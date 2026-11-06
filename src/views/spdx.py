@@ -6,10 +6,14 @@ from ..helpers.verbose import verbose
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from .fast_spdx import (SPDX2_SYNTHETIC_SOURCE_COMMENT, spdx2_dependency_edge, spdx2_dependency_scope,
                         spdx2_provenance_only_sources)
+from ..helpers.export_files import file_metadata, SPDX2_INVENTORY_PREFIX, SPDX2_ASSOCIATION_COMMENT
+from ..helpers.export_evidence import dependency_relationships, export_evidence, EVIDENCE_PREFIX
 
 from spdx_tools.spdx.parser.parse_anything import parse_file
 from spdx_tools.spdx.parser.error import SPDXParsingError
 from spdx_tools.spdx.parser.jsonlikedict.json_like_dict_parser import JsonLikeDictParser
+from spdx_tools.spdx.parser.jsonlikedict.file_parser import FileParser
+from spdx_tools.spdx.model.file import File as SpdxFile
 from spdx_tools.spdx.jsonschema.document_converter import DocumentConverter
 from spdx_tools.spdx.writer.json.json_writer import write_document_to_stream as write_document_to_json_stream
 from spdx_tools.spdx.writer.xml.xml_writer import write_document_to_stream as write_document_to_xml_stream
@@ -24,6 +28,8 @@ from spdx_tools.spdx.model.actor import Actor, ActorType
 from spdx_tools.spdx.model.relationship import Relationship, RelationshipType
 from spdx_tools.spdx.model.spdx_no_assertion import SpdxNoAssertion
 from spdx_tools.spdx.model.spdx_none import SpdxNone
+from spdx_tools.spdx.validation.file_validator import validate_file
+from spdx_tools.spdx.validation.license_expression_validator import validate_license_expression
 from uuid_extensions import uuid7
 from datetime import datetime, timezone
 from io import StringIO
@@ -46,6 +52,27 @@ def _normalize_spdx_dict(doc_dict: dict) -> None:
         creation_info["licenseListVersion"] = f"{major}.{minor}"
 
 
+class _RecordedFileParser(FileParser):
+    def parse_file(self, file_dict: dict):
+        name, spdx_id = file_dict.get("fileName"), file_dict.get("SPDXID")
+        if (not isinstance(name, str) or not isinstance(spdx_id, str)
+                or (file_dict.get("checksums") is not None and file_dict["checksums"] != [])):
+            return super().parse_file(file_dict)
+        # File inventories can be recorded without hashing the source tree.
+        # Keep raw properties in the inventory recorder; do not invent a hash
+        # merely to satisfy spdx-tools' mandatory constructor argument.
+        return SpdxFile(
+            name=name, spdx_id=spdx_id, checksums=[],
+            comment=file_dict.get("comment"),
+        )
+
+
+def _recorded_file_parser() -> JsonLikeDictParser:
+    parser = JsonLikeDictParser()
+    parser.file_parser = _RecordedFileParser()
+    return parser
+
+
 _ACTOR_TYPE_LABELS = {
     ActorType.ORGANIZATION: "Organization",
     ActorType.PERSON: "Person",
@@ -54,8 +81,19 @@ _ACTOR_TYPE_LABELS = {
 
 
 class _SPDXDocumentConverter(DocumentConverter):
+    def __init__(self):
+        super().__init__()
+        self.recorded_files: list[dict] = []
+        self.recorded_relationships: list[dict] = []
+        self.recorded_annotations: list[dict] = []
+
     def convert(self, instance: Document, document: Document | None = None) -> dict:
         result = super().convert(instance, document)
+        if self.recorded_files:
+            result.setdefault("files", []).extend(self.recorded_files)
+            result.setdefault("relationships", []).extend(self.recorded_relationships)
+        if self.recorded_annotations:
+            result.setdefault("annotations", []).extend(self.recorded_annotations)
         # spdx-tools emits enum names instead of SPDX's hyphenated JSON/XML values.
         for package in result.get("packages", []):
             if package.get("primaryPackagePurpose") == "OPERATING_SYSTEM":
@@ -82,8 +120,11 @@ class SPDX:
 
     def load_from_dict(self, spdx: dict):
         """Read data from SPDX json parsed format."""
-        parser = JsonLikeDictParser()
-        self.sbom = parser.parse(spdx)
+        parser = _recorded_file_parser()
+        from copy import deepcopy
+        normalized = deepcopy(spdx)
+        _normalize_spdx_dict(normalized)
+        self.sbom = parser.parse(normalized)
 
     def load_from_file(self, spdx_file: str):
         """Read data from SPDX file, detecting format automatically."""
@@ -95,7 +136,7 @@ class SPDX:
                 with open(spdx_file) as f:
                     doc_dict = json.load(f)
                 _normalize_spdx_dict(doc_dict)
-                try_reading = JsonLikeDictParser().parse(doc_dict)
+                try_reading = _recorded_file_parser().parse(doc_dict)
             except Exception:
                 raise original_err
         if try_reading:
@@ -254,15 +295,15 @@ class SPDX:
     def register_dependencies(self):
         """Copy dependency edges between registered components into SBOM."""
         existing = {
-            (relation.spdx_element_id, relation.related_spdx_element_id)
+            (relation.spdx_element_id, relation.related_spdx_element_id, relation.relationship_type)
             for relation in self.sbom.relationships
-            if relation.relationship_type == RelationshipType.DEPENDS_ON
+            if isinstance(relation.spdx_element_id, str) and isinstance(relation.related_spdx_element_id, str)
         }
-        for source, target in sorted(self.packagesCtrl.dependency_edges()):
-            edge = (self.pkg_to_ref[source], self.pkg_to_ref[target])
+        for source, target, kind, _ in dependency_relationships(self.packagesCtrl, spdx3=False):
+            edge = (self.pkg_to_ref[source], self.pkg_to_ref[target], RelationshipType[kind])
             if edge not in existing:
                 existing.add(edge)
-                self.sbom.relationships.append(Relationship(edge[0], RelationshipType.DEPENDS_ON, edge[1]))
+                self.sbom.relationships.append(Relationship(edge[0], edge[2], edge[1]))
 
     def create_shell_document(self, author=None):
         if "sbom" not in self.__dict__ or not self.sbom:
@@ -299,12 +340,55 @@ class SPDX:
             self.sbom.relationships = [Relationship("SPDXRef-DOCUMENT", RelationshipType.DESCRIBES, SpdxNone())]
 
         stream = StringIO()
+        converter = _SPDXDocumentConverter()
+        evidence_annotation = {
+            "annotationDate": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "annotationType": "OTHER", "annotator": "Tool: VulnScout",
+            "comment": EVIDENCE_PREFIX + json.dumps(
+                export_evidence(self.packagesCtrl, self.pkg_to_ref), sort_keys=True,
+            ),
+        }
+        annotated_files: list[dict] = []
+        annotated_relationships: list[dict] = []
+        for record in self.packagesCtrl.recorded_files():
+            ref = f"SPDXRef-File-{uuid7(as_type='str')}"
+            file = {
+                "SPDXID": ref, "fileName": record["path"], **file_metadata(record, spdx3=False),
+            }
+            try:
+                parsed = FileParser().parse_file(file)
+                native = parsed is not None and not validate_file(parsed, "SPDX-2.3")
+                if native and parsed is not None:
+                    # File-only validation cannot detect references missing from the new document.
+                    native = not any(
+                        validate_license_expression(license, self.sbom, ref)
+                        for license in [parsed.license_concluded, *parsed.license_info_in_file]
+                    )
+            except (SPDXParsingError, TypeError, ValueError):
+                native = False
+            destination = converter.recorded_files if native else annotated_files
+            relationships = converter.recorded_relationships if native else annotated_relationships
+            destination.append(file)
+            relationships.extend({
+                "spdxElementId": self.pkg_to_ref[owner], "relationshipType": "OTHER",
+                "relatedSpdxElement": ref,
+                "comment": SPDX2_ASSOCIATION_COMMENT,
+            } for owner in record["packages"] if owner in self.pkg_to_ref)
+        if annotated_files:
+            converter.recorded_annotations.append({
+                "annotationDate": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "annotationType": "OTHER", "annotator": "Tool: VulnScout",
+                "comment": SPDX2_INVENTORY_PREFIX + json.dumps({
+                    "files": annotated_files, "relationships": annotated_relationships,
+                }, sort_keys=True),
+            })
+        converter.recorded_annotations.append(evidence_annotation)
         # CPE validation may fail because the SPDX spec expects special characters in package
         # names to be escaped, but our CPE strings may contain unescaped special characters
         if with_cpe:
-            writer(self.sbom, stream, validate=False, converter=_SPDXDocumentConverter())
+            writer(self.sbom, stream, validate=False, converter=converter)
         else:
-            writer(self.sbom, stream, validate=validate, converter=_SPDXDocumentConverter())
+            writer(self.sbom, stream, validate=validate, converter=converter)
         return stream.getvalue()
 
     def output_as_json(self, validate=True, author=None, with_cpe=False) -> str:

@@ -792,3 +792,631 @@ def test_checked_in_yocto_spdx3_recipe_inputs_do_not_exclude_cves(app, tmp_path)
     assert all(file["builds"] and not file["builds"][0]["compiled"] for file in row["source_files"])
     assert not any(file["path"].startswith("usr/lib/") for file in row["source_files"])
     assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+
+
+def _export_files(variant, version):
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.spdx import SPDX
+    from src.views.spdx3 import SPDX3
+
+    controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    view = SPDX(controllers) if version == 2 else SPDX3(controllers)
+    output = json.loads(view.output_as_json())
+    if version == 2:
+        import jsonschema
+        from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+        schema = Path(__file__).resolve().parents[1] / "schemas" / "spdx" / "spdx-schema-2.3.json"
+        jsonschema.validate(output, json.loads(schema.read_text()))
+        parser = SPDX(ControllersCache())
+        parser.load_from_dict(output)
+        assert validate_full_spdx_document(parser.sbom) == []
+    return output
+
+
+def _export_sbom_evidence(variant, format_name, tmp_path):
+    import jsonschema
+    from referencing import Registry, Resource
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.cyclonedx import CycloneDx
+    from src.views.spdx import SPDX
+    from src.views.spdx3 import SPDX3
+
+    controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    schema_dir = Path(__file__).resolve().parents[1] / "schemas"
+    if format_name.startswith("cdx"):
+        version = int(format_name[-1])
+        output = json.loads(CycloneDx(controllers).output_as_json(version=version))
+        schemas = [json.loads(path.read_text()) for path in (schema_dir / "cyclonedx").glob("*.json")]
+        registry = Registry().with_resources((schema["$id"], Resource.from_contents(schema)) for schema in schemas)
+        schema = next(schema for schema in schemas if schema["$id"].endswith(f"bom-1.{version}.schema.json"))
+        jsonschema.Draft7Validator(schema, registry=registry).validate(output)
+    elif format_name == "spdx3":
+        output = json.loads(SPDX3(controllers).output_as_json())
+        jsonschema.validate(output, json.loads((schema_dir / "spdx/spdx-json-schema-3.0.1.json").read_text()))
+    elif format_name == "xml":
+        from spdx_tools.spdx.parser.parse_anything import parse_file
+        from spdx_tools.spdx.jsonschema.document_converter import DocumentConverter
+        from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+
+        path = tmp_path / "export.spdx.xml"
+        path.write_text(SPDX(controllers).output_as_xml())
+        document = parse_file(str(path))
+        assert validate_full_spdx_document(document) == []
+        output = DocumentConverter().convert(document)
+    else:
+        output = _export_files(variant, 2)
+    return output
+
+
+@pytest.mark.parametrize("format_name", ["spdx2", "xml", "spdx3", "cdx4", "cdx5", "cdx6"])
+@pytest.mark.parametrize("fast", [False, True])
+def test_sbom_exports_preserve_scoped_compiler_dependency_and_file_evidence(
+    app, tmp_path, monkeypatch, format_name, fast,
+):
+    from src.helpers.export_evidence import read_evidence
+    from src.models import PackageDependency
+
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    documents = _documents(extra=True)
+    prefix = "https://example.org/evidence/"
+    parameters = [
+        {"key": "compile:flags:C", "value": '-O2 -DNAME="quoted value"'},
+        {"key": "compile:flags:C", "value": "-fno-builtin"},
+        {"key": "compile:defines:C", "value": "FEATURE=1;NAME=a b"},
+        {"key": "compile:flags:CXX", "value": "-std=c++20"},
+        {"key": "compile:defines:CXX", "value": ""},
+    ]
+    build = next(node for node in documents["a-build.jsonld"]["@graph"] if node.get("type") == "build_Build")
+    build["build_parameter"] = parameters
+    documents["a-build.jsonld"]["@graph"].extend([
+        {"type": "LifecycleScopedRelationship", "relationshipType": "dependsOn", "scope": "build",
+         "from": prefix + "package", "to": [prefix + "source"]},
+        {"type": "LifecycleScopedRelationship", "relationshipType": "dependencyOf", "scope": "runtime",
+         "from": prefix + "source", "to": [prefix + "package"]},
+        {"type": "Relationship", "relationshipType": "hasPrerequisite",
+         "from": prefix + "package", "to": [prefix + "source"]},
+        {"type": "Relationship", "relationshipType": "hasOptionalDependency",
+         "from": prefix + "package", "to": [prefix + "source"]},
+        {"type": "Relationship", "relationshipType": "hasProvidedDependency",
+         "from": prefix + "package", "to": [prefix + "source"]},
+    ])
+    # Superseded and other-variant metadata for the exact same packages must not leak.
+    variant, _ = _import(tmp_path, _documents("stale.c"))
+    variant, scan = _import(tmp_path, documents, variant)
+    other = Variant.create("other", variant.project_id)
+    _import(tmp_path, _documents("other.c"), other)
+    source_document = next(doc for doc in SBOMDocument.get_by_scan(scan.id) if doc.build_targets)
+    expected_target = source_document.build_targets[0]
+    original_declarations = db.session.scalar(
+        db.select(PackageDependency).where(PackageDependency.sbom_document_id == source_document.id)
+    ).declarations
+    for doc in SBOMDocument.get_by_scan(scan.id):
+        Path(doc.path).unlink()
+
+    output = _export_sbom_evidence(variant, format_name, tmp_path)
+    evidence = read_evidence(output)
+    assert evidence is not None
+    assert len(evidence["build_targets"]) == 1
+    target = evidence["build_targets"][0]
+    assert target["languages"] == expected_target["languages"]
+    assert target["source_document"]["id"] == str(source_document.id)
+    assert target["source_document"]["source_name"] == "a-build.jsonld"
+    assert len(evidence["dependencies"]) == 1
+    assert evidence["dependencies"][0]["declarations"] == original_declarations
+    assert "stale.c" not in json.dumps(output)
+    assert "other.c" not in json.dumps(output)
+    if format_name == "spdx3":
+        dependency_kinds = {
+            "dependsOn", "dependencyOf", "hasPrerequisite", "hasOptionalDependency", "hasProvidedDependency",
+        }
+        assert sorted(
+            (node["relationshipType"], node.get("scope", "")) for node in output["@graph"]
+            if node.get("relationshipType") in dependency_kinds
+        ) == [
+            ("dependsOn", "build"), ("dependsOn", "runtime"), ("hasOptionalDependency", ""),
+            ("hasPrerequisite", ""), ("hasProvidedDependency", ""),
+        ]
+        emitted_build = next(node for node in output["@graph"] if node.get("type") == "build_Build")
+        assert emitted_build["build_parameter"] == [{"type": "DictionaryEntry", **value} for value in parameters]
+    elif format_name in {"spdx2", "xml"}:
+        assert {relation["relationshipType"] for relation in output["relationships"]} >= {
+            "BUILD_DEPENDENCY_OF", "RUNTIME_DEPENDENCY_OF", "DEPENDS_ON",
+        }
+    else:
+        assert len(evidence["files"]) == 3
+
+    restored = Variant.create("restored", variant.project_id)
+    for index in range(2):
+        imported_scan = Scan.create("roundtrip", restored.id, scan_type="sbom")
+        path = tmp_path / f"roundtrip-{index}.json"
+        path.write_text(json.dumps(output))
+        doc = SBOMDocument.create(str(path), path.name, imported_scan.id,
+                                  format="cdx" if format_name.startswith("cdx") else "spdx")
+        read_inputs(ControllersCache(), imported_scan.id)
+        assert doc.build_targets[0]["languages"] == expected_target["languages"]
+        rows = list(db.session.scalars(
+            db.select(PackageDependency).where(PackageDependency.sbom_document_id == doc.id)
+        ))
+        assert len(rows) == 1
+        assert rows[0].declarations == original_declarations
+        source = _package(app, restored, "lib-sources")
+        assert source["source_file_count"] == 2
+        assert source["compiled_source_file_count"] == 1
+        assert not source["compiled_sources_complete"]
+        assert source["source_files"][0]["builds"][0]["parameters"] == parameters
+        output = _export_sbom_evidence(restored, format_name, tmp_path)
+        assert read_evidence(output)["build_targets"][0]["source_document"] == target["source_document"]
+
+
+@pytest.mark.parametrize("format_name", ["spdx2", "spdx3", "cdx6"])
+def test_compiler_metadata_exports_without_files_or_dependencies(app, tmp_path, format_name):
+    from src.helpers.export_evidence import read_evidence
+
+    documents = _documents()
+    graph = documents["a-build.jsonld"]["@graph"]
+    package = next(node for node in graph if node.get("type") == "software_Package")
+    build = next(node for node in graph if node.get("type") == "build_Build")
+    variant, scan = _import(tmp_path, {"target.jsonld": _graph([
+        package, build,
+        {"type": "Relationship", "relationshipType": "hasOutput",
+         "from": build["spdxId"], "to": [package["spdxId"]]},
+    ])})
+    for doc in SBOMDocument.get_by_scan(scan.id):
+        Path(doc.path).unlink()
+    output = _export_sbom_evidence(variant, format_name, tmp_path)
+    evidence = read_evidence(output)
+    assert evidence["dependencies"] == []
+    assert len(evidence["build_targets"]) == 1
+    assert evidence["build_targets"][0]["languages"] == [
+        {"language": "C", "flags": ["-DCONFIG_FEATURE=1"], "defines": []},
+    ]
+
+
+def test_project_export_keeps_compiler_targets_separate_across_variants(app, tmp_path):
+    from src.helpers.export_evidence import export_evidence
+    from src.helpers.export_scope import compute_export_scope
+
+    variant, _ = _import(tmp_path, _documents())
+    other = Variant.create("other", variant.project_id)
+    documents = _documents()
+    build = next(node for node in documents["a-build.jsonld"]["@graph"] if node.get("type") == "build_Build")
+    build["build_parameter"] = [{"key": "compile:flags:C", "value": "-DOTHER_VARIANT"}]
+    _import(tmp_path, documents, other)
+    controllers = ControllersCache(compute_export_scope(project_id=variant.project_id))
+    controllers.packages._preload_cache()
+    references = {package.string_id: package.string_id for package in controllers.packages}
+    targets = export_evidence(controllers.packages, references)["build_targets"]
+    assert len(targets) == 2
+    assert len({target["source_document"]["id"] for target in targets}) == 2
+    assert {target["languages"][0]["flags"][0] for target in targets} == {
+        "-DCONFIG_FEATURE=1", "-DOTHER_VARIANT",
+    }
+
+
+def _exported_file_records(output, version):
+    from src.helpers.export_files import spdx2_annotation_inventory
+
+    if version == 2:
+        annotated, _ = spdx2_annotation_inventory(output)
+        return [*output.get("files", []), *annotated]
+    return [item for item in output["@graph"] if item.get("type") == "software_File"]
+
+
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("fast", [False, True])
+def test_file_exports_roundtrip_companion_identity_shared_records_and_active_scope(
+    app, tmp_path, monkeypatch, version, fast,
+):
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    documents = _spdx2_documents()
+    documents["z-source.spdx.json"]["files"][0]["checksums"].append({
+        "algorithm": "SHA1", "checksumValue": "c" * 40,
+    })
+    built = documents["a-built.spdx.json"]
+    built["packages"].append({**built["packages"][0], "SPDXID": "SPDXRef-shared", "name": "shared"})
+    built["relationships"].append({**built["relationships"][0], "spdxElementId": "SPDXRef-shared"})
+    duplicate = json.loads(json.dumps(documents["z-source.spdx.json"]))
+    duplicate["documentNamespace"] = "https://example.org/duplicate"
+    # Same local SPDX ID and same path, but a distinct companion-document record.
+    duplicate["files"][0].pop("checksums")
+    duplicate["files"][0]["fileContent"] = "FILE CONTENT MUST NOT BE EXPORTED"
+    documents["duplicate.spdx.json"] = duplicate
+    built["externalDocumentRefs"].append({
+        **built["externalDocumentRefs"][0], "externalDocumentId": "DocumentRef-duplicate",
+        "spdxDocument": duplicate["documentNamespace"],
+    })
+    built["relationships"].append({
+        **built["relationships"][0], "relatedSpdxElement": "DocumentRef-duplicate:SPDXRef-source",
+    })
+    variant, _ = _import(tmp_path, _spdx2_documents())
+    old_file = db.session.scalars(db.select(SBOMFile)).one()
+    old_file.path = "old-scan-only.c"
+    db.session.commit()
+    _import(tmp_path, documents, variant)
+    other = Variant.create("other", variant.project_id)
+    _, other_scan = _import(tmp_path, _spdx2_documents(), other)
+    for file in db.session.scalars(db.select(SBOMFile).join(SBOMDocument).where(
+        SBOMDocument.scan_id == other_scan.id,
+    )):
+        file.path = "other-variant-only.c"
+    db.session.commit()
+    output = _export_files(variant, version)
+    encoded = json.dumps(output)
+    assert "old-scan-only.c" not in encoded
+    assert "other-variant-only.c" not in encoded
+    assert "FILE CONTENT MUST NOT BE EXPORTED" not in encoded
+    files = _exported_file_records(output, version)
+    assert len(files) == 2
+    id_field = "SPDXID" if version == 2 else "spdxId"
+    assert len({file[id_field] for file in files}) == 2
+    hash_field = "checksums" if version == 2 else "verifiedUsing"
+    assert sum(hash_field in file for file in files) == 1
+    if version == 2:
+        from src.helpers.export_files import spdx2_annotation_inventory
+        _, annotated_relationships = spdx2_annotation_inventory(output)
+        assert len(output["files"]) == 1
+        relationships = [*output["relationships"], *annotated_relationships]
+    else:
+        relationships = output["@graph"]
+    assert sum(item.get("relationshipType") == ("OTHER" if version == 2 else "contains")
+               for item in relationships) == 3
+    restored = Variant.create("restored", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _, scan = _import(tmp_path, {name: output}, restored)
+    lib = _package(app, restored)
+    shared = _package(app, restored, "shared")
+    assert lib["source_file_count"] == 2
+    assert shared["source_file_count"] == 1
+    assert lib["compiled_source_file_count"] == shared["compiled_source_file_count"] == 0
+    assert len({item["spdx_id"] for item in lib["source_files"]}) == 2
+    assert shared["source_files"][0]["spdx_id"] in {item["spdx_id"] for item in lib["source_files"]}
+    assert not any(package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+    again = _export_files(restored, version)
+    assert len(_exported_file_records(again, version)) == 2
+
+
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("fast", [False, True])
+def test_file_exports_preserve_recorded_compilation_without_fabricating_graph_completeness(
+    app, tmp_path, monkeypatch, version, fast,
+):
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    documents = _documents(extra=True)
+    variant, _ = _import(tmp_path, documents)
+    output = _export_files(variant, version)
+    files = _exported_file_records(output, version)
+    assert len(files) == 3  # Includes the recorded binary output, not just source counts.
+    if version == 3:
+        identifiers = [node.get("spdxId", node.get("@id")) for node in output["@graph"]]
+        assert len(identifiers) == len(set(identifiers))
+        builds = [node for node in output["@graph"] if node.get("type") == "build_Build"]
+        assert len(builds) == 1
+        assert builds[0]["build_buildType"] == "https://vulnscout.io/build-types/recorded-compiler-metadata"
+        assert "not a reconstruction" in builds[0]["comment"]
+        assert not any(node.get("relationshipType") == "hasInput" for node in output["@graph"])
+    restored = Variant.create("restored", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _, scan = _import(tmp_path, {name: output}, restored)
+    source = _package(app, restored, "lib-sources")
+    built = _package(app, restored)
+    assert source["source_file_count"] == 2
+    assert source["compiled_source_file_count"] == built["compiled_source_file_count"] == 1
+    assert not source["compiled_sources_complete"]
+    assert not built["compiled_sources_complete"]
+    compiled, listed = source["source_files"]
+    assert compiled["path"] == "src/enabled.c"
+    assert compiled["builds"][0]["compiled"] is True
+    assert compiled["builds"][0]["parameters"] == [{"key": "compile:flags:C", "value": "-DCONFIG_FEATURE=1"}]
+    assert compiled["builds"][0]["outputs"] == ["https://example.org/evidence/output"]
+    assert listed["path"] == "src/listed.c"
+    assert listed["builds"] == []
+    assert not any(package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+    read_inputs(ControllersCache(), scan.id)
+    assert _package(app, restored, "lib-sources")["compiled_source_file_count"] == 1
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_file_exports_do_not_invent_inventory_for_unrecorded_packages(app, tmp_path, version):
+    from src.models import SBOMPackage
+
+    project = Project.create("source-test")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("legacy inventory", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("gone", "legacy", scan.id)
+    package = Package.create("lib", "1.0")
+    SBOMPackage.create(document.id, package.id)
+    output = _export_files(variant, version)
+    assert not output.get("files")
+    assert not any(node.get("type") == "software_File" for node in output.get("@graph", []))
+    restored = Variant.create("restored", project.id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _import(tmp_path, {name: output}, restored)
+    row = _package(app, restored)
+    assert row["source_file_count"] is None
+    assert not row["compiled_sources_complete"]
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_file_exports_do_not_upgrade_recipe_input_observations_to_compilation(app, tmp_path, version):
+    documents = _documents()
+    build = next(node for node in documents["a-build.jsonld"]["@graph"] if node.get("type") == "build_Build")
+    build["build_buildType"] = "http://openembedded.org/bitbake/do_create_spdx/recipe"
+    variant, _ = _import(tmp_path, documents)
+    output = _export_files(variant, version)
+    restored = Variant.create("restored", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _import(tmp_path, {name: output}, restored)
+    file = _package(app, restored)["source_files"][0]
+    assert file["builds"]
+    assert file["builds"][0]["compiled"] is False
+    assert _package(app, restored)["compiled_source_file_count"] == 0
+
+
+def test_spdx2_xml_exports_recorded_files_and_shared_containment(app, tmp_path):
+    from xml.etree import ElementTree
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.spdx import SPDX
+
+    documents = _documents(extra=True)
+    source = next(node for node in documents["z-source.jsonld"]["@graph"] if node.get("type") == "software_File")
+    source["verifiedUsing"].append({"type": "Hash", "algorithm": "sha1", "hashValue": "c" * 40})
+    variant, _ = _import(tmp_path, documents)
+    controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    output = SPDX(controllers).output_as_xml()
+    root = ElementTree.fromstring(output)
+    path = tmp_path / "export.spdx.xml"
+    path.write_text(output)
+    parser = SPDX(ControllersCache())
+    parser.load_from_file(str(path))
+    from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+    assert validate_full_spdx_document(parser.sbom) == []
+    files = root.findall("files")
+    assert len(files) == 1
+    assert len({file.findtext("SPDXID") for file in files}) == 1
+    assert sum(file.find("checksums") is not None for file in files) == 1
+    associations = [relation for relation in root.findall("relationships")
+                    if relation.findtext("relationshipType") == "OTHER"]
+    assert len(associations) == 2
+    from src.helpers.export_files import SPDX2_INVENTORY_PREFIX
+    annotation = root.findtext("annotations/comment")
+    assert annotation.startswith(SPDX2_INVENTORY_PREFIX)
+    inventory = json.loads(annotation[len(SPDX2_INVENTORY_PREFIX):])
+    assert len(inventory["files"]) == 2
+    assert len(inventory["relationships"]) == 1
+
+
+@pytest.mark.parametrize("absolute_path", [False, True])
+def test_spdx2_hashless_and_sha256_only_records_are_valid_annotation_evidence(app, tmp_path, absolute_path):
+    from src.helpers.export_files import spdx2_annotation_inventory
+
+    documents = _documents(extra=True)
+    if absolute_path:
+        source = next(node for node in documents["z-source.jsonld"]["@graph"] if node.get("type") == "software_File")
+        source["name"] = "/recorded/source.c"
+        source["verifiedUsing"].append({"type": "Hash", "algorithm": "sha1", "hashValue": "c" * 40})
+    variant, _ = _import(tmp_path, documents)
+    output = _export_files(variant, 2)
+    # Even a recorded SHA256 alone cannot satisfy SPDX2's normative SHA1 requirement.
+    assert not output.get("files")
+    files, relationships = spdx2_annotation_inventory(output)
+    assert len(files) == 3
+    hashed = next(file for file in files if file["fileName"] == (
+        "/recorded/source.c" if absolute_path else "src/enabled.c"
+    ))
+    expected_hashes = [{"algorithm": "SHA256", "checksumValue": "a" * 64}]
+    if absolute_path:
+        expected_hashes.append({"algorithm": "SHA1", "checksumValue": "c" * 40})
+    assert hashed["checksums"] == expected_hashes
+    assert all(not file.get("checksums") for file in files if file is not hashed)
+    private_ids = {file["SPDXID"] for file in files}
+    assert all(relation["relatedSpdxElement"] not in private_ids for relation in output["relationships"])
+    assert len(relationships) == 3
+
+
+@pytest.mark.parametrize("format", ["json", "xml"])
+@pytest.mark.parametrize("license_field", ["licenseConcluded", "licenseInfoInFiles"])
+@pytest.mark.parametrize("external", [False, True])
+def test_spdx2_custom_file_licenses_remain_valid_inventory_evidence(
+    app, tmp_path, format, license_field, external,
+):
+    from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+    from src.helpers.export_files import SPDX2_INVENTORY_PREFIX
+    from src.helpers.export_scope import compute_export_scope
+    from src.views.spdx import SPDX
+
+    documents = _spdx2_documents()
+    source_document = documents["z-source.spdx.json"]
+    file = source_document["files"][0]
+    file["checksums"].append({"algorithm": "SHA1", "checksumValue": "c" * 40})
+    license = "LicenseRef-Proprietary"
+    if external:
+        source_document["externalDocumentRefs"] = [{
+            "externalDocumentId": "DocumentRef-licenses", "spdxDocument": "https://example.org/licenses",
+            "checksum": {"algorithm": "SHA1", "checksumValue": "d" * 40},
+        }]
+        license = "DocumentRef-licenses:" + license
+    else:
+        source_document["hasExtractedLicensingInfos"] = [{
+            "licenseId": license, "extractedText": "Custom license terms",
+        }]
+    file[license_field] = [license] if license_field == "licenseInfoInFiles" else license
+    variant, _ = _import(tmp_path, documents)
+    controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+    controllers.packages._preload_cache()
+    view = SPDX(controllers)
+    output = view.output_as_json() if format == "json" else view.output_as_xml()
+    path = tmp_path / f"export.spdx.{format}"
+    path.write_text(output)
+    parser = SPDX(ControllersCache())
+    parser.load_from_file(str(path))
+    assert validate_full_spdx_document(parser.sbom) == []
+    assert not parser.sbom.files
+    annotation = next(annotation for annotation in parser.sbom.annotations
+                      if annotation.annotation_comment.startswith(SPDX2_INVENTORY_PREFIX))
+    inventory = json.loads(annotation.annotation_comment[len(SPDX2_INVENTORY_PREFIX):])
+    assert inventory["files"][0][license_field] == file[license_field]
+    assert len(inventory["relationships"]) == 1
+
+
+@pytest.mark.parametrize("version", [2, 3, "xml"])
+@pytest.mark.parametrize("identifier", ["spdxId", "@id"])
+@pytest.mark.parametrize("companion", [False, True])
+def test_referenced_spdx3_hashes_are_persisted_and_exported_self_contained(
+    app, tmp_path, version, identifier, companion,
+):
+    documents = _documents()
+    source = documents["z-source.jsonld"]["@graph"]
+    file = next(node for node in source if node.get("type") == "software_File")
+    reference = "https://example.org/evidence/hash" if companion else "_:hash0"
+    file["verifiedUsing"] = [reference]
+    hash = {"type": "Hash", identifier: reference, "algorithm": "sha1", "hashValue": "c" * 40}
+    target = documents["a-build.jsonld"]["@graph"] if companion else source
+    target.append(hash)
+    if not companion:
+        documents["a-build.jsonld"]["@graph"].append({**hash, "hashValue": "d" * 40})
+    variant, scan = _import(tmp_path, documents)
+    properties = _package(app, variant)["source_files"][0]["properties"]
+    assert properties["verifiedUsing"] == [{"type": "Hash", "algorithm": "sha1", "hashValue": "c" * 40}]
+    # Export must use persisted metadata, even after input files are removed.
+    for document in SBOMDocument.get_by_scan(scan.id):
+        Path(document.path).unlink()
+    if version == "xml":
+        from spdx_tools.spdx.jsonschema.document_converter import DocumentConverter
+        from spdx_tools.spdx.validation.document_validator import validate_full_spdx_document
+        from src.helpers.export_scope import compute_export_scope
+        from src.views.spdx import SPDX
+
+        controllers = ControllersCache(compute_export_scope(variant_id=variant.id))
+        controllers.packages._preload_cache()
+        path = tmp_path / "export.spdx.xml"
+        path.write_text(SPDX(controllers).output_as_xml())
+        parser = SPDX(ControllersCache())
+        parser.load_from_file(str(path))
+        assert validate_full_spdx_document(parser.sbom) == []
+        output = DocumentConverter().convert(parser.sbom)
+        version = 2
+    else:
+        output = _export_files(variant, version)
+    exported = next(file for file in _exported_file_records(output, version)
+                    if file.get("fileName", file.get("name")) == "src/enabled.c")
+    if version == 2:
+        assert exported["checksums"] == [{"algorithm": "SHA1", "checksumValue": "c" * 40}]
+        assert exported in output["files"]
+    else:
+        assert exported["verifiedUsing"] == properties["verifiedUsing"]
+        assert reference not in exported["verifiedUsing"]
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_unresolved_hash_references_are_not_emitted_as_native_integrity(app, tmp_path, version):
+    from src.helpers.export_files import EVIDENCE_PREFIX
+
+    documents = _documents()
+    source = documents["z-source.jsonld"]["@graph"]
+    file = next(node for node in source if node.get("type") == "software_File")
+    file["verifiedUsing"] = ["_:missing"]
+    variant, _ = _import(tmp_path, documents)
+    output = _export_files(variant, version)
+    exported = next(file for file in _exported_file_records(output, version)
+                    if file.get("fileName", file.get("name")) == "src/enabled.c")
+    assert "verifiedUsing" not in exported
+    assert "checksums" not in exported
+    evidence = json.loads(exported["comment"][len(EVIDENCE_PREFIX):])
+    assert evidence["properties"]["verifiedUsing"] == ["_:missing"]
+
+
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("identifier", ["spdxId", "@id"])
+@pytest.mark.parametrize("as_list", [False, True])
+def test_graph_content_identifiers_roundtrip_without_original_documents(app, tmp_path, version, identifier, as_list):
+    documents = _documents()
+    source = documents["z-source.jsonld"]["@graph"]
+    file = next(node for node in source if node.get("type") == "software_File")
+    file["software_contentIdentifier"] = ["_:cid"] if as_list else "_:cid"
+    content_identifier = {
+        "type": "software_ContentIdentifier",
+        "software_contentIdentifierType": "gitoid",
+        "software_contentIdentifierValue": "gitoid:blob:sha1:" + "c" * 40,
+    }
+    source.append({identifier: "_:cid", **content_identifier})
+    documents["a-build.jsonld"]["@graph"].append({
+        identifier: "_:cid", **content_identifier,
+        "software_contentIdentifierValue": "gitoid:blob:sha1:" + "d" * 40,
+    })
+    variant, scan = _import(tmp_path, documents)
+    properties = _package(app, variant)["source_files"][0]["properties"]
+    assert properties["software_contentIdentifier"] == [content_identifier]
+    for document in SBOMDocument.get_by_scan(scan.id):
+        Path(document.path).unlink()
+    output = _export_sbom_evidence(variant, "spdx3", tmp_path) if version == 3 else _export_files(variant, version)
+    exported = next(file for file in _exported_file_records(output, version)
+                    if file.get("fileName", file.get("name")) == "src/enabled.c")
+    if version == 3:
+        assert exported["software_contentIdentifier"] == [content_identifier]
+    restored = Variant.create("restored", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _import(tmp_path, {name: output}, restored)
+    again = _export_files(restored, 3)
+    exported = next(file for file in _exported_file_records(again, 3) if file.get("name") == "src/enabled.c")
+    assert exported["software_contentIdentifier"] == [content_identifier]
+
+
+@pytest.mark.parametrize("reference", ["_:missing", "https://example.org/missing", {"@id": "_:missing"}, ["_:missing"]])
+def test_unresolved_content_identifiers_remain_only_in_evidence(reference):
+    from src.helpers.export_files import EVIDENCE_PREFIX, file_metadata
+
+    exported = file_metadata({"properties": {"software_contentIdentifier": reference}, "builds": []}, spdx3=True)
+    assert "software_contentIdentifier" not in exported
+    evidence = json.loads(exported["comment"][len(EVIDENCE_PREFIX):])
+    assert evidence["properties"]["software_contentIdentifier"] == reference
+
+
+def test_inline_content_identifiers_are_exported_without_local_identity():
+    from src.helpers.export_files import EVIDENCE_PREFIX, file_metadata
+
+    identifier = {
+        "type": "software_ContentIdentifier", "@id": "_:cid", "spdxId": "_:cid",
+        "software_contentIdentifierType": "swhid",
+        "software_contentIdentifierValue": "swh:1:cnt:" + "c" * 40,
+    }
+    exported = file_metadata({"properties": {"software_contentIdentifier": identifier}, "builds": []}, spdx3=True)
+    assert exported["software_contentIdentifier"] == [{
+        key: value for key, value in identifier.items() if key not in {"@id", "spdxId"}
+    }]
+    evidence = json.loads(exported["comment"][len(EVIDENCE_PREFIX):])
+    assert evidence["properties"]["software_contentIdentifier"] == identifier
+
+
+@pytest.mark.parametrize("target_size", [0, 1, 10000])
+def test_restore_evidence_queries_only_used_packages_in_large_inventory(app, target_size):
+    from sqlalchemy import event
+    from src.helpers.export_evidence import restore_evidence
+
+    project = Project.create("evidence-query-count")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("large inventory", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("unused.json", "unused.json", scan.id, format="spdx")
+    db.session.add_all(Package(name=f"package-{index}", version="1") for index in range(10000))
+    db.session.commit()
+    db.session.refresh(document)
+    references = {f"SPDXRef-{index}": f"package-{index}@1" for index in range(10000)}
+    target = {"id": "target", "name": "target", "package_ids": list(references)[:target_size], "languages": []}
+    evidence = {"dependencies": [], "build_targets": [target] if target_size else []}
+    selects = []
+
+    def track_selects(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    event.listen(db.engine, "before_cursor_execute", track_selects)
+    try:
+        restore_evidence(document, evidence, references)
+    finally:
+        event.remove(db.engine, "before_cursor_execute", track_selects)
+    assert len(selects) == (target_size + 499) // 500
+    if target_size:
+        assert len(document.build_targets[0]["package_ids"]) == target_size
+        assert document.build_targets[0]["package_ids"][0] == str(Package.get_by_string_id("package-0@1").id)

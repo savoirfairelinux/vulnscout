@@ -2469,9 +2469,14 @@ def _scan_edges(scan_id):
 
 
 def _exported_spdx2_edges(document):
+    from src.views.fast_spdx import spdx2_dependency_edge
+
     names = {package['SPDXID']: package['name'] for package in document['packages']}
-    return sorted((names[relation['spdxElementId']], names[relation['relatedSpdxElement']])
-                  for relation in document['relationships'] if relation['relationshipType'] == 'DEPENDS_ON')
+    return sorted((names[edge[0]], names[edge[1]])
+                  for relation in document['relationships']
+                  if (edge := spdx2_dependency_edge(
+                      relation['spdxElementId'], relation['relationshipType'], relation['relatedSpdxElement'],
+                  )) is not None)
 
 
 def _exported_spdx3_edges(document):
@@ -2520,12 +2525,14 @@ def test_scoped_spdx_export_import_cycles_preserve_cross_document_dependencies(
             exported = json.loads(exporter.output_as_json())
             assert _exported_spdx2_edges(exported) == [('app', 'lib'), ('app', 'util')]
             xml = ElementTree.fromstring(exporter.output_as_xml())
-            assert [relation.findtext('relationshipType') for relation in xml.findall('relationships')].count(
-                'DEPENDS_ON') == 2
+            assert {relation.findtext('relationshipType') for relation in xml.findall('relationships')} >= {
+                'BUILD_DEPENDENCY_OF', 'RUNTIME_DEPENDENCY_OF',
+            }
         else:
             exported = json.loads(SPDX3(controllers).output_as_json())
             assert _exported_spdx3_edges(exported) == [('app', 'lib'), ('app', 'util')]
-            assert len([item for item in exported['@graph'] if item.get('relationshipType') == 'dependsOn']) == 1
+            assert sorted(item['scope'] for item in exported['@graph']
+                          if item.get('type') == 'LifecycleScopedRelationship') == ['build', 'runtime']
         path = tmp_path / f'cycle-{index}.spdx.json'
         path.write_text(json.dumps(exported))
         scan_id = Scan.create('SBOM', variant_id).id

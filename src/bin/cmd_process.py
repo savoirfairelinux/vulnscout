@@ -210,6 +210,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
 
     use_fastspdx = get_bool_env('IGNORE_PARSING_ERRORS', False)
     from ..helpers.sbom_files import record_source_files, spdx2_file_graph
+    from ..helpers.export_evidence import read_evidence, restore_evidence, evidence_file_graph
 
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
@@ -218,6 +219,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
     jsonld_documents = []
     file_documents = []
+    evidence_documents = []
     detached_cdx_documents: list[SBOMDocument] = []
     detached_cdx_refs: dict[SBOMDocument, dict[str, str]] = {}
 
@@ -318,6 +320,17 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             else:
                 print_message(f"Warning: unknown format for {doc.path}, skipping", role="warning")
                 continue
+            if (evidence := read_evidence(data)) is not None:
+                if data.get("bomFormat") == "CycloneDX":
+                    references = dict(document_cdx._document_refs)
+                    file_documents.append((doc, evidence_file_graph(evidence), references, {}))
+                elif fastspdx3.could_parse_spdx(data):
+                    references = dict(fastspdx3._document_refs)
+                elif "spdxVersion" in data:
+                    references = dict(fastspdx._document_refs if use_fastspdx else spdx._document_refs)
+                else:
+                    references = {}
+                evidence_documents.append((doc, evidence, references))
             doc.dependencies_recorded = True
         except FileNotFoundError:
             pass  # File was already merged into the DB and cleaned up — expected.
@@ -375,6 +388,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                     assessment.packages = stored.packages
             for package_id in assessment.packages:
                 assessCtrl._by_vuln_pkg.setdefault((assessment.vuln_id, package_id), []).append(key)
+    for document, evidence, references in evidence_documents:
+        restore_evidence(document, evidence, references)
     for current_scan_id in {document.scan_id for document, *_ in file_documents}:
         record_source_files([entry for entry in file_documents if entry[0].scan_id == current_scan_id])
     _db.session.commit()

@@ -11,8 +11,18 @@ import uuid
 from ..extensions import db
 from ..models import Package, PackageSourceFile, SBOMBuild, SBOMDocument, SBOMFile, SBOMFileBuild, SBOMPackage
 from ..models.sbom_file import has_compilation_evidence
+from .export_files import (
+    recorded_evidence, spdx2_annotation_inventory, INVENTORY_UNKNOWN_COMMENT, SPDX2_ASSOCIATION_COMMENT,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _element_key(ref: str, document: SBOMDocument, namespaces: dict[str, str]) -> str:
+    if ref.startswith('_:'):
+        return f'{document.id}:{ref}'
+    prefix, separator, suffix = ref.partition(':')
+    return namespaces.get(prefix, prefix + ':') + suffix if separator else f'{document.id}:{ref}'
 
 
 def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, str]) -> tuple[dict, dict[str, str]]:
@@ -33,6 +43,7 @@ def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, s
         qualified = _spdx_key(ref, namespace, external_documents)
         return f'{qualified[0]}#{qualified[1]}' if qualified else f'{document.id}:{ref}'
 
+    annotated_files, annotated_relationships = spdx2_annotation_inventory(data)
     graph: list[dict] = []
     for package in data.get('packages') or []:
         if not isinstance(package, dict) or not isinstance(package.get('SPDXID'), str):
@@ -43,7 +54,7 @@ def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, s
             {'relationshipType': 'contains', 'from': owner, 'to': [key(ref)]}
             for ref in package.get('hasFiles') or [] if isinstance(ref, str)
         )
-    for file in data.get('files') or []:
+    for file in [*(data.get('files') or []), *annotated_files]:
         if not isinstance(file, dict):
             continue
         ref = file.get('SPDXID')
@@ -51,13 +62,15 @@ def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, s
             'type': 'software_File', 'spdxId': key(ref) if isinstance(ref, str) else None,
             'name': file.get('fileName'), '_file_properties': file,
         })
-    for relation in data.get('relationships') or []:
+    for relation in [*(data.get('relationships') or []), *annotated_relationships]:
         if not isinstance(relation, dict):
             continue
         source, target = relation.get('spdxElementId'), relation.get('relatedSpdxElement')
         if not isinstance(source, str) or not isinstance(target, str):
             continue
         kind = relation.get('relationshipType')
+        if kind == 'OTHER' and relation.get('comment') == SPDX2_ASSOCIATION_COMMENT:
+            kind = 'CONTAINS'
         if kind == 'CONTAINED_BY':
             source, target = target, source
         if kind in {'CONTAINS', 'CONTAINED_BY'}:
@@ -97,10 +110,10 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     edges: dict[str, set[tuple[str, str]]] = defaultdict(set)
     ambiguous: set[str] = set()
     malformed = False
+    document_namespaces = {document.id: namespaces for document, _, _, namespaces in documents}
     for document, data, references, namespaces in documents:
         def key(ref: str) -> str:
-            prefix, separator, suffix = ref.partition(':')
-            return namespaces.get(prefix, prefix + ':') + suffix if separator else f'{document.id}:{ref}'
+            return _element_key(ref, document, namespaces)
 
         for ref, string_id in references.items():
             package_id = canonical.get(string_id)
@@ -112,7 +125,7 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         for item in data.get('@graph', []):
             if not isinstance(item, dict):
                 continue
-            element_ref = item.get('spdxId')
+            element_ref = item.get('spdxId', item.get('@id'))
             if item.get('type') == 'software_File' and (
                 not isinstance(element_ref, str) or not isinstance(item.get('name'), str) or not item['name']
             ):
@@ -142,8 +155,34 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     for ref, (document, item) in nodes.items():
         if item.get('type') != 'software_File' or not isinstance(item.get('name'), str) or not item['name']:
             continue
+        properties = dict(item.get('_file_properties', item))
+        if isinstance(properties.get('verifiedUsing'), list):
+            integrity = []
+            for verification in properties['verifiedUsing']:
+                if isinstance(verification, str):
+                    target = nodes.get(_element_key(verification, document, document_namespaces[document.id]))
+                    if target and target[1].get('type') == 'Hash':
+                        verification = {
+                            key: value for key, value in target[1].items() if key not in {'spdxId', '@id'}
+                        }
+                integrity.append(verification)
+            properties['verifiedUsing'] = integrity
+        content_identifiers = properties.get('software_contentIdentifier')
+        if isinstance(content_identifiers, (str, dict)):
+            content_identifiers = [content_identifiers]
+        if isinstance(content_identifiers, list):
+            identifiers = []
+            for content_identifier in content_identifiers:
+                if isinstance(content_identifier, str):
+                    target = nodes.get(_element_key(content_identifier, document, document_namespaces[document.id]))
+                    if target and target[1].get('type') == 'software_ContentIdentifier':
+                        content_identifier = {
+                            key: value for key, value in target[1].items() if key not in {'spdxId', '@id'}
+                        }
+                identifiers.append(content_identifier)
+            properties['software_contentIdentifier'] = identifiers
         file = SBOMFile(sbom_document_id=document.id, spdx_id=ref, path=item['name'],
-                        properties=item.get('_file_properties', item))
+                        properties=properties)
         db.session.add(file)
         files[ref] = file
     contains: dict[str, set[str]] = defaultdict(set)
@@ -202,6 +241,9 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
             documents[0][0].scan_id,
         )
     complete = resolved and all(data.get('_compilation_complete', True) for _, data, *_ in documents)
+    # Export comments retain observations, not the graph needed to prove completeness.
+    if any(recorded_evidence(file.properties) is not None for file in files.values()):
+        complete = False
     compiled: dict[str, list[SBOMBuild]] = defaultdict(list)
     incomplete_packages: set[tuple[uuid.UUID, uuid.UUID]] = set()
     associations: dict[str, set[str]] = defaultdict(set)
@@ -244,6 +286,10 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
         packages[ref] for _, data, *_ in documents for ref in data.get('_unknown_inventories', [])
         if ref in packages
     }
+    unknown.update(
+        packages[ref] for ref, (_, node) in nodes.items()
+        if ref in packages and node.get("comment") == INVENTORY_UNKNOWN_COMMENT
+    )
     unknown -= {packages[owner] for file_owners in owners.values() for owner in file_owners}
     for link_key, link in links.items():
         link.compiled_sources_complete = (
@@ -264,3 +310,47 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
                 file_document_id=file.sbom_document_id, spdx_id=ref,
             )
     db.session.add_all(rows.values())
+    restore_recorded_builds(list(files.values()))
+
+
+def restore_recorded_builds(files: list[SBOMFile]) -> None:
+    """Restore explicitly labelled observations without inventing build relationships."""
+    import json
+
+    builds: dict[tuple, SBOMBuild] = {}
+    for file in files:
+        evidence = recorded_evidence(file.properties)
+        if evidence is None:
+            continue
+        seen: set[tuple] = set()
+        for item in evidence["builds"]:
+            if not isinstance(item, dict) or not isinstance(item.get("spdx_id"), str):
+                continue
+            parameters, outputs = item.get("parameters"), item.get("outputs")
+            build_type = item.get("build_type")
+            if (not isinstance(parameters, list) or not isinstance(outputs, list)
+                    or any(not isinstance(output, str) for output in outputs)
+                    or (build_type is not None and not isinstance(build_type, str))):
+                continue
+            original_id = item["spdx_id"]
+            ref = original_id if original_id.startswith("urn:vulnscout:recorded-build:") else (
+                "urn:vulnscout:recorded-build:" + str(uuid.uuid5(
+                    uuid.NAMESPACE_URL, json.dumps([item.get("document_id"), original_id]),
+                ))
+            )
+            key = file.sbom_document_id, ref
+            if key in seen:
+                continue
+            seen.add(key)
+            if key not in builds:
+                build = SBOMBuild(
+                    sbom_document_id=file.sbom_document_id, spdx_id=ref, build_type=build_type,
+                    parameters=parameters, outputs=outputs,
+                    compiled=item.get("compiled") is True and has_compilation_evidence([item]),
+                )
+                db.session.add(build)
+                db.session.flush()
+                builds[key] = build
+            db.session.add(SBOMFileBuild(
+                file_document_id=file.sbom_document_id, spdx_id=file.spdx_id, build_id=builds[key].id,
+            ))
