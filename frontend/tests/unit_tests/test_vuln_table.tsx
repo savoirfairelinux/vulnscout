@@ -813,6 +813,7 @@ describe('Vulnerability Table', () => {
     test('select all in table and unselecting', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeDisabled();
 
         const user = userEvent.setup();
         const select_all = await screen.getByTitle(/select all/i);
@@ -820,6 +821,7 @@ describe('Vulnerability Table', () => {
 
         await user.click(select_all)
         expect(select_all).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeEnabled();
 
         const uniques_selections = await screen.getAllByTitle(/unselect/i);
         expect(uniques_selections.length).toBeGreaterThanOrEqual(1);
@@ -828,6 +830,11 @@ describe('Vulnerability Table', () => {
         await user.click(uniques_selections[0])
 
         expect(select_all).not.toBeChecked();
+
+        await user.click(select_all);
+        await user.click(select_all);
+        expect(screen.queryAllByTitle(/unselect/i)).toHaveLength(0);
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeDisabled();
     })
 
     test('select using ctrl+click and reset selection', async () => {

@@ -159,9 +159,10 @@ A failed request shows its error, **Retry failed action**, and **Remove failed
 action** in its conversation. The shared queue pauses until it is retried or
 removed; other conversations show a banner linking to it.
 
-Chat suggestions such as **Assess vulnerability** and **Assess displayed**
-send immediately. Large displayed lists may require narrowing the table; a
-partial display is never silently treated as the complete scope.
+The **Assess vulnerability** chat suggestion sends immediately for the open
+vulnerability. To assess several vulnerabilities, check the desired rows and
+use **Assess with AI**; the chat does not offer a separate action to assess
+every displayed row.
 
 You can also ask in chat, for example:
 
