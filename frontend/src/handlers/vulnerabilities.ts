@@ -120,6 +120,7 @@ const buildStatusSummary = (
     currentPackagesByVariant?: Record<string, string[]>,
 ): StatusSummary => {
     const hasVariantPackageScope = currentPackagesByVariant !== undefined;
+    let legacyCurrentPackages: Set<string> | undefined;
     if (!hasVariantPackageScope && currentPackages && currentPackages.length > 0
         && assessments.length > 0) {
         const currentSet = new Set(currentPackages);
@@ -129,7 +130,10 @@ const buildStatusSummary = (
         );
         // Preserve compatibility with payloads that lack exact per-variant
         // package data: if nothing matches, retain the previous fallback.
-        if (filtered.length > 0) assessments = filtered;
+        if (filtered.length > 0) {
+            assessments = filtered;
+            legacyCurrentPackages = currentSet;
+        }
     }
 
     if (assessments.length === 0) {
@@ -142,42 +146,40 @@ const buildStatusSummary = (
         };
     }
 
-    // Group assessments by variant. A cross-variant assessment covers every
-    // variant it targets, so it is counted once per target rather than being
-    // dropped into the fallback bucket. Assessments with no target at all are
-    // grouped together under a single fallback key so they contribute one slot.
-    const byVariant = new Map<string, Assessment[]>();
+    // Supersession applies to exact package/variant targets, not whole variants.
+    // Keep a fallback slot for legacy assessments with no package target.
+    const latestPerTarget = new Map<string, Assessment>();
     const globalCurrentPackages = new Set(currentPackages ?? []);
     assessments.forEach((assessment) => {
         const variantIds = assessmentVariantIds(assessment);
         const keys = variantIds.length > 0 ? variantIds : ['__no_variant__'];
         keys.forEach((key) => {
-            if (hasVariantPackageScope) {
-                const currentForVariant = key !== '__no_variant__'
+            const targetPackages = (key === '__no_variant__'
+                ? assessment.packages
+                : assessmentPackagesInVariant(assessment, key)) ?? [];
+            const currentForVariant = hasVariantPackageScope
+                ? key !== '__no_variant__'
                     ? new Set(currentPackagesByVariant?.[key] ?? [])
-                    : globalCurrentPackages;
-                const targetPackages = key === '__no_variant__'
-                    ? assessment.packages
-                    : assessmentPackagesInVariant(assessment, key);
-                if (targetPackages.length > 0
-                    && !targetPackages.some(pkg => currentForVariant.has(pkg))) return;
-            }
-            if (!byVariant.has(key)) byVariant.set(key, []);
-            byVariant.get(key)!.push(assessment);
+                    : globalCurrentPackages
+                : legacyCurrentPackages;
+            const packages = targetPackages.length > 0
+                ? targetPackages.filter(pkg => !currentForVariant || currentForVariant.has(pkg))
+                : [null];
+            packages.forEach(pkg => {
+                const targetKey = JSON.stringify([key, pkg]);
+                const best = latestPerTarget.get(targetKey);
+                const timestamp = new Date(assessment.timestamp).getTime();
+                const bestTimestamp = best ? new Date(best.timestamp).getTime() : -Infinity;
+                // Match the compact assessment API's timestamp/ID ordering.
+                if (!best || timestamp > bestTimestamp
+                    || (timestamp === bestTimestamp && assessment.id > best.id)) {
+                    latestPerTarget.set(targetKey, assessment);
+                }
+            });
         });
     });
 
-    // For each variant keep only the most recent assessment.
-    const latestPerVariant: Assessment[] = [];
-    byVariant.forEach((variantAssessments) => {
-        const latest = variantAssessments.reduce((best, a) =>
-            new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best
-        );
-        latestPerVariant.push(latest);
-    });
-
-    // Count how many variants share each simplified status.
-    const counts = latestPerVariant.reduce((acc, assessment) => {
+    const counts = Array.from(latestPerTarget.values()).reduce((acc, assessment) => {
         const simplified = assessment.simplified_status || 'unknown';
         acc[simplified] = (acc[simplified] || 0) + 1;
         return acc;

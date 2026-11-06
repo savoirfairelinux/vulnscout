@@ -622,6 +622,102 @@ describe('buildStatusSummary helpers', () => {
   });
 });
 
+describe('current package-target status aggregation', () => {
+  const packages = ['curl@8.5.0', 'libcurl@8.5.0', 'curl-static@8.5.0'];
+  const makeAssessment = (id: string, simplified_status: string, day: number, pkgs: string[], variant_id = 'board') => ({
+    id, vuln_id: 'CVE-2023-38545', packages: pkgs, variant_id,
+    origin: 'custom', status: simplified_status, simplified_status,
+    timestamp: `2026-11-${String(day).padStart(2, '0')}T12:00:00Z`, responses: [],
+  });
+  const varied = () => [
+    makeAssessment('a', 'Exploitable', 1, [packages[0]]),
+    makeAssessment('b', 'Fixed', 2, [packages[1]]),
+    makeAssessment('c', 'Pending Assessment', 3, [packages[2]]),
+  ];
+
+  test.each([undefined, packages])('lists every current package status with scope %j', currentPackages => {
+    const summary = buildStatusSummary(varied(), currentPackages);
+    expect(getTopStatusSummaryLabel(summary)).toBe('Exploitable, Pending Assessment, Fixed');
+    expect(summary.counts).toEqual({ Exploitable: 1, Fixed: 1, 'Pending Assessment': 1 });
+  });
+
+  test('supersedes history only for the same package and keeps active filters accurate', () => {
+    const assessments = [...varied(), makeAssessment('d', 'Fixed', 4, [packages[2]])];
+    const [vuln] = Vulnerabilities.enrich_with_assessments([
+      { ...rawVuln(), id: 'CVE-2023-38545', packages_current: packages,
+        packages_current_by_variant: { board: packages } } as any,
+    ], assessments);
+    expect(getTopStatusSummaryLabel(vuln.status_summary!)).toBe('Exploitable, Fixed');
+    expect(vuln.status_summary!.counts).toEqual({ Exploitable: 1, Fixed: 2 });
+    expect(isVulnerabilityActive(vuln)).toBe(true);
+    const [updated] = Vulnerabilities.append_assessment([vuln],
+      makeAssessment('e', 'Fixed', 5, [packages[0]]));
+    expect(getTopStatusSummaryLabel(updated.status_summary!)).toBe('Fixed');
+    expect(isVulnerabilityActive(updated)).toBe(false);
+  });
+
+  test('overrides only one target of an older multi-package assessment', () => {
+    const summary = buildStatusSummary([
+      makeAssessment('a', 'Exploitable', 1, packages),
+      makeAssessment('b', 'Fixed', 2, [packages[0]]),
+    ]);
+    expect(summary.counts).toEqual({ Exploitable: 2, Fixed: 1 });
+  });
+
+  test('does not cross sparse variant/package pairs or include stale targets', () => {
+    const fused = {
+      ...makeAssessment('a', 'Exploitable', 1, packages),
+      variant_id: undefined, variant_ids: ['board', 'other'],
+      targets: [
+        { variant_id: 'board', package: packages[0] },
+        { variant_id: 'other', package: packages[1] },
+        { variant_id: 'other', package: packages[2] },
+      ],
+    };
+    const assessments = [fused, makeAssessment('b', 'Fixed', 2, [packages[0]], 'other')];
+    const summary = buildStatusSummary(assessments, packages, {
+      board: [packages[0]], other: [packages[0], packages[1]],
+    });
+    expect(summary.counts).toEqual({ Exploitable: 2, Fixed: 1 });
+    expect(buildStatusSummary(assessments, packages, { board: [packages[1]] }).counts).toEqual({});
+  });
+
+  test.each([false, true])('filters each package of a partially current assessment (exact scope: %s)', exact => {
+    const assessments = [
+      makeAssessment('a', 'Exploitable', 1, packages),
+      makeAssessment('b', 'Fixed', 2, [packages[0]]),
+    ];
+    const summary = buildStatusSummary(assessments, [packages[0]],
+      exact ? { board: [packages[0]] } : undefined);
+    expect(summary.counts).toEqual({ Fixed: 1 });
+  });
+
+  test('deduplicates repeated targets and statuses in deterministic priority order', () => {
+    const assessments = [
+      makeAssessment('a', 'Fixed', 1, [packages[0], packages[0]]),
+      makeAssessment('b', 'Exploitable', 1, [packages[1]]),
+      makeAssessment('c', 'Fixed', 1, [packages[2]]),
+    ];
+    const forward = buildStatusSummary(assessments);
+    expect(forward.counts).toEqual({ Fixed: 2, Exploitable: 1 });
+    expect(getTopStatusSummaryLabel(forward)).toBe('Exploitable, Fixed');
+    expect(buildStatusSummary([...assessments].reverse())).toEqual(forward);
+  });
+
+  test('breaks equal timestamp ties by assessment ID, matching the compact API', () => {
+    const older = makeAssessment('a', 'Exploitable', 1, [packages[0]]);
+    const newer = makeAssessment('b', 'Fixed', 1, [packages[0]]);
+    expect(buildStatusSummary([older, newer]).counts).toEqual({ Fixed: 1 });
+    expect(buildStatusSummary([newer, older]).counts).toEqual({ Fixed: 1 });
+  });
+
+  test('keeps package identities distinct for legacy assessments without variants', () => {
+    const assessments = varied().map(a => ({ ...a, variant_id: undefined }));
+    expect(getTopStatusSummaryLabel(buildStatusSummary(assessments)))
+      .toBe('Exploitable, Pending Assessment, Fixed');
+  });
+});
+
 describe('getTopStatusSummaryLabel', () => {
   test('returns all statuses when 2 or fewer', () => {
     const summary = buildStatusSummary([
