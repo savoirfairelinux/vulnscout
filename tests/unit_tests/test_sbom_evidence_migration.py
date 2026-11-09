@@ -15,7 +15,7 @@ from sqlalchemy import JSON, DateTime, String, Uuid, column, inspect, table, tex
 from src.bin.webapp import create_app
 from src.controllers.packages import PackagesController
 from src.extensions import db
-from src.models import Package, Project, SBOMDocument, SBOMPackage, Scan, Variant
+from src.models import Package, PackageRepository, Project, RepositoryScorecard, SBOMDocument, SBOMPackage, Scan, Variant
 
 
 HEAD_REVISION = ScriptDirectory(
@@ -167,6 +167,50 @@ def test_populated_pre_pr_database_upgrades_without_inventing_document_evidence(
         assert snapshots[0].id == package_id
         assert purl in snapshots[0].purl
         assert cpe in snapshots[0].cpe
+
+
+def test_repository_evidence_migration_invalidates_unscoped_mappings_but_keeps_scores(app):
+    _upgrade(app, "de1339f8135e")
+    package = Package.find_or_create("shared", "1")
+    package_id = package.id
+    repository = "github.com/acme/shared"
+    db.session.add(RepositoryScorecard(repository=repository, status="scored", score=8,
+                                      fetched_at=datetime.now(timezone.utc)))
+    db.session.commit()
+    mappings = table(
+        "package_repositories", column("package_id", Uuid), column("repository", String),
+        column("source", String), column("resolved_at", DateTime),
+    )
+    db.session.remove()
+    with db.engine.begin() as connection:
+        connection.execute(mappings.insert().values(
+            package_id=package_id, repository=repository, source="sbom", resolved_at=datetime.now(timezone.utc),
+        ))
+
+    _upgrade(app)
+    assert db.session.get(Package, package_id).name == "shared"
+    assert db.session.scalars(db.select(PackageRepository)).all() == []
+    assert db.session.get(RepositoryScorecard, repository).score == 8
+    assert inspect(db.engine).get_pk_constraint("package_repositories")["constrained_columns"] == [
+        "package_id", "evidence_key",
+    ]
+    for evidence_key in ("a" * 64, "b" * 64):
+        db.session.add(PackageRepository(
+            package_id=package_id, evidence_key=evidence_key, repository=repository, source="sbom",
+            resolved_at=datetime.now(timezone.utc),
+        ))
+    db.session.commit()
+    assert len(db.session.scalars(db.select(PackageRepository)).all()) == 2
+    db.session.remove()
+
+    result = app.test_cli_runner().invoke(args=["db", "downgrade", "de1339f8135e"])
+    assert result.exit_code == 0, result.output
+    assert inspect(db.engine).get_pk_constraint("package_repositories")["constrained_columns"] == ["package_id"]
+    assert db.session.get(RepositoryScorecard, repository).score == 8
+    db.session.remove()
+    _upgrade(app)
+    assert db.session.scalars(db.select(PackageRepository)).all() == []
+    assert db.session.get(RepositoryScorecard, repository).score == 8
 
 
 def test_empty_evidence_schema_can_downgrade_to_an_older_schema_and_upgrade_again(app):

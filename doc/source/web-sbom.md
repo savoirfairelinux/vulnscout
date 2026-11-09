@@ -15,7 +15,7 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ## Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Recorded Files, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency explorer](web-dependencies.md); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Recorded Files, Dependency, Vulnerabilities, Maintenance, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency explorer](web-dependencies.md); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
@@ -58,6 +58,47 @@ recorded evidence without a CVE-matching policy banner; see
 
 See [Recorded files](interactive-mode.md#recorded-files) for supported formats,
 scope, and reimport requirements.
+
+## Maintenance
+
+The **Maintenance** column shows the [OpenSSF Scorecard](https://scorecard.dev/)
+score (0–10) of each package's upstream repository: green from 7, amber from 4,
+red below. Chips summarise the Scorecard **Maintained** check (**Active**,
+**Low activity**, **Inactive** or **Archived**, from commit and issue activity
+over the last 90 days) and flag packages that deps.dev reports as
+**Deprecated** in their registry. Sort the column to list the best-scored
+packages first. Click a cell to open every Scorecard check with its reason, the
+repository, and how that repository was found.
+
+The score describes the maintainers' practices (code review, security policy,
+fuzzing, signed releases, activity, …). It gives context while assessing a
+package's vulnerabilities, for example how likely an upstream fix is, but it is
+not a verdict and never changes assessments.
+
+**Refresh maintenance** queues an **OpenSSF Scorecard** operation for the
+current variants; scans started from the scan wizard queue it automatically.
+The operation looks up the upstream repository of each package, in order, from:
+
+1. SBOM metadata: `pkg:github`/`pkg:gitlab`/Go PURLs, Git source URLs, download
+   locations, homepages, and CycloneDX `vcs`/`website`/`distribution`
+   references (reimport older SBOMs to record download and homepage URLs);
+2. [deps.dev](https://deps.dev/) for npm, PyPI, Cargo, Go, Maven, NuGet and
+   RubyGems PURLs, which also provides the deprecation status;
+3. the Git repository named by OSV for one of the package's CVEs, kept only when
+   the CVE's CPE product matches the package.
+
+Known mirror accounts are ignored, since their score says nothing about the
+upstream maintainers. GitHub names from PURLs are case-insensitive while
+Scorecard's are not, so a missing result is retried with GitHub's canonical
+name; set `GITHUB_TOKEN` to lift GitHub's anonymous limit of 60 lookups per
+hour. Repositories are re-resolved after 30 days and scores
+after 7 days, matching Scorecard's weekly publication.
+
+Cells read **Not covered** when the repository is not on GitHub or GitLab,
+**Not scored** when it is outside the Scorecard public dataset, **No
+repository** when none was found, and **Not fetched** until the refresh runs.
+Set `VULNSCOUT_SCORECARD_ENABLED=0` to disable these lookups on offline
+installations; the column then reads **Disabled**.
 
 ## Zephyr Component Badges
 

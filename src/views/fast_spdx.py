@@ -113,6 +113,8 @@ class FastSPDX ():
         download = _get_field(pkg, ["downloadLocation"])
         if isinstance(download, str):
             package.add_source_url(download)
+        package.add_upstream_url(download)
+        package.add_upstream_url(_get_field(pkg, ["homepage"]))
 
         for external_ref in _get_field(pkg, ["externalRefs"]) or []:
             ref_type = _get_field(external_ref, ["referenceType"])

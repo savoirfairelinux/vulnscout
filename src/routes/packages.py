@@ -14,7 +14,9 @@ from ..models.variant import Variant
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import SBOMPackage, PackageEvidence
 from ..extensions import db
+from ..controllers.package_health import package_health, scorecard_enabled
 from ..helpers.active_scans import (
+    active_package_ids_for_scans,
     active_sbom_scan_ids_for_variant,
     active_sbom_scan_ids_for_project,
 )
@@ -23,6 +25,58 @@ from ._scan_helpers import parse_uuid_or_400
 
 
 def init_app(app: Flask) -> None:
+
+    @app.route('/api/packages/health')
+    def package_health_index() -> ResponseReturnValue:
+        """Return cached upstream repository and OpenSSF Scorecard data for packages in scope.
+
+        The ``scorecard`` refresh operation fills this cache; unresolved packages are absent.
+
+        OpenAPI:
+        query variant_id uuid optional Scope to one variant.
+        query compare_variant_id uuid optional Also include a compared variant.
+        query project_id uuid optional Scope to every variant of a project.
+        query variant_ids string optional Comma-separated list of variant IDs.
+        query package_id string optional Return one package string ID, including every Scorecard check.
+        response 200 PackageHealthMap Repository and Scorecard state keyed by package string ID.
+        response 400 Error Missing scope or invalid identifiers.
+        """
+        from flask import request
+        raw_variant_ids = [value for value in (request.args.get('variant_id'), request.args.get('compare_variant_id'))
+                           if value]
+        raw_variant_ids += [value.strip() for value in (request.args.get('variant_ids') or '').split(',')
+                            if value.strip()]
+        project_id = request.args.get('project_id')
+        if not raw_variant_ids and not project_id:
+            return {"error": "A project or variant scope is required"}, 400
+        scan_ids: list[uuid.UUID] = []
+        for raw_id in raw_variant_ids:
+            variant_uuid, err = parse_uuid_or_400(raw_id, "variant_id")
+            if err:
+                return err
+            assert variant_uuid is not None
+            scan_ids += active_sbom_scan_ids_for_variant(variant_uuid)
+        if not raw_variant_ids:
+            project_uuid, err = parse_uuid_or_400(str(project_id), "project_id")
+            if err:
+                return err
+            assert project_uuid is not None
+            scan_ids += active_sbom_scan_ids_for_project(project_uuid)
+        package_ids = active_package_ids_for_scans(scan_ids)
+        package_filter = request.args.get('package_id')
+        if package_filter:
+            selected = Package.get_by_string_id(package_filter)
+            package_ids = {selected.id} & package_ids if selected is not None else set()
+        health = package_health(package_ids, scan_ids, details=bool(package_filter))
+        names: dict[uuid.UUID, str] = {}
+        health_ids = list(health)
+        for start in range(0, len(health_ids), 500):
+            names.update({package.id: package.string_id for package in db.session.scalars(
+                db.select(Package).where(Package.id.in_(health_ids[start:start + 500])))})
+        return {
+            "enabled": scorecard_enabled(),
+            "packages": {names[package_id]: value for package_id, value in health.items() if package_id in names},
+        }
 
     @app.route('/api/packages')
     def index_pkg() -> ResponseReturnValue:

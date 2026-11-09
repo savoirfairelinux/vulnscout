@@ -35,6 +35,7 @@ READ_TOOLS = (
     "list_custom_assessments",
     "list_codebase_files", "read_codebase_file", "search_codebase",
     "list_dependency_documents", "list_dependency_packages", "get_package_dependencies", "get_package_source_files",
+    "get_package_health",
     "get_ai_context_form_guide",
 )
 WRITE_TOOLS = (

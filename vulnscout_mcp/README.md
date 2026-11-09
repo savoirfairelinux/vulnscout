@@ -122,6 +122,7 @@ python vulnscout_mcp/server.py
 | `list_dependency_packages`     | Search/paginate the complete SBOM inventory, including isolated packages and per-document version evidence |
 | `get_package_dependencies`     | Traverse direct/transitive dependencies or reverse dependents with paths and source provenance |
 | `get_package_source_files`     | Paginate an exact package's recorded SPDX files and build associations within one variant, retaining coverage and provenance |
+| `get_package_health`           | Read an exact package's upstream repository, deps.dev deprecation and cached OpenSSF Scorecard checks within one variant (context, not a verdict) |
 | `list_codebase_files`          | List paths/sizes in a variant upload; follow `next_offset` for pagination |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |

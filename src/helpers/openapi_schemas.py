@@ -134,6 +134,28 @@ SCHEMAS: dict[str, Any] = {
         "description": "Default list, or format=dict keyed by name@version (historical rows append @variant UUID).",
         "anyOf": [_array(_ref("Package")), _map(_ref("Package"))],
     },
+    "PackageHealth": _object({
+        "repository": {**_TEXT, "description": "host/owner/repo, or null when no repository was found."},
+        "repository_source": {"type": "string", "enum": ["sbom", "deps_dev", "osv", "none"]},
+        "repository_evidence": {**_TEXT, "description": "SBOM URL/PURL, deps.dev version key or CVE ID."},
+        "deprecated": {**_BOOL, "nullable": True}, "deprecated_reason": _TEXT, "resolved_at": _DATE,
+        "scorecard": _object({
+            "status": {"type": "string", "enum": ["scored", "not_found", "unsupported", "error"]},
+            "repository": {**_TEXT, "description": "Name under which Scorecard published the result."},
+            "score": _NUMBER, "date": _TEXT, "commit": _TEXT, "fetched_at": _DATE,
+            "maintained": _object({"score": _NUMBER, "reason": _TEXT}, nullable=True),
+            "checks": _array(_object({
+                "name": _STRING, "score": _NUMBER, "reason": _TEXT, "description": _TEXT, "url": _TEXT,
+            }, ("name",)), description="Only returned when package_id is given."),
+        }, ("status",), nullable=True),
+    }, ("repository", "repository_source", "scorecard"), description=(
+        "OpenSSF Scorecard data is an informational maintenance signal, not an assessment verdict."
+    )),
+    "PackageHealthMap": _object({
+        "enabled": _BOOL,
+        "packages": _map(_ref("PackageHealth"),
+                         description="Keyed by package string ID; unresolved packages are absent."),
+    }, ("enabled", "packages")),
     "CVSS": _object({
         "id": _UUID, "variant_id": _NULL_UUID, "version": _STRING,
         "vector_string": _STRING, "author": _TEXT, "origin": _STRING,
@@ -397,6 +419,7 @@ SCHEMAS: dict[str, Any] = {
         "mode": {"type": "string", "enum": ["local", "api"], "default": "local"},
         "exclude_kernel": _BOOL, "exclude_native": _BOOL,
         "native_package_exceptions": _STRINGS,
+        "force": {**_BOOL, "description": "Scorecard refresh only: ignore cached repositories and results."},
     }),
     "OperationBatch": _object({
         "jobs": _array({"anyOf": [
@@ -415,6 +438,14 @@ SCHEMAS: dict[str, Any] = {
                 {"required": ["ids"], "not": {"required": ["variant_ids"]}},
                 {"required": ["variant_ids"], "not": {"required": ["ids"]}},
             ]),
+            _object({
+                "kind": {"type": "string", "enum": ["refresh"]},
+                "source": {"type": "string", "enum": ["scorecard"]},
+                "variant_ids": _array(_UUID, minItems=1, maxItems=100, uniqueItems=True),
+                "options": _ref("OperationOptions"),
+            }, ("kind", "source", "variant_ids"), description=(
+                "Resolve package repositories and fetch OpenSSF Scorecard results for the variants' packages."
+            )),
         ]}, minItems=1, maxItems=100),
     }, ("jobs",), description="At most 100 expanded operations; duplicate operation IDs are rejected."),
     "ContextFile": _object({

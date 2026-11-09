@@ -7,6 +7,7 @@ from .variant import Variant
 from .scan import Scan
 from .sbom_document import SBOMDocument
 from .package import Package
+from .package_health import PackageRepository, RepositoryScorecard
 from .sbom_package import SBOMPackage
 from .sbom_file import SBOMFile, SBOMBuild, SBOMFileBuild, PackageSourceFile
 from .package_dependency import PackageDependency

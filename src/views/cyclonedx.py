@@ -8,6 +8,7 @@ from ..models.cvss import CVSS
 from ..models.assessment import Assessment
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
+from cyclonedx.model import ExternalReferenceType
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.bom_ref import BomRef
 from cyclonedx.model.dependency import Dependency
@@ -50,6 +51,11 @@ class CycloneDx:
         "critical": cyclonedx.model.vulnerability.VulnerabilitySeverity.CRITICAL,
         "info": cyclonedx.model.vulnerability.VulnerabilitySeverity.INFO,
     }
+
+    _UPSTREAM_REFERENCE_TYPES = frozenset({
+        ExternalReferenceType.VCS, ExternalReferenceType.WEBSITE,
+        ExternalReferenceType.DISTRIBUTION, ExternalReferenceType.SOURCE_DISTRIBUTION,
+    })
 
     _VEX_STATUS_MAP = {
         "resolved": ImpactAnalysisState.RESOLVED,
@@ -179,6 +185,9 @@ class CycloneDx:
                 package.add_purl(str(component.purl))
             if component.cpe:
                 package.add_cpe(component.cpe)
+            for reference in component.external_references:
+                if reference.type in self._UPSTREAM_REFERENCE_TYPES:
+                    package.add_upstream_url(str(reference.url))
             package.generate_generic_cpe()
             package.generate_generic_purl()
 

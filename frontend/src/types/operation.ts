@@ -15,6 +15,9 @@ export type ScanSource = "grype" | "nvd" | "osv" | "scc";
 
 export type RefreshSource = "nvd" | "epss" | "ghsa" | "euvd";
 
+/** Package-scoped refreshes, separate from the vulnerability refresh sources. */
+export type PackageRefreshSource = "scorecard";
+
 export type OperationScope = {
     variant_id: string | null;
     variant_name?: string;
@@ -65,7 +68,7 @@ export const percentOf = (operation: Operation): number => {
 /** A job as sent to `POST /api/operations`. */
 export type OperationJob = {
     kind: "scan" | "refresh";
-    source: ScanSource | RefreshSource;
+    source: ScanSource | RefreshSource | PackageRefreshSource;
     variant_ids?: string[];
     ids?: string[];
     exclude_ids?: string[];
@@ -74,5 +77,6 @@ export type OperationJob = {
         exclude_native?: boolean;
         native_package_exceptions?: string[];
         mode?: "local" | "api";
+        force?: boolean;
     };
 };

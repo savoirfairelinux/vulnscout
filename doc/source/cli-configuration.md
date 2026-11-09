@@ -136,6 +136,7 @@ does not consume this value. Use `refresh` explicitly when current data is neede
 | `IGNORE_PARSING_ERRORS` | Continue scanning even if input files contain errors | `false` |
 | `VERBOSE_MODE` | Enable verbose logging in the container | `false` |
 | `SBOM_CVE_CHECK_AUTO_UPDATE` | Clone/fetch local advisory databases before NVD/local sbom-cve-check scans; `0` uses existing clones offline | `1` |
+| `VULNSCOUT_SCORECARD_ENABLED` | Query OpenSSF Scorecard, deps.dev and OSV for the SBOM table's Maintenance column; `0` disables these lookups offline | `1` |
 | `VULNSCOUT_SBOM_CVE_CHECK_DB_DIR` | Optional host directory with `nvd-fkie` and `cvelist` clones; mounted by the wrapper at `/local_databases` on startup | cache's `local_databases` directory |
 
 #### Report Metadata

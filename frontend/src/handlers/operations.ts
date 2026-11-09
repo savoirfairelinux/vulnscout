@@ -90,6 +90,11 @@ class Operations {
         };
     }
 
+    /** Resolve package repositories and fetch OpenSSF Scorecard results for the variants' packages. */
+    static scorecardRefreshJob(variantIds: string[], force = false): OperationJob {
+        return { kind: "refresh", source: "scorecard", variant_ids: variantIds, options: { force } };
+    }
+
     static async cancel(opId: string): Promise<boolean> {
         const response = await fetch(api(`/api/operations/${encodeURIComponent(opId)}/cancel`), {
             method: "POST",
