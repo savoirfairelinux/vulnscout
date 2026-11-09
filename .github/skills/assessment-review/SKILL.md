@@ -254,7 +254,7 @@ replacement. `rationale` names each differing field and the evidence:
 If the stored `inline_mitigations_already_exist` (or another `not_affected`
 justification) rests only on a mitigation declared in the STRIDE `risks`, and
 no evidence corroborates it, treat the justification as unsupported and say so
-in `rationale`, citing the `T#` line. Cite STRIDE IDs only from the target's
+in `rationale`, citing the `R#` risk line. Cite STRIDE IDs only from the target's
 own variant.
 
 ### Confidence gate

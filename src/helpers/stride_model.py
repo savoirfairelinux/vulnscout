@@ -40,6 +40,7 @@ SYSTEM_KEYS: tuple[str, ...] = ("scope", "actors", "entry_points", "trust_bounda
 _COMPONENT_ID = re.compile(r"^C[1-9]\d*$")
 _INTERACTION_ID = re.compile(r"^I[1-9]\d*$")
 _THREAT_ID = re.compile(r"^T[1-9]\d*$")
+_RISK_ID = re.compile(r"^R[1-9]\d*$")
 
 
 class StrideValidationError(ValueError):
@@ -207,11 +208,14 @@ def _rating(value: object, path: str, errs: _Errors) -> Optional[str]:
 
 
 def _risks(raw: object, threat_ids: set[str], errs: _Errors) -> list[dict[str, Any]]:
+    seen: set[str] = set()
     out = []
     for i, row in enumerate(_rows(raw, "risks", errs)):
         p = f"risks[{i}]"
         out.append({
-            "threat_id": _ref(row, "threat_id", f"{p}.threat_id", threat_ids, errs),
+            "id": _row_id(row, f"{p}.id", _RISK_ID, seen, errs),
+            "description": _text(row.get("description"), f"{p}.description", errs),
+            "threat_ids": _target_ids(row.get("threat_ids"), f"{p}.threat_ids", threat_ids, errs),
             "likelihood": _rating(row.get("likelihood"), f"{p}.likelihood", errs),
             "impact": _rating(row.get("impact"), f"{p}.impact", errs),
             "mitigation": _text(row.get("mitigation"), f"{p}.mitigation", errs),
@@ -260,6 +264,12 @@ def _check_budgets(model: dict[str, Any], errs: _Errors) -> None:
     )
     if expanded > MAX_EXPANDED_TARGET_CHARS:
         errs.add("threats", "reference too much component and interaction text through their targets")
+    threats = {threat["id"]: threat for threat in model["threats"]}
+    risk_refs = sum(
+        len(_threat_summary(t, threats.get(t))) + 2 for risk in model["risks"] for t in risk["threat_ids"]
+    )
+    if risk_refs > MAX_EXPANDED_TARGET_CHARS:
+        errs.add("risks", "reference too much threat text through their threats")
 
 
 def normalize_system(raw: object) -> dict[str, Optional[str]]:
@@ -367,16 +377,38 @@ def render_threat_model(system: Optional[dict[str, Optional[str]]], model: Optio
     return "\n\n".join(sections) if sections else None
 
 
+def _truncated(text: str) -> str:
+    return text[:RISK_DESCRIPTION_MAX] + "…" if len(text) > RISK_DESCRIPTION_MAX else text
+
+
 def _threat_summary(threat_id: str, threat: Optional[dict[str, Any]]) -> str:
     if threat is None:
         return threat_id
     summary = f"{threat_id} {CATEGORY_LABELS.get(threat.get('category', ''), threat.get('category', ''))}".rstrip()
     description = threat.get("description") or ""
     if _has_text(description):
-        if len(description) > RISK_DESCRIPTION_MAX:
-            description = description[:RISK_DESCRIPTION_MAX] + "…"
-        summary += f", {description}"
+        summary += f", {_truncated(description)}"
     return summary
+
+
+def _risk_threat_ids(risk: dict[str, Any]) -> list[str]:
+    """Threat ids of a risk; legacy single-``threat_id`` rows are still read for old migrations."""
+    ids = risk.get("threat_ids")
+    if isinstance(ids, list):
+        return [t for t in ids if isinstance(t, str)]
+    legacy = risk.get("threat_id")
+    return [legacy] if isinstance(legacy, str) and legacy else []
+
+
+def _risk_subject(risk: dict[str, Any], threats: dict[str, dict[str, Any]]) -> str:
+    summaries = "; ".join(_threat_summary(t, threats.get(t)) for t in _risk_threat_ids(risk))
+    risk_id = risk.get("id")
+    if not _has_text(risk_id):
+        return summaries
+    subject = str(risk_id)
+    if _has_text(risk.get("description")):
+        subject += f" {_truncated(risk['description'])}"
+    return f"{subject} [{summaries}]" if summaries else subject
 
 
 def _risk_detail(risk: dict[str, Any]) -> str:
@@ -403,5 +435,5 @@ def render_risks(model: Optional[dict[str, Any]]) -> Optional[str]:
     for risk in model.get("risks") or []:
         detail = _risk_detail(risk)
         if detail:
-            lines.append(f"- {_threat_summary(risk['threat_id'], threats.get(risk['threat_id']))} — {detail}")
+            lines.append(f"- {_risk_subject(risk, threats)} — {detail}")
     return "\n".join(lines) if lines else None

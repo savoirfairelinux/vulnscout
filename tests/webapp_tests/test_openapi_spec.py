@@ -509,7 +509,7 @@ def test_stride_editor_save_matches_context_contracts(client, contract_data):
             "components": [{"id": "C1", "name": "Web UI"}, {"id": "C2", "name": "Daemon"}],
             "interactions": [{"id": "I1", "source_id": "C1", "destination_id": "C2"}],
             "threats": [{"id": "T1", "category": "tampering", "target_ids": ["I1"]}],
-            "risks": [{"threat_id": "T1", "likelihood": "high", "impact": None}],
+            "risks": [{"id": "R1", "threat_ids": ["T1"], "likelihood": "high", "impact": None}],
         },
     }
     path = "/api/variants/{variant_id}/context"

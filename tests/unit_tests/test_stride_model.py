@@ -32,9 +32,11 @@ def _model(**over):
     ]
     m["threats"] = [
         {"id": "T1", "category": "tampering", "description": "Swap image", "target_ids": ["C1", "I1"]},
+        {"id": "T2", "category": "spoofing", "description": "Fake server", "target_ids": ["C2"]},
     ]
     m["risks"] = [
-        {"threat_id": "T1", "likelihood": "high", "impact": None, "mitigation": "", "residual": ""},
+        {"id": "R1", "description": "", "threat_ids": ["T1"],
+         "likelihood": "high", "impact": None, "mitigation": "", "residual": ""},
     ]
     m.update(over)
     return m
@@ -133,20 +135,69 @@ def test_threat_target_must_exist():
 
 def test_risk_threat_must_exist():
     m = _model()
-    m["risks"][0]["threat_id"] = "T4"
-    assert _fields(m) == {"risks[0].threat_id": "references an unknown id"}
+    m["risks"][0]["threat_ids"] = ["T4"]
+    assert _fields(m) == {"risks[0].threat_ids": "references an unknown id"}
 
 
-def test_risk_threat_required():
+@pytest.mark.parametrize("threat_ids", [[], None])
+def test_risk_threat_required(threat_ids):
     m = _model()
-    m["risks"][0]["threat_id"] = ""
-    assert _fields(m) == {"risks[0].threat_id": "is required"}
+    m["risks"][0]["threat_ids"] = threat_ids
+    assert _fields(m) == {"risks[0].threat_ids": "is required"}
+
+
+def test_risk_threat_ids_must_not_repeat():
+    m = _model()
+    m["risks"][0]["threat_ids"] = ["T1", "T1"]
+    assert _fields(m) == {"risks[0].threat_ids": "must not repeat an id"}
+
+
+def test_risk_may_group_several_threats():
+    m = _model()
+    m["risks"][0]["threat_ids"] = ["T1", "T2"]
+    assert normalize_stride_model(m)["risks"][0]["threat_ids"] == ["T1", "T2"]
 
 
 def test_several_risks_may_share_a_threat():
     m = _model()
-    m["risks"].append(dict(m["risks"][0]))
+    m["risks"].append({**m["risks"][0], "id": "R2"})
     assert len(normalize_stride_model(m)["risks"]) == 2
+
+
+@pytest.mark.parametrize("bad_id", ["", "R0", "r1", "T1", None])
+def test_risk_id_pattern_enforced(bad_id):
+    m = _model()
+    m["risks"][0]["id"] = bad_id
+    assert "risks[0].id" in _fields(m)
+
+
+def test_duplicate_risk_id_rejected():
+    m = _model()
+    m["risks"].append({**m["risks"][0]})
+    assert _fields(m) == {"risks[1].id": "is duplicated"}
+
+
+def test_risk_description_kept():
+    m = _model()
+    m["risks"][0]["description"] = "Rogue update"
+    assert normalize_stride_model(m)["risks"][0]["description"] == "Rogue update"
+
+
+def test_legacy_threat_id_row_rejected():
+    m = _model(risks=[{"threat_id": "T1", "likelihood": "high", "impact": None, "mitigation": "", "residual": ""}])
+    fields = _fields(m)
+    assert fields["risks[0].id"].startswith("must match")
+    assert fields["risks[0].threat_ids"] == "is required"
+
+
+def test_risk_fan_out_is_bounded():
+    threats = [{"id": f"T{i}", "category": "spoofing", "description": "x" * 200, "target_ids": ["C1"]}
+               for i in range(1, 501)]
+    risks = [{"id": f"R{r}", "description": "", "threat_ids": [t["id"] for t in threats],
+              "likelihood": "low", "impact": None, "mitigation": "", "residual": ""} for r in range(1, 6)]
+    with pytest.raises(StrideValidationError) as exc:
+        normalize_stride_model(_model(threats=threats, risks=risks))
+    assert exc.value.fields == {"risks": "reference too much threat text through their threats"}
 
 
 @pytest.mark.parametrize("rating", [None, "low", "medium", "high"])
@@ -220,7 +271,8 @@ def test_full_render_matches_shape():
         "Components:\n- C1 OTA updater (trust zone: device)\n- C2 Update server (trust zone: cloud)\n\n"
         "Interactions:\n- I1 Download: C1 OTA updater -> C2 Update server; interface: HTTPS; "
         "data: image; trust boundary: internet\n\n"
-        "Threats:\nTampering\n- T1 [C1 OTA updater, I1 Download]: Swap image")
+        "Threats:\nSpoofing\n- T2 [C2 Update server]: Fake server\n"
+        "Tampering\n- T1 [C1 OTA updater, I1 Download]: Swap image")
 
 
 def test_all_empty_is_none():
@@ -263,7 +315,7 @@ def test_threats_grouped_in_stride_order():
 
 def _risk_model(**risk):
     m = _model()
-    m["risks"] = [{"threat_id": "T1", "likelihood": None, "impact": None,
+    m["risks"] = [{"id": "R1", "description": "", "threat_ids": ["T1"], "likelihood": None, "impact": None,
                    "mitigation": "", "residual": "", **risk}]
     return m
 
@@ -271,31 +323,50 @@ def _risk_model(**risk):
 def test_risk_line_full():
     m = _risk_model(likelihood="high", impact="medium", mitigation="Sign images", residual="Accept")
     assert render_risks(m) == (
-        "- T1 Tampering, Swap image \u2014 Likelihood: High, Impact: Medium. "
+        "- R1 [T1 Tampering, Swap image] \u2014 Likelihood: High, Impact: Medium. "
         "Mitigation: Sign images. Residual risk / decision: Accept")
 
 
 def test_risk_line_partial():
-    assert render_risks(_risk_model(likelihood="high")) == "- T1 Tampering, Swap image \u2014 Likelihood: High"
+    assert render_risks(_risk_model(likelihood="high")) == "- R1 [T1 Tampering, Swap image] \u2014 Likelihood: High"
 
 
 def test_risk_line_without_rating_starts_with_mitigation():
-    assert render_risks(_risk_model(mitigation="Sign")) == "- T1 Tampering, Swap image \u2014 Mitigation: Sign"
+    assert render_risks(_risk_model(mitigation="Sign")) == "- R1 [T1 Tampering, Swap image] \u2014 Mitigation: Sign"
+
+
+def test_risk_line_groups_threats_after_the_description():
+    m = _risk_model(description="Rogue update", threat_ids=["T1", "T2"], likelihood="high")
+    assert render_risks(m) == (
+        "- R1 Rogue update [T1 Tampering, Swap image; T2 Spoofing, Fake server] \u2014 Likelihood: High")
 
 
 def test_unrated_empty_risk_skipped_and_none():
     assert render_risks(_risk_model()) is None
+    assert render_risks(_risk_model(description="Only a name")) is None
     assert render_risks(None) is None
 
 
 def test_long_threat_description_truncated():
     m = _risk_model(likelihood="low")
     m["threats"][0]["description"] = "x" * 200
-    assert render_risks(m) == f"- T1 Tampering, {'x' * RISK_DESCRIPTION_MAX}\u2026 \u2014 Likelihood: Low"
+    assert render_risks(m) == f"- R1 [T1 Tampering, {'x' * RISK_DESCRIPTION_MAX}\u2026] \u2014 Likelihood: Low"
+
+
+def test_long_risk_description_truncated():
+    m = _risk_model(description="y" * 200, likelihood="low")
+    assert render_risks(m) == (
+        f"- R1 {'y' * RISK_DESCRIPTION_MAX}\u2026 [T1 Tampering, Swap image] \u2014 Likelihood: Low")
 
 
 def test_risk_with_unknown_threat_renders_id_only():
-    m = _risk_model(likelihood="low")
+    assert render_risks(_risk_model(threat_ids=["T9"], likelihood="low")) == "- R1 [T9] \u2014 Likelihood: Low"
+
+
+def test_legacy_risk_row_still_renders():
+    # Rows stay in this shape while the a3d5e7f9b1c2 downgrade renders them.
+    m = _model(risks=[{"threat_id": "T1", "likelihood": "low", "impact": None, "mitigation": "", "residual": ""}])
+    assert render_risks(m) == "- T1 Tampering, Swap image \u2014 Likelihood: Low"
     m["risks"][0]["threat_id"] = "T9"
     assert render_risks(m) == "- T9 \u2014 Likelihood: Low"
 
