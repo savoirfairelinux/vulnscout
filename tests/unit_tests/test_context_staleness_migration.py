@@ -329,6 +329,30 @@ def test_upgrade_converts_only_legacy_rows():
     assert twice == once
 
 
+def test_upgrade_reads_models_in_bounded_batches(monkeypatch):
+    monkeypatch.setattr(risk_groups, "_BATCH_SIZE", 2)
+    engine = sa.create_engine("sqlite:///:memory:")
+    selects = []
+    sa.event.listen(engine, "before_cursor_execute",
+                    lambda *args: selects.append(args[2]) if args[2].lstrip().startswith("SELECT") else None)
+    with engine.begin() as connection:
+        _create_risk_schema(connection)
+        for index in range(5):
+            connection.execute(
+                sa.text("INSERT INTO variant_context VALUES (:id, :m, '2026-01-01')"),
+                {"id": f"extra{index}", "m": json.dumps({"threats": [], "risks": [_LEGACY_RISK]})})
+        selects.clear()
+        risk_groups.upgrade()
+        migration_selects = list(selects)
+        rows = _risk_rows(connection)
+
+    assert all("LIMIT" in statement for statement in migration_selects)
+    assert len(migration_selects) >= 5
+    for index in range(5):
+        assert rows[f"extra{index}"][0]["risks"][0]["threat_ids"] == ["T1"]
+    assert rows["legacy"][0]["risks"][0]["id"] == "R1"
+
+
 def test_downgrade_keeps_the_first_threat():
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
