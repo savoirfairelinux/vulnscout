@@ -737,7 +737,7 @@ class TestCodebaseSource:
 # ---------------------------------------------------------------------------
 
 def _risk(mitigation):
-    return [{"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": mitigation, "residual": ""}]
+    return [{"id": "R1", "description": "", "threat_ids": ["T1"], "likelihood": "high", "impact": "medium", "mitigation": mitigation, "residual": ""}]
 
 
 def _stride_model(**overrides):
@@ -754,7 +754,7 @@ def _stride_model(**overrides):
             {"id": "T1", "category": "tampering", "description": "Image swapped", "target_ids": ["C1", "I1"]},
         ],
         "risks": [
-            {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""},
+            {"id": "R1", "description": "", "threat_ids": ["T1"], "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""},
         ],
     }
     model.update(overrides)

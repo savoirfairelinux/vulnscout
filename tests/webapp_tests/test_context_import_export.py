@@ -56,7 +56,7 @@ def _setup_db(app):
             "stride": {
                 "components": [{"id": "C1", "name": "A1 threat model"}],
                 "threats": [{"id": "T1", "category": "tampering", "description": "A1 risks", "target_ids": ["C1"]}],
-                "risks": [{"threat_id": "T1", "likelihood": "low"}],
+                "risks": [{"id": "R1", "threat_ids": ["T1"], "likelihood": "low"}],
             },
         })
         VariantContext.save_editor(variant_a2.id, {"codebase_source": "paths", "stride": _stride("A2 threat model")})
@@ -185,7 +185,7 @@ class TestExportContext:
         assert entry["codebase_path"] == "/src/a1"
         assert entry["environment"] == "prod"
         assert entry["stride_model"]["components"][0]["name"] == "A1 threat model"
-        assert entry["stride_model"]["risks"][0]["threat_id"] == "T1"
+        assert entry["stride_model"]["risks"][0]["threat_ids"] == ["T1"]
         assert entry["other_info"] == "A1 other"
         assert not {"editor_mode", "threat_model", "risks"} & set(entry)
 
@@ -413,7 +413,7 @@ _STRIDE_MODEL = {
         {"id": "T1", "category": "tampering", "description": "Swapped", "target_ids": ["C1", "I1"]},
     ],
     "risks": [
-        {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""},
+        {"id": "R1", "description": "", "threat_ids": ["T1"], "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""},
     ],
 }
 

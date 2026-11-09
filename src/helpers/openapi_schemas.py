@@ -441,10 +441,12 @@ SCHEMAS: dict[str, Any] = {
             "target_ids": _array(_STRING, minItems=1, description="Component or interaction IDs."),
         }, ("id", "category", "target_ids")), **_STRIDE_ROWS),
         "risks": _array(_object({
-            "threat_id": _STRING,
+            "id": {"type": "string", "pattern": r"^R[1-9]\d*$"},
+            "description": _TEXT,
+            "threat_ids": _array(_STRING, minItems=1, description="Threat IDs."),
             "likelihood": _RATING, "impact": _RATING,
             "mitigation": _TEXT, "residual": _TEXT,
-        }, ("threat_id",)), **_STRIDE_ROWS),
+        }, ("id", "threat_ids")), **_STRIDE_ROWS),
     }, description="Structured STRIDE model; rows reference earlier rows by ID."),
     "VariantContextEditor": _object({
         "codebase_source": _CODEBASE_SOURCE, "codebase_path": _TEXT,
