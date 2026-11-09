@@ -20,21 +20,34 @@ def _graph(client: VulnScoutClient, variant_id: str, document_id: str | None) ->
     if document_id is not None and not selected:
         raise ValueError("No active SBOM document found with that ID in this variant.")
     packages: dict[str, dict] = {}
+    targets_by_package: dict[str, list[dict]] = {}
+    for doc in documents:
+        for target in doc.get("build_targets", []):
+            observation = {**target, "document_id": doc["id"], "source_name": doc["source_name"]}
+            for package_id in target["package_ids"]:
+                targets_by_package.setdefault(package_id, []).append(observation)
     for doc in documents:
         for package in doc["packages"]:
             entry = packages.setdefault(package["id"], {"id": package["id"], "occurrences": []})
             entry["occurrences"].append({
                 "document_id": doc["id"], "source_name": doc["source_name"],
                 "dependencies_recorded": doc["dependencies_recorded"], **package,
+                "build_targets": targets_by_package.get(package["id"], []),
             })
     # Companion documents can supply cross-document endpoint metadata, as in the frontend.
     members = {package["id"] for doc in selected for package in doc["packages"]}
-    edges: dict[tuple[str, str], set[str]] = {}
+    edges: dict[tuple[str, str], list[dict]] = {}
     for doc in selected:
         for edge in doc["edges"]:
             source, target = edge["package_id"], edge["dependency_id"]
             if source in packages and target in packages:
-                edges.setdefault((source, target), set()).add(doc["id"])
+                evidence = {
+                    "document_id": doc["id"], "source_name": doc["source_name"], **edge,
+                    "declarations": edge.get("declarations", []),
+                }
+                records = edges.setdefault((source, target), [])
+                if evidence not in records:
+                    records.append(evidence)
     coverage = {
         "variant_id": variant_id, "document_id": document_id,
         "document_count": len(selected),
@@ -98,6 +111,25 @@ def _walk(links: dict, package_id: str, max_depth: int) -> tuple:
     return found, distances, parents, depth_limited
 
 
+def _source_files_impl(client: VulnScoutClient, variant_id: str, package_id: str,
+                       offset: int, limit: int) -> str:
+    try:
+        _page([], offset, limit)
+        package = client.get_package_source_files(variant_id, package_id)
+        files = package["source_files"]
+        return json.dumps({
+            "variant_id": variant_id, "package_id": package_id,
+            "source_file_count": package["source_file_count"],
+            "compiled_source_file_count": package["compiled_source_file_count"],
+            "compiled_sources_complete": package["compiled_sources_complete"],
+            "files_recorded": files is not None,
+            "evidence": "Recorded files and build associations, not proof of runtime reachability",
+            **_page(files or [], offset, limit),
+        }, ensure_ascii=True)
+    except (VulnScoutError, ValueError) as exc:
+        return f"Error: {exc}"
+
+
 def _traverse_impl(client: VulnScoutClient, variant_id: str, package_id: str, direction: str,
                    max_depth: int, document_id: str | None, offset: int, limit: int) -> str:
     try:
@@ -110,11 +142,11 @@ def _traverse_impl(client: VulnScoutClient, variant_id: str, package_id: str, di
         endpoints = {endpoint for edge in edges for endpoint in edge}
         if package_id not in members | endpoints:
             raise ValueError("Package not found in the selected active SBOM graph; use its exact package ID.")
-        links: dict[str, dict[str, list[str]]] = {}
+        links: dict[str, dict[str, list[dict]]] = {}
         for (source, target), documents in sorted(edges.items()):
             if direction == "dependents":
                 source, target = target, source
-            links.setdefault(source, {})[target] = sorted(documents)
+            links.setdefault(source, {})[target] = documents
         found, distances, parents, depth_limited = _walk(links, package_id, max_depth)
         page = _page(found, offset, limit)
         items = []
@@ -127,7 +159,11 @@ def _traverse_impl(client: VulnScoutClient, variant_id: str, package_id: str, di
             items.append({
                 **packages[target], "distance": distances[target], "direct": distances[target] == 1,
                 "path": path,
-                "path_document_ids": [links[source][dest] for source, dest in zip(path, path[1:])],
+                "path_document_ids": [
+                    sorted({edge["document_id"] for edge in links[source][dest]})
+                    for source, dest in zip(path, path[1:])
+                ],
+                "path_edges": [links[source][dest] for source, dest in zip(path, path[1:])],
             })
         return json.dumps({
             **coverage, "root": packages[package_id], "direction": direction, "max_depth": max_depth,
@@ -138,6 +174,20 @@ def _traverse_impl(client: VulnScoutClient, variant_id: str, package_id: str, di
 
 
 def register_tools(server, client: VulnScoutClient) -> None:
+    @server.tool()
+    def get_package_source_files(variant_id: str, package_id: str, offset: int = 0, limit: int = 100) -> str:
+        """Read paginated recorded SPDX files and build evidence for an exact package in one variant.
+
+        Uses active SBOMs only. Each item retains file SPDX ID, path, document/scan/variant
+        provenance, raw properties and builds (type, parameters, outputs, compiled marker).
+        files_recorded=false / source_file_count=null means unknown, not an empty inventory.
+        compiled_sources_complete describes recorded compiler-input coverage only, not deployment
+        or reachability. File containment and arbitrary build associations do not prove compilation.
+        Follow next_offset until null; pages reload evidence, so disclose scan changes.
+        Errors use Error:, never interpret them as package absence. Read-only.
+        """
+        return _source_files_impl(client, variant_id, package_id, offset, limit)
+
     @server.tool()
     def list_dependency_documents(variant_id: str, offset: int = 0, limit: int = 100) -> str:
         """List active SBOM sources and dependency-recording coverage for one variant.
@@ -157,6 +207,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
         query is a case-insensitive substring of name, version or opaque package ID.
         Returns paginated unique IDs with per-document occurrences retaining original
         version, release_version, source_revision, version_evidence and conflict flags.
+        Each occurrence's build_targets retains targets owning that package across the
+        variant's documents, with declaring document_id/source_name and separate
+        language/flags/defines; never flatten conflicting declarations or targets.
         Use exact returned IDs for traversal; names alone can match several releases.
         document_id optionally restricts discovery to one active source.
         Follow next_offset until null (limit 1..500); pages are not snapshot-isolated.
@@ -174,6 +227,11 @@ def register_tools(server, client: VulnScoutClient) -> None:
         max_depth=1 returns direct neighbours; 0 traverses all reachable nodes cycle-safely.
         Root is excluded from items. distance/direct reflect the shortest observed path;
         path_document_ids attributes each hop to source documents, not runtime evidence.
+        path_edges retains each hop's original package_id -> dependency_id orientation,
+        document/source and declarations (relationship_type, lifecycle_scope, original
+        source_document_id/source_name), even for dependents. Empty/legacy declarations
+        mean unknown scope, not runtime. Mixed paths have no inferred lifecycle scope;
+        this is one shortest path, not every alternative route.
         By default edges are unioned across active documents of this variant, like the UI;
         a path can combine sources. document_id restricts edges to that source while
         companion documents still resolve endpoint metadata. No cross-variant traversal.

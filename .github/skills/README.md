@@ -4,6 +4,18 @@ The built-in VulnScout Agent loads `cve-assessment` for assess actions and
 `vulnscout assess`, and `assessment-review` for review actions. Changes here
 affect both the built-in Agent and external clients.
 
+## Scoped SPDX assessment evidence
+
+Assessment and independent review use recorded SPDX files/build associations,
+package-owned compiler targets (per document, target and language, preserving
+flags/defines), and typed dependency/required-by declarations. The MCP tools
+expose these via `get_package_source_files`, `list_dependency_packages`
+(`occurrences[].build_targets`) and `get_package_dependencies` (`path_edges`).
+File presence is not compilation, and neither compiler inputs nor BUILD/RUNTIME
+declarations prove deployment or vulnerable-code reachability. Missing evidence
+stays unknown; verdicts require matching source/configuration and scoped citations.
+See the CVE skill's Phase 2 for coverage and confidence rules.
+
 ## SBOM Dependencies and Lifecycle Skill
 
 [`sbom-dependencies/SKILL.md`](./sbom-dependencies/SKILL.md) answers questions such

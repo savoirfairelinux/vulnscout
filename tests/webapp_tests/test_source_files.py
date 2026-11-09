@@ -113,6 +113,43 @@ def _assert_no_source_exclusion(scan, name="lib"):
     ) is None
 
 
+def test_companion_file_evidence_reaches_mcp_in_selected_variant(app, tmp_path, monkeypatch):
+    import httpx
+
+    from vulnscout_mcp.client import VulnScoutClient
+    from vulnscout_mcp.tools.dependencies import _source_files_impl
+
+    variant, _ = _import(tmp_path, _documents(extra=True))
+    project = Project.create("other-source-test")
+    other = Variant.create("other-board", project.id)
+    _import(tmp_path, _documents(path="src/other-board.c"), variant=other)
+    http = app.test_client()
+
+    def get(client, url, *, params):
+        response = http.get(url.removeprefix("http://vulnscout.test"), query_string=params)
+        return httpx.Response(response.status_code, json=response.json)
+
+    monkeypatch.setattr(httpx.Client, "get", get)
+    result = json.loads(_source_files_impl(
+        VulnScoutClient("http://vulnscout.test"), str(variant.id), "lib@1.0", 0, 100,
+    ))
+    expected = _package(app, variant)
+    assert result["items"] == expected["source_files"]
+    assert result["source_file_count"] == 1
+    assert result["compiled_source_file_count"] == 1
+    assert result["compiled_sources_complete"] is True
+    assert all(file["variant_id"] == str(variant.id) for file in result["items"])
+    compiled = next(file for file in result["items"] if file["path"] == "src/enabled.c")
+    assert compiled["document_name"] == "z-source.jsonld"
+    assert compiled["builds"][0]["compiled"] is True
+    assert compiled["builds"][0]["parameters"] == [{"key": "compile:flags:C", "value": "-DCONFIG_FEATURE=1"}]
+    contained = json.loads(_source_files_impl(
+        VulnScoutClient("http://vulnscout.test"), str(variant.id), "lib-sources@1.0", 0, 100,
+    ))
+    assert contained["source_file_count"] == 2
+    assert next(file for file in contained["items"] if file["path"] == "src/listed.c")["builds"] == []
+
+
 def test_companion_files_builds_and_properties_survive_input_cleanup(app, tmp_path):
     variant, scan = _import(tmp_path, _documents())
     assert db.session.query(SBOMFile).count() == 2

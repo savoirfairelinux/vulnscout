@@ -121,6 +121,7 @@ python vulnscout_mcp/server.py
 | `list_dependency_documents`    | Paginate active SBOM sources and relationship-recording coverage for a variant |
 | `list_dependency_packages`     | Search/paginate the complete SBOM inventory, including isolated packages and per-document version evidence |
 | `get_package_dependencies`     | Traverse direct/transitive dependencies or reverse dependents with paths and source provenance |
+| `get_package_source_files`     | Paginate an exact package's recorded SPDX files and build associations within one variant, retaining coverage and provenance |
 | `list_codebase_files`          | List paths/sizes in a variant upload; follow `next_offset` for pagination |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |
@@ -169,6 +170,44 @@ cannot prove absence. Lifecycle facts are not supplied or guessed by the MCP
 tools: the skill researches authoritative dated upstream/vendor support policies,
 including distribution backports, and explicitly reports unknown evidence.
 No SBOMs, contexts or assessments are modified.
+
+### Recorded SPDX evidence for CVE assessment and review
+
+After resolving exact package IDs, use `get_package_source_files(variant_id,
+package_id, offset=0, limit=100)` and follow `next_offset` until null. It reads
+`/api/packages` with the exact package/variant and `include_source_files=true`,
+never outdated scans or global package evidence. `items` retains file SPDX IDs,
+paths, document/scan/variant provenance, raw properties and builds with parameters,
+outputs and compilation markers. `files_recorded=false` / `source_file_count=null`
+is unknown, not a recorded empty inventory. Counts and `compiled_sources_complete`
+are the existing backend's scoped evidence, not new runtime/reachability claims.
+Pagination bounds tool output; each call still reads the full package evidence
+through HTTP, without snapshot isolation. Errors are `Error: ...`, not absence.
+
+`list_dependency_packages` now also preserves package-owned `build_targets` on
+each occurrence: document, target ID/name/package IDs and separate language
+`flags`/`defines`, without parsing or flattening raw strings. Targets come from
+the dependency graph, even for isolated packages with no dependency edges.
+Ownership is resolved across the active variant's companion documents, including
+build-only documents. Each target carries its declaring `document_id` and
+`source_name`, independently of the package occurrence's document. All matching
+observations remain visible, including conflicting declarations of one build ID;
+an optional package-document filter does not discard companion compiler evidence.
+
+`get_package_dependencies` retains `path_edges` aligned to each hop of `path`.
+Each hop is a list of edge records with graph document/source, normalized
+`package_id → dependency_id` and original `declarations` (relationship type,
+lifecycle scope and source document/name). Reverse traversal keeps the original
+edge orientation. Multiple declarations, mixed build/runtime paths and legacy
+empty declarations remain distinct; no effective lifecycle scope is inferred.
+The path is one shortest route, not every possible route.
+
+The assessment/review skills require correlating these three evidence classes
+with advisory-specific source, configuration, linkage and deployment evidence.
+File presence does not prove compilation; compiler inputs and BUILD/RUNTIME
+declarations do not prove vulnerable-code reachability. Missing files, flags or
+relationships cannot alone justify `not_affected`. No new assessment write
+fields are introduced; cite decisive evidence and gaps in existing narratives.
 
 The embedded Agent exposes the same scoped read-only dependency tools. It keeps
 host skill/config discovery disabled and has no web research tools: its built-in
