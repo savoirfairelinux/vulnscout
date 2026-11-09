@@ -9,6 +9,7 @@ export type DependencyScope = {
     packages: Map<string, DependencyPackage>;
     outgoing: Map<string, string[]>;
     incoming: Map<string, string[]>;
+    dependentCounts: Map<string, number>;
     edges: DependencyEdge[];
     recorded: Set<string>;
     unresolvedEdges: number;
@@ -67,8 +68,19 @@ export function buildDependencyScopes(documents: DependencyDocument[], sourceId:
             packageVersionLabel(packages.get(left)!).localeCompare(packageVersionLabel(packages.get(right)!)) || left.localeCompare(right);
         outgoing.forEach(links => links.sort(compare));
         incoming.forEach(links => links.sort(compare));
-        return { id, name: sources[0].variant_name, documents: sources, packages, outgoing, incoming, edges, recorded, unresolvedEdges };
+        const dependentCounts = new Map<string, number>();
+        documents.filter(doc => doc.variant_id === id).forEach(doc =>
+            Object.entries(doc.dependent_counts ?? {}).forEach(([packageId, count]) =>
+                dependentCounts.set(packageId, Math.max(count, dependentCounts.get(packageId) ?? 0))));
+        return { id, name: sources[0].variant_name, documents: sources, packages, outgoing, incoming,
+            dependentCounts, edges, recorded, unresolvedEdges };
     }).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function exclusiveDirectDependencies(scope: DependencyScope, id: string, evidenceScope = scope): DependencyPackage[] {
+    return (scope.outgoing.get(id) ?? []).filter(dependencyId => dependencyId !== id
+        && (evidenceScope.dependentCounts.get(dependencyId) ?? evidenceScope.incoming.get(dependencyId)?.length) === 1)
+        .map(dependencyId => scope.packages.get(dependencyId)!);
 }
 
 // Source components of the condensed graph also cover rootless cycles.

@@ -530,6 +530,18 @@ GET /api/package-dependencies
 
 **Response:** `{"documents": [...]}` where each active SBOM document lists its `variant_id`, `variant_name`, `dependencies_recorded`, `packages` and directed `edges` (`package_id` depends on `dependency_id`), or `{"counts": {"name@version": {"in": n, "out": n}}, "unrecorded": ["name@version", ...]}` when `counts=1` (`in`: packages it depends on, `out`: packages that depend on it). `dependencies_recorded` is `false` for documents imported before dependency support, and `unrecorded` lists packages found only in such documents, whose relationships are unknown rather than zero. An edge is listed under the dependent package's document; its dependency may appear in another document of the same scan (SPDX 2 `DocumentRef-` links). Package selection follows the same comparison rules as `GET /api/packages`.
 
+Each graph document also includes `dependent_counts`, mapping its visible
+package IDs (including dependency endpoints resolved in companion documents)
+to the number of unique direct incoming dependents across all active SBOM
+sources **in that variant**, before comparison filtering. Duplicate declarations
+count once; self edges count as incoming dependents. These counts do not merge
+other variants/projects or historical scans. A direct dependency other than
+the selected package is exclusive when its count is one. This enables discovery
+without treating a dependent hidden by a comparison/source filter as absent.
+The existing `counts=1` response and graph/list selection are unchanged.
+SBOM relations may be incomplete and are not proof of actual build/runtime
+requirements or safe package removal.
+
 Each document also includes `build_targets` (empty when compiler metadata is
 absent). For West-generated Zephyr SPDX 3 JSON-LD, each entry contains the build's
 SPDX `id`, target `name`, associated public `package_ids`, and `languages`.

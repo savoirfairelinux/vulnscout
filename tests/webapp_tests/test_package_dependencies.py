@@ -2896,6 +2896,100 @@ def test_outdated_cleanup_keeps_reactivated_graph_consistent(app, tmp_path):
         assert Scan.get_by_id(older_scan_id) is not None
 
 
+def test_dependent_counts_use_all_active_variant_evidence_without_global_relations(app, tmp_path):
+    from datetime import timedelta
+
+    def graph(names, pairs):
+        return {'@graph': [
+            {'type': 'CreationInfo', 'specVersion': '3.0.1'},
+            *({'type': 'software_Package', 'spdxId': f'pkg:{name}',
+               'name': name, 'software_packageVersion': '1.0'} for name in names),
+            *({'type': 'Relationship', 'relationshipType': 'dependsOn',
+               'from': f'pkg:{source}', 'to': [f'pkg:{target}']} for source, target in pairs),
+        ]}
+
+    variant_id, scan_id = _scan(app, tmp_path, 'curl', graph(
+        ['CURL', 'A', 'B', 'C', 'D', 'other', 'transitive'],
+        [('CURL', name) for name in ('A', 'B', 'C', 'D')]
+        + [('other', 'A'), ('other', 'D'), ('B', 'transitive')],
+    ))
+
+    def evidence(scan_id, name, pairs):
+        document = SBOMDocument.create(name, name, scan_id)
+        document.dependencies_recorded = True
+        names = {name for pair in pairs for name in pair}
+        packages = {name: Package.get_by_string_id(f'{name}@1.0') for name in names}
+        for package in packages.values():
+            SBOMPackage.create(document.id, package.id)
+        db.session.add_all(PackageDependency(
+            sbom_document_id=document.id, package_id=packages[source].id, dependency_id=packages[target].id,
+        ) for source, target in pairs)
+        db.session.commit()
+        return document
+
+    # Duplicate declarations in another source are still one incoming dependent.
+    companion = evidence(scan_id, 'companion', [('CURL', 'B'), ('other', 'D')])
+    stale = Scan.create('SBOM', variant_id)
+    stale.timestamp = db.session.get(Scan, scan_id).timestamp - timedelta(days=1)
+    db.session.commit()
+    evidence(stale.id, 'stale', [('other', 'C')])
+    other_variant, _ = _scan(app, tmp_path, 'other-variant', graph(
+        ['CURL', 'B', 'other'], [('CURL', 'B'), ('other', 'B')],
+    ))
+    foreign_project = Project.create('foreign')
+    foreign_variant = Variant.create('foreign', foreign_project.id)
+    evidence(Scan.create('SBOM', foreign_variant.id).id, 'foreign', [('other', 'C')])
+
+    client = app.test_client()
+    project_id = db.session.get(Variant, variant_id).project_id
+    expected = {'CURL@1.0': 0, 'A@1.0': 2, 'B@1.0': 1, 'C@1.0': 1,
+                'D@1.0': 2, 'other@1.0': 0, 'transitive@1.0': 1}
+    for query in (f'variant_id={variant_id}', f'project_id={project_id}',
+                  f'variant_ids={variant_id},{other_variant}'):
+        response = client.get(f'/api/package-dependencies?{query}')
+        assert response.status_code == 200
+        documents = response.json['documents']
+        main = next(doc for doc in documents if doc['source_name'] == 'curl.json')
+        assert main['dependent_counts'] == expected
+        assert next(doc for doc in documents if doc['id'] == str(companion.id))['dependent_counts'] == {
+            'CURL@1.0': 0, 'B@1.0': 1, 'other@1.0': 0, 'D@1.0': 2,
+        }
+        assert all(doc['variant_id'] != str(foreign_variant.id) for doc in documents)
+        for doc in documents:
+            if doc['variant_id'] == str(other_variant):
+                assert doc['dependent_counts']['B@1.0'] == 2
+
+    # Comparison filters can hide a dependent, but must not make its dependency exclusive.
+    base_variant, _ = _scan(app, tmp_path, 'base-only-other', graph(['other'], []))
+    intersection_variant, _ = _scan(app, tmp_path, 'intersection', graph(
+        ['CURL', 'B', 'D'], [('CURL', 'B'), ('CURL', 'D')],
+    ))
+    for query in (
+        f'variant_id={base_variant}&compare_variant_id={variant_id}&operation=difference',
+        f'variant_ids={variant_id},{intersection_variant}&operation=intersection',
+    ):
+        documents = client.get(f'/api/package-dependencies?{query}').json['documents']
+        main = next(doc for doc in documents if doc['source_name'] == 'curl.json')
+        assert all(pkg['name'] != 'other' for pkg in main['packages'])
+        assert main['dependent_counts']['B@1.0'] == 1
+        if 'D@1.0' in main['dependent_counts']:
+            assert main['dependent_counts']['D@1.0'] == 2
+        assert 'other@1.0' not in main['dependent_counts']
+
+    # A cycle does not disqualify B, but a self edge is another dependent of C.
+    evidence(scan_id, 'cycles', [('CURL', 'CURL'), ('B', 'CURL'), ('C', 'C')])
+    main = next(doc for doc in client.get(f'/api/package-dependencies?variant_id={variant_id}').json['documents']
+                if doc['source_name'] == 'curl.json')
+    counts = main['dependent_counts']
+    assert counts['CURL@1.0'] == 2
+    assert counts['B@1.0'] == 1
+    assert counts['C@1.0'] == 2
+    empty_variant, _ = _scan(app, tmp_path, 'empty-relations', graph(['CURL'], []))
+    empty = client.get(f'/api/package-dependencies?variant_id={empty_variant}').json['documents'][0]
+    assert empty['dependent_counts'] == {'CURL@1.0': 0}
+    assert empty['edges'] == []
+
+
 def test_comparison_graph_matches_package_selection(app, tmp_path):
     base_id, _ = _scan(app, tmp_path, 'base', _spdx3())
     compare_id, _ = _scan(app, tmp_path, 'compare', {'@graph': [
