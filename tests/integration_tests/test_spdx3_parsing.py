@@ -30,7 +30,7 @@ def test_commit_version_preserves_all_release_identifiers(spdx3_parser):
     assert package.version == revision
     assert package.version_info["release_version"] == "4.1.1"
     assert package.version_info["source_revision"] == revision
-    assert len(package.purl) == 3
+    assert len(package.purl) == 2
     assert {item["source"] for item in package.version_info["version_evidence"]} == {"sbom", "purl", "cpe"}
     exported = SPDX3(ControllersCache()).generate_package_element(package)
     assert exported["software_packageVersion"] == revision
@@ -47,6 +47,17 @@ def test_spdx3_purl_conflicts_remain_visible(spdx3_parser):
     package = spdx3_parser.packagesCtrl.get(f"lib@{'a' * 40}")
     assert package.version_info["release_version"] is None
     assert package.version_info["version_conflict"]
+
+
+def test_spdx3_declared_purl_skips_generic_identifiers(spdx3_parser):
+    maven_purl = "pkg:maven/com.prosysopc.ua/prosys-opc-ua-sdk-client-server@5.4.0-201"
+    spdx3_parser.parse_from_dict({"@graph": [{
+        "type": "software_Package", "spdxId": "pkg:prosys", "name": "Prosys OPC UA SDK Client/Server",
+        "software_packageVersion": "5.4.0-201", "software_packageUrl": maven_purl,
+    }]})
+    package = spdx3_parser.packagesCtrl.get("Prosys OPC UA SDK Client/Server@5.4.0-201")
+    assert package.cpe == []
+    assert package.purl == [maven_purl]
 
 
 def test_spdx3_collects_valid_purls_from_all_supported_fields(spdx3_parser):

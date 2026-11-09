@@ -182,8 +182,7 @@ class CycloneDx:
                 package.add_purl(str(component.purl))
             if component.cpe:
                 package.add_cpe(component.cpe)
-            package.generate_generic_cpe()
-            package.generate_generic_purl()
+            package.add_fallback_identifiers()
 
             if component.bom_ref.value:
                 self.ref_dict[component.bom_ref.value] = package.string_id
@@ -343,18 +342,19 @@ class CycloneDx:
         """
         self._component_refs = {}
         for pkg in self.packagesCtrl:
-            if len(pkg.cpe) < 1:
+            if not pkg.cpe and not pkg.purl:
                 pkg.generate_generic_cpe()
-            if len(pkg.purl) < 1:
+            if not pkg.purl:
                 pkg.generate_generic_purl()
-            group = pkg.cpe[0].split(":")[3]
+            cpe = pkg.cpe[0] if pkg.cpe else None
+            group = cpe.split(":")[3] if cpe else None
             cmp = Component(
                 type=cyclonedx.model.component.ComponentType.LIBRARY,
                 name=pkg.name,
                 version=pkg.version,
                 bom_ref=pkg.purl[0],
                 group=group if group != '*' else None,
-                cpe=pkg.cpe[0],
+                cpe=cpe,
                 purl=PackageURL.from_string(pkg.purl[0]),
             )
             self.sbom.components.add(cmp)

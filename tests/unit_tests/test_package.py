@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pytest
+from packageurl import PackageURL
 from src.models.package import Package
 
 
@@ -361,6 +362,49 @@ def test_purl_epoch_qualifier_without_version_not_corrupted():
     no_version_purl = "pkg:deb/ubuntu/procps?epoch=2"
     pkg.add_purl(no_version_purl)
     assert "None" not in pkg.purl[0]
+
+
+def test_generic_purl_keeps_slash_inside_name():
+    pkg = Package("Prosys OPC UA SDK Client/Server", "5.4.0-201")
+    stored = pkg.generate_generic_purl()
+    assert pkg.purl == [stored]
+    assert stored == "pkg:generic/Prosys%20OPC%20UA%20SDK%20Client%2FServer@5.4.0-201"
+    assert PackageURL.from_string(stored).name == "Prosys OPC UA SDK Client/Server"
+
+
+def test_generic_purl_with_supplier_namespace():
+    pkg = Package("foo", "1.0", supplier="Organization: Acme Corp (x@a.com)")
+    assert pkg.generate_generic_purl() == "pkg:generic/acme-corp/foo@1.0"
+
+
+def test_generic_purl_without_name_keeps_raw_format():
+    pkg = Package("", "1.0")
+    assert pkg.generate_generic_purl() == "pkg:generic/@1.0"
+    assert pkg.purl == ["pkg:generic/@1.0"]
+
+
+def test_declared_purl_with_encoded_slash_round_trips():
+    pkg = Package("foo", "1.0")
+    pkg.add_purl("pkg:generic/acme/foo%2Fbar@1.0?arch=x86_64#sub/dir")
+    assert pkg.purl == ["pkg:generic/acme/foo%2Fbar@1.0?arch=x86_64#sub/dir"]
+
+
+def test_fallback_identifiers_added_without_declared_identifiers():
+    pkg = Package("mypackage", "1.0.0")
+    pkg.add_fallback_identifiers()
+    assert pkg.cpe == ["cpe:2.3:a:*:mypackage:1.0.0:*:*:*:*:*:*:*"]
+    assert pkg.purl == ["pkg:generic/mypackage@1.0.0"]
+
+
+@pytest.mark.parametrize(("cpe", "purl"), [
+    ([], ["pkg:maven/com.prosysopc.ua/prosys-opc-ua-sdk-client-server@5.4.0-201"]),
+    (["cpe:2.3:a:gnu:binutils:2.38:*:*:*:*:*:*:*"], []),
+])
+def test_fallback_identifiers_skipped_with_declared_identifier(cpe, purl):
+    pkg = Package("name", "1.0", cpe, purl)
+    pkg.add_fallback_identifiers()
+    assert pkg.cpe == cpe
+    assert pkg.purl == purl
 
 
 @pytest.mark.parametrize("supplier", [

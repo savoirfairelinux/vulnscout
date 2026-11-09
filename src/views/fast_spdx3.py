@@ -190,11 +190,10 @@ class FastSPDX3:
         cpes = self.extract_cpes(pkg_element)
         for cpe in cpes:
             pkg.add_cpe(cpe)
-        pkg.generate_generic_cpe()
 
         for purl in self.extract_purls(pkg_element):
             pkg.add_purl(purl)
-        pkg.generate_generic_purl()
+        pkg.add_fallback_identifiers()
 
         return pkg
 

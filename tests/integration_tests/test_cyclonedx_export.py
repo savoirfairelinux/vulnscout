@@ -103,6 +103,24 @@ def test_export_components_json(cdx_exporter):
         raise e
 
 
+def test_export_component_without_declared_cpe(cdx_exporter):
+    maven_purl = "pkg:maven/com.prosysopc.ua/prosys-opc-ua-sdk-client-server@5.4.0-201"
+    cairo_cpe = "cpe:2.3:a:cairographics:cairo:1.16.0:*:*:*:*:*:*:*"
+    cdx_exporter.packagesCtrl.add(Package("Prosys OPC UA SDK Client/Server", "5.4.0-201", [], [maven_purl]))
+    cdx_exporter.packagesCtrl.add(Package("cairo", "1.16.0", [cairo_cpe], []))
+    components = {item["name"]: item for item in json.loads(cdx_exporter.output_as_json())["components"]}
+
+    prosys = components["Prosys OPC UA SDK Client/Server"]
+    assert prosys["bom-ref"] == maven_purl
+    assert prosys["purl"] == maven_purl
+    assert "cpe" not in prosys
+    assert "group" not in prosys
+    cairo = components["cairo"]
+    assert cairo["cpe"] == cairo_cpe
+    assert cairo["group"] == "cairographics"
+    assert cairo["purl"] == "pkg:generic/cairo@1.16.0"
+
+
 def test_export_vulnerabilities_json(cdx_exporter):
     pkg_1 = Package("cairo", "1.16.0", [], [])
     cdx_exporter.packagesCtrl.add(pkg_1)

@@ -511,16 +511,20 @@ class PackagesController:
                     old_id = peer.string_id
                     self._coalesced_bare[old_id] = self._copy_metadata(peer)
                     peer.version = package.version
-                    epoch_cpe = (package.cpe or [peer.generate_generic_cpe()])[0]
-                    epoch_purl = (package.purl or [peer.generate_generic_purl()])[0]
+                    epoch_cpes = list(package.cpe or [])
+                    epoch_purls = list(package.purl or [])
+                    if not epoch_cpes and not epoch_purls:
+                        epoch_cpes = [peer.generate_generic_cpe()]
+                        epoch_purls = [peer.generate_generic_purl()]
                     self._provisional_epoch_metadata[old_id] = (peer, Package(
-                        peer.name or "", peer.version or "", list(package.cpe or [epoch_cpe]),
-                        list(package.purl or [epoch_purl]), package.licences or "",
-                        supplier=peer.supplier,
+                        peer.name or "", peer.version or "", epoch_cpes, epoch_purls,
+                        package.licences or "", supplier=peer.supplier,
                     ))
                     self._merge_metadata(peer, package)
-                    peer.cpe = [epoch_cpe, *(cpe for cpe in peer.cpe or [] if cpe != epoch_cpe)]
-                    peer.purl = [epoch_purl, *(purl for purl in peer.purl or [] if purl != epoch_purl)]
+                    if epoch_cpes:
+                        peer.cpe = [epoch_cpes[0], *(cpe for cpe in peer.cpe or [] if cpe != epoch_cpes[0])]
+                    if epoch_purls:
+                        peer.purl = [epoch_purls[0], *(purl for purl in peer.purl or [] if purl != epoch_purls[0])]
                     self._cache.pop(old_id, None)
                     self._db_id_cache.pop(old_id, None)
                     self._cache[string_id] = peer

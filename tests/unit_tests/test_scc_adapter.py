@@ -114,6 +114,13 @@ class TestCompIdsForPackage:
         # Empty string name: the `if name:` guard prevents adding a blank id.
         assert len(ids) == 0
 
+    def test_generic_purl_keeps_name_with_slash(self):
+        from src.models.package import Package
+        pkg = Package("Prosys OPC UA SDK Client/Server", "5.4.0-201")
+        pkg.add_fallback_identifiers()
+        ids = _comp_ids_for_package(pkg.name, pkg.version, [], pkg.purl)
+        assert ids == {CompId(name="prosys opc ua sdk client/server")}
+
 
 # ---------------------------------------------------------------------------
 # VsComponent

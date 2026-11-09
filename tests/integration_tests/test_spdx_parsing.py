@@ -147,7 +147,7 @@ def test_parse_invalid_tagvalue(spdx_parser, spdx_tagvalue_file):
 
 
 def test_parse_cpe23type_externalrefs(spdx_parser):
-    """BOM cpe23Type externalRefs must be stored and appear before the generic CPE."""
+    """BOM cpe23Type externalRefs must be stored without a generic CPE fallback."""
     spdx_parser.load_from_dict({
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": "test",
@@ -194,13 +194,12 @@ def test_parse_cpe23type_externalrefs(spdx_parser):
     # First CPE must be a BOM CPE (not the generic wildcard)
     assert pkg.cpe[0] == "cpe:2.3:a:libtasn1:libtasn1_6:4.13-2:*:*:*:*:*:*:*"
 
-    # Generic fallback must still be present (as last entry)
-    generic = "cpe:2.3:a:*:libtasn1-6:4.13-2:*:*:*:*:*:*:*"
-    assert generic in pkg.cpe
-    assert pkg.cpe[-1] == generic
+    # Declared identifiers are not supplemented by generic ones
+    assert "cpe:2.3:a:*:libtasn1-6:4.13-2:*:*:*:*:*:*:*" not in pkg.cpe
+    assert len(pkg.cpe) == 2
 
     # PURL must also be parsed
-    assert "pkg:deb/ubuntu/libtasn1-6@4.13-2?arch=arm64" in pkg.purl
+    assert pkg.purl == ["pkg:deb/ubuntu/libtasn1-6@4.13-2?arch=arm64"]
 
 
 def test_parse_cpe23type_uri_reference_type(spdx_parser):

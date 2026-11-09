@@ -125,8 +125,7 @@ class FastSPDX ():
                 if isinstance(cpe, str):
                     package.add_cpe(cpe)
 
-        package.generate_generic_cpe()
-        package.generate_generic_purl()
+        package.add_fallback_identifiers()
 
         return package
 

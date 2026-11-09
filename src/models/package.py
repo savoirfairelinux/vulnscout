@@ -31,6 +31,18 @@ def _normalize_supplier(value: str | None) -> str:
     return supplier
 
 
+def _purl_to_string(purl: PackageURL) -> str:
+    """Serialize *purl*, percent-encoding any "/" inside its name."""
+    text = purl.to_string()
+    if "/" not in (purl.name or ""):
+        return text
+    # packageurl-python leaves "/" unescaped, so the name would re-parse as namespace + last segment.
+    head = PackageURL(purl.type, purl.namespace, "_").to_string()[:-1]
+    tail = PackageURL(purl.type, None, "_", purl.version, purl.qualifiers, purl.subpath).to_string()
+    tail = tail[len(PackageURL(purl.type, None, "_").to_string()):]
+    return head + text[len(head):len(text) - len(tail)].replace("/", "%2F") + tail
+
+
 def _normalize_purl(purl: str) -> str:
     """Normalize PURL to a canonical form.
 
@@ -54,7 +66,7 @@ def _normalize_purl(purl: str) -> str:
                 type=p.type, namespace=p.namespace, name=p.name,
                 version=new_version, qualifiers=new_qualifiers or None, subpath=p.subpath
             )
-        return str(p)
+        return _purl_to_string(p)
     except Exception:
         return purl
 
@@ -254,17 +266,25 @@ class Package(Base):
 
     def generate_generic_purl(self) -> str:
         """Build a generic purl string for the package, add it to the purl list and return it."""
+        slug = ""
         if self.supplier:
             name_part = re.sub(r'^[^:]+:\s*', '', self.supplier)   # strip "Organization: "
             name_part = re.sub(r'\s*\(.*\)$', '', name_part).strip()  # strip email
             slug = re.sub(r'[^\w]+', '-', name_part).strip('-').lower()
             if not slug:
                 slug = "supplier-" + hashlib.sha1(self.supplier.encode()).hexdigest()[:8]
-            item = f"pkg:generic/{slug}/{self.name}@{self.version}"
+        if self.name:
+            item = _purl_to_string(PackageURL("generic", slug or None, self.name, self.version or None))
         else:
-            item = f"pkg:generic/{self.name}@{self.version}"
+            item = f"pkg:generic/{slug + '/' if slug else ''}{self.name}@{self.version}"
         self.add_purl(item)
-        return item
+        return _normalize_purl(item)
+
+    def add_fallback_identifiers(self) -> None:
+        """Add generic CPE and PURL only when the package declares neither identifier."""
+        if not self.cpe and not self.purl:
+            self.generate_generic_cpe()
+            self.generate_generic_purl()
 
     def merge(self, other: "Package") -> bool:
         """Merge CPE/PURL identifiers from *other* into *self* if they represent the same package."""
