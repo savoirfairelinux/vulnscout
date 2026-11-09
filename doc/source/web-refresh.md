@@ -1,11 +1,14 @@
 # Refresh Changes
 
 Open **Refresh** in the navigation bar to inspect persisted vulnerability-data
-refresh runs. Start a refresh here with **Refresh Vulnerability Data**. Choose
+refresh runs. Start a refresh with **Refresh Vulnerability Data** on the right
+of the **Refresh History** bar. Choose
 **Complete refresh** for every available provider or **Custom refresh** to choose
 providers, then **Start**. The action uses vulnerabilities in the selected scope,
-not table filters. Progress and per-provider cancellation are available here;
-queued work continues after navigating away. Completed refreshes update the
+not table filters. Detailed progress is shown in the operation queue.
+Per-provider cancellation remains available in the refresh menu, and success
+or error banners appear above **Refresh History**.
+Queued work continues after navigating away. Completed refreshes update the
 loaded data and run results. This view does not run scanners or duplicate the
 vulnerability's
 [Data history](web-vulnerability-details.md#data-history).
@@ -23,11 +26,15 @@ not result scopes; the page asks you to select a project or variant rather than
 silently broadening the results to the whole project. Refreshing from a
 comparison still targets only its vulnerabilities.
 
-The latest matching run opens by default. Run cards follow the Scan tab's list
-layout, showing the date, status, providers and change counts. Select a run to
-inspect it, or use **Previous runs** and **Next runs**. Selected runs have a shareable
-`/refresh?run=…` URL. An unavailable or out-of-scope run is explicitly reported;
-the page never silently substitutes another run.
+Runs follow the Scan tab's timeline,
+with provider markers, dated cards, status badges and highlighted change counts.
+Use **View Refresh Result** to open a fullscreen popup like the Scan result popup.
+Its **Changes**, **Coverage** and **Overview** sections present results in tables.
+The timeline stays visible when no result is open. Use **Previous runs** and
+**Next runs** to browse the history. Selected runs have a shareable
+`/refresh?run=…` URL that opens their popup directly. Close it with **Close**,
+Escape or the backdrop. An unavailable or out-of-scope run is explicitly reported.
+The page never silently substitutes another run.
 
 Run identifiers remain in shareable URLs; providers, start/end dates and status
 are displayed without internal IDs.
@@ -41,12 +48,13 @@ or clear another user's indicators.
 and **Pending** count distinct CVEs, not source/CVE pairs. One CVE checked by
 several providers is counted once in each applicable category. Categories can
 overlap: for example, NVD can succeed while EPSS fails for the same CVE.
-Expand **Per-source coverage and gaps**, then a source, to inspect each CVE's
-outcome and error. Counts describe the whole selected run in the viewing scope,
+Open **Overview** for the distinct counts or **Coverage** for per-source totals
+and each CVE's outcome and error. Counts describe the whole selected run in the viewing scope,
 not just the current page or change filter.
 
 - **No refresh / no baseline** means no matching recorded run exists. Earlier
   values may predate run tracking; this does not establish that nothing changed.
+  This is a normal empty state, not an API error.
 - **First enrichment** means a field had no previous recorded value. It is an
   addition without a baseline, not a modification to a known prior value.
 - **Zero changes** on a complete run is distinct from an absent run.
@@ -58,7 +66,8 @@ not just the current page or change filter.
 
 Filter by source or change type (first enrichment, additions, modifications,
 confirmed removals). Filtering is applied on the server before pagination.
-Expand a CVE to see each field's before/after values, provider and timestamp.
+The **Changes** table shows each field's before/after values, provider, timestamp
+and relevant package links, with one row per field change.
 CVSS entries identify the version, author and metric; scores and vectors remain
 inspectable. Long descriptions, lists and vectors wrap and scroll.
 

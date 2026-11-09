@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import type { ReactNode } from 'react';
 import RefreshVulnerabilityData from './RefreshVulnerabilityData';
 import MessageBanner from './MessageBanner';
 import type { Vulnerability } from '../handlers/vulnerabilities';
@@ -11,6 +12,7 @@ type Props = {
     variantId?: string;
     getRefreshVulnerabilities: () => Promise<Vulnerability[]>;
     onRefreshComplete?: () => void;
+    toolbar?: ReactNode;
 };
 
 export default function RefreshControls(props: Readonly<Props>) {
@@ -22,10 +24,6 @@ export default function RefreshControls(props: Readonly<Props>) {
     const progress = Object.fromEntries(vulnerabilityRefreshSources.map(({ source }) => [
         source, operations.some(operation => operation.op_id === `refresh:${source}`) ? refreshProgressOf(source) : null,
     ]));
-    const active = vulnerabilityRefreshSources.flatMap(({ source, label }) => {
-        const current = progress[source];
-        return current?.in_progress ? [`${label} ${current.current}/${current.total}`] : [];
-    });
 
     useEffect(() => {
         vulnerabilityRefreshSources.forEach(({ source, label }) => {
@@ -58,14 +56,17 @@ export default function RefreshControls(props: Readonly<Props>) {
 
     const messages = [...Object.values(sourceBanners), ...(banner ? [banner] : [])];
     const clearBanners = () => { setBanner(null); setSourceBanners({}); };
+    const action = <RefreshVulnerabilityData {...props}
+        nvdProgress={progress.nvd} epssProgress={progress.epss} ghsaProgress={progress.ghsa} euvdProgress={progress.euvd}
+        triggerBanner={(message, type) => setBanner({ message, type })} hideBanner={clearBanners} />;
 
     return <div className="space-y-3">
-        <RefreshVulnerabilityData {...props}
-            nvdProgress={progress.nvd} epssProgress={progress.epss} ghsaProgress={progress.ghsa} euvdProgress={progress.euvd}
-            triggerBanner={(message, type) => setBanner({ message, type })} hideBanner={clearBanners} />
-        {active.length > 0 && <p role="status">{active.join(' · ')}</p>}
         <MessageBanner message={messages.map(item => item.message).join(' · ')}
             type={messages.some(item => item.type === 'error') ? 'error' : 'success'}
             isVisible={messages.length > 0} onClose={clearBanners} />
+        {props.toolbar ? <header className="rounded-md p-2 bg-sky-800 text-white w-full flex items-center gap-2 flex-wrap">
+            {props.toolbar}
+            <div className="ml-auto min-w-0">{action}</div>
+        </header> : action}
     </div>;
 }

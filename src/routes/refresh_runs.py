@@ -212,6 +212,8 @@ def init_app(app):
             abort(400, description=str(exc))
         run = find_run(params, run_id)
         if run is None:
+            if run_id is None:
+                return jsonify(None)
             abort(404, description="Refresh run unavailable, expired, or outside the selected scope")
         data = artifact(run, params, paginate=not export)
         if export:

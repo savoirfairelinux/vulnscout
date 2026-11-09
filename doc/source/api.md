@@ -1810,6 +1810,10 @@ changes in detail responses and to runs in list responses. Exports include all
 filtered changes without pagination. Coverage is never truncated or affected
 by source/field/kind/change-type filters.
 
+When no retained run matches, `GET /api/refresh-runs/latest` returns HTTP `200`
+with JSON `null`. Exact-run detail and export requests still return HTTP `404`
+for unavailable, expired or out-of-scope runs; they never substitute another run.
+
 Detail/latest responses have this shape:
 
 ```json
