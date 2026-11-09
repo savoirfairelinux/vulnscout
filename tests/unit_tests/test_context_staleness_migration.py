@@ -274,3 +274,69 @@ def test_editor_fields_downgrade_restores_rendered_text():
     assert "Scope text" in rows["A"]["threat_model"] and "T1 [C1 API]: Fake caller" in rows["A"]["threat_model"]
     assert "T1 Spoofing, Fake caller" in rows["A"]["risks"]
     assert rows["B"]["threat_model"] is None and rows["B"]["risks"] is None
+
+
+risk_groups = importlib.import_module(
+    "src.migrations.versions.b4f1c8e2d7a3_group_threats_in_stride_risks"
+)
+
+_LEGACY_RISK = {"threat_id": "T1", "likelihood": "high", "impact": "low", "mitigation": "Sign", "residual": ""}
+_NEW_RISK = {"id": "R4", "description": "Kept", "threat_ids": ["T1", "T2"],
+             "likelihood": None, "impact": None, "mitigation": "", "residual": ""}
+
+
+def _risk_rows(connection):
+    rows = connection.exec_driver_sql("SELECT id, stride_model, updated_at FROM variant_context").all()
+    return {r[0]: (json.loads(r[1]) if isinstance(r[1], str) else r[1], r[2]) for r in rows}
+
+
+def _create_risk_schema(connection):
+    connection.exec_driver_sql(
+        "CREATE TABLE variant_context (id VARCHAR PRIMARY KEY, stride_model JSON, updated_at DATETIME)")
+    models = {
+        "legacy": {"threats": [], "risks": [_LEGACY_RISK, {**_LEGACY_RISK, "threat_id": ""}]},
+        "new": {"threats": [], "risks": [_NEW_RISK]},
+        "no_risks": {"threats": []},
+    }
+    for ctx_id, model in models.items():
+        connection.execute(
+            sa.text("INSERT INTO variant_context (id, stride_model, updated_at) VALUES (:id, :m, '2026-01-01')"),
+            {"id": ctx_id, "m": json.dumps(model)})
+    connection.exec_driver_sql("INSERT INTO variant_context VALUES ('sql_null', NULL, '2026-01-01')")
+    connection.exec_driver_sql("INSERT INTO variant_context VALUES ('json_null', 'null', '2026-01-01')")
+    risk_groups.op = Operations(MigrationContext.configure(connection))
+
+
+def test_upgrade_converts_only_legacy_rows():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_risk_schema(connection)
+        before = _risk_rows(connection)
+        risk_groups.upgrade()
+        once = _risk_rows(connection)
+        risk_groups.upgrade()
+        twice = _risk_rows(connection)
+
+    assert once["legacy"][0]["risks"] == [
+        {"id": "R1", "description": "", "threat_ids": ["T1"],
+         "likelihood": "high", "impact": "low", "mitigation": "Sign", "residual": ""},
+        {"id": "R2", "description": "", "threat_ids": [],
+         "likelihood": "high", "impact": "low", "mitigation": "Sign", "residual": ""},
+    ]
+    for ctx_id in ("new", "no_risks", "sql_null", "json_null"):
+        assert once[ctx_id] == before[ctx_id]
+    assert {stamp for _, stamp in once.values()} == {"2026-01-01"}
+    assert twice == once
+
+
+def test_downgrade_keeps_the_first_threat():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        _create_risk_schema(connection)
+        risk_groups.upgrade()
+        risk_groups.downgrade()
+        rows = _risk_rows(connection)
+
+    assert rows["legacy"][0]["risks"] == [_LEGACY_RISK, {**_LEGACY_RISK, "threat_id": ""}]
+    assert rows["new"][0]["risks"] == [
+        {"threat_id": "T1", "likelihood": None, "impact": None, "mitigation": "", "residual": ""}]
