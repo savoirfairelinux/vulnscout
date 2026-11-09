@@ -184,12 +184,61 @@ describe('StatusEditor', () => {
         });
     });
 
-    test('does not render Assess with AI without a handler', () => {
+    const exactProps = {
+        variants: [{id: 'v1', name: 'default', project_id: 'p'}],
+        availablePackages: ['pkg@1.0.0'],
+        variantPackageMap: {v1: ['pkg@1.0.0']},
+        exactTargetSelection: true,
+    };
+
+    test('offers no Manual / AI choice without an AI handler', () => {
         render(<StatusEditor {...defaultProps} />);
-        expect(screen.queryByRole('button', { name: 'Assess with AI' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Start assessing' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Add assessment' })).toBeInTheDocument();
     });
 
-    test('Assess with AI is enabled only once an exact target is selected', async () => {
+    test('Manual mode is the default and shows status below the mode choice', () => {
+        render(<StatusEditor {...defaultProps} {...exactProps} onAssessWithAi={jest.fn()} />);
+        expect(screen.getByRole('radio', { name: 'Manual' })).toBeChecked();
+        expect(screen.getByRole('radio', { name: 'AI' })).not.toBeChecked();
+        const target = screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'});
+        const modeChoice = screen.getByRole('group', { name: 'Select how an assessment is added' });
+        const status = screen.getByRole('combobox');
+        expect(target.compareDocumentPosition(modeChoice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(modeChoice.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(screen.getByRole('button', { name: 'Add assessment' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Start assessing' })).not.toBeInTheDocument();
+    });
+
+    test('AI mode hides manual fields, keeps targets and restores typed text on return to Manual', async () => {
+        const user = userEvent.setup();
+        render(<StatusEditor {...defaultProps} {...exactProps} onAssessWithAi={jest.fn()} />);
+        await user.type(screen.getByPlaceholderText(/Free text notes/), 'kept');
+
+        await user.click(screen.getByRole('radio', { name: 'AI' }));
+        expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+        expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Add assessment' })).not.toBeInTheDocument();
+        expect(screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'})).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Start assessing' })).toBeInTheDocument();
+
+        await user.click(screen.getByRole('radio', { name: 'Manual' }));
+        expect(screen.getByPlaceholderText(/Free text notes/)).toHaveValue('kept');
+        expect(screen.queryByRole('button', { name: 'Start assessing' })).not.toBeInTheDocument();
+    });
+
+    test('clearing the form returns to Manual mode', async () => {
+        const user = userEvent.setup();
+        const props = {...defaultProps, ...exactProps, onAssessWithAi: jest.fn()};
+        const { rerender } = render(<StatusEditor {...props} clearFields={false} />);
+        await user.click(screen.getByRole('radio', { name: 'AI' }));
+        rerender(<StatusEditor {...props} clearFields={true} />);
+        await waitFor(() => expect(screen.getByRole('radio', { name: 'Manual' })).toBeChecked());
+        expect(screen.getByRole('button', { name: 'Add assessment' })).toBeInTheDocument();
+    });
+
+    test('Start assessing is enabled only once an exact target is selected', async () => {
         const user = userEvent.setup();
         const onAssessWithAi = jest.fn();
         render(
@@ -203,7 +252,8 @@ describe('StatusEditor', () => {
             />
         );
 
-        const button = screen.getByRole('button', { name: 'Assess with AI' });
+        await user.click(screen.getByRole('radio', { name: 'AI' }));
+        const button = screen.getByRole('button', { name: 'Start assessing' });
         expect(button).toBeDisabled();
         await user.click(screen.getByRole('checkbox', {name: 'release / pkg@1.0.0'}));
         expect(button).toBeEnabled();
@@ -212,24 +262,18 @@ describe('StatusEditor', () => {
         expect(defaultProps.onAddAssessment).not.toHaveBeenCalled();
     });
 
-    test('Assess with AI shows when the selected targets are already queued or running', async () => {
+    test('Start assessing shows when the selected targets are already queued or running', async () => {
         const user = userEvent.setup();
         const onAssessWithAi = jest.fn();
-        const props = {
-            ...defaultProps,
-            onAssessWithAi,
-            variants: [{id: 'v1', name: 'default', project_id: 'p'}],
-            availablePackages: ['pkg@1.0.0'],
-            variantPackageMap: {v1: ['pkg@1.0.0']},
-            exactTargetSelection: true,
-        };
+        const props = {...defaultProps, ...exactProps, onAssessWithAi};
         const aiAssessState = jest.fn().mockReturnValue({status: 'queued', position: 2, taskId: 'task-1'});
         const { rerender } = render(<StatusEditor {...props} aiAssessState={aiAssessState} />);
         const target = screen.getByRole('checkbox', {name: 'default / pkg@1.0.0'});
         if (!(target as HTMLInputElement).checked) await user.click(target);
+        await user.click(screen.getByRole('radio', { name: 'AI' }));
 
         // A queued action stays clickable and opens its request in the agent chat instead of queueing it twice.
-        const queued = screen.getByRole('button', { name: 'Assess with AI (queued, position 2)' });
+        const queued = screen.getByRole('button', { name: 'Start assessing (queued, position 2)' });
         expect(queued).toBeEnabled();
         expect(queued).toHaveTextContent('Queued · #2');
         expect(aiAssessState).toHaveBeenLastCalledWith([{variant_id: 'v1', package: 'pkg@1.0.0'}]);
@@ -239,17 +283,17 @@ describe('StatusEditor', () => {
         expect(getAgentChatRequest().nonce).toBe(opened + 1);
 
         rerender(<StatusEditor {...props} aiAssessState={() => ({status: 'running', taskId: 'task-1'})} />);
-        expect(screen.getByRole('button', { name: 'Assess with AI (running)' })).toHaveTextContent('Running…');
+        expect(screen.getByRole('button', { name: 'Start assessing (running)' })).toHaveTextContent('Running…');
 
         rerender(<StatusEditor {...props} aiAssessState={() => ({status: 'failed', taskId: 'task-1'})} />);
-        expect(screen.getByRole('button', { name: 'Assess with AI (failed)' })).toHaveTextContent('Failed · view');
+        expect(screen.getByRole('button', { name: 'Start assessing (failed)' })).toHaveTextContent('Failed · view');
 
         rerender(<StatusEditor {...props} aiAssessState={() => undefined} />);
-        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
+        await user.click(screen.getByRole('button', { name: 'Start assessing' }));
         expect(onAssessWithAi).toHaveBeenCalledTimes(1);
     });
 
-    test('Assess with AI needs both a variant and a package in variant/package mode', async () => {
+    test('Start assessing needs both a variant and a package in variant/package mode', async () => {
         const user = userEvent.setup();
         const onAssessWithAi = jest.fn();
         render(
@@ -262,7 +306,8 @@ describe('StatusEditor', () => {
             />
         );
 
-        const button = screen.getByRole('button', { name: 'Assess with AI' });
+        await user.click(screen.getByRole('radio', { name: 'AI' }));
+        const button = screen.getByRole('button', { name: 'Start assessing' });
         // checkbox order: v1, v2, pkgA, pkgB
         const checkboxes = screen.getAllByRole('checkbox');
         await user.click(checkboxes[0]);

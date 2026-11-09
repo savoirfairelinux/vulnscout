@@ -5,6 +5,8 @@ import type { AssessmentTargetPair } from '../handlers/assessments';
 import { formatPkgId } from '../helpers/pkgId';
 import TargetPairSelector from './TargetPairSelector';
 import AgentActionButton from './AgentActionButton';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faWandMagicSparkles } from '@fortawesome/free-solid-svg-icons';
 import type { AgentActionState } from '../types/agent';
 
 const targetKeys = (targets: AssessmentTargetPair[]) => targets
@@ -40,7 +42,7 @@ type Props = {
     findingsLoading?: boolean;
     findingsError?: string;
     exactTargetSelection?: boolean;
-    /** When provided, renders an "Assess with AI" button for the selected targets. */
+    /** When provided, offers a Manual / AI choice; AI mode assesses the selected targets with AI. */
     onAssessWithAi?: (targets: AssessmentTargetPair[]) => void;
     /** Whether an identical Assess with AI request is already queued or running. */
     aiAssessState?: (targets: AssessmentTargetPair[]) => AgentActionState | undefined;
@@ -101,6 +103,8 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
     const [selectedTargets, setSelectedTargets] = useState<AssessmentTargetPair[]>(initialTargets);
     const initialTargetKeys = useMemo(() => targetKeys(initialTargets), [initialTargets]);
     const [includeOutdatedPackages, setIncludeOutdatedPackages] = useState(false);
+    const [mode, setMode] = useState<'manual' | 'ai'>('manual');
+    const aiMode = Boolean(onAssessWithAi) && mode === 'ai';
 
     const packageOptions = useMemo(() => {
         const options = new Set(currentPackages);
@@ -320,6 +324,7 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
         setWorkaround("");
         setImpact("");
         setIncludeOutdatedPackages(false);
+        setMode('manual');
         setSelectedVariantIds(variants?.length === 1 ? [variants[0].id] : []);
         setSelectedPackages(
             (availablePackages?.length === 1 ? availablePackages :
@@ -344,38 +349,6 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
             />
         )}
 
-        <h3 className="m-1">
-            Status:
-            <select
-                value={status}
-                onChange={(event) => setStatus(event.target.value)}
-                className="p-1 px-2 bg-gray-800 mr-4"
-                name="new_assessment_status"
-            >
-                <option value="under_investigation">Pending Assessment</option>
-                <option value="affected">Affected / exploitable</option>
-                <option value="fixed">Fixed / patched</option>
-                <option value="not_affected">Not applicable</option>
-                <option value="false_positive">False positive</option>
-            </select>
-            {status == "not_affected" && <>
-                Justification:
-                <select
-                    value={justification}
-                    onChange={(event) => setJustification(event.target.value)}
-                    className="p-1 px-2 bg-gray-800"
-                    name="new_assessment_justification"
-                >
-                    <option value="none">No justification</option>
-                    <option value="component_not_present">Component not present</option>
-                    <option value="vulnerable_code_not_present">vulnerable code not present</option>
-                    <option value="code_not_reachable">The vulnerable code is not invoked at runtime</option>
-                    <option value="requires_configuration">Exploitability requires a configurable option to be set/unset</option>
-                    <option value="requires_environment">Exploitability requires a certain environment which is not present</option>
-                    <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
-                </select>
-            </>}
-        </h3>
         {findingsLoading && (
             <p className="mt-3 text-xs text-gray-400 animate-pulse">Checking for previous package versions…</p>
         )}
@@ -478,46 +451,113 @@ function StatusEditor ({onAddAssessment, progressBar, clearFields: shouldClearFi
                 </div>
             </div>
         )}
-        {(status == "not_affected" || status == "false_positive") && <>
+        {onAssessWithAi && (
+            <fieldset className="mt-3 rounded-lg border border-gray-600 bg-gray-800/40 p-3">
+                <legend className="sr-only">Select how an assessment is added</legend>
+                <p aria-hidden="true" className="mb-2 text-sm font-medium text-gray-200">Select how an assessment is added:</p>
+                <div className="flex flex-wrap items-center gap-6 text-sm text-gray-200">
+                    <label className="inline-flex cursor-pointer items-center gap-2 select-none">
+                        <input
+                            type="radio"
+                            name="new_assessment_mode"
+                            value="manual"
+                            checked={mode === 'manual'}
+                            onChange={() => setMode('manual')}
+                            className="h-4 w-4 accent-blue-500"
+                        />
+                        Manual
+                    </label>
+                    <label className="inline-flex cursor-pointer items-center gap-2 select-none">
+                        <input
+                            type="radio"
+                            name="new_assessment_mode"
+                            value="ai"
+                            checked={mode === 'ai'}
+                            onChange={() => setMode('ai')}
+                            className="h-4 w-4 accent-blue-500"
+                        />
+                        <FontAwesomeIcon icon={faWandMagicSparkles} className="text-cyan-300" aria-hidden="true" />
+                        AI
+                    </label>
+                </div>
+            </fieldset>
+        )}
+        {!aiMode && <>
+            <h3 className={onAssessWithAi ? "m-1 mt-3" : "m-1"}>
+                Status:
+                <select
+                    value={status}
+                    onChange={(event) => setStatus(event.target.value)}
+                    className="p-1 px-2 bg-gray-800 mr-4"
+                    name="new_assessment_status"
+                >
+                    <option value="under_investigation">Pending Assessment</option>
+                    <option value="affected">Affected / exploitable</option>
+                    <option value="fixed">Fixed / patched</option>
+                    <option value="not_affected">Not applicable</option>
+                    <option value="false_positive">False positive</option>
+                </select>
+                {status == "not_affected" && <>
+                    Justification:
+                    <select
+                        value={justification}
+                        onChange={(event) => setJustification(event.target.value)}
+                        className="p-1 px-2 bg-gray-800"
+                        name="new_assessment_justification"
+                    >
+                        <option value="none">No justification</option>
+                        <option value="component_not_present">Component not present</option>
+                        <option value="vulnerable_code_not_present">vulnerable code not present</option>
+                        <option value="code_not_reachable">The vulnerable code is not invoked at runtime</option>
+                        <option value="requires_configuration">Exploitability requires a configurable option to be set/unset</option>
+                        <option value="requires_environment">Exploitability requires a certain environment which is not present</option>
+                        <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
+                    </select>
+                </>}
+            </h3>
+            {(status == "not_affected" || status == "false_positive") && <>
+                <textarea
+                    value={impact}
+                    onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}
+                    name="new_assessment_impact"
+                    className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 resize-vertical whitespace-pre-wrap"
+                    rows={3}
+                    placeholder="why this vulnerability is not exploitable ?"
+                /><br/>
+            </>}
             <textarea
-                value={impact}
-                onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setImpact(event.target.value)}
-                name="new_assessment_impact"
+                value={statusNotes}
+                onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setStatusNotes(event.target.value)}
+                name="new_assessment_status_notes"
                 className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 resize-vertical whitespace-pre-wrap"
                 rows={3}
-                placeholder="why this vulnerability is not exploitable ?"
+                placeholder="Free text notes about your review, details, actions taken, ..."
             /><br/>
+            <textarea
+                value={workaround}
+                onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setWorkaround(event.target.value)}
+                name="new_assessment_workaround"
+                className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white resize-vertical whitespace-pre-wrap"
+                rows={3}
+                placeholder="Describe workaround here if available"
+            /><br/>
+            <button
+                onClick={addAssessment}
+                type="button"
+                className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
+            >Add assessment</button>
         </>}
-        <textarea
-            value={statusNotes}
-            onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setStatusNotes(event.target.value)}
-            name="new_assessment_status_notes"
-            className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 resize-vertical whitespace-pre-wrap"
-            rows={3}
-            placeholder="Free text notes about your review, details, actions taken, ..."
-        /><br/>
-        <textarea
-            value={workaround}
-            onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setWorkaround(event.target.value)}
-            name="new_assessment_workaround"
-            className="bg-gray-800 m-1 p-1 px-2 min-w-[50%] placeholder:text-slate-400 text-white resize-vertical whitespace-pre-wrap"
-            rows={3}
-            placeholder="Describe workaround here if available"
-        /><br/>
-        <button
-            onClick={addAssessment}
-            type="button"
-            className="mt-2 bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center"
-        >Add assessment</button>
-        {onAssessWithAi && <AgentActionButton
-            state={aiState}
-            label="Assess with AI"
-            onRun={() => onAssessWithAi(aiTargets)}
-            disabled={aiTargets.length === 0}
-            title={aiTargets.length === 0 ? "Select at least one variant and one package" : "Assess the selected targets with AI"}
-            iconClassName="mr-2"
-            className="mt-2 ml-2 rounded-lg border border-cyan-500 px-4 py-2 text-center font-medium text-cyan-200 hover:bg-cyan-900/40 focus:outline-none focus:ring-4 focus:ring-cyan-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-        />}
+        {aiMode && onAssessWithAi && <div>
+            <AgentActionButton
+                state={aiState}
+                label="Start assessing"
+                onRun={() => onAssessWithAi(aiTargets)}
+                disabled={aiTargets.length === 0}
+                title={aiTargets.length === 0 ? "Select at least one variant and one package" : "Assess the selected targets with AI"}
+                iconClassName="mr-2"
+                className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-center font-medium hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-600"
+            />
+        </div>}
 
         {progressBar !== undefined && <div className="p-4 pb-1 w-full">
              <progress max={1} value={progressBar} className="w-full h-2"></progress>
