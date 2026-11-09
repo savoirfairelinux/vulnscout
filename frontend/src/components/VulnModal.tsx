@@ -1884,9 +1884,9 @@ type VariantScopedSnapshot = {
 
                         <div className="mb-6 mt-6">
                             <h3 className="font-bold mb-2">Links</h3>
-                            <ul>
+                            <ul className="max-h-64 overflow-y-auto bg-gray-800 p-2 px-4 rounded-lg">
                                 {vuln.urls.map(url => (
-                                    <li key={encodeURIComponent(url)}><a className="underline" href={encodeURI(url)} target="_blank">{url}</a></li>
+                                    <li key={encodeURIComponent(url)} className="truncate"><a className="underline" href={encodeURI(url)} target="_blank" title={url}>{url}</a></li>
                                 ))}
                             </ul>
                         </div>
