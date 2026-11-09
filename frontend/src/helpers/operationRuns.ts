@@ -3,7 +3,8 @@
  *
  * Every operation enqueued in the same request shares a `queue_id`; a batch of
  * two or more is shown as one run so a multi-scanner, multi-variant launch
- * does not flood the queue.
+ * does not flood the queue. Refresh batches keep their parent even when only
+ * one provider step is present.
  */
 
 import type { Operation, OperationStatus } from "../types/operation";
@@ -26,7 +27,7 @@ export function groupQueueItems(operations: readonly Operation[]): QueueItem[] {
     const items: QueueItem[] = [];
     operations.forEach(operation => {
         const queueId = operation.queue_id;
-        if (!queueId || (batchSizes.get(queueId) ?? 0) < 2) {
+        if (!queueId || (operation.kind !== "refresh" && (batchSizes.get(queueId) ?? 0) < 2)) {
             items.push({ type: "operation", operation });
             return;
         }

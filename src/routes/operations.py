@@ -379,6 +379,7 @@ def _enqueue(planned: List[dict]) -> Tuple[str, List[dict]]:
             run_id=queue_id, scope=scope,
         )
     created: List[dict] = []
+    # Publish every step before a worker can finish and make the batch appear complete.
     for position, item in enumerate(planned, 1):
         operation = registry.create(
             op_id=item["op_id"],
@@ -393,6 +394,7 @@ def _enqueue(planned: List[dict]) -> Tuple[str, List[dict]]:
             cancellable=True,
         )
         created.append(operation)
+    for item in planned:
         queue.submit(
             op_id=item["op_id"],
             lane=item["lane"],

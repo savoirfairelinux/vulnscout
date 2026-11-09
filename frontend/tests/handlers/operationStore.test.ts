@@ -568,6 +568,96 @@ describe("refresh progress percentage", () => {
 });
 
 describe("enqueueing work", () => {
+    it("replaces an older finished provider with its newly accepted batch", async () => {
+        const stream = connect();
+        stream.send("snapshot", { seq: 1, operations: [
+            operation({ op_id: "refresh:epss", kind: "refresh", source: "epss", queue_id: "q-old", status: "done" }),
+            operation({ op_id: "scan:grype:v1", status: "running" }),
+        ] });
+        const accepted = operation({
+            op_id: "refresh:epss", kind: "refresh", source: "epss", queue_id: "q-new",
+            created_at: "2026-08-19T10:01:00+00:00",
+        });
+        jest.spyOn(global, "fetch").mockResolvedValue({
+            status: 202, json: async () => ({ queue_id: "q-new", operations: [accepted] }),
+        } as Response);
+
+        await Operations.enqueue([Operations.refreshJob("epss", ["CVE-2024-1111"])]);
+
+        expect(selectByQueue("q-old")).toHaveLength(0);
+        expect(selectByQueue("q-new")).toEqual([accepted]);
+        expect(getOperation("scan:grype:v1")?.status).toBe("running");
+    });
+
+    it.each(["running", "done"] as const)(
+        "keeps streamed %s progress when the older enqueue response arrives",
+        async status => {
+            const stream = connect();
+            const accepted = operation({
+                op_id: "refresh:epss", kind: "refresh", source: "epss", queue_id: "q-refresh",
+            });
+            const streamed = {
+                ...accepted, status, progress: { current: 9, total: 10, message: "Progress from stream" },
+            };
+            const euvd = operation({
+                op_id: "refresh:euvd", kind: "refresh", source: "euvd", queue_id: "q-refresh",
+            });
+            jest.spyOn(global, "fetch").mockResolvedValue({
+                status: 202,
+                json: async () => {
+                    stream.send("operation", streamed);
+                    return { queue_id: "q-refresh", operations: [accepted, euvd] };
+                },
+            } as Response);
+
+            await Operations.enqueue([
+                Operations.refreshJob("epss", ["CVE-2024-1111"]),
+                Operations.refreshJob("euvd", ["CVE-2024-1111"]),
+            ]);
+
+            expect(getOperation("refresh:epss")).toEqual(streamed);
+            expect(getOperation("refresh:euvd")).toEqual(euvd);
+        },
+    );
+
+    it("does not replace a later batch with a delayed older enqueue response", async () => {
+        const stream = connect();
+        const accepted = operation({
+            op_id: "refresh:epss", kind: "refresh", source: "epss", queue_id: "q-old",
+        });
+        const newer = { ...accepted, queue_id: "q-new", created_at: "2026-08-19T10:01:00+00:00" };
+        jest.spyOn(global, "fetch").mockResolvedValue({
+            status: 202,
+            json: async () => {
+                stream.send("operation", newer);
+                return { queue_id: "q-old", operations: [accepted] };
+            },
+        } as Response);
+
+        await Operations.enqueue([Operations.refreshJob("epss", ["CVE-2024-1111"])]);
+
+        expect(getOperation("refresh:epss")).toEqual(newer);
+    });
+
+    it("does not resurrect a batch dismissed before its enqueue response arrives", async () => {
+        const stream = connect();
+        const accepted = operation({
+            op_id: "refresh:epss", kind: "refresh", source: "epss", queue_id: "q-refresh",
+        });
+        jest.spyOn(global, "fetch").mockResolvedValue({
+            status: 202,
+            json: async () => {
+                stream.send("operation", { ...accepted, status: "done" });
+                stream.send("operation_removed", { op_id: accepted.op_id });
+                return { queue_id: "q-refresh", operations: [accepted] };
+            },
+        } as Response);
+
+        await Operations.enqueue([Operations.refreshJob("epss", ["CVE-2024-1111"])]);
+
+        expect(getSnapshot()).toEqual([]);
+    });
+
     it("sends scans and refreshes as one batch", async () => {
         const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue({
             status: 202,
@@ -604,6 +694,7 @@ describe("enqueueing work", () => {
         const result = await Operations.enqueue([Operations.scanJob("grype", ["v1"])]);
 
         expect(result).toEqual({ ok: false, error: "already queued", conflicts: ["scan:grype:v1"] });
+        expect(getSnapshot()).toEqual([]);
     });
 
     it("builds a deferred refresh target for an atomic scan batch", () => {

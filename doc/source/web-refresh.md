@@ -8,8 +8,13 @@ providers, then **Start**. The action uses vulnerabilities in the selected scope
 not table filters. Detailed progress is shown in the operation queue.
 Per-provider cancellation remains available in the refresh menu, and success
 or error banners appear above **Refresh History**.
-Queued work continues after navigating away. Completed refreshes update the
-loaded data and run results. This view does not run scanners or duplicate the
+Queued work continues after navigating away. Each launch records one refresh run
+containing all selected providers. Loaded data and run results update once after
+every step finishes, fails or is cancelled, not after individual providers.
+Accepted refreshes appear immediately as one operation-queue task with provider
+steps, without waiting for the first streamed progress update.
+Skipped provider responses remain incomplete coverage even when execution succeeds.
+This view does not run scanners or duplicate the
 vulnerability's
 [Data history](web-vulnerability-details.md#data-history).
 

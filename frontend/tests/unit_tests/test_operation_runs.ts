@@ -51,6 +51,29 @@ describe('groupQueueItems', () => {
         expect(isQueueItemActive(run)).toBe(true);
         expect(isQueueItemActive(lone)).toBe(false);
     });
+
+    it('keeps a refresh parent while provider steps arrive or only one remains', () => {
+        const epss = step('refresh:epss', 'running', { kind: 'refresh', source: 'epss', queue_id: 'q-refresh', position: 1 });
+        const euvd = step('refresh:euvd', 'queued', { kind: 'refresh', source: 'euvd', queue_id: 'q-refresh', position: 2 });
+        const done = { ...euvd, status: 'done' as const };
+        for (const { snapshot, steps } of [
+            { snapshot: [epss], steps: [epss] },
+            { snapshot: [euvd, epss], steps: [epss, euvd] },
+            { snapshot: [done], steps: [done] },
+        ]) {
+            expect(groupQueueItems(snapshot)).toEqual([{ type: 'run', queueId: 'q-refresh', steps }]);
+        }
+    });
+
+    it('keeps separate refresh launches and unbatched operations independent', () => {
+        const items = groupQueueItems([
+            step('refresh:epss', 'running', { kind: 'refresh', source: 'epss', queue_id: 'q-epss' }),
+            step('refresh:euvd', 'queued', { kind: 'refresh', source: 'euvd', queue_id: 'q-euvd' }),
+            step('refresh:nvd', 'queued', { kind: 'refresh', source: 'nvd' }),
+        ]);
+        expect(items.map(item => item.type === 'run' ? item.queueId : item.operation.op_id))
+            .toEqual(['q-epss', 'q-euvd', 'refresh:nvd']);
+    });
 });
 
 describe('runStatus', () => {

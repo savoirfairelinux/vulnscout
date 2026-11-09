@@ -196,6 +196,35 @@ def test_partial_provider_response_is_incomplete_not_removal(app, client):
     assert [row["vuln_id"] for row in data["changes"]] == [CVE]
 
 
+def test_provider_completion_preserves_one_pending_batch_and_its_coverage_gaps(app, client):
+    missing = "CVE-2099-1111"
+    with app.app_context():
+        Vulnerability.create_record(id=missing, epss_score=0.1)
+        run = create_run({"epss": [CVE, missing], "euvd": [CVE, missing]})
+        with patch("src.controllers.refresh_jobs.EPSS_DB") as api:
+            api.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}}
+            run_epss_refresh(JobContext("test", {"ids": [CVE, missing]}, run))
+    partial = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert partial["status"] == "running"
+    assert partial["finished_at"] is None
+    assert partial["source_status"] == {"epss": "incomplete", "euvd": "pending"}
+    assert client.get("/api/refresh-runs").get_json()["total"] == 1
+
+    with app.app_context():
+        with capture_source(run, "euvd"):
+            target_result("euvd", CVE)
+            target_result("euvd", missing)
+        finish_source(run, "euvd")
+    finished = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert finished["status"] == "incomplete"
+    assert finished["finished_at"] is not None
+    assert finished["source_status"] == {"epss": "incomplete", "euvd": "complete"}
+    assert any(row["source"] == "epss" and row["status"] == "skipped" for row in finished["coverage"])
+    listing = client.get("/api/refresh-runs").get_json()
+    assert listing["total"] == 1
+    assert listing["runs"][0]["run_id"] == run
+
+
 def test_cancelled_and_failed_targets_have_explicit_coverage(app, client):
     with app.app_context():
         run = create_run({"epss": [CVE]})

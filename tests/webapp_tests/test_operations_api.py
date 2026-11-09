@@ -143,6 +143,24 @@ def test_every_job_of_a_batch_receives_its_queue_id(client, ids):
     ]
 
 
+def test_entire_refresh_batch_is_registered_before_a_fast_first_step_finishes(client):
+    def finish_immediately(**job):
+        steps = [registry.get(op_id) for op_id in ("refresh:epss", "refresh:euvd")]
+        assert all(step is not None for step in steps)
+        assert {step["queue_id"] for step in steps} == {job["ctx"].queue_id}
+        registry.update(job["op_id"], status=STATUS_DONE)
+
+    with patch("src.controllers.operation_queue.OperationQueue.submit", side_effect=finish_immediately):
+        response = client.post("/api/operations", json={"jobs": [
+            {"kind": "refresh", "source": "epss", "ids": ["CVE-2024-1111"]},
+            {"kind": "refresh", "source": "euvd", "ids": ["CVE-2024-1111"]},
+        ]})
+
+    assert response.status_code == 202
+    assert all(registry.get(operation["op_id"])["status"] == STATUS_DONE
+               for operation in response.get_json()["operations"])
+
+
 def test_deferred_refresh_is_reserved_with_its_scan_batch(client, ids):
     payload = client.post("/api/operations", json={"jobs": [
         {"kind": "scan", "source": "grype", "variant_ids": [ids["variant_a"]]},

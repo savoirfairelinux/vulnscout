@@ -17,6 +17,9 @@ import { __reset, __setEventSourceFactory } from '../../src/handlers/operationSt
 import type { Operation } from '../../src/types/operation';
 import { UnsavedGuardProvider, useUnsavedGuard } from '../../src/hooks/useUnsavedGuard';
 import RefreshRuns from '../../src/handlers/refreshRuns';
+import Operations from '../../src/handlers/operations';
+import VulnerabilityHistory from '../../src/handlers/vulnerabilityHistory';
+import Iso8601Duration from '../../src/handlers/iso8601duration';
 
 class TestEventSource {
     static current: TestEventSource;
@@ -256,6 +259,15 @@ const savedScope = (projectId: string, variantIds: string[]) => ({
     compare_variant_id: '',
 });
 
+const refreshOperation = (source: 'epss' | 'euvd', status: Operation['status'], queueId = 'refresh-batch'): Operation => ({
+    op_id: `refresh:${source}`, kind: 'refresh', source, label: source,
+    lane: 'pipeline', scope: null, status, queue_id: queueId,
+    position: source === 'epss' ? 1 : 2, options: {}, cancellable: true,
+    progress: { current: 0, total: 2, message: status },
+    logs: [], error: null, result: null,
+    created_at: '2026-10-30T12:00:00Z', started_at: '2026-10-30T12:00:00Z', finished_at: null,
+});
+
 describe('Explorer saved-scope validation', () => {
     let restoreStream: () => void;
     beforeEach(() => {
@@ -270,6 +282,7 @@ describe('Explorer saved-scope validation', () => {
     afterEach(() => {
         __reset();
         restoreStream();
+        jest.restoreAllMocks();
         jest.clearAllMocks();
         mountFilters.length = 0;
     });
@@ -376,6 +389,94 @@ describe('Explorer saved-scope validation', () => {
             op_id: 'scan:grype:variant-1', kind: 'scan', status: 'done',
         });
         await waitFor(() => expect(mockVulnerabilitiesList.mock.calls.length).toBeGreaterThan(initialCalls));
+    });
+
+    test.each(['done', 'error', 'cancelled'] as const)(
+        'waits for the whole refresh batch when the first provider is %s',
+        async status => {
+            mockGetFrontendScope.mockReturnValue(null);
+            render(<MemoryRouter initialEntries={['/refresh']}><Explorer /></MemoryRouter>);
+            await screen.findByText(/No refresh has been recorded/);
+            await waitFor(() => expect(screen.queryByText('Loading Data...')).not.toBeInTheDocument());
+            const handlers = [mockPackagesList, mockVulnerabilitiesList, mockAssessmentsList, RefreshRuns.list as jest.Mock];
+            const initialCalls = handlers.map(handler => handler.mock.calls.length);
+            const expectReloads = (count: number) => handlers.forEach((handler, index) =>
+                expect(handler).toHaveBeenCalledTimes(initialCalls[index] + count));
+            const epss = refreshOperation('epss', status);
+            const euvd = refreshOperation('euvd', 'done');
+            TestEventSource.current.send('snapshot', { seq: 1, operations: [
+                { ...epss, status: 'running' }, { ...euvd, status: 'queued' },
+            ] });
+
+            await act(async () => TestEventSource.current.send('operation', epss));
+            expectReloads(0);
+            expect(screen.queryByText('Loading Data...')).not.toBeInTheDocument();
+            expect(screen.queryByText(/EPSS refresh (complete|failed|cancelled)/i)).not.toBeInTheDocument();
+            await act(async () => TestEventSource.current.send('operation', { ...euvd, status: 'running' }));
+            expectReloads(0);
+
+            TestEventSource.current.send('operation', euvd);
+            await waitFor(() => expectReloads(1));
+            await act(async () => {
+                TestEventSource.current.send('operation', euvd);
+                TestEventSource.current.send('snapshot', { seq: 2, operations: [epss, euvd] });
+            });
+            expectReloads(1);
+
+            await act(async () => TestEventSource.current.send('operation',
+                refreshOperation('epss', 'running', 'next-refresh-batch')));
+            expectReloads(1);
+            TestEventSource.current.send('operation', refreshOperation('epss', 'done', 'next-refresh-batch'));
+            await waitFor(() => expectReloads(2));
+            TestEventSource.current.send('operation', refreshOperation('epss', 'done', 'fast-refresh-batch'));
+            await waitFor(() => expectReloads(3));
+        },
+    );
+
+    test('reloads once after a locally launched EPSS and EUVD batch finishes', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        const duration = new Iso8601Duration(undefined);
+        mockVulnerabilitiesList.mockResolvedValue([{
+            id: 'CVE-2024-1111', aliases: [], related_vulnerabilities: [], namespace: 'cve',
+            found_by: [], datasource: 'nvd', packages: [], packages_current: [], variants: [],
+            urls: [], texts: [], assessments: [], simplified_status: 'Pending Assessment',
+            severity: { severity: 'UNKNOWN', min_score: 0, max_score: 0, cvss: [] },
+            epss: { score: undefined, percentile: undefined }, fix: { state: 'unknown' },
+            effort: { optimistic: duration, likely: duration, pessimistic: duration },
+        }]);
+        (Vulnerabilities.enrich_with_assessments as jest.Mock).mockImplementationOnce(vulnerabilities => vulnerabilities);
+        const epss = refreshOperation('epss', 'queued');
+        const euvd = refreshOperation('euvd', 'queued');
+        const enqueue = jest.spyOn(Operations, 'enqueue');
+        jest.spyOn(global, 'fetch').mockResolvedValue({
+            status: 202,
+            json: async () => ({ queue_id: 'refresh-batch', operations: [epss, euvd] }),
+        } as Response);
+        const summary = jest.spyOn(VulnerabilityHistory, 'changesSince').mockResolvedValue({
+            since: epss.created_at, total: 0, vulnerabilities: 0, fields: {},
+        });
+        render(<MemoryRouter initialEntries={['/refresh']}><Explorer /></MemoryRouter>);
+        await screen.findByText(/No refresh has been recorded/);
+        await waitFor(() => expect(screen.getByTestId('refresh-dropdown-toggle')).toBeEnabled());
+        const handlers = [mockPackagesList, mockVulnerabilitiesList, mockAssessmentsList, RefreshRuns.list as jest.Mock];
+        fireEvent.click(screen.getByTestId('refresh-dropdown-toggle'));
+        fireEvent.click(screen.getByRole('radio', { name: 'Custom refresh' }));
+        fireEvent.click(screen.getByRole('checkbox', { name: /NVD/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+        await screen.findByText('Vulnerability data refresh added to the operation queue');
+        expect(enqueue.mock.calls[0][0].map(job => job.source)).toEqual(['epss', 'euvd']);
+        expect(screen.getByTestId('operation-counts')).toHaveTextContent('0/1/1');
+        expect(screen.getByRole('button', { name: 'close progress' })).toBeInTheDocument();
+        const initialCalls = handlers.map(handler => handler.mock.calls.length);
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [epss, euvd] });
+        await act(async () => TestEventSource.current.send('operation', { ...epss, status: 'done' }));
+        handlers.forEach((handler, index) => expect(handler).toHaveBeenCalledTimes(initialCalls[index]));
+        expect(summary).not.toHaveBeenCalled();
+
+        TestEventSource.current.send('operation', { ...euvd, status: 'done' });
+        await waitFor(() => expect(summary).toHaveBeenCalledTimes(1));
+        await waitFor(() => handlers.forEach((handler, index) =>
+            expect(handler).toHaveBeenCalledTimes(initialCalls[index] + 1)));
     });
 
     test('shows running operations from SSE even when variant lookup fails', async () => {
@@ -815,6 +916,6 @@ describe('Explorer refresh run identity', () => {
         ));
         expect(screen.getByTestId('location')).toHaveTextContent(`${ROUTES.refresh}?run=A`);
         expect(RefreshRuns.latest).not.toHaveBeenCalled();
-        expect(await screen.findByText(/Requested refresh run is unavailable in this scope/)).toBeInTheDocument();
+        await waitFor(() => expect(screen.getByText(/Requested refresh run is unavailable in this scope/)).toBeInTheDocument());
     });
 });
