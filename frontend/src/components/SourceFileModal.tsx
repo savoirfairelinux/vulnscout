@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFileLines, faMagnifyingGlass } from '@fortawesome/free-solid-svg-icons';
-import Packages, { hasCompilationEvidence, type SourceFile } from '../handlers/packages';
+import Packages, { hasCompilationEvidence, isArtifactFile, type SourceFile } from '../handlers/packages';
 import ModalShell, { ModalButton } from './ModalShell';
 
 type Props = {
@@ -15,14 +15,15 @@ type Props = {
     onClose: () => void;
 };
 
-type EvidenceFilter = 'all' | 'compiled' | 'build' | 'listed';
+type EvidenceFilter = 'all' | 'compiled' | 'build' | 'listed' | 'artifact';
 
 const fileKey = (file: SourceFile) => JSON.stringify([
     file.document_id, file.spdx_id, file.variant_id, file.scan_id,
 ]);
 
 function evidenceKind(file: SourceFile): Exclude<EvidenceFilter, 'all'> {
-    return hasCompilationEvidence(file) ? 'compiled' : file.builds.length > 0 ? 'build' : 'listed';
+    return isArtifactFile(file) ? 'artifact'
+        : hasCompilationEvidence(file) ? 'compiled' : file.builds.length > 0 ? 'build' : 'listed';
 }
 
 function EvidenceBadge({ kind }: Readonly<{ kind: Exclude<EvidenceFilter, 'all'> }>) {
@@ -30,8 +31,11 @@ function EvidenceBadge({ kind }: Readonly<{ kind: Exclude<EvidenceFilter, 'all'>
         compiled: 'border-emerald-800 bg-emerald-950/60 text-emerald-300',
         build: 'border-amber-800 bg-amber-950/60 text-amber-200',
         listed: 'border-neutral-600 bg-neutral-800 text-neutral-300',
+        artifact: 'border-sky-800 bg-sky-950/60 text-sky-200',
     };
-    const labels = { compiled: 'Compilation recorded', build: 'Other build input', listed: 'Listed only' };
+    const labels = {
+        compiled: 'Compilation recorded', build: 'Other build input', listed: 'Listed only', artifact: 'Binary / output',
+    };
     return <span className={`inline-flex rounded border px-2 py-0.5 text-xs ${styles[kind]}`}>{labels[kind]}</span>;
 }
 
@@ -92,7 +96,9 @@ function FileDetails({ file }: Readonly<{ file: SourceFile }>) {
         <section aria-label="Build evidence" className="space-y-3">
             <h4 className="font-semibold text-white">Build evidence</h4>
             <p className="text-sm text-neutral-400">
-                {evidenceKind(file) === 'compiled'
+                {evidenceKind(file) === 'artifact'
+                    ? 'This is a recorded binary or output artifact, not evidence of compiled source. Its package association cannot enable CVE source exclusion.'
+                    : evidenceKind(file) === 'compiled'
                     ? 'A compiler target records this file as an input. This does not prove inclusion in the final firmware.'
                     : evidenceKind(file) === 'build'
                         ? 'This file is an input to a build task, such as a recipe or packaging step. Compilation is not proven.'
@@ -105,7 +111,7 @@ function FileDetails({ file }: Readonly<{ file: SourceFile }>) {
                         <span className="break-all font-semibold" title={typeof build.spdx_id === 'string' ? build.spdx_id : undefined}>
                             {typeof build.spdx_id === 'string' ? build.spdx_id.split('/').pop() : `Build task ${index + 1}`}
                         </span>
-                        <EvidenceBadge kind={build.compiled === true ? 'compiled' : 'build'} />
+                        <EvidenceBadge kind={isArtifactFile(file) ? 'artifact' : build.compiled === true ? 'compiled' : 'build'} />
                     </div>
                     <dl className="space-y-3">
                         {typeof build.build_type === 'string' && <div>
@@ -211,7 +217,7 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
         + 'focus:outline-none focus:ring-2 focus:ring-cyan-500';
 
     return <ModalShell isOpen title={`Recorded Files: ${packageId}`} size="fullscreen" onClose={onClose}
-        subtitle="Explore file provenance and distinguish compilation evidence from listed or recipe inputs."
+        subtitle="Explore file provenance and distinguish compilation evidence, binaries/outputs, and listed or recipe inputs."
         icon={<FontAwesomeIcon icon={faFileLines} className="text-cyan-400" />}
         testId="source-file-modal" contentClassName="flex flex-1 flex-col min-h-0">
         <div className="flex flex-col text-neutral-200 lg:min-h-0 lg:flex-1">
@@ -245,12 +251,14 @@ export default function SourceFileModal({ packageId, variantId, projectId, varia
                             <select aria-label="Filter by build evidence" value={evidence}
                                 onChange={event => {
                                     const value = event.target.value;
-                                    if (value === 'all' || value === 'compiled' || value === 'build' || value === 'listed') setEvidence(value);
+                                    if (value === 'all' || value === 'compiled' || value === 'build' || value === 'listed'
+                                        || value === 'artifact') setEvidence(value);
                                 }} className={controlClass}>
                                 <option value="all">All evidence</option>
                                 <option value="compiled">Compilation recorded</option>
                                 <option value="build">Other build input</option>
                                 <option value="listed">Listed only</option>
+                                <option value="artifact">Binary / output</option>
                             </select>
                         </label>
                         <label className="min-w-0 max-w-full">

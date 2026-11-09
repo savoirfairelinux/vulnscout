@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
-import Packages, { hasCompilationEvidence, type Package, type SourceFile } from '../../src/handlers/packages';
+import Packages, { hasCompilationEvidence, isArtifactFile, type Package, type SourceFile } from '../../src/handlers/packages';
 import SourceFileModal from '../../src/components/SourceFileModal';
 import TablePackages from '../../src/pages/TablePackages';
 
@@ -123,6 +123,52 @@ test.each([undefined, false, 'true', 1])('missing or non-boolean compilation pro
     expect(hasCompilationEvidence({ ...file, builds: [{ build_type: 'urn:packaging', compiled }] })).toBe(false);
 });
 
+test.each([
+    ['bin/busybox.suid', { fileTypes: ['BINARY'] }],
+    ['build/output.elf', {}],
+    ['firmware', { software_primaryPurpose: 'firmware' }],
+    ['exported-binary', { comment: 'VulnScout recorded file evidence v1:\n'
+        + JSON.stringify({ properties: { fileTypes: ['BINARY'] }, builds: [] }) }],
+])('binary/output records are labeled and filtered without compilation evidence (%s)', async (path, properties) => {
+    const artifact: SourceFile = { ...file, spdx_id: 'artifact', path: String(path), properties };
+    expect(hasCompilationEvidence(artifact)).toBe(false);
+    jest.spyOn(Packages, 'sourceFiles').mockResolvedValue({
+        files: [artifact, { ...file, builds: [] }], complete: false,
+    });
+    render(<SourceFileModal packageId={pkg.id} onClose={() => {}} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: new RegExp(`Inspect ${path}`) }));
+    expect(screen.getByText(/compiled source paths/)).toHaveTextContent('0 compiled source paths');
+    const details = within(screen.getByRole('region', { name: 'File details' }));
+    expect(details.getAllByText('Binary / output').length).toBeGreaterThan(0);
+    expect(details.getByText(/not evidence of compiled source/)).toBeVisible();
+    expect(details.queryByText('Compilation recorded')).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by build evidence' }), 'artifact');
+    expect(screen.getByRole('button', { name: new RegExp(`Inspect ${path}`) })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Inspect lib\/lz4.c/ })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Filter by build evidence' }), 'compiled');
+    expect(screen.getByText('No recorded files match these filters.')).toBeVisible();
+});
+
+test.each(['VulnScout recorded file evidence v1:\ninvalid', 'VulnScout recorded file evidence v1:\nnull'])(
+    'malformed exported metadata cannot claim artifact or compilation evidence (%s)', comment => {
+        expect(hasCompilationEvidence({ ...file, properties: { comment }, builds: [] })).toBe(false);
+    },
+);
+
+test.each([{ toString: null }, ['executable'], null, 42])(
+    'malformed primary purpose cannot crash or classify source files as artifacts (%j)', primaryPurpose => {
+        const nativeProperties = { software_primaryPurpose: primaryPurpose };
+        const portableProperties = { comment: 'VulnScout recorded file evidence v1:\n'
+            + JSON.stringify({ properties: nativeProperties, builds: [] }) };
+        for (const properties of [nativeProperties, portableProperties]) {
+            const sourceFile = { ...file, properties };
+            expect(isArtifactFile(sourceFile)).toBe(false);
+            expect(hasCompilationEvidence(sourceFile)).toBe(true);
+        }
+    },
+);
+
 test('packaging inputs are not shown as compiled source files', async () => {
     jest.spyOn(Packages, 'sourceFiles').mockResolvedValue({
         files: [{ ...file, path: 'manifest.json', builds: [{ build_type: 'urn:packaging', compiled: false }] }],
@@ -166,8 +212,8 @@ test('SBOM recorded counts explain the inventory and open details with older col
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Recorded files helper' }));
     expect(screen.getByRole('tooltip')).toHaveTextContent(
-        'Non-binary file records associated with this component in the imported SBOMs. '
-        + 'May include source code, patches, licenses, and configuration files; '
+        'File records associated with this component in the imported SBOMs. '
+        + 'May include source code, patches, licenses, configuration files, and SPDX 2 binaries/outputs; '
         + 'not necessarily a complete source inventory.',
     );
     await user.click(button);

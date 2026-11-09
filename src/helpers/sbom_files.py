@@ -18,6 +18,24 @@ from .export_files import (
 logger = logging.getLogger(__name__)
 
 
+def _is_binary(file: SBOMFile) -> bool:
+    evidence = recorded_evidence(file.properties)
+    portable = evidence.get('properties') if evidence else None
+    properties = {**(portable if isinstance(portable, dict) else {}), **file.properties}
+    file_types = properties.get('fileTypes')
+    primary_purpose = properties.get('software_primaryPurpose')
+    return bool(
+        file.path.lower().endswith((
+            '.o', '.obj', '.a', '.so', '.dylib', '.dll', '.exe', '.elf', '.bin', '.hex', '.uf2',
+        ))
+        or re.search(r'\.so(?:\.\d+)+$', file.path.lower())
+        or (isinstance(file_types, list) and all(isinstance(file_type, str) for file_type in file_types)
+            and 'BINARY' in file_types)
+        or (isinstance(primary_purpose, str)
+            and primary_purpose in {'executable', 'library', 'firmware', 'archive'})
+    )
+
+
 def _element_key(ref: str, document: SBOMDocument, namespaces: dict[str, str]) -> str:
     if ref.startswith('_:'):
         return f'{document.id}:{ref}'
@@ -80,7 +98,10 @@ def spdx2_file_graph(document: SBOMDocument, data: dict, references: dict[str, s
         if isinstance(package, dict) and isinstance(package.get('SPDXID'), str)
         and package.get('filesAnalyzed') is False
     ]
-    return {'@graph': graph, '_compilation_complete': False, '_unknown_inventories': unknown_inventories}, {
+    return {
+        '@graph': graph, '_compilation_complete': False, '_unknown_inventories': unknown_inventories,
+        '_retain_artifact_associations': True,
+    }, {
         key(ref): string_id for ref, string_id in references.items()
     }
 
@@ -202,15 +223,7 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     )
     # West also lists intermediate objects as inputs without separate compiler
     # build nodes. They are retained as files, not evidence of compiled source.
-    binaries = {
-        ref for ref, file in files.items()
-        if file.path.lower().endswith((
-            '.o', '.obj', '.a', '.so', '.dylib', '.dll', '.exe', '.elf', '.bin', '.hex', '.uf2',
-        ))
-        or re.search(r'\.so(?:\.\d+)+$', file.path.lower())
-        or 'BINARY' in (file.properties.get('fileTypes') or [])
-        or file.properties.get('software_primaryPurpose') in {'executable', 'library', 'firmware', 'archive'}
-    }
+    binaries = {ref for ref, file in files.items() if _is_binary(file)}
     artifacts = (output_files - input_files) | binaries
     resolved = not ambiguous and not malformed and all(
         build in nodes and nodes[build][1].get('type') == 'build_Build' and target in nodes
@@ -233,9 +246,15 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
     compiled: dict[str, list[SBOMBuild]] = defaultdict(list)
     incomplete_packages: set[tuple[uuid.UUID, uuid.UUID]] = set()
     associations: dict[str, set[str]] = defaultdict(set)
+    artifact_inventory_documents = {
+        document.id for document, data, *_ in documents if data.get('_retain_artifact_associations')
+    }
     for ref in files:
-        if ref not in artifacts:
-            associations[ref].update(owners[ref])
+        associations[ref].update(
+            owner for owner in owners[ref]
+            if ref not in artifacts or packages[owner][0] in artifact_inventory_documents
+            or recorded_evidence(files[ref].properties) is not None
+        )
     for build, targets in outputs.items():
         if build not in nodes or nodes[build][1].get('type') != 'build_Build':
             continue
@@ -296,7 +315,8 @@ def record_source_files(documents: list[tuple[SBOMDocument, dict, dict[str, str]
                 file_document_id=file.sbom_document_id, spdx_id=ref,
             )
     db.session.add_all(rows.values())
-    restore_recorded_builds(list(files.values()))
+    # Exported observations must not turn a binary/output association into source evidence.
+    restore_recorded_builds([file for ref, file in files.items() if ref not in artifacts])
 
 
 def restore_recorded_builds(files: list[SBOMFile]) -> None:

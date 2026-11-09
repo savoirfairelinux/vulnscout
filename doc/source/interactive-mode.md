@@ -79,15 +79,15 @@ Recorded relationships do not prove runtime use.
 (source-files)=
 ### Recorded files
 
-**Recorded Files** counts the non-binary file records associated with a package
+**Recorded Files** counts the file records associated with a package
 in the selected active SBOMs. These may include source code, patches, licenses,
 and configuration files; they are not necessarily a complete source inventory.
 The column's help tooltip explains this distinction. Click the count to inspect
 paths, original SPDX file
 properties (including recorded hashes and license information), source documents,
 and build-input associations. The details view supports filtering by path or
-document. Object files, libraries, and final build outputs are stored as file
-records but are not included in this count. The details separately report
+document. SPDX 2 explicitly contained binaries and output artifacts are included,
+with a separate **Binary / output** label and filter. The details separately report
 the number of files with compilation evidence.
 
 SPDX 3 `software_File`, `contains`, and Build-profile `hasInput`/`hasOutput`
@@ -100,7 +100,11 @@ relationships also populate the inventory, including namespaced
 When bare and epoch-prefixed package versions in one document are coalesced,
 file containment through either SPDX package element is preserved.
 Original SPDX 2 checksums, licenses, and file types remain visible in the details.
-Explicit binary file types and installed package outputs are excluded from **Recorded Files**.
+SPDX 2 binary/output associations never count as compiled source and cannot enable
+CVE source exclusion. Reimport existing SPDX 2 SBOMs to populate these associations.
+SPDX 3 native binary and installed-output handling is unchanged: those artifacts
+are stored but excluded from package file inventories. Explicitly labelled
+VulnScout export observations retain their recorded associations on round-trip.
 
 **Build input** means compilation evidence exists; **Listed only** does not
 prove compilation, and neither proves inclusion in the final firmware.
