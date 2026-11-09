@@ -27,7 +27,7 @@ const populated: StrideModel = {
     components: [{ id: 'C1', name: 'API', description: '', trust_zone: '' }],
     interactions: [{ id: 'I1', name: 'call', source_id: 'C1', destination_id: 'C2', interface: '', data: '', trust_boundary: '' }],
     threats: [{ id: 'T1', category: 'spoofing', description: 'x', target_ids: ['I1'] }],
-    risks: [{ threat_id: 'T1', likelihood: 'low', impact: null, mitigation: '', residual: '' }],
+    risks: [{ id: 'R1', description: '', threat_ids: ['T1'], likelihood: 'low', impact: null, mitigation: '', residual: '' }],
 };
 
 describe('constants', () => {
@@ -73,6 +73,7 @@ describe('drafts', () => {
         expect(d.stride).toEqual(populated);
         expect(d.stride.threats[0]).not.toBe(populated.threats[0]);
         expect(d.stride.threats[0].target_ids).not.toBe(populated.threats[0].target_ids);
+        expect(d.stride.risks[0].threat_ids).not.toBe(populated.risks[0].threat_ids);
     });
 
     test('draftsEqual ignores object identity but detects changes', () => {
@@ -95,6 +96,10 @@ describe('ids and references', () => {
         expect(nextId([{ id: 'C1' }], 'C', ['C2'])).toBe('C3');
     });
 
+    test('nextId numbers risks with the R prefix', () => {
+        expect(nextId([{ id: 'R1' }, { id: 'T7' }], 'R', ['R2'])).toBe('R3');
+    });
+
     test('nextId ignores other prefixes and malformed ids', () => {
         expect(nextId([{ id: 'I9' }, { id: 'Cx' }], 'C')).toBe('C1');
     });
@@ -105,6 +110,7 @@ describe('ids and references', () => {
         expect(isReferenced(populated, 'I1')).toBe(true);
         expect(isReferenced(populated, 'T1')).toBe(true);
         expect(isReferenced(populated, 'C9')).toBe(false);
+        expect(isReferenced({ ...populated, risks: [] }, 'T1')).toBe(false);
     });
 });
 
@@ -131,7 +137,7 @@ describe('requiredFieldErrors', () => {
             components: [{ ...populated.components[0], name: '  ' }],
             interactions: [{ ...populated.interactions[0], source_id: '', destination_id: '' }],
             threats: [{ ...populated.threats[0], category: '', target_ids: [] }],
-            risks: [{ ...populated.risks[0], threat_id: '' }],
+            risks: [{ ...populated.risks[0], threat_ids: [] }],
         };
         expect(requiredFieldErrors(model)).toEqual({
             'components[0].name': 'Enter a component name.',
@@ -139,7 +145,7 @@ describe('requiredFieldErrors', () => {
             'interactions[0].destination_id': 'Select a destination component.',
             'threats[0].category': 'Select a STRIDE category.',
             'threats[0].target_ids': 'Select at least one target.',
-            'risks[0].threat_id': 'Select a threat.',
+            'risks[0].threat_ids': 'Select at least one threat.',
         });
     });
 });

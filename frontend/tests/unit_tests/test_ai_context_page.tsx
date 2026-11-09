@@ -938,6 +938,9 @@ describe('AIContext page', () => {
             fireEvent.click(within(screen.getByRole('group', { name: 'Threat T1 targets' }))
                 .getByRole('checkbox', { name: 'C1 Broker' }));
         };
+        const tickRiskThreat = (riskId: string, name: string) =>
+            fireEvent.click(within(screen.getByRole('group', { name: `Risk ${riskId} threats` }))
+                .getByRole('checkbox', { name }));
         const saveBody = async (backend: Backend) => {
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
@@ -1009,21 +1012,71 @@ describe('AIContext page', () => {
             expect(screen.queryByLabelText('Threat T2 description')).not.toBeInTheDocument();
         });
 
-        test('a threat with a risk cannot be removed and says why', async () => {
+        test('a threat ticked in risks cannot be removed until unticked from all of them', async () => {
             await openStride();
             addThreat();
             fireEvent.click(variantTab('Risks'));
             addRisk();
+            addRisk();
+            tickRiskThreat('R1', 'T1');
+            tickRiskThreat('R2', 'T1');
             fireEvent.click(variantTab('Threat model'));
 
             const remove = screen.getByRole('button', { name: 'Remove threat T1' });
             expect(remove).toBeDisabled();
-            expect(remove).toHaveAccessibleDescription('Remove its risks first.');
+            expect(remove).toHaveAccessibleDescription('Untick it from its risks first.');
 
             fireEvent.click(variantTab('Risks'));
-            fireEvent.click(screen.getByRole('button', { name: 'Remove risk 1' }));
+            tickRiskThreat('R1', 'T1');
+            fireEvent.click(variantTab('Threat model'));
+            expect(screen.getByRole('button', { name: 'Remove threat T1' })).toBeDisabled();
+
+            fireEvent.click(variantTab('Risks'));
+            tickRiskThreat('R2', 'T1');
             fireEvent.click(variantTab('Threat model'));
             expect(screen.getByRole('button', { name: 'Remove threat T1' })).toBeEnabled();
+        });
+
+        test('removed risk ids are not reused', async () => {
+            await openStride();
+            addThreat();
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+            addRisk();
+            fireEvent.click(screen.getByRole('button', { name: 'Remove risk R2' }));
+            addRisk();
+
+            expect(screen.getByLabelText('Risk R3 description')).toBeInTheDocument();
+            expect(screen.queryByLabelText('Risk R2 description')).not.toBeInTheDocument();
+        });
+
+        test('a risk without a threat blocks the save and says so next to the cell', async () => {
+            const { backend } = await openStride();
+            addTargetedThreat();
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            expect(await screen.findByText('Select at least one threat.')).toBeInTheDocument();
+            expect(screen.getByRole('group', { name: 'Risk R1 threats' }))
+                .toHaveAccessibleDescription('Select at least one threat.');
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+        });
+
+        test('a risk can group several threats', async () => {
+            const { backend } = await openStride();
+            addTargetedThreat();
+            addThreat();
+            fireEvent.click(within(screen.getByRole('group', { name: 'Threat T2 targets' }))
+                .getByRole('checkbox', { name: 'C1 Broker' }));
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+            tickRiskThreat('R1', 'T1');
+            tickRiskThreat('R1', 'T2');
+
+            const body = await saveBody(backend);
+
+            expect(body.stride.risks[0].threat_ids).toEqual(['T1', 'T2']);
         });
 
         test('Add risk is disabled with a hint until a threat exists', async () => {
@@ -1048,34 +1101,35 @@ describe('AIContext page', () => {
 
             const table = screen.getByRole('table', { name: 'Risks' });
             expect(within(table).getAllByRole('columnheader').map(h => h.textContent)).toEqual([
-                'Threat*', 'Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision', 'Remove',
+                'ID', 'Description', 'Threats*', 'Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision', 'Remove',
             ]);
-            const likelihood = screen.getByLabelText('Risk 1 likelihood');
+            const likelihood = screen.getByLabelText('Risk R1 likelihood');
             expect(within(likelihood).getAllByRole('option').map(o => o.textContent))
                 .toEqual(['Not rated', 'Low', 'Medium', 'High']);
             expect(likelihood).toHaveValue('');
-            expect(within(screen.getByLabelText('Risk 1 threat')).getByRole('option').textContent)
-                .toBe(`T1: ${'x'.repeat(40)}`);
+            tickRiskThreat('R1', `T1: ${'x'.repeat(40)}`);
             fireEvent.change(likelihood, { target: { value: 'high' } });
-            fireEvent.change(screen.getByLabelText('Risk 1 impact'), { target: { value: 'low' } });
-            fireEvent.change(screen.getByLabelText('Risk 1 impact'), { target: { value: '' } });
-            fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Patch' } });
-            fireEvent.change(screen.getByLabelText('Risk 1 residual risk / decision'), { target: { value: 'Accept' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 impact'), { target: { value: 'low' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 impact'), { target: { value: '' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 description'), { target: { value: 'Rogue update' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 mitigation'), { target: { value: 'Patch' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 residual risk / decision'), { target: { value: 'Accept' } });
 
             const body = await saveBody(backend);
 
             expect(body.stride.risks).toEqual([
-                { threat_id: 'T1', likelihood: 'high', impact: null, mitigation: 'Patch', residual: 'Accept' },
+                { id: 'R1', description: 'Rogue update', threat_ids: ['T1'], likelihood: 'high', impact: null, mitigation: 'Patch', residual: 'Accept' },
             ]);
         });
 
-        test('threat option shows just the id when the description is empty', async () => {
+        test('threat checkbox shows just the id when the description is empty', async () => {
             await openStride();
             addThreat();
             fireEvent.click(variantTab('Risks'));
             addRisk();
 
-            expect(within(screen.getByLabelText('Risk 1 threat')).getByRole('option').textContent).toBe('T1');
+            expect(within(screen.getByRole('group', { name: 'Risk R1 threats' }))
+                .getByRole('checkbox', { name: 'T1' })).not.toBeChecked();
         });
 
         async function failWith(fields: Record<string, string>, prepare: () => void) {
@@ -1098,10 +1152,11 @@ describe('AIContext page', () => {
                 addTargetedThreat();
                 fireEvent.click(variantTab('Risks'));
                 addRisk();
+                tickRiskThreat('R1', 'T1');
             });
 
             expect(variantTab('Risks')).toHaveAttribute('aria-selected', 'true');
-            const select = screen.getByLabelText('Risk 1 likelihood');
+            const select = screen.getByLabelText('Risk R1 likelihood');
             expect(select).toHaveAttribute('aria-invalid', 'true');
             expect(select).toHaveAccessibleDescription('invalid rating');
         });
@@ -1111,6 +1166,14 @@ describe('AIContext page', () => {
 
             expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
             expect(within(screen.getByRole('tabpanel', { name: 'Threat model' })).getByText('A threat model is required.')).toBeVisible();
+        });
+
+        test('a top-level risks 400 error opens the Risks tab and shows the message', async () => {
+            const message = 'reference too much threat text through their threats';
+            await failWith({ risks: message }, addTargetedThreat);
+
+            expect(variantTab('Risks')).toHaveAttribute('aria-selected', 'true');
+            expect(within(screen.getByRole('tabpanel', { name: 'Risks' })).getByText(message)).toBeVisible();
         });
 
         test('an unrecognised or merely prefixed path falls back to the Context tab', async () => {
