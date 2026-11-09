@@ -244,6 +244,21 @@ describe('Vulnerability Modal', () => {
         });
         expect(within(history).getAllByText('first@1.0.0')).toHaveLength(1);
         expect(within(history).getAllByText('second@1.0.0')).toHaveLength(1);
+        expect(history.querySelectorAll('[data-timeline-connector]')).toHaveLength(1);
+        expect(within(history).getAllByRole('listitem')[1].querySelector('[data-timeline-connector]')).toBeNull();
+    });
+
+    test('keeps the add form outside the timeline and draws no bar for a single assessment', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(JSON.stringify([]));
+        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const history = screen.getByText('Assessment history').nextElementSibling as HTMLElement;
+        await waitFor(() => {
+            expect(within(history).getAllByRole('listitem')).toHaveLength(1);
+        });
+        expect(within(history).getByText('Add a new assessment').closest('ol')).toBeNull();
+        expect(history.querySelector('[data-timeline-connector]')).toBeNull();
     });
 
 
