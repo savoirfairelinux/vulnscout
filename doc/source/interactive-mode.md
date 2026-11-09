@@ -83,9 +83,10 @@ Recorded relationships do not prove runtime use.
 in the selected active SBOMs. These may include source code, patches, licenses,
 and configuration files; they are not necessarily a complete source inventory.
 The column's help tooltip explains this distinction. Click the count to inspect
-paths, original SPDX file
+paths, original file
 properties (including recorded hashes and license information), source documents,
 and build-input associations. The details view supports filtering by path or
+<<<<<<< HEAD
 document. SPDX 2 explicitly contained binaries and output artifacts are included,
 with a separate **Binary / output** label and filter. The details separately report
 the number of files with compilation evidence.
@@ -106,6 +107,33 @@ SPDX 3 native binary and installed-output handling is unchanged: those artifacts
 are stored but excluded from package file inventories. Explicitly labelled
 VulnScout export observations retain their recorded associations on round-trip.
 
+CycloneDX 1.5+ imports `component.evidence.occurrences`, explicitly nested
+`type: file` components, and file components in `formulation`. Files are not
+software packages. Occurrences retain their locations and available line,
+offset, symbol, and context fields; file properties, hashes, and MIME types are
+preserved. These are recorded observations, so CycloneDX binary file records
+are retained too, rather than going through SPDX artifact filtering.
+Package ownership comes only from explicit nesting, a component's own occurrences,
+or an explicit `formulation` external reference to a formula in the same
+document (including a matching document/version BOM-Link). Dependencies do not
+establish file ownership. Unowned files remain stored but are not attached to
+unrelated packages. References are document-scoped, even across imports with
+identical `bom-ref` values.
+
+Formulation metadata, including its tools and workflows, is retained as recorded
+build context. Neither occurrences, formulation file lists, nor workflow
+`taskTypes: ["build"]` prove which sources were compiled. CycloneDX evidence
+therefore never enables compiled-source CVE exclusions. Reimport replaces the
+document's recorded evidence without duplicates; the API and MCP read persisted
+records even after input cleanup.
+
+The regression fixture
+[`MBOM/helloworld-c/mbom.json`](https://raw.githubusercontent.com/CycloneDX/bom-examples/7d9172d00c88c05a8f1ccb90589d111870fc9d86/MBOM/helloworld-c/mbom.json)
+is an unmodified official CycloneDX 1.6 example: its `Hello World` application
+references `formula-1`, recording `helloworld.c` and `Makefile` with build
+context but no compilation proof. Occurrence tests use separate synthetic,
+schema-valid 1.5 and 1.6 documents, not upstream occurrence fixtures.
+
 **Build input** means compilation evidence exists; **Listed only** does not
 prove compilation, and neither proves inclusion in the final firmware.
 Yocto SPDX 3 lifecycle-scoped build relationships are supported, but BitBake
@@ -123,7 +151,7 @@ for those packages.
 
 **Not recorded** means file evidence is unavailable, not an empty recorded
 inventory. Reimport the original companion SBOMs together to populate older
-imports. Non-SPDX SBOM formats currently do not populate this inventory.
+imports. Formats other than SPDX and CycloneDX 1.5+ do not populate this inventory.
 SPDX 2 packages with `filesAnalyzed: false` and no associated file records also
 remain **Not recorded**, including package-only VulnScout exports.
 Outdated packages show **Not in active scan**.

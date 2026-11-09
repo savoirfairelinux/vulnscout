@@ -11,6 +11,7 @@ from ..controllers import ControllersCache, PackagesController, VulnerabilitiesC
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from ..helpers.export_evidence import export_evidence, EVIDENCE_PROPERTY
 from cyclonedx.model import Property
+from ..helpers.cyclonedx_files import has_recorded_files
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.bom_ref import BomRef
 from cyclonedx.model.dependency import Dependency
@@ -43,6 +44,8 @@ class CycloneDx:
         self.ref_dict: dict[str, str] = {}
         self.bom_link_refs: dict[str, str] = {}
         self._document_refs: dict[str, str] = {}
+        self._file_package_aliases: dict[str, str] = {}
+        self._raw_data: dict = {}
         self._dependency_edges: set[tuple[str, str]] = set()
         self._component_refs: dict[str, BomRef] = {}
 
@@ -137,6 +140,7 @@ class CycloneDx:
 
     def load_from_dict(self, cyclonedx: dict):
         """Read data from CycloneDx json parsed format."""
+        self._raw_data = cyclonedx
         self._dependency_edges = set()
         try:
             cyclonedx = self.clean_sbom(cyclonedx)
@@ -155,12 +159,15 @@ class CycloneDx:
         """Yield top-level components, nested software packages, and the root when it is a package in the graph."""
         root = self.sbom.metadata.component
         if root is not None:
-            if root.type in self._ROOT_PACKAGE_TYPES and any(
-                    root.bom_ref.value in edge for edge in self._dependency_edges):
+            if root.type in self._ROOT_PACKAGE_TYPES and (
+                any(root.bom_ref.value in edge for edge in self._dependency_edges)
+                or has_recorded_files((self._raw_data.get("metadata") or {}).get("component") or {})
+            ):
                 yield root
             yield from self._nested_packages(root.components)
         for component in self.sbom.components:
-            yield component
+            if component.type != ComponentType.FILE:
+                yield component
             yield from self._nested_packages(component.components)
 
     def _nested_packages(self, components: Iterable[Component]) -> Iterator[Component]:
@@ -172,6 +179,7 @@ class CycloneDx:
         Merge components from SBOM into controller.
         """
         self._document_refs = {}
+        self._file_package_aliases = {}
         if "sbom" not in self.__dict__ or not self.sbom:
             return
 
@@ -193,6 +201,7 @@ class CycloneDx:
                 component_refs.append(component.bom_ref.value)
 
             self.packagesCtrl.add(package)
+            self._file_package_aliases[package.string_id] = self.packagesCtrl.canonical_id(package.string_id)
 
         for bom_ref in component_refs:
             canonical_id = self.packagesCtrl.canonical_id(self.ref_dict[bom_ref])
@@ -200,6 +209,9 @@ class CycloneDx:
             self._document_refs[bom_ref] = canonical_id
             bom_link = f"urn:cdx:{self.sbom.serial_number}/{self.sbom.version}#{bom_ref}"
             self.bom_link_refs[bom_link] = canonical_id
+        self._file_package_aliases = {
+            string_id: self.packagesCtrl.canonical_id(string_id) for string_id in self._file_package_aliases
+        }
 
     def merge_vulnerabilities_into_controller(self):
         """

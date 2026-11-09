@@ -221,6 +221,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     use_fastspdx = get_bool_env('IGNORE_PARSING_ERRORS', False)
     from ..helpers.sbom_files import record_source_files, spdx2_file_graph
     from ..helpers.export_evidence import read_evidence, restore_evidence, evidence_file_graph
+    from ..helpers.cyclonedx_files import record_cyclonedx_files
 
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
@@ -230,6 +231,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     jsonld_documents = []
     file_documents = []
     evidence_documents = []
+    cdx_file_documents = []
     detached_cdx_documents: list[SBOMDocument] = []
     detached_cdx_refs: dict[SBOMDocument, dict[str, str]] = {}
 
@@ -290,6 +292,9 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 document_cdx.load_from_dict(data)
                 if document_cdx is cdx:
                     cdx.merge_components_into_controller()
+                    cdx_file_documents.append(
+                        (doc, data, dict(cdx._document_refs), dict(cdx._file_package_aliases))
+                    )
                     pkgCtrl.add_dependencies(cdx._document_refs, cdx._dependency_edges)
                     if (getattr(cdx, "sbom", None) is not None
                             and any(affect.ref.startswith("urn:cdx:") and affect.ref not in cdx.bom_link_refs
@@ -402,6 +407,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
         restore_evidence(document, evidence, references)
     for current_scan_id in {document.scan_id for document, *_ in file_documents}:
         record_source_files([entry for entry in file_documents if entry[0].scan_id == current_scan_id])
+    for entry in cdx_file_documents:
+        record_cyclonedx_files(*entry)
     _db.session.commit()
 
     _db.session.flush()
