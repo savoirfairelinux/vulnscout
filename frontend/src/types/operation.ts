@@ -16,9 +16,9 @@ export type ScanSource = "grype" | "nvd" | "osv" | "scc";
 export type RefreshSource = "nvd" | "epss" | "ghsa" | "euvd";
 
 export type OperationScope = {
-    variant_id: string;
-    variant_name: string;
-    project_id: string;
+    variant_id: string | null;
+    variant_name?: string;
+    project_id: string | null;
 };
 
 export type OperationProgress = {

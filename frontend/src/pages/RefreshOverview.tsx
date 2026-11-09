@@ -298,7 +298,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                         <tbody>{sourceNames.map(name => <tr key={name} className="border-t border-gray-600 hover:bg-gray-600/40">
                             <th scope="row" className="px-3 py-2">{sourceLabel(name)}</th>
                             <td className="px-3 py-2">{run.source_status[name] ?? 'pending'}
-                                {run.source_status[name] === 'incomplete' && <p className="mt-1 text-amber-300">This source did not complete successfully. Missing or deferred responses are coverage gaps, not removals.</p>}
+                                {run.source_status[name] === 'incomplete' && <p className="mt-1 text-amber-300">This source has incomplete coverage. Inspect target outcomes and operation logs. Missing or deferred responses are coverage gaps, not removals.</p>}
                             </td>
                             {Object.entries(counts(run.coverage.filter(row => row.source === name))).map(([label, count]) => <td key={label} className="px-3 py-2 tabular-nums">{count}</td>)}
                         </tr>)}</tbody>

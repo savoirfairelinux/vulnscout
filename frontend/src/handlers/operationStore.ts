@@ -3,7 +3,7 @@
  *
  * One `EventSource` replaces the per-scan managers, the refresh queue, the
  * upload poll and the export poll. The backend owns sequencing, so this module
- * only mirrors what the stream reports and exposes it through the
+ * mirrors accepted enqueue responses and stream updates through the
  * `useSyncExternalStore` contract.
  */
 
@@ -29,6 +29,7 @@ let source: EventSource | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 let lastEventId: string | null = null;
+const pendingEnqueues = new Set<Set<string | null>>();
 
 /** Swappable so tests can drive the store without a live server. */
 let createEventSource: (url: string) => EventSource = url => new EventSource(url);
@@ -64,6 +65,8 @@ function applyOperation(operation: Operation) {
 }
 
 function applyRemoval(frame: RemovedFrame) {
+    const queueId = operations.get(frame.op_id)?.queue_id;
+    if (queueId) pendingEnqueues.forEach(dismissed => dismissed.add(queueId));
     if (operations.delete(frame.op_id)) emit();
 }
 
@@ -170,6 +173,26 @@ export const getSnapshot = (): readonly Operation[] => snapshot;
 export const subscribeToConnection = subscribe;
 
 export const getConnectionState = (): ConnectionState => connection;
+
+/** Publish accepted work without rolling back stream updates or resurrecting dismissed runs. */
+export const beginEnqueue = () => {
+    const dismissed = new Set<string | null>();
+    pendingEnqueues.add(dismissed);
+    return {
+        acknowledge(accepted: readonly Operation[]): void {
+            let changed = false;
+            for (const operation of accepted) {
+                if (dismissed.has(operation.queue_id)) continue;
+                const current = operations.get(operation.op_id);
+                if (current && (current.queue_id === operation.queue_id || current.created_at > operation.created_at)) continue;
+                operations.set(operation.op_id, operation);
+                changed = true;
+            }
+            if (changed) emit();
+        },
+        dispose: () => { pendingEnqueues.delete(dismissed); },
+    };
+};
 
 // ---- selectors ----
 
@@ -327,4 +350,5 @@ export const __reset = () => {
     connection = "idle";
     reconnectAttempt = 0;
     lastEventId = null;
+    pendingEnqueues.clear();
 };

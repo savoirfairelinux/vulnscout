@@ -117,7 +117,7 @@ function Explorer() {
         { kind: 'project' } | { kind: 'variant'; projectId: string } | { kind: 'error' } | null
     >(null);
     const hadActiveScans = useRef(false);
-    const observedOperationStatuses = useRef(new Map<string, string>());
+    const observedOperationActivity = useRef(new Map<string, boolean>());
     const setupCheckGeneration = useRef(0);
     const loadGeneration = useRef(0);
     const scopeReady = useRef(false);
@@ -379,13 +379,19 @@ function Explorer() {
         currentOperation, currentVariantIds, currentMultiOperation]);
 
     useEffect(() => {
-        const previous = observedOperationStatuses.current;
-        const next = new Map(operationEntries.map(operation => [operation.op_id, operation.status]));
-        const finished = operationEntries.some(operation =>
-            ['scan', 'refresh', 'upload', 'enrichment'].includes(operation.kind)
-            && ['done', 'error', 'cancelled'].includes(operation.status)
-            && previous.get(operation.op_id) !== operation.status);
-        observedOperationStatuses.current = next;
+        const previous = observedOperationActivity.current;
+        const next = new Map<string, boolean>();
+        let finished = false;
+        for (const item of groupQueueItems(operationEntries)) {
+            const steps = item.type === 'run' ? item.steps : [item.operation];
+            if (!steps.some(operation => ['scan', 'refresh', 'upload', 'enrichment'].includes(operation.kind))) continue;
+            const queueId = item.type === 'run' ? item.queueId : item.operation.queue_id;
+            const key = queueId ? `queue:${queueId}` : `operation:${steps[0].op_id}`;
+            const active = isQueueItemActive(item);
+            next.set(key, active);
+            if (!active && previous.get(key) !== false) finished = true;
+        }
+        observedOperationActivity.current = next;
         if (finished && scopeReady.current) handleRefreshComplete();
     }, [operationEntries, handleRefreshComplete]);
 
@@ -744,7 +750,7 @@ function Explorer() {
                 } />
                 <Route path={ROUTES.refresh} element={
                     <RefreshOverview key={`${currentProjectId}-${currentVariantId}`} projectId={currentProjectId} variantId={currentVariantId}
-                        vulnerabilities={vulns} onRefreshComplete={handleRefreshComplete}
+                        vulnerabilities={vulns}
                         baseVariantId={currentBaseVariantId} compareOperation={currentOperation}
                         variantIds={currentVariantIds} multiOperation={currentMultiOperation}
                         comparisonScope={!!currentBaseVariantId || (currentVariantIds?.length ?? 0) > 1} dataRevision={dataRevision} />

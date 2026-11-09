@@ -378,7 +378,7 @@ describe('Refresh overview', () => {
         await openResult();
         expect(await screen.findByText(/Coverage is incomplete\. Unchanged data cannot be concluded/)).toBeInTheDocument();
         await selectSection('Coverage');
-        expect(await screen.findByText(/This source did not complete successfully/)).toBeInTheDocument();
+        expect(await screen.findByText(/This source has incomplete coverage/)).toBeInTheDocument();
         expect(screen.queryByText(/Refresh complete: zero changes/)).not.toBeInTheDocument();
     });
 

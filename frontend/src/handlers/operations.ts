@@ -1,11 +1,12 @@
 /**
  * HTTP client for the operation queue.
  *
- * Progress never comes back through these calls; it arrives on the event
- * stream. These only enqueue, cancel and dismiss.
+ * Accepted operations enter the shared queue immediately. Progress updates
+ * arrive on the event stream.
  */
 
 import type { Operation, OperationJob, RefreshSource, ScanSource } from "../types/operation";
+import { beginEnqueue } from "./operationStore";
 
 export type EnqueueResult =
     | { ok: true; queueId: string; operations: Operation[] }
@@ -24,17 +25,23 @@ async function errorFrom(response: Response): Promise<{ error: string; conflicts
 class Operations {
     /** Queue a batch. The backend orders scans before refreshes. */
     static async enqueue(jobs: OperationJob[]): Promise<EnqueueResult> {
-        const response = await fetch(api("/api/operations"), {
-            method: "POST",
-            mode: "cors",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jobs }),
-        });
-        if (response.status === 202) {
-            const data = await response.json();
-            return { ok: true, queueId: data.queue_id, operations: data.operations };
+        const enqueue = beginEnqueue();
+        try {
+            const response = await fetch(api("/api/operations"), {
+                method: "POST",
+                mode: "cors",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ jobs }),
+            });
+            if (response.status === 202) {
+                const data = await response.json();
+                enqueue.acknowledge(data.operations);
+                return { ok: true, queueId: data.queue_id, operations: data.operations };
+            }
+            return { ok: false, ...(await errorFrom(response)) };
+        } finally {
+            enqueue.dispose();
         }
-        return { ok: false, ...(await errorFrom(response)) };
     }
 
     static scanJob(
