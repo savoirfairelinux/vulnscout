@@ -387,15 +387,16 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-Export format `2.0` carries `codebase_source`, `system` and `stride_model` per variant, alongside the text fields,
+Export format `2.1` carries `codebase_source`, `system` and `stride_model` per variant, alongside the text fields,
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
 contents are not exported, and import ignores `files`.
 Every entry is imported through the editor path, so it needs a valid `codebase_source` and a non-empty threat model;
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
+Files exported as `2.0` still import: each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
 
 ```json
 {
-  "version": "2.0",
+  "version": "2.1",
   "exported_at": "2026-01-01T12:00:00+00:00",
   "projects": [{
     "project_name": "demo",
@@ -421,7 +422,7 @@ Every entry is imported through the editor path, so it needs a valid `codebase_s
           {"id": "T1", "category": "tampering", "description": "Image swapped", "target_ids": ["I1"]}
         ],
         "risks": [
-          {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""}
+          {"id": "R1", "description": "Rogue update", "threat_ids": ["T1"], "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""}
         ]
       },
       "files": [{"original_name": "updater-src.zip", "description": "text or null"}]
@@ -432,12 +433,13 @@ Every entry is imported through the editor path, so it needs a valid `codebase_s
 
 Rules checked on import, with the same messages as the editor save:
 
-- IDs are `C<n>`, `I<n>` and `T<n>`, unique per table. Interactions refer to components, threats to components or
-  interactions, and risks to threats.
+- IDs are `C<n>`, `I<n>`, `T<n>` and `R<n>`, unique per table. Interactions refer to components, threats to components or
+  interactions, and risks to one or more threats.
 - Required: the project description, a component `name`, an interaction `source_id` and `destination_id` (two different
   components), a threat `category` (`spoofing`, `tampering`, `repudiation`, `information_disclosure`,
-  `denial_of_service` or `elevation_of_privilege`) with at least one non-repeated `target_ids` entry, and a risk
-  `threat_id`. `likelihood` and `impact` are `low`, `medium`, `high` or `null`.
+  `denial_of_service` or `elevation_of_privilege`) with at least one non-repeated `target_ids` entry, and a risk with at
+  least one non-repeated `threat_ids` entry (its `description` is optional). `likelihood` and `impact` are `low`, `medium`,
+  `high` or `null`.
 - The system fields and STRIDE tables together must render a non-empty threat model.
 - At most 500 rows per table and 20,000 characters per text field.
 

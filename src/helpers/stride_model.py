@@ -243,6 +243,25 @@ def normalize_stride_model(raw: object) -> dict[str, Any]:
     return model
 
 
+def upgrade_legacy_risks(model: object) -> object:
+    """Return a copy of *model* whose pre-2.1 risks (single ``threat_id``) use ``R<n>`` and ``threat_ids``.
+
+    Rows that already carry ``threat_ids``, and malformed input, are returned unchanged
+    for :func:`normalize_stride_model` to judge.
+    """
+    if not isinstance(model, dict) or not isinstance(model.get("risks"), list):
+        return model
+    risks = []
+    for index, risk in enumerate(model["risks"], start=1):
+        if isinstance(risk, dict) and "threat_ids" not in risk and "threat_id" in risk:
+            legacy = risk["threat_id"]
+            rest = {key: value for key, value in risk.items() if key != "threat_id"}
+            risk = {"id": f"R{index}", "description": "", **rest,
+                    "threat_ids": [] if legacy in (None, "") else [legacy]}
+        risks.append(risk)
+    return {**model, "risks": risks}
+
+
 def _text_size(value: object) -> int:
     if isinstance(value, str):
         return len(value)

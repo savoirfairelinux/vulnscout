@@ -634,7 +634,7 @@ SCHEMAS: dict[str, Any] = {
         }, ("variant_name",))),
     }, ("project_name", "project_description", "variants")),
     "ContextExport": _object({
-        "version": {"type": "string", "example": "2.0"},
+        "version": {"type": "string", "example": "2.1"},
         "exported_at": _DATE, "projects": _array(_ref("ContextExportProject")),
     }, ("version", "exported_at", "projects")),
     "ContextImportEntry": _object({"project_name": _TEXT, "variant_name": _TEXT, "reason": _STRING}),
