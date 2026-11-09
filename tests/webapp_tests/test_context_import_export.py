@@ -145,7 +145,7 @@ class TestExportContext:
         client, _ = client_and_data
         body = json.loads(client.get("/api/context/export").data)
         assert isinstance(body, dict)
-        assert body["version"] == "2.0"
+        assert body["version"] == "2.1"
         assert isinstance(body["exported_at"], str) and body["exported_at"]
         assert isinstance(body["projects"], list)
 
@@ -444,7 +444,7 @@ class TestExportImportV2:
         _make_stride(app, data["variant_a2_id"])
         client = app.test_client()
         body = json.loads(client.get("/api/context/export").data)
-        assert body["version"] == "2.0"
+        assert body["version"] == "2.1"
         entries = _export_variants(client)
         stride = next(e for e in entries if e["variant_name"] == "VariantA2")
         assert stride["codebase_source"] == "paths"
@@ -542,6 +542,26 @@ class TestExportImportV2:
         }]).data)
         assert result["failed"][0]["reason"] .endswith("A threat model is required.")
         assert result["imported"] == []
+
+    def test_import_v2_0_legacy_risks_are_upgraded(self, client_and_data):
+        client, _ = client_and_data
+        legacy = {**_STRIDE_MODEL, "risks": [
+            {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""},
+            {"threat_id": "T1", "likelihood": "low", "impact": None, "mitigation": "Sign", "residual": ""},
+        ]}
+        result = json.loads(_post_json(client, {"version": "2.0", "projects": [{
+            "project_name": "ProjectA", "project_description": "d",
+            "variants": [{"variant_name": "VariantA1", "codebase_source": "paths",
+                          "system": {"scope": "Firmware"}, "stride_model": legacy}],
+        }]}).data)
+        assert result["failed"] == []
+        entry = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
+        assert entry["stride_model"]["risks"] == [
+            {"id": "R1", "description": "", "threat_ids": ["T1"], "likelihood": "high", "impact": "medium",
+             "mitigation": "", "residual": ""},
+            {"id": "R2", "description": "", "threat_ids": ["T1"], "likelihood": "low", "impact": None,
+             "mitigation": "Sign", "residual": ""},
+        ]
 
 
 # ===========================================================================

@@ -17,6 +17,7 @@ from src.helpers.stride_model import (
     normalize_system,
     render_risks,
     render_threat_model,
+    upgrade_legacy_risks,
 )
 
 
@@ -388,3 +389,32 @@ def test_rendered_target_text_is_bounded():
     with pytest.raises(StrideValidationError) as exc:
         normalize_stride_model(m)
     assert "threats" in exc.value.fields
+
+
+def _legacy(threat_id, **extra):
+    return {"threat_id": threat_id, "likelihood": "high", "impact": None, "mitigation": "m", "residual": "", **extra}
+
+
+def test_upgrade_legacy_risks_numbers_rows_and_wraps_the_threat():
+    m = _model(risks=[_legacy("T1"), _legacy("T2")])
+    upgraded = upgrade_legacy_risks(m)
+    assert normalize_stride_model(upgraded)["risks"] == [
+        {"id": "R1", "description": "", "threat_ids": ["T1"], "likelihood": "high", "impact": None,
+         "mitigation": "m", "residual": ""},
+        {"id": "R2", "description": "", "threat_ids": ["T2"], "likelihood": "high", "impact": None,
+         "mitigation": "m", "residual": ""},
+    ]
+    assert m["risks"][0] == _legacy("T1")
+
+
+def test_upgrade_legacy_risks_leaves_new_rows_and_malformed_input():
+    m = _model()
+    assert upgrade_legacy_risks(m) == m
+    assert upgrade_legacy_risks(None) is None
+    assert upgrade_legacy_risks({"risks": "nope"}) == {"risks": "nope"}
+
+
+def test_upgrade_legacy_blank_threat_id_reports_required():
+    with pytest.raises(StrideValidationError) as exc:
+        normalize_stride_model(upgrade_legacy_risks(_model(risks=[_legacy("")])))
+    assert exc.value.fields == {"risks[0].threat_ids": "is required"}

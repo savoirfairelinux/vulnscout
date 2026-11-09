@@ -18,11 +18,11 @@ from ..models.project import Project
 from ..models.project_context import ProjectContext
 from ..models.variant import Variant
 from ..models.variant_context import VariantContext, default_editor_block
-from ..helpers.stride_model import SYSTEM_KEYS, StrideValidationError, empty_stride_model
+from ..helpers.stride_model import SYSTEM_KEYS, StrideValidationError, empty_stride_model, upgrade_legacy_risks
 
 # Version of the export file format. Bump the major component only on a
 # breaking change to the entry shape.
-EXPORT_VERSION = "2.0"
+EXPORT_VERSION = "2.1"
 
 
 class ExportedFile(TypedDict):
@@ -322,7 +322,8 @@ def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[st
 
 
 def _editor_payload(entry: dict) -> dict:
-    """Map a 2.0 export entry onto the ``save_editor`` payload.
+    """Map a 2.x export entry onto the ``save_editor`` payload.
+    2.0 risks (single ``threat_id``) are upgraded to the 2.1 shape.
 
     ``files`` only lists upload names, so it is not imported.
     """
@@ -333,5 +334,5 @@ def _editor_payload(entry: dict) -> dict:
         "codebase_source": entry.get('codebase_source'),
         "codebase_path": entry.get('codebase_path'),
         "system": entry.get('system'),
-        "stride": entry.get('stride_model'),
+        "stride": upgrade_legacy_risks(entry.get('stride_model')),
     }
