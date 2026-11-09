@@ -36,7 +36,9 @@ type StrideInteraction = {
 type StrideThreat = { id: string; category: string; description: string; target_ids: string[] };
 
 type StrideRisk = {
-    threat_id: string;
+    id: string;
+    description: string;
+    threat_ids: string[];
     likelihood: Rating;
     impact: Rating;
     mitigation: string;

@@ -135,6 +135,7 @@ function VariantEditor({
                     )}
                     {key === 'risks' && (
                         <RisksTab
+                            key={`${variantId}:${draftGeneration}`}
                             draft={draft}
                             onDraftChange={onDraftChange}
                             fieldErrors={fieldErrors}

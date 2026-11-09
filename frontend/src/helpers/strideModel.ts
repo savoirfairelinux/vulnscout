@@ -46,7 +46,7 @@ function cloneStride(model: StrideModel): StrideModel {
         components: model.components.map(c => ({ ...c })),
         interactions: model.interactions.map(i => ({ ...i })),
         threats: model.threats.map(t => ({ ...t, target_ids: [...t.target_ids] })),
-        risks: model.risks.map(r => ({ ...r })),
+        risks: model.risks.map(r => ({ ...r, threat_ids: [...r.threat_ids] })),
     };
 }
 
@@ -74,7 +74,7 @@ export function draftsEqual(a: VariantDraft, b: VariantDraft): boolean {
 }
 
 /** Next free id for the prefix: max numeric suffix over rows and reserved ids, plus one. */
-export function nextId(rows: { id: string }[], prefix: 'C' | 'I' | 'T', reserved: string[] = []): string {
+export function nextId(rows: { id: string }[], prefix: 'C' | 'I' | 'T' | 'R', reserved: string[] = []): string {
     const pattern = new RegExp(`^${prefix}(\\d+)$`);
     const max = [...rows.map(r => r.id), ...reserved].reduce((acc, id) => {
         const match = pattern.exec(id);
@@ -87,7 +87,7 @@ export function isReferenced(model: StrideModel, id: string): boolean {
     return (
         model.interactions.some(i => i.source_id === id || i.destination_id === id) ||
         model.threats.some(t => t.target_ids.includes(id)) ||
-        model.risks.some(r => r.threat_id === id)
+        model.risks.some(r => r.threat_ids.includes(id))
     );
 }
 
@@ -119,7 +119,7 @@ export function requiredFieldErrors(model: StrideModel): Record<string, string> 
         if (t.target_ids.length === 0) errors[`threats[${i}].target_ids`] = 'Select at least one target.';
     });
     model.risks.forEach((r, i) => {
-        if (!hasText(r.threat_id)) errors[`risks[${i}].threat_id`] = 'Select a threat.';
+        if (r.threat_ids.length === 0) errors[`risks[${i}].threat_ids`] = 'Select at least one threat.';
     });
     return errors;
 }
