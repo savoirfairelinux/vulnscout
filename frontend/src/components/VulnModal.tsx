@@ -1978,7 +1978,7 @@ type VariantScopedSnapshot = {
 
                         <div className="mt-6">
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                <h3 className="font-bold">Assessments</h3>
+                                <h3 className="font-bold">Assessment summary</h3>
                             </div>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
@@ -1992,31 +1992,30 @@ type VariantScopedSnapshot = {
                                     {renderStatusTable(sortStatusRows(deprecatedAssessmentRows))}
                                 </div>
                             )}
+                            {isEditing && (
+                                <div className="text-white mb-8">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Add a new assessment</h4>
+                                    <StatusEditor
+                                        onAddAssessment={(data) => addAssessment(data)}
+                                        clearFields={clearAssessmentFields}
+                                        onFieldsChange={setHasAssessmentChanges}
+                                        triggerBanner={showMessage}
+                                        defaultStatus={defaultStatus}
+                                        variants={availableVariants}
+                                        availablePackages={projectPackages}
+                                        defaultSelectedPackages={vuln.packages_current}
+                                        variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
+                                        variantFindingsMap={variantFindingsMap}
+                                        findingsLoading={!variantPackageMapLoaded}
+                                        findingsError={variantPackageMapError ?? undefined}
+                                        exactTargetSelection={true}
+                                        onAssessWithAi={readOnly ? undefined : assessWithAi}
+                                        aiAssessState={assessWithAiState}
+                                    />
+                                </div>
+                            )}
                             <h4 className="font-semibold text-gray-200 mb-2">Assessment history</h4>
                             <div>
-                                {isEditing && (
-                                    <div className="text-white mb-8">
-                                        <p className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</p>
-                                        <StatusEditor
-                                            onAddAssessment={(data) => addAssessment(data)}
-                                            clearFields={clearAssessmentFields}
-                                            onFieldsChange={setHasAssessmentChanges}
-                                            triggerBanner={showMessage}
-                                            defaultStatus={defaultStatus}
-                                            variants={availableVariants}
-                                            availablePackages={projectPackages}
-                                            defaultSelectedPackages={vuln.packages_current}
-                                            variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
-                                            variantFindingsMap={variantFindingsMap}
-                                            findingsLoading={!variantPackageMapLoaded}
-                                            findingsError={variantPackageMapError ?? undefined}
-                                            exactTargetSelection={true}
-                                            onAssessWithAi={readOnly ? undefined : assessWithAi}
-                                            aiAssessState={assessWithAiState}
-                                        />
-                                    </div>
-                                )}
-
                                 {aiRows.map(row => {
                                     const rowKey = row.id;
                                     const targets = row.targets ?? [];
