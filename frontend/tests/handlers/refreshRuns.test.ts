@@ -28,4 +28,12 @@ describe('persisted refresh API client', () => {
         (fetch as jest.Mock).mockResolvedValueOnce({ status: 503, ok: false });
         await expect(RefreshRuns.latest({})).rejects.toThrow('HTTP 503');
     });
+
+    test('accepts successful empty latest history without a fallback request', async () => {
+        (fetch as jest.Mock).mockResolvedValueOnce({ status: 200, ok: true, json: async () => null });
+        expect(await RefreshRuns.latest({ project_id: 'new-project' })).toBeNull();
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/latest?project_id=new-project'),
+            expect.objectContaining({ mode: 'cors' }));
+    });
 });

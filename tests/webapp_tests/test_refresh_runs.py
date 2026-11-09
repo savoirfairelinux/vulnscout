@@ -51,6 +51,19 @@ def _change(run_id, score, *, source="epss"):
         db.session.commit()
 
 
+@pytest.mark.parametrize("scope", [{}, {"project_id": PROJECT}, {"variant_id": VARIANT}])
+def test_latest_without_refresh_history_is_a_successful_empty_result(client, scope):
+    latest = client.get("/api/refresh-runs/latest", query_string=scope)
+    assert latest.status_code == 200
+    assert latest.get_json() is None
+    listing = client.get("/api/refresh-runs", query_string=scope)
+    assert listing.status_code == 200
+    assert listing.get_json()["runs"] == []
+    assert listing.get_json()["total"] == 0
+    assert client.get("/api/refresh-runs/missing", query_string=scope).status_code == 404
+    assert client.get("/api/refresh-runs/missing/export", query_string=scope).status_code == 404
+
+
 def test_exact_run_is_immutable_and_latest_uses_coverage_even_unchanged(app, client):
     with app.app_context():
         first = create_run({"epss": [CVE]}, run_id="first")
