@@ -133,7 +133,8 @@ human action.
 ### Request an Assessment
 
 Open a vulnerability, enter **Edit** mode, select the target variants and
-packages, and click **Assess with AI** next to **Add assessment**. VulnScout opens
+packages, choose **AI** under **Select how an assessment is added**, and click
+**Start assessing**. VulnScout opens
 the agent panel on a new action conversation for those exact targets.
 
 For several vulnerabilities, select rows in **Vulnerabilities** and choose

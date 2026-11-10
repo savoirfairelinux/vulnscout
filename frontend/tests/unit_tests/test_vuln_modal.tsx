@@ -244,6 +244,26 @@ describe('Vulnerability Modal', () => {
         });
         expect(within(history).getAllByText('first@1.0.0')).toHaveLength(1);
         expect(within(history).getAllByText('second@1.0.0')).toHaveLength(1);
+        expect(history.querySelectorAll('[data-timeline-connector]')).toHaveLength(1);
+        expect(within(history).getAllByRole('listitem')[1].querySelector('[data-timeline-connector]')).toBeNull();
+    });
+
+    test('titles the add form above the assessment history and draws no bar for a single assessment', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(JSON.stringify([]));
+        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const formTitle = screen.getByRole('heading', { name: 'Add a new assessment' });
+        const historyTitle = screen.getByRole('heading', { name: 'Assessment history' });
+        expect(screen.getByRole('heading', { name: 'Assessment summary' }).compareDocumentPosition(formTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(formTitle.compareDocumentPosition(historyTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+        const history = historyTitle.nextElementSibling as HTMLElement;
+        await waitFor(() => {
+            expect(within(history).getAllByRole('listitem')).toHaveLength(1);
+        });
+        expect(within(history).queryByText('Add a new assessment')).toBeNull();
+        expect(history.querySelector('[data-timeline-connector]')).toBeNull();
     });
 
 

@@ -1704,7 +1704,7 @@ type VariantScopedSnapshot = {
                 </div>
             )}
                     {/* Scrollable content region (only the body scrolls) */}
-                    <div className="min-w-0 flex-1 overflow-y-auto min-h-0">
+                    <div className="relative min-w-0 flex-1 overflow-y-auto min-h-0">
 
                     {/* Message Banner - Sticky at top */}
                     {showBanner && (
@@ -1978,7 +1978,7 @@ type VariantScopedSnapshot = {
 
                         <div className="mt-6">
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                <h3 className="font-bold">Assessments</h3>
+                                <h3 className="font-bold">Assessment summary</h3>
                             </div>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
@@ -1992,32 +1992,30 @@ type VariantScopedSnapshot = {
                                     {renderStatusTable(sortStatusRows(deprecatedAssessmentRows))}
                                 </div>
                             )}
+                            {isEditing && (
+                                <div className="text-white mb-8">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Add a new assessment</h4>
+                                    <StatusEditor
+                                        onAddAssessment={(data) => addAssessment(data)}
+                                        clearFields={clearAssessmentFields}
+                                        onFieldsChange={setHasAssessmentChanges}
+                                        triggerBanner={showMessage}
+                                        defaultStatus={defaultStatus}
+                                        variants={availableVariants}
+                                        availablePackages={projectPackages}
+                                        defaultSelectedPackages={vuln.packages_current}
+                                        variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
+                                        variantFindingsMap={variantFindingsMap}
+                                        findingsLoading={!variantPackageMapLoaded}
+                                        findingsError={variantPackageMapError ?? undefined}
+                                        exactTargetSelection={true}
+                                        onAssessWithAi={readOnly ? undefined : assessWithAi}
+                                        aiAssessState={assessWithAiState}
+                                    />
+                                </div>
+                            )}
                             <h4 className="font-semibold text-gray-200 mb-2">Assessment history</h4>
-                            <ol className="relative border-s border-gray-800">
-                                {isEditing && (
-                                    <li className="ms-4 text-white pb-8">
-                                        <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
-                                        <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                        <StatusEditor
-                                            onAddAssessment={(data) => addAssessment(data)}
-                                            clearFields={clearAssessmentFields}
-                                            onFieldsChange={setHasAssessmentChanges}
-                                            triggerBanner={showMessage}
-                                            defaultStatus={defaultStatus}
-                                            variants={availableVariants}
-                                            availablePackages={projectPackages}
-                                            defaultSelectedPackages={vuln.packages_current}
-                                            variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
-                                            variantFindingsMap={variantFindingsMap}
-                                            findingsLoading={!variantPackageMapLoaded}
-                                            findingsError={variantPackageMapError ?? undefined}
-                                            exactTargetSelection={true}
-                                            onAssessWithAi={readOnly ? undefined : assessWithAi}
-                                            aiAssessState={assessWithAiState}
-                                        />
-                                    </li>
-                                )}
-
+                            <div>
                                 {aiRows.map(row => {
                                     const rowKey = row.id;
                                     const targets = row.targets ?? [];
@@ -2118,7 +2116,9 @@ type VariantScopedSnapshot = {
                                     );
                                 })}
 
-                                {nonAiRows.map(row => {
+                                {nonAiRows.length > 0 && (
+                                <ol className="relative">
+                                {nonAiRows.map((row, index) => {
                                     const dt = new Date(row.timestamp);
                                     const rowKey = row.id;
                                     const targets = row.targets ?? [];
@@ -2147,8 +2147,12 @@ type VariantScopedSnapshot = {
                                     };
 
                                     return (
-                                        <li key={rowKey} data-assessment-id={row.id} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
-                                            <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
+                                        <li key={rowKey} data-assessment-id={row.id} className={`relative mb-10 last:mb-0 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
+                                            {index < nonAiRows.length - 1 && (
+                                                // Runs from this node's centre to the next one's, across the mb-10 gap.
+                                                <span aria-hidden="true" data-timeline-connector className="absolute -start-4 top-3 -bottom-[3.25rem] w-px bg-gray-800"></span>
+                                            )}
+                                            <div className="absolute w-3 h-3 rounded-full top-1.5 -start-[1.375rem] border border-gray-800 bg-gray-800"></div>
                                             <div className="mb-2 flex flex-wrap items-center gap-2">
                                                 <time className="text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
                                                 {row.origin && (
@@ -2326,7 +2330,9 @@ type VariantScopedSnapshot = {
                                         </li>
                                     );
                                 })}
-                            </ol>
+                                </ol>
+                                )}
+                            </div>
                         </div>
                     </div>
 
