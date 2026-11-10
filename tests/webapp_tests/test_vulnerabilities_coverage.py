@@ -954,6 +954,74 @@ def test_get_vulnerability_by_id_with_variant_scope(app, client):
     assert any(cvss["origin"] == "custom" for cvss in data["severity"]["cvss"])
 
 
+def test_get_vulnerability_scopes_severity_aggregates_by_project_and_variant(app, client):
+    """The detail endpoint derives severity aggregates from its scoped metrics."""
+    from src.extensions import db
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+    from src.models.metrics import Metrics
+
+    with app.app_context():
+        vuln = Vulnerability.create_record(
+            id="CVE-DETAIL-SCOPE-AGGREGATES",
+            description="Scoped severity aggregate test",
+            status="unknown",
+        )
+        db.session.commit()
+        project_a = Project.create("SeverityAggregateProjectA")
+        variant_a = Variant.create("SeverityAggregateVariantA", project_a.id)
+        project_b = Project.create("SeverityAggregateProjectB")
+        variant_b = Variant.create("SeverityAggregateVariantB", project_b.id)
+
+        Metrics.create(
+            vulnerability_id=vuln.id,
+            version="3.1",
+            score=5.0,
+            vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+            author="scanner",
+            origin="scanner",
+        )
+        Metrics.create(
+            vulnerability_id=vuln.id,
+            variant_id=variant_a.id,
+            version="3.1",
+            score=6.0,
+            vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:L/A:L",
+            author="project-a",
+            origin="custom",
+        )
+        Metrics.create(
+            vulnerability_id=vuln.id,
+            variant_id=variant_b.id,
+            version="3.1",
+            score=9.8,
+            vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            author="project-b",
+            origin="custom",
+        )
+        variant_a_id = str(variant_a.id)
+        variant_b_id = str(variant_b.id)
+        project_a_id = str(project_a.id)
+        project_b_id = str(project_b.id)
+
+    for query, expected_severity, expected_scores in (
+        (f"variant_id={variant_a_id}", "medium", [5.0, 6.0]),
+        (f"variant_id={variant_b_id}", "critical", [5.0, 9.8]),
+        (f"project_id={project_a_id}", "medium", [5.0, 6.0]),
+        (f"project_id={project_b_id}", "critical", [5.0, 9.8]),
+    ):
+        response = client.get(
+            f"/api/vulnerabilities/CVE-DETAIL-SCOPE-AGGREGATES?{query}"
+        )
+        assert response.status_code == 200
+        severity = response.get_json()["severity"]
+        assert severity["severity"] == expected_severity
+        assert severity["min_score"] == 5.0
+        assert severity["max_score"] == max(expected_scores)
+        assert sorted(metric["base_score"] for metric in severity["cvss"]) == expected_scores
+
+
 # ---------------------------------------------------------------------------
 # PATCH /api/vulnerabilities/<id> — invalid variant_id in effort (lines 280-281)
 # ---------------------------------------------------------------------------
@@ -1631,6 +1699,74 @@ def test_epss_refresh_success(client):
 
 
 # ---------------------------------------------------------------------------
+# POST /api/vulnerabilities/<id>/euvd-refresh
+# ---------------------------------------------------------------------------
+
+def _write_euvd_cache(cache_dir, mapping_rows, kev_entries):
+    euvd_dir = cache_dir / "euvd"
+    euvd_dir.mkdir(parents=True, exist_ok=True)
+    (euvd_dir / "euvd_cve_mapping.csv").write_text(
+        "euvd_id,cve_id\n" + "".join(f"{euvd},{cve}\n" for euvd, cve in mapping_rows)
+    )
+    (euvd_dir / "euvd_kev.json").write_text(json.dumps(kev_entries))
+
+
+def test_euvd_refresh_rejects_non_cve_and_unknown_ids(client):
+    assert client.post("/api/vulnerabilities/GHSA-1234-5678-9012/euvd-refresh").status_code == 400
+    assert client.post("/api/vulnerabilities/CVE-2099-99999/euvd-refresh").status_code == 404
+
+
+def test_euvd_refresh_sets_and_clears_eu_kev(client, tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(cache_dir))
+    mapping = [("EUVD-2020-1234", "CVE-2020-35492")]
+    _write_euvd_cache(cache_dir, mapping, [{
+        "cveId": "CVE-2020-35492", "euvdId": "EUVD-2020-1234",
+        "sources": ["CISA"], "dateAdded": "2026-11-01",
+    }])
+
+    response = client.post("/api/vulnerabilities/cve-2020-35492/euvd-refresh")
+    assert response.status_code == 200
+    vuln = response.get_json()["vulnerabilities"][0]
+    assert vuln["euvd"] == {
+        "id": "EUVD-2020-1234",
+        "known_exploited": True,
+        "sources": ["CISA"],
+        "date_added": "2026-11-01",
+        "url": "https://euvd.enisa.europa.eu/vulnerability/EUVD-2020-1234",
+    }
+    assert "EUVD-2020-1234" in vuln["aliases"]
+    assert vuln["euvd_fetched_at"] is not None
+
+    _write_euvd_cache(cache_dir, mapping, [{"cveId": "CVE-2000-0001", "euvdId": "EUVD-2000-0001"}])
+    response = client.post("/api/vulnerabilities/CVE-2020-35492/euvd-refresh")
+    assert response.status_code == 200
+    euvd = response.get_json()["vulnerabilities"][0]["euvd"]
+    assert euvd["id"] == "EUVD-2020-1234"
+    assert euvd["known_exploited"] is False
+    assert euvd["sources"] == []
+
+    history = client.get(
+        "/api/vulnerabilities/CVE-2020-35492/history?field=euvd_known_exploited"
+    ).get_json()["history"]
+    assert [(row["value"], row["source"]) for row in history][-2:] == [(True, "euvd"), (False, "euvd")]
+
+
+@pytest.mark.parametrize("mapping_rows,kev_entries", [
+    ([], [{"cveId": "CVE-2020-35492", "euvdId": "EUVD-2020-1234"}]),
+    ([("EUVD-2020-1234", "CVE-2020-35492")], []),
+])
+def test_euvd_refresh_unavailable_data_returns_503(client, tmp_path, monkeypatch, mapping_rows, kev_entries):
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(cache_dir))
+    _write_euvd_cache(cache_dir, mapping_rows, kev_entries)
+
+    response = client.post("/api/vulnerabilities/CVE-2020-35492/euvd-refresh")
+    assert response.status_code == 503
+    assert "unavailable" in response.get_json()["error"]
+
+
+# ---------------------------------------------------------------------------
 # POST /api/vulnerabilities/<ghsa_id>/ghsa-refresh
 # ---------------------------------------------------------------------------
 
@@ -1896,5 +2032,4 @@ def test_compact_endpoint_serves_decodable_json_to_a_gzip_client(client):
     if response.headers.get("Content-Encoding") == "gzip":
         body = gzip.decompress(body)
     assert [v["id"] for v in json.loads(body)] == ["CVE-2020-35492"]
-
 

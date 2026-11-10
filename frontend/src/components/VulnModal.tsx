@@ -29,6 +29,7 @@ import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import NvdRefreshHandler from "../handlers/nvdRefresh";
 import EpssRefreshHandler from "../handlers/epssRefresh";
+import EuvdRefreshHandler from "../handlers/euvdRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import type { QueuedAgentMessage } from '../types/agent';
@@ -633,20 +634,43 @@ type VariantScopedSnapshot = {
         setRefreshing(true);
         setRefreshError(null);
         setRefreshedList([]);
+        const reloadMetadata = async (): Promise<Vulnerability> => {
+            const details = await Vulnerabilities.getDetails(vuln.id, variantId, projectId);
+            if (!details) throw new Error("Failed to load refreshed vulnerability details.");
+            // Refresh endpoints return global records, not the modal's project/variant scope.
+            return {
+                ...vuln,
+                aliases: details.aliases,
+                related_vulnerabilities: details.related_vulnerabilities,
+                urls: details.urls,
+                cpes: details.cpes,
+                published: details.published,
+                data_fetched_at: details.data_fetched_at,
+                data_updated_at: details.data_updated_at,
+                nvd_fetched_at: details.nvd_fetched_at,
+                ghsa_fetched_at: details.ghsa_fetched_at,
+                texts: details.texts,
+                severity: details.severity,
+                euvd: details.euvd,
+                euvd_fetched_at: details.euvd_fetched_at,
+            };
+        };
+        const latest = (...values: Array<string | undefined>) =>
+            values.filter((value): value is string => Boolean(value)).sort().pop();
         try {
             if (vuln.id.toUpperCase().startsWith('GHSA-')) {
                 const result = await GhsaRefreshHandler.triggerSingleRefresh(vuln.id);
                 if (result) {
-                    const { simplified_status: _ss, assessments: _a, packages_current: _pc, variants: _v, found_by: _fb, ...ghsaUpdates } = result;
-                    patchVuln(vuln.id, { ...vuln, ...ghsaUpdates });
+                    patchVuln(vuln.id, await reloadMetadata());
                     setRefreshedList(['GHSA']);
                 } else {
                     setRefreshError("GitHub Advisory Database refresh failed. Please try again later.");
                 }
             } else {
-                const [nvdResult, epssResult] = await Promise.allSettled([
+                const [nvdResult, epssResult, euvdResult] = await Promise.allSettled([
                     NvdRefreshHandler.triggerSingleRefresh(vuln.id, "api"),
                     EpssRefreshHandler.triggerSingleRefresh(vuln.id),
+                    EuvdRefreshHandler.triggerSingleRefresh(vuln.id),
                 ]);
 
                 const errors: string[] = [];
@@ -666,29 +690,45 @@ type VariantScopedSnapshot = {
                 if (epssResult.status === "rejected" || epssResult.value === null) {
                     errors.push("EPSS API unavailable");
                 }
+                const euvdValue = euvdResult.status === "fulfilled" ? euvdResult.value : null;
+                if (!euvdValue) {
+                    errors.push("ENISA EUVD unavailable");
+                }
 
                 const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
 
                 let merged = { ...vuln };
 
-                if (nvdUpdated || epssUpdated) {
+                if (nvdUpdated || epssUpdated || euvdValue) {
                     if (nvdUpdated) {
-                        const {
-                            simplified_status: _ss,
-                            assessments: _a,
-                            packages_current: _pc,
-                            variants: _v,
-                            found_by: _fb,
-                            ...nvdUpdates
-                        } = nvdValue.vuln;
-
-                        merged = { ...merged, ...nvdUpdates };
-                        setRefreshedList(prev => [...prev, "NVD"]);
+                        try {
+                            merged = await reloadMetadata();
+                            setRefreshedList(prev => [...prev, "NVD"]);
+                        } catch (error) {
+                            errors.push(`Failed to load refreshed vulnerability details: ${String(error)}`);
+                        }
                     }
 
                     if (epssUpdated) {
-                        merged = { ...merged, epss: epssResult.value!.epss };
+                        merged = {
+                            ...merged,
+                            epss: epssResult.value!.epss,
+                            data_fetched_at: latest(merged.data_fetched_at, epssResult.value!.data_fetched_at),
+                            data_updated_at: latest(merged.data_updated_at, epssResult.value!.data_updated_at),
+                        };
                         setRefreshedList(prev => [...prev, "EPSS"]);
+                    }
+
+                    if (euvdValue) {
+                        merged = {
+                            ...merged,
+                            aliases: [...new Set([...merged.aliases, ...euvdValue.aliases])],
+                            euvd: euvdValue.euvd,
+                            euvd_fetched_at: euvdValue.euvd_fetched_at,
+                            data_fetched_at: latest(merged.data_fetched_at, euvdValue.data_fetched_at),
+                            data_updated_at: latest(merged.data_updated_at, euvdValue.data_updated_at),
+                        };
+                        setRefreshedList(prev => [...prev, "ENISA EUVD"]);
                     }
 
                     patchVuln(vuln.id, merged);
@@ -704,7 +744,7 @@ type VariantScopedSnapshot = {
             setRefreshing(false);
             setHistoryVersion(version => version + 1);
         }
-    }, [vuln, patchVuln]);
+    }, [vuln, patchVuln, variantId, projectId]);
 
     const copyRowId = async (row: Assessment) => {
         try {
@@ -1307,10 +1347,10 @@ type VariantScopedSnapshot = {
         </div>
     );
 
-    const bothRefreshed = isGhsaVuln
+    const allRefreshed = isGhsaVuln
         ? refreshedList.includes('GHSA')
-        : refreshedList.includes('NVD') && refreshedList.includes('EPSS');
-    const partialRefreshed = refreshedList.length > 0 && !bothRefreshed;
+        : ['NVD', 'EPSS', 'ENISA EUVD'].every(source => refreshedList.includes(source));
+    const partialRefreshed = refreshedList.length > 0 && !allRefreshed;
 
     // Get the default status for new assessments
     // Use the most recent assessment's status, or "under_investigation" if no assessments exist
@@ -1607,19 +1647,19 @@ type VariantScopedSnapshot = {
                     <button
                         onClick={handleRefresh}
                         disabled={refreshing}
-                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD & EPSS"}
+                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD, EPSS & ENISA EUVD"}
                         type="button"
                         className={`rounded-lg border bg-transparent px-3 py-2 text-sm font-medium transition-colors focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
-                            bothRefreshed
+                            allRefreshed
                                 ? "border-green-600 text-green-400 hover:bg-green-900"
                                 : partialRefreshed
                                     ? "border-yellow-600 text-yellow-400 hover:bg-yellow-900"
                                     : "border-gray-600 text-gray-300 hover:bg-gray-600 hover:text-white"
                         }`}
                     >
-                        <FontAwesomeIcon icon={(bothRefreshed || partialRefreshed) ? faCheck : faRotate} className={refreshing ? "animate-spin" : ""} />
-                        {bothRefreshed && <span className="ml-2 text-xs">Updated</span>}
-                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList[0]} Updated</span>}
+                        <FontAwesomeIcon icon={(allRefreshed || partialRefreshed) ? faCheck : faRotate} className={refreshing ? "animate-spin" : ""} />
+                        {allRefreshed && <span className="ml-2 text-xs">Updated</span>}
+                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList.join(', ')} Updated</span>}
                     </button>
                     {refreshError && <span className="text-xs text-red-400">{refreshError}</span>}
                 </div>

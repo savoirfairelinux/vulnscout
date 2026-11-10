@@ -17,6 +17,7 @@ from sqlalchemy import func, select, ColumnElement
 from sqlalchemy.orm import joinedload, selectinload, aliased, attributes as orm_attrs
 from ..models import (
     Vulnerability,
+    CVSS,
     Finding,
     Observation,
     Package,
@@ -37,6 +38,8 @@ from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_extract import extract_cve_details
 from ..controllers.nvd_apply import apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
+from ..controllers.euvd_db import EUVD_DB
+from ..controllers.refresh_jobs import CVE_RE, _apply_euvd
 from ..controllers.vulnerabilities import VulnerabilitiesController
 from ..controllers.conditions_parser import ConditionParser
 from ..helpers.active_scans import (
@@ -135,6 +138,23 @@ def effort_to_dict(effort: Effort) -> dict[typing.Literal["optimistic", "likely"
 class _ScopedOverrides:
     cvss: list[Metrics]
     effort: Effort
+    severity_label: str | None = None
+
+
+def _apply_scoped_cvss_to_vuln_dict(
+    vuln: dict, metrics: list[Metrics], severity_label: str | None
+) -> None:
+    """Apply CVSS records and aggregate severity values from one metric scope."""
+    severity = vuln.setdefault("severity", {})
+    scores = [float(metric.score) for metric in metrics if metric.score is not None]
+    severity["cvss"] = [metric.to_dict() for metric in metrics]
+    severity["min_score"] = min(scores) if scores else None
+    severity["max_score"] = max(scores) if scores else None
+    if (severity_label or "unknown").lower() == "unknown":
+        severity["severity"] = (
+            CVSS("", "", "unknown", max(scores), 0.0, 0.0).severity().lower()
+            if scores else "unknown"
+        )
 
 
 def _variant_scoped_metrics_and_effort_overrides(
@@ -203,7 +223,11 @@ def _variant_scoped_metrics_and_effort_overrides(
         # Effort is a single value per vuln: a variant-scoped estimate overrides
         # the global one, falling back to global when none is set.
         chosen_effort = effort_by_vuln.get(r.id) or fallback_effort_by_vuln.get(r.id)
-        overrides[str(r.id)] = _ScopedOverrides(selected_metrics, chosen_effort or Effort(None, None, None))
+        overrides[str(r.id)] = _ScopedOverrides(
+            selected_metrics,
+            chosen_effort or Effort(None, None, None),
+            r.status,
+        )
 
     return overrides
 
@@ -219,7 +243,7 @@ def _apply_variant_scoped_overrides_to_vuln_dicts(
         scoped = overrides.get(str(vuln_id))
         if scoped is None:
             continue
-        vuln.setdefault("severity", {})["cvss"] = [m.to_dict() for m in scoped.cvss]
+        _apply_scoped_cvss_to_vuln_dict(vuln, scoped.cvss, scoped.severity_label)
         vuln["effort"] = effort_to_dict(scoped.effort)
 
 
@@ -1109,9 +1133,7 @@ def init_app(app: Flask) -> None:
                     metric_filter,
                 )
             ).scalars().all()
-            response.setdefault("severity", {})["cvss"] = [
-                metric.to_dict() for metric in scoped_metrics
-            ]
+            _apply_scoped_cvss_to_vuln_dict(response, scoped_metrics, record.status)
         else:
             variant_uuid = None
 
@@ -1534,6 +1556,46 @@ def init_app(app: Flask) -> None:
         rec.epss["percentile"] = epss_data.get("percentile")
 
         # Repopulate transient severity scores from committed metrics
+        for m in (rec.metrics or []):
+            if m.score is not None:
+                score = float(m.score)
+                if rec.severity_min_score is None or score < rec.severity_min_score:
+                    rec.severity_min_score = score
+                if rec.severity_max_score is None or score > rec.severity_max_score:
+                    rec.severity_max_score = score
+
+        return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
+
+    @app.route('/api/vulnerabilities/<cve_id>/euvd-refresh', methods=['POST'])
+    @refresh_history("euvd")
+    def refresh_single_cve_euvd(cve_id: str) -> ResponseReturnValue:
+        """Refresh ENISA EUVD and EU KEV data for a single CVE.
+
+        OpenAPI:
+        response 200 VulnerabilityRefreshResponse Refreshed vulnerability collection.
+        response 400 Error Invalid CVE identifier.
+        response 404 Error CVE not found.
+        response 503 Error ENISA EUVD data source unavailable.
+        """
+        cve_id_upper = cve_id.upper()
+        if not CVE_RE.match(cve_id_upper):
+            return jsonify({"error": "Only valid CVE identifiers are supported"}), 400
+        rec = db.session.get(Vulnerability, cve_id_upper)
+        if rec is None:
+            return jsonify({"error": "CVE not found"}), 404
+
+        euvd = EUVD_DB()
+        full_map = euvd.get_full_mapping()
+        kev_map = euvd.get_mapping()
+        # An empty dump means ENISA was unreachable; applying it would clear KEV flags.
+        if not full_map or not kev_map:
+            return jsonify({"error": "ENISA EUVD data unavailable"}), 503
+
+        _apply_euvd(cve_id_upper, full_map, kev_map, datetime.datetime.now(datetime.timezone.utc))
+        db.session.commit()
+
+        db.session.refresh(rec)
+        rec._init_transient()
         for m in (rec.metrics or []):
             if m.score is not None:
                 score = float(m.score)
