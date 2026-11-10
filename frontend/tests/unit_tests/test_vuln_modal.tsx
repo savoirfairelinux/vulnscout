@@ -8,6 +8,7 @@ import "@testing-library/jest-dom";
 import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
+import Vulnerabilities from "../../src/handlers/vulnerabilities";
 import Assessments from "../../src/handlers/assessments";
 import type { Assessment } from "../../src/handlers/assessments";
 import Iso8601Duration from '../../src/handlers/iso8601duration';
@@ -3563,14 +3564,171 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         simplified_status: 'Pending Assessment',
     };
 
+    beforeEach(() => {
+        jest.spyOn(Vulnerabilities, 'getDetails').mockResolvedValue({
+            ...vulnerability,
+            texts: updatedVulnPayload.texts,
+            severity: updatedVulnPayload.severity,
+        });
+    });
+
+    afterEach(() => {
+        jest.mocked(Vulnerabilities.getDetails).mockRestore();
+    });
+
+    test.each([
+        { variantId: 'variant-a', projectId: 'project-a' },
+        { variantId: undefined, projectId: 'project-a' },
+    ])('refreshes metadata without replacing scoped data ($variantId)', async ({ variantId, projectId }) => {
+        const scopedVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['scoped@1'],
+            packages_current: ['scoped@1'],
+            packages_current_by_variant: { 'variant-a': ['scoped@1'] },
+            variants: ['variant-a'],
+            first_scan_date: '2025-01-01T00:00:00Z',
+            effort: {
+                optimistic: new Iso8601Duration('PT1H'),
+                likely: new Iso8601Duration('PT2H'),
+                pessimistic: new Iso8601Duration('PT3H'),
+            },
+            fix: { state: 'fixed' },
+            status_summary: {
+                counts: { Fixed: 1 }, ordered: [{ status: 'Fixed', count: 1 }],
+                total_assessments: 1, dominant_status: 'Fixed', has_active_status: false,
+            },
+        };
+        const customCvss = {
+            author: 'user', origin: 'custom', variant_id: 'variant-a',
+            severity: 'critical', version: '3.1',
+            vector_string: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H',
+            base_score: 9.8, exploitability_score: 3.9, impact_score: 5.9,
+        };
+        const details: Vulnerability = {
+            ...vulnerability,
+            ...updatedVulnPayload,
+            effort: vulnerability.effort,
+            texts: [{ title: 'description', content: 'Fresh scoped description' }],
+            urls: ['https://example.org/refreshed'],
+            cpes: ['cpe:2.3:a:example:refreshed:*:*:*:*:*:*:*:*'],
+            published: '2026-01-01',
+            nvd_fetched_at: '2026-11-10T12:00:00Z',
+            data_fetched_at: '2026-11-10T12:00:00Z',
+            data_updated_at: '2026-11-10T12:00:00Z',
+            severity: { severity: 'critical', min_score: 8.1, max_score: 9.8, cvss: [customCvss] },
+        };
+        jest.mocked(Vulnerabilities.getDetails).mockResolvedValue(details);
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => ({
+            body: JSON.stringify(request.url.endsWith('-refresh')
+                ? { vulnerabilities: [{ ...updatedVulnPayload, packages: ['other-project@2'] }] }
+                : []),
+        }));
+        const patchVuln = jest.fn();
+        const { rerender } = render(<VulnModal vuln={scopedVuln} variantId={variantId} projectId={projectId}
+            onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        await waitFor(() => expect(patchVuln).toHaveBeenCalledTimes(1));
+        expect(Vulnerabilities.getDetails).toHaveBeenCalledWith(vulnerability.id, variantId, projectId);
+        const refreshed = patchVuln.mock.calls[0][1] as Vulnerability;
+        expect(refreshed).toEqual({
+            ...scopedVuln,
+            aliases: details.aliases,
+            related_vulnerabilities: details.related_vulnerabilities,
+            texts: details.texts,
+            urls: details.urls,
+            cpes: details.cpes,
+            published: details.published,
+            nvd_fetched_at: details.nvd_fetched_at,
+            ghsa_fetched_at: undefined,
+            data_fetched_at: details.data_fetched_at,
+            data_updated_at: details.data_updated_at,
+            severity: details.severity,
+            epss: updatedVulnPayload.epss,
+        });
+        rerender(<VulnModal vuln={refreshed} variantId={variantId} projectId={projectId}
+            onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+        expect(screen.getByText('Fresh scoped description')).toBeInTheDocument();
+        expect(screen.getByText('Updated')).toBeInTheDocument();
+        expect(screen.queryByText('other-project@2')).not.toBeInTheDocument();
+    });
+
+    test('reports detail reload errors while retaining successful EPSS and EUVD updates', async () => {
+        jest.mocked(Vulnerabilities.getDetails).mockRejectedValue(new Error('HTTP 503'));
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => ({
+            body: JSON.stringify(request.url.endsWith('-refresh')
+                ? { vulnerabilities: [updatedVulnPayload] } : []),
+        }));
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={patchVuln} />);
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        expect(await screen.findByText(/Failed to load refreshed vulnerability details: Error: HTTP 503/)).toBeInTheDocument();
+        expect(screen.getByText('EPSS, ENISA EUVD Updated')).toBeInTheDocument();
+        expect(screen.queryByText('Updated')).not.toBeInTheDocument();
+        expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({
+            texts: vulnerability.texts, severity: vulnerability.severity, epss: updatedVulnPayload.epss,
+        }));
+    });
+
+    test('applies refreshed ENISA EUVD and EU KEV data to the modal', async () => {
+        const euvd = {
+            id: 'EUVD-2010-0001', known_exploited: true, sources: ['CISA'], date_added: '2026-11-01',
+            url: 'https://euvd.enisa.europa.eu/vulnerability/EUVD-2010-0001',
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => {
+            if (request.url.endsWith('/nvd-refresh')) return { status: 503, body: '{}' };
+            if (request.url.endsWith('/euvd-refresh')) {
+                return { body: JSON.stringify({ vulnerabilities: [{
+                    ...updatedVulnPayload, aliases: [euvd.id], euvd, euvd_fetched_at: '2026-11-11T10:00:00Z',
+                }] }) };
+            }
+            return { body: JSON.stringify(request.url.endsWith('-refresh') ? { vulnerabilities: [updatedVulnPayload] } : []) };
+        });
+        const patchVuln = jest.fn();
+        const { rerender } = render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={patchVuln} />);
+        expect(screen.queryByText('EU KEV — Known Exploited')).not.toBeInTheDocument();
+
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        await waitFor(() => expect(patchVuln).toHaveBeenCalledTimes(1));
+        const refreshed = patchVuln.mock.calls[0][1] as Vulnerability;
+        expect(refreshed).toEqual(expect.objectContaining({
+            aliases: [euvd.id], euvd, euvd_fetched_at: '2026-11-11T10:00:00Z',
+            texts: vulnerability.texts, packages: vulnerability.packages,
+        }));
+        expect(screen.getByText('EPSS, ENISA EUVD Updated')).toBeInTheDocument();
+
+        rerender(<VulnModal vuln={refreshed} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={patchVuln} />);
+        expect(screen.getByRole('link', { name: euvd.id })).toHaveAttribute('href', euvd.url);
+        expect(screen.getByText('EU KEV — Known Exploited')).toBeInTheDocument();
+    });
+
+    test('reports an ENISA EUVD refresh failure while keeping NVD and EPSS updates', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => {
+            if (request.url.endsWith('/euvd-refresh')) return { status: 503, body: '{}' };
+            return { body: JSON.stringify(request.url.endsWith('-refresh') ? { vulnerabilities: [updatedVulnPayload] } : []) };
+        });
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={() => {}} />);
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        expect(await screen.findByText('NVD, EPSS Updated')).toBeInTheDocument();
+        expect(screen.getByText(/ENISA EUVD unavailable/)).toBeInTheDocument();
+    });
+
     test('refresh button renders in header when not readOnly', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        expect(screen.getByTitle('Refresh from NVD & EPSS')).toBeInTheDocument();
+        expect(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD')).toBeInTheDocument();
     });
 
     test('refresh button is not rendered in readOnly mode', () => {
         render(<VulnModal vuln={vulnerability} readOnly={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        expect(screen.queryByTitle('Refresh from NVD & EPSS')).not.toBeInTheDocument();
+        expect(screen.queryByTitle('Refresh from NVD, EPSS & ENISA EUVD')).not.toBeInTheDocument();
     });
 
     test('calls patchVuln with updated vulnerability on successful refresh', async () => {
@@ -3586,7 +3744,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({ id: vulnerability.id }));
@@ -3621,7 +3779,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledWith(
@@ -3645,11 +3803,12 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
         fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // euvd-refresh
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText('Updated')).toBeInTheDocument();
@@ -3668,10 +3827,10 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD.*unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD.*unavailable.*EPSS API unavailable.*ENISA EUVD unavailable/i)).toBeInTheDocument();
         });
     });
 
@@ -3690,7 +3849,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD rate-limited.*NVD API key/i)).toBeInTheDocument();
@@ -3712,7 +3871,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD rate-limited.*exhausted/i)).toBeInTheDocument();
@@ -3731,7 +3890,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             const nvdCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/nvd-refresh'));
@@ -3761,7 +3920,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD API key rejected/i)).toBeInTheDocument();
@@ -3780,7 +3939,7 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD API unavailable/i)).toBeInTheDocument();
@@ -3983,7 +4142,14 @@ describe('Refresh button', () => {
         simplified_status: 'active',
     });
 
-    beforeEach(() => { fetchMock.resetMocks(); });
+    beforeEach(() => {
+        fetchMock.resetMocks();
+        jest.spyOn(Vulnerabilities, 'getDetails').mockImplementation(async id => ({ ...baseVuln, id }));
+    });
+
+    afterEach(() => {
+        jest.mocked(Vulnerabilities.getDetails).mockRestore();
+    });
 
     test('NVD + EPSS refresh success calls patchVuln and shows Updated badge', async () => {
         // Mount fetches
@@ -4001,19 +4167,24 @@ describe('Refresh button', () => {
             ok: true, status: 200,
             json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
         } as Response));
+        // EUVD refresh
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
+        } as Response));
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        const refreshBtn = screen.getByTitle(/Refresh from NVD & EPSS/i);
+        const refreshBtn = screen.getByTitle(/Refresh from NVD, EPSS & ENISA EUVD/i);
         await user.click(refreshBtn);
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledTimes(1);
         });
 
-        // After both NVD and EPSS succeed, "Updated" badge should appear
+        // After NVD, EPSS and EUVD succeed, "Updated" badge should appear
         expect(await screen.findByText('Updated')).toBeInTheDocument();
     });
 
@@ -4037,14 +4208,14 @@ describe('Refresh button', () => {
         render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
+        await user.click(screen.getByTitle(/Refresh from NVD, EPSS & ENISA EUVD/i));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD rate-limited/i)).toBeInTheDocument();
         });
     });
 
-    test('NVD + EPSS both unavailable shows combined error', async () => {
+    test('NVD, EPSS and EUVD all unavailable shows combined error', async () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
@@ -4059,12 +4230,17 @@ describe('Refresh button', () => {
             ok: false, status: 503,
             json: () => Promise.resolve({}),
         } as Response));
+        // EUVD refresh → fail
+        fetchMock.mockImplementationOnce(() => Promise.resolve({
+            ok: false, status: 503,
+            json: () => Promise.resolve({}),
+        } as Response));
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
+        await user.click(screen.getByTitle(/Refresh from NVD, EPSS & ENISA EUVD/i));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD.*unavailable/i)).toBeInTheDocument();
