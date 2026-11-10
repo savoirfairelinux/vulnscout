@@ -324,6 +324,8 @@ describe('AIContext page', () => {
 
         agentWrite('update_variant_context');
         await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+        agentWrite('update_variant_threat_model');
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(3));
 
         await openProjectDescription();
         expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({

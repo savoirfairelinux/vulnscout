@@ -309,7 +309,11 @@ mitigation or residual decision are left out of `risks`. `codebase_path` is
 only sent when the source is paths, and uploaded references are only listed
 when the source is references; `get_merged_context` also reports the
 `codebase_source`. The MCP `update_variant_context` tool cannot change the
-threat model, risks or codebase source; edit them in the page.
+threat model, risks or codebase source. `get_merged_context` with
+`include_model=true` and `update_variant_threat_model` read and edit the System
+text and STRIDE tables as structured rows; an update given `expected_updated_at`
+is rejected, without changes, when the variant's context was saved after that
+read. The codebase source is edited only in the page.
 
 The assessment skills and the embedded Agent use the STRIDE model per variant.
 They map the affected component to Components and Interactions, check
@@ -329,8 +333,9 @@ references and SBOM dependencies, asks for missing facts, and replies with
 copy-ready values: one code block per text field, and one entry per table row
 naming the exact option to pick (for example `C1: OTA updater`). Each code block
 has its own copy button. Unconfirmed values are marked `[confirm: ...]`. The
-Agent does not save the form; paste the values and click **Save changes**. It
-only sees saved context, not unsaved edits.
+Agent does not save the form unless you explicitly ask it to; otherwise paste
+the values and click **Save changes**. It only sees saved context, not unsaved
+edits, and the page reloads after the Agent saves.
 
 ## Codebase references on the AI Context page
 

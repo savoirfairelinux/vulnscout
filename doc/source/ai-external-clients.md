@@ -102,11 +102,12 @@ Once configured, the agent can call these assessment and context tools
 | `get_vulnerability`        | Retrieve a vulnerability with variant-scoped details        |
 | `find_project_id` / `find_variant_id` | Resolve a project / variant by name             |
 | `list_variants`            | List every variant across all projects                      |
-| `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, codebase source, environment, STRIDE-rendered threat model and risks, other info) |
+| `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, codebase source, environment, STRIDE-rendered threat model and risks, other info). With `include_model=true`, it also returns the editable System text and STRIDE rows as JSON with their IDs |
 | `list_codebase_files` / `read_codebase_file` / `search_codebase` | Browse, read and search uploaded codebase references for a variant, including inside the container |
 | `get_ai_context_form_guide` | Return the AI Context form guide: what each field and table expects, and the copy-ready reply format used to help fill it |
 | `get_project_context` / `update_project_context` | Read / replace a project's description |
-| `update_variant_context`   | Replace a variant's text context fields (description, codebase path, environment, other info) — full replacement, not a partial update; the threat model, risks and codebase source can only be edited on the AI Context page. A variant with no context yet is created with codebase source paths when a codebase path is given, otherwise references |
+| `update_variant_context`   | Replace a variant's text context fields (description, codebase path, environment, other info) — full replacement, not a partial update; the threat model and risks are edited with `update_variant_threat_model`, and the codebase source only on the AI Context page. A variant with no context yet is created with codebase source paths when a codebase path is given, otherwise references |
+| `update_variant_threat_model` | Partially update a variant's System, Threat model and Risks tabs: upsert rows by ID, remove listed IDs, change only the System fields given. The whole model is validated before it is stored, and the save is rejected if the variant's context changed since `expected_updated_at`; saving outdates pending AI assessments |
 | `get_custom_assessment`    | Fetch one user-authored assessment and its per-target reviews |
 | `list_custom_assessments`  | List user-authored assessments, optionally scoped to a project variant |
 | `write_assessment_review`  | Record an AI second opinion for one (variant, package) target |
@@ -232,6 +233,22 @@ For current lifecycle, LTS, and end-of-life research, use a client with web
 research capabilities or supply authoritative dated evidence. Distinguish
 upstream support from vendor/distribution backports and entitlement. MCP itself
 does not provide web browsing.
+
+## Filling the AI Context From a Document
+
+The `.github/skills/ai-context-import/` skill drafts a variant's AI Context
+(Context, System, Threat model and Risks tabs) from a document the client can
+read locally: a Threagile model or report (`threagile.yaml`, `risks.json`,
+`report.pdf`), another threat-model export, or an architecture or security PDF.
+It replies with copy-ready values per field and row, with sources and
+`[confirm: ...]` marks. Paste the values in the AI Context page, review them
+and click **Save changes**. With the MCP server connected it reads the saved
+context so new row IDs continue after the existing ones, and, once you have
+reviewed the values and confirmed, it can save them with
+`update_variant_threat_model` and `update_variant_context`; it never saves
+without that confirmation. Reading PDFs needs `pdftotext` (poppler-utils) or
+the `pypdf` Python package on the client machine. The skill does not extract
+archives: extract them yourself and give it the directory.
 
 ## External Client Troubleshooting
 

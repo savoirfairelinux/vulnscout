@@ -8,10 +8,11 @@ paste. Labels in **bold** are the exact labels shown on the page.
 ## How to help
 
 - You only guide; the user types or pastes values and clicks **Save changes**.
-  For form help, do not call `update_project_context` or `update_variant_context`
-  unless the user explicitly asks you to save. Those tools cannot change the
-  System, Threat model or Risks tabs or the **Codebase source** anyway.
-- You can read only the saved context (`get_merged_context`). Edits the user has
+  For form help, do not call `update_project_context`, `update_variant_context`
+  or `update_variant_threat_model` unless the user explicitly asks you to save.
+  None of them changes the **Codebase source**.
+- You can read only the saved context (`get_merged_context`; pass
+  `include_model=true` for the System text and table rows). Edits the user has
   not saved are invisible to you, so ask the user to paste them when they matter.
 - Start from evidence: the saved context, uploaded codebase references
   (`list_codebase_files`, `search_codebase`, `read_codebase_file`) and the SBOM
@@ -170,10 +171,12 @@ keep threats that are plausible for this variant.
 
 ### Risks tab
 
-**Risks** table (**Add risk**). Add threats first. One row per threat you rate;
-several rows may point at the same threat.
+**Risks** table (**Add risk**). Add threats first. A risk can cover one or more
+threats, and several risks may cover the same threat.
 
-- **Threat** (required): select the threat, shown as `T1: <start of its description>`.
+- **Description**: the risk in one line, e.g. `Firmware replaced via OTA.`
+- **Threats** (required, at least one): tick the threats this risk covers,
+  shown as `T1: <first 40 characters of its description>`.
 - **Likelihood** and **Impact**: **Not rated**, **Low**, **Medium** or **High**.
   Base likelihood on exposure (who can reach the entry point) and impact on the
   assets at stake.

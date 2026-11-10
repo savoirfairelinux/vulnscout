@@ -39,7 +39,7 @@ READ_TOOLS = (
 )
 WRITE_TOOLS = (
     "write_assessment", "update_ai_assessment", "update_project_context",
-    "update_variant_context", "write_assessment_review",
+    "update_variant_context", "update_variant_threat_model", "write_assessment_review",
 )
 COOKIE = "vulnscout_agent"
 MAX_SCOPE_VARIANTS = 1000
@@ -721,7 +721,8 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
                 "and follow it: read the variant's saved context and use uploads and SBOM packages as "
                 "evidence, focus on the tab in view.section, ask for missing facts one topic at a time, and "
                 "answer with copy-ready values per field label. You cannot see the user's unsaved edits. "
-                "Form help is guidance only: do not call update_project_context or update_variant_context "
+                "Form help is guidance only: do not call update_project_context, update_variant_context or "
+                "update_variant_threat_model "
                 "unless the user explicitly asks to save. "
                 "Explain what you changed. If a tool returns an error, report it; do not invent results."
             )},
