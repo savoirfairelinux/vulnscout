@@ -720,11 +720,17 @@ def _spdx2_documents():
 
 @pytest.mark.parametrize("fast", [False, True])
 @pytest.mark.parametrize("containment", ["CONTAINS", "CONTAINED_BY", "hasFiles"])
+@pytest.mark.parametrize("file_kind", ["source", "binary", "output"])
 def test_spdx2_companion_source_files_preserve_properties_without_claiming_compilation(
-    app, tmp_path, monkeypatch, fast, containment,
+    app, tmp_path, monkeypatch, fast, containment, file_kind,
 ):
     monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
     documents = _spdx2_documents()
+    original = documents["z-source.spdx.json"]["files"][0]
+    if file_kind == "binary":
+        original.update(fileName="bin/busybox.suid", fileTypes=["BINARY"])
+    elif file_kind == "output":
+        original.update(fileName="build/firmware.elf", fileTypes=["OTHER"])
     built = documents["a-built.spdx.json"]
     if containment == "hasFiles":
         built["packages"][0]["hasFiles"] = ["DocumentRef-sources:SPDXRef-source"]
@@ -740,22 +746,80 @@ def test_spdx2_companion_source_files_preserve_properties_without_claiming_compi
     assert row["compiled_source_file_count"] == 0
     assert not row["compiled_sources_complete"]
     file = row["source_files"][0]
-    assert file["path"] == "src/enabled.c"
+    assert file["path"] == original["fileName"]
     assert file["spdx_id"] == "https://example.org/sources#SPDXRef-source"
     assert file["properties"] == documents["z-source.spdx.json"]["files"][0]
     assert not file["builds"]
     assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+    _assert_no_source_exclusion(scan)
     read_inputs(ControllersCache(), scan.id)
     assert db.session.query(SBOMFile).count() == 1
+    assert db.session.query(PackageSourceFile).count() == 1
+    assert _package(app, variant)["source_files"] == row["source_files"]
 
 
-def test_spdx2_external_file_references_never_use_a_different_scan(app, tmp_path):
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize("properties,binary", [
+    ({"software_primaryPurpose": []}, False),
+    ({"software_primaryPurpose": {}}, False),
+    ({"software_primaryPurpose": 7}, False),
+    ({"software_primaryPurpose": "executable"}, True),
+    ({"fileTypes": 7}, False),
+    ({"fileTypes": "BINARY"}, False),
+    ({"fileTypes": {"BINARY": True}}, False),
+    ({"fileTypes": ["BINARY", []]}, False),
+    ({"fileTypes": ["BINARY"]}, True),
+    ({"fileTypes": None, "software_primaryPurpose": None}, False),
+])
+def test_spdx2_portable_file_properties_validate_types(app, tmp_path, monkeypatch, fast, properties, binary):
+    from src.helpers.export_files import EVIDENCE_PREFIX
+    from src.helpers.sbom_files import _is_binary
+
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
     documents = _spdx2_documents()
+    original = documents["z-source.spdx.json"]["files"][0]
+    original.pop("fileTypes")
+    original["comment"] = EVIDENCE_PREFIX + json.dumps({"builds": [], "properties": properties})
+    variant, scan = _import(tmp_path, documents)
+    file = db.session.scalars(db.select(SBOMFile)).one()
+    assert _is_binary(file) is binary
+    assert file.properties == original
+    row = _package(app, variant)
+    assert row["source_file_count"] == 1
+    assert row["compiled_source_file_count"] == 0
+    assert not row["compiled_sources_complete"]
+    _assert_no_source_exclusion(scan)
+
+
+@pytest.mark.parametrize("file_types", [["SOURCE"], ["BINARY"]])
+def test_spdx2_external_file_references_never_use_a_different_scan(app, tmp_path, file_types):
+    documents = _spdx2_documents()
+    documents["z-source.spdx.json"]["files"][0]["fileTypes"] = file_types
     variant, _ = _import(tmp_path, documents)
     other = Variant.create("missing-source-companion", variant.project_id)
     _, scan = _import(tmp_path, {"a-built.spdx.json": documents["a-built.spdx.json"]}, other)
     assert _package(app, other)["source_file_count"] is None
     assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+
+
+def test_spdx2_binary_inventory_uses_only_the_selected_variants_active_scan(app, tmp_path):
+    documents = _spdx2_documents()
+    file = documents["z-source.spdx.json"]["files"][0]
+    file.update(fileName="bin/old-scan", fileTypes=["BINARY"])
+    variant, _ = _import(tmp_path, documents)
+    file["fileName"] = "bin/active-scan"
+    _, active_scan = _import(tmp_path, documents, variant)
+    other = Variant.create("other-artifacts", variant.project_id)
+    file["fileName"] = "bin/other-variant"
+    _import(tmp_path, documents, other)
+    row = _package(app, variant)
+    assert row["source_file_count"] == 1
+    assert row["compiled_source_file_count"] == 0
+    assert [file["path"] for file in row["source_files"]] == ["bin/active-scan"]
+    assert row["source_files"][0]["scan_id"] == str(active_scan.id)
+    assert row["source_files"][0]["variant_id"] == str(variant.id)
+    assert [file["path"] for file in _package(app, other)["source_files"]] == ["bin/other-variant"]
+    _assert_no_source_exclusion(active_scan)
 
 
 @pytest.mark.parametrize("fast", [False, True])
@@ -813,8 +877,23 @@ def test_checked_in_yocto_spdx2_retains_binary_inventory_without_compiled_source
     assert db.session.query(SBOMFile).count() == 162
     binary = db.session.scalars(db.select(SBOMFile).where(SBOMFile.path == "bin/busybox.suid")).one()
     assert binary.properties["fileTypes"] == ["BINARY"]
-    assert _package(app, variant, "busybox")["source_file_count"] == 0
+    row = _package(app, variant, "busybox")
+    assert row["source_file_count"] == 7
+    assert row["compiled_source_file_count"] == 0
+    assert not row["compiled_sources_complete"]
+    assert len(binary.package_links) == 1
+    file = next(file for file in row["source_files"] if file["path"] == "bin/busybox.suid")
+    assert file["path"] == "bin/busybox.suid"
+    assert file["document_name"].endswith("busybox.spdx.json")
+    assert file["scan_id"] == str(scan.id)
+    assert file["variant_id"] == str(variant.id)
+    assert file["properties"]["fileTypes"] == ["BINARY"]
+    assert file["builds"] == []
     assert all(not package.compiled_sources for package in package_snapshots_for_sbom_scans([scan.id]))
+    _assert_no_source_exclusion(scan, "busybox")
+    read_inputs(ControllersCache(), scan.id)
+    assert db.session.query(SBOMFile).count() == 162
+    assert _package(app, variant, "busybox")["source_files"] == row["source_files"]
 
 
 def test_checked_in_yocto_spdx3_recipe_inputs_do_not_exclude_cves(app, tmp_path):
@@ -858,6 +937,47 @@ def _exported_file_records(output, version):
         annotated, _ = spdx2_annotation_inventory(output)
         return [*output.get("files", []), *annotated]
     return [item for item in output["@graph"] if item.get("type") == "software_File"]
+
+
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("path,file_types", [("bin/busybox.suid", ["BINARY"]), ("build/output.elf", ["OTHER"])])
+def test_spdx2_artifact_associations_roundtrip_without_source_exclusion(
+    app, tmp_path, monkeypatch, fast, version, path, file_types,
+):
+    from src.helpers.export_files import EVIDENCE_PREFIX, recorded_evidence
+
+    monkeypatch.setenv("IGNORE_PARSING_ERRORS", str(fast).lower())
+    documents = _spdx2_documents()
+    file = documents["z-source.spdx.json"]["files"][0]
+    file.update(fileName=path, fileTypes=file_types)
+    # Even recorded compiler observations cannot turn an artifact into compiled source.
+    file["comment"] = EVIDENCE_PREFIX + json.dumps({"builds": [{
+        "spdx_id": "compile-artifact", "compiled": True,
+        "build_type": "urn:spdx.dev:zephyr-cmake",
+        "parameters": [{"key": "compile:flags:C", "value": "-O2"}], "outputs": [],
+    }]})
+    variant, scan = _import(tmp_path, documents)
+    _assert_no_source_exclusion(scan)
+    original = _package(app, variant)
+    assert original["source_file_count"] == 1
+    assert original["compiled_source_file_count"] == 0
+    assert original["source_files"][0]["builds"] == []
+    output = _export_files(variant, version)
+    restored = Variant.create("restored-artifacts", variant.project_id)
+    name = "export.spdx.json" if version == 2 else "export.jsonld"
+    _, restored_scan = _import(tmp_path, {name: output}, restored)
+    row = _package(app, restored)
+    assert row["source_file_count"] == 1
+    assert row["compiled_source_file_count"] == 0
+    assert not row["compiled_sources_complete"]
+    assert row["source_files"][0]["path"] == path
+    properties = row["source_files"][0]["properties"]
+    assert recorded_evidence(properties)["properties"]["fileTypes"] == file_types
+    assert row["source_files"][0]["builds"] == []
+    assert row["source_files"][0]["scan_id"] == str(restored_scan.id)
+    assert row["source_files"][0]["variant_id"] == str(restored.id)
+    _assert_no_source_exclusion(restored_scan)
 
 
 @pytest.mark.parametrize("version", [2, 3])

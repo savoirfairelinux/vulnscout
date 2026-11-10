@@ -55,6 +55,9 @@ dangling native integrity references.
 Native file types, licenses, and other supported properties are retained in the
 matching format; properties without a native equivalent are retained in the
 labelled comment metadata.
+Explicitly contained SPDX 2 binary/output associations survive reimport from
+either SPDX export format, retaining their artifact classification. They never
+become compiled-source evidence or enable CVE source exclusion.
 
 Both formats use a `VulnScout recorded file evidence v1:` JSON comment to
 preserve supported original metadata and recorded file-level build observations

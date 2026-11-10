@@ -387,8 +387,8 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 id: 'source_files',
                 header: () => <div className="flex items-center justify-center">Recorded Files</div>,
                 HintText: <p>
-                    Non-binary file records associated with this component in the imported SBOMs.
-                    May include source code, patches, licenses, and configuration files;
+                    File records associated with this component in the imported SBOMs.
+                    May include source code, patches, licenses, configuration files, and SPDX 2 binaries/outputs;
                     not necessarily a complete source inventory.
                 </p>,
                 HintAriaLabel: 'Recorded files helper',

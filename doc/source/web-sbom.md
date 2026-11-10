@@ -47,6 +47,10 @@ means the imported SBOMs recorded no files for the package.
 **Compilation recorded** means a compiler target records the file as an input.
 **Other build input** includes recipe or packaging tasks and does not prove
 compilation. **Listed only** means no associated build task was recorded.
+**Binary / output** identifies explicitly contained SPDX 2 binaries and output
+artifacts; use the corresponding filter to inspect them, including their original
+file types, hashes, and licenses. These associations never count as compiled source
+or enable CVE source exclusion. Reimport older SPDX 2 SBOMs to populate them.
 None of these proves inclusion in the final firmware. The summary distinguishes
 file records from unique compiled source paths. The browser presents the
 recorded evidence without a CVE-matching policy banner; see
