@@ -340,7 +340,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 if (projectDraft.dirty) showBanner(DIRTY_PROJECT_AGENT_TEXT, "error");
                 else reloadProject();
             }
-            if (tool === 'update_variant_context' && selected?.kind === 'variant') {
+            if ((tool === 'update_variant_context' || tool === 'update_variant_threat_model') && selected?.kind === 'variant') {
                 if (variantDraft.dirty) showBanner(DIRTY_VARIANT_AGENT_TEXT, "error");
                 else reloadVariant();
             }
