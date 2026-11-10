@@ -661,22 +661,42 @@ describe('Packages Table', () => {
         expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
     })
 
-    test('dependency actions are discoverable and open the correct scoped package by mouse or keyboard', async () => {
-        const fetch = jest.spyOn(global, 'fetch').mockImplementation(async input => {
-            const url = new URL(String(input));
-            return {
-                ok: true, json: async () => url.searchParams.has('counts')
-                    ? { counts: { [packages[0].id]: { in: 1, out: 0 }, [packages[1].id]: { in: 0, out: 1 } }, unrecorded: [] }
-                    : { documents: [{
-                        id: 'dependency-fixture', source_name: 'fixture.spdx', variant_id: 'dependency-v1', variant_name: 'default',
-                        dependencies_recorded: true, packages,
-                        edges: [{ package_id: packages[0].id, dependency_id: packages[1].id }],
-                    }] },
-            } as Response;
-        });
+    const mockDependencyFetch = () => jest.spyOn(global, 'fetch').mockImplementation(async input => {
+        const url = new URL(String(input));
+        return {
+            ok: true, json: async () => url.searchParams.has('counts')
+                ? { counts: { [packages[0].id]: { in: 1, out: 0 }, [packages[1].id]: { in: 0, out: 1 } }, unrecorded: [] }
+                : { documents: [{
+                    id: 'dependency-fixture', source_name: 'fixture.spdx', variant_id: 'dependency-v1', variant_name: 'default',
+                    dependencies_recorded: true, packages,
+                    edges: [{ package_id: packages[0].id, dependency_id: packages[1].id }],
+                }] },
+        } as Response;
+    });
+
+    // Each test passes its own dataRevision so the modal's module-level graph cache cannot satisfy it from an earlier test.
+    const renderDependencyTable = (dataRevision: number) => render(<TablePackages preferenceScopeKey="dependency-default"
+        packages={packages} variantId="dependency-v1" compareVariantId="dependency-v2" operation="intersection"
+        dataRevision={dataRevision} />);
+
+    const expectScopedDependencyRequests = (fetch: ReturnType<typeof mockDependencyFetch>) => {
+        const requests = fetch.mock.calls.map(([input]) => new URL(String(input)));
+        expect(requests.some(url => url.searchParams.has('counts'))).toBe(true);
+        expect(requests.some(url => !url.searchParams.has('counts'))).toBe(true);
+        for (const url of requests) {
+            expect(url.pathname).toBe('/api/package-dependencies');
+            expect(url.searchParams.get('variant_id')).toBe('dependency-v1');
+            expect(url.searchParams.get('compare_variant_id')).toBe('dependency-v2');
+            expect(url.searchParams.get('operation')).toBe('intersection');
+        }
+    };
+
+    // The first open of the lazy DependencyModal compiles it under coverage, which can exceed Jest's 5 s
+    // default on loaded CI runners; mouse and keyboard flows are split and given an explicit timeout.
+    test('dependency actions are discoverable and open the correct scoped package by mouse', async () => {
+        const fetch = mockDependencyFetch();
         try {
-            render(<TablePackages preferenceScopeKey="dependency-default" packages={packages}
-                variantId="dependency-v1" compareVariantId="dependency-v2" operation="intersection" />);
+            renderDependencyTable(1);
             const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
             expect(headers.slice(0, 6)).toEqual([
                 'Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities',
@@ -707,8 +727,18 @@ describe('Packages Table', () => {
                 .findByRole('heading', { name: packages[0].id })).toBeTruthy();
             await user.click(screen.getByRole('button', { name: 'Close modal' }));
             expect(screen.queryByRole('dialog')).toBeNull();
+            expectScopedDependencyRequests(fetch);
+        } finally {
+            fetch.mockRestore();
+        }
+    }, 15000);
 
-            const reverseButton = screen.getByRole('button', { name: 'Explore dependencies for xxxyyyzzz' });
+    test('dependency actions open the correct scoped package by keyboard', async () => {
+        const fetch = mockDependencyFetch();
+        try {
+            renderDependencyTable(2);
+            const user = userEvent.setup();
+            const reverseButton = await screen.findByRole('button', { name: 'Explore dependencies for xxxyyyzzz' });
             expect(reverseButton.textContent).toContain('Deps: 0 / Req by: 1');
             for (const key of ['{Enter}', ' ']) {
                 reverseButton.focus();
@@ -721,19 +751,11 @@ describe('Packages Table', () => {
                 expect(screen.getAllByRole('dialog')).toHaveLength(1);
                 await user.click(screen.getByRole('button', { name: 'Close modal' }));
             }
-            const requests = fetch.mock.calls.map(([input]) => new URL(String(input)));
-            expect(requests.some(url => url.searchParams.has('counts'))).toBe(true);
-            expect(requests.some(url => !url.searchParams.has('counts'))).toBe(true);
-            for (const url of requests) {
-                expect(url.pathname).toBe('/api/package-dependencies');
-                expect(url.searchParams.get('variant_id')).toBe('dependency-v1');
-                expect(url.searchParams.get('compare_variant_id')).toBe('dependency-v2');
-                expect(url.searchParams.get('operation')).toBe('intersection');
-            }
+            expectScopedDependencyRequests(fetch);
         } finally {
             fetch.mockRestore();
         }
-    });
+    }, 15000);
 
     test('dependency loading and unavailable states are not actions or zero counts', async () => {
         let fail!: (reason: Error) => void;
