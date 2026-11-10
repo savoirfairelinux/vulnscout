@@ -142,7 +142,7 @@ class _ScopedOverrides:
 
 
 def _apply_scoped_cvss_to_vuln_dict(
-    vuln: dict, metrics: list[Metrics], severity_label: str | None
+    vuln: dict, metrics: typing.Sequence[Metrics], severity_label: str | None
 ) -> None:
     """Apply CVSS records and aggregate severity values from one metric scope."""
     severity = vuln.setdefault("severity", {})
