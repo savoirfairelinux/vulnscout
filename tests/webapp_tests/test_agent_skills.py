@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.routes import agent_skills
-from src.routes.agent_skills import ASSESS, REVIEW
+from src.routes.agent_skills import ASSESS, CONTEXT_IMPORT, REVIEW
 
 
 def _skills(tmp_path):
@@ -30,11 +30,20 @@ def _resolve_to(monkeypatch, *addresses):
 
 
 def test_profiles_expose_only_their_writes():
-    assert agent_skills.PROFILES == {"assess": ASSESS, "review": REVIEW}
+    assert agent_skills.PROFILES == {"assess": ASSESS, "review": REVIEW, "context-import": CONTEXT_IMPORT}
+    assert CONTEXT_IMPORT.skills == ("ai-context-import",)
+    assert CONTEXT_IMPORT.write_tools == ("propose_variant_threat_model",)
     assert ASSESS.skill == "cve-assessment" and ASSESS.skills == ("cve-assessment",)
     assert set(ASSESS.write_tools) == {"write_assessment", "update_ai_assessment"}
     assert REVIEW.skill == "assessment-review" and set(REVIEW.skills) == {"assessment-review", "cve-assessment"}
     assert REVIEW.write_tools == ("write_assessment_review",)
+
+
+def test_profile_writes_are_reported_as_writes():
+    from src.routes import agent
+
+    for profile in agent_skills.PROFILES.values():
+        assert set(profile.write_tools) <= set(agent.WRITE_TOOLS), profile.action
 
 
 def test_skills_path_uses_override_then_repository(monkeypatch, tmp_path):
