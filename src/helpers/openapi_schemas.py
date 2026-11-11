@@ -1013,6 +1013,13 @@ SCHEMAS.update({
         "renumbered": _map(_STRING),
         "base_updated_at": _DATE, "saved_updated_at": _DATE, "created_at": _DATE, "updated_at": _DATE,
     }, ("source", "status", "values", "conflicts", "renumbered", "base_updated_at", "saved_updated_at")),
+    "ImportSource": _object({"name": _STRING, "size": _COUNT}, ("name", "size")),
+    "ImportSourceResult": {"anyOf": [
+        _object({"name": _STRING, **{key: value for key, value in variant["properties"].items()
+                                     if key not in ("file_id", "original_name")}},
+                ("name", *[key for key in variant["required"] if key not in ("file_id", "original_name")]))
+        for variant in SCHEMAS["SourceReferenceResult"]["anyOf"]
+    ]},
     "ContextDraftUpdate": _object({
         "source": {"type": "string", "minLength": 1, "maxLength": 255},
         "base_updated_at": _DATE, "values": _ref("ContextDraftValues"),
