@@ -18,7 +18,9 @@ export const MAIN_CONVERSATION = 'main';
 export const AGENT_CHAT_SOURCE = 'Agent chat';
 /** The backend's limit of actions per queue request (`agent_queue.MAX_ACTIONS`); larger lists go in batches. */
 export const ACTIONS_PER_REQUEST = 500;
-export const agentActionLabels = { assess: 'Assess', review: 'Review', message: 'Message' } as const;
+export const agentActionLabels = {
+    assess: 'Assess', review: 'Review', message: 'Message', 'context-import': 'Fill',
+} as const;
 const STREAM_PATH = '/api/agent/queue/stream';
 
 export type AgentTask = {
