@@ -12,7 +12,9 @@ from vulnscout_mcp.tools.context import (
     _find_variant_id_impl,
     _get_merged_context_impl,
     _get_project_context_impl,
+    _import_source_impl,
     _list_variants_impl,
+    _propose_variant_threat_model_impl,
     _update_project_context_impl,
     _update_variant_context_impl,
     _update_variant_threat_model_impl,
@@ -324,13 +326,16 @@ class TestVariantThreatModel:
         with respx.mock:
             respx.get(f"{BASE_URL}/api/context").mock(
                 return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
+            respx.get(f"{BASE_URL}/api/variants/v1/context/draft").mock(
+                return_value=httpx.Response(404, json={"error": "No draft."}))
             plain = _get_merged_context_impl(client, "p1", "v1")
             result = _get_merged_context_impl(client, "p1", "v1", include_model=True)
         assert "\nmodel=" not in plain
         assert result.startswith(plain + "\nmodel=")
-        model = json.loads(result.rsplit("\nmodel=", 1)[1])
+        model = json.loads(result.rsplit("\nmodel=", 1)[1].rsplit("\ndraft=", 1)[0])
         assert model["system"]["scope"] == "Gateway"
         assert model["stride"] == SAVED_STRIDE
+        assert result.endswith("\ndraft=null")
 
     def test_update_merges_rows_and_keeps_the_rest_of_the_context(self, client):
         from src.models.variant_context import _editor_values
@@ -474,6 +479,10 @@ class TestAiContextFormGuide:
         update = tools["update_variant_threat_model"].input_schema["properties"]
         assert {"system", "components", "interactions", "threats", "risks", "remove_ids"} <= set(update)
         assert "include_model" in tools["get_merged_context"].input_schema["properties"]
+        propose = tools["propose_variant_threat_model"].input_schema["properties"]
+        assert {"source", "system", "components", "remove_ids", "environment", "replace"} <= set(propose)
+        assert "pending review" in tools["propose_variant_threat_model"].description
+        assert "read_import_source" in tools
 
 
 class TestAiContextImportSkill:
@@ -528,3 +537,99 @@ class TestAiContextImportSkill:
             "system": {key: None for key in ("scope", "actors", "entry_points", "trust_boundaries")},
             "stride": {section: example[section] for section in sections},
         })
+
+
+DRAFT_URL = f"{BASE_URL}/api/variants/v1/context/draft"
+
+
+def _mock_context(draft=None):
+    respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
+    respx.get(DRAFT_URL).mock(return_value=httpx.Response(200, json=draft) if draft is not None
+                              else httpx.Response(404, json={"error": "No draft."}))
+
+
+def _echo_put():
+    return respx.put(DRAFT_URL).mock(side_effect=lambda request: httpx.Response(
+        200, json={"status": "current", **json.loads(request.content)}))
+
+
+class TestProposeThreatModel:
+
+    def test_first_proposal_builds_on_the_saved_model(self, client):
+        with respx.mock:
+            _mock_context()
+            put = _echo_put()
+            result = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", system={"actors": "Admins"},
+                rows={"components": [{"id": "C3", "name": "Updater"}]}, texts={"environment": ""})
+        body = json.loads(put.calls.last.request.content)
+        assert body["source"] == "report.pdf" and body["base_updated_at"] == "2026-11-10T00:00:00Z"
+        assert [row["id"] for row in body["values"]["stride"]["components"]] == ["C1", "C2", "C3"]
+        assert body["values"]["system"]["scope"] == "Gateway" and body["values"]["system"]["actors"] == "Admins"
+        assert body["values"]["environment"] == "" and body["values"]["variant_description"] is None
+        assert result.startswith("Draft stored for variant v1 (pending review, not saved): ")
+        assert "components=3 (+1 ~0 -0)" in result and "actors" in result and "environment" in result
+
+    def test_later_proposals_build_on_the_pending_draft(self, client):
+        pending = {"status": "rebased", "values": {
+            "variant_description": None, "environment": "Field", "other_info": None,
+            "system": {"scope": "Gateway", "actors": None, "entry_points": None, "trust_boundaries": None},
+            "stride": {**SAVED_STRIDE, "components": [*SAVED_STRIDE["components"], {"id": "C3", "name": "Updater"}]},
+        }}
+        with respx.mock:
+            _mock_context(pending)
+            put = _echo_put()
+            _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf",
+                                               rows={"threats": [{"id": "T2", "category": "tampering",
+                                                                  "target_ids": ["C3"]}]})
+        values = json.loads(put.calls.last.request.content)["values"]
+        assert values["environment"] == "Field"
+        assert [row["id"] for row in values["stride"]["components"]] == ["C1", "C2", "C3"]
+        assert [row["id"] for row in values["stride"]["threats"]] == ["T1", "T2"]
+
+    def test_conflicting_draft_needs_replace(self, client):
+        with respx.mock:
+            _mock_context({"status": "conflict", "values": None, "conflicts": [{"path": "components[C1]"}]})
+            refused = _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf")
+            put = _echo_put()
+            draft_reads = respx.calls.call_count
+            replaced = _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf", replace=True)
+            calls = respx.calls.call_count
+        assert refused.startswith("Error:") and "replace=true" in refused
+        assert replaced.startswith("Draft stored") and put.called
+        assert calls == draft_reads + 2  # context read and PUT; the draft is not read
+
+    def test_conflict_on_put_and_invalid_input(self, client):
+        with respx.mock:
+            _mock_context()
+            respx.put(DRAFT_URL).mock(return_value=httpx.Response(409, json={"error": "changed", "updated_at": "y"}))
+            moved = _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf")
+            unknown = _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf", remove_ids=["C9"])
+            no_source = _propose_variant_threat_model_impl(client, "p1", "v1", " ")
+            bad_text = _propose_variant_threat_model_impl(client, "p1", "v1", "a", texts={"codebase_path": "/x"})
+        assert "changed while drafting" in moved and "replace=true" in moved
+        assert unknown == "Error: Cannot remove unknown ids: C9."
+        assert no_source.startswith("Error:") and bad_text.startswith("Error:")
+
+    def test_merged_context_summarizes_the_pending_draft(self, client):
+        draft = {"source": "report.pdf", "status": "current", "updated_at": "2026-11-11T00:00:00+00:00",
+                 "values": {"stride": {"components": [{"id": "C1"}], "interactions": [], "threats": [],
+                                       "risks": []}}}
+        with respx.mock:
+            _mock_context(draft)
+            result = _get_merged_context_impl(client, "p1", "v1", include_model=True)
+        summary = json.loads(result.rsplit("\ndraft=", 1)[1])
+        assert summary == {"source": "report.pdf", "status": "current", "updated_at": "2026-11-11T00:00:00+00:00",
+                           "ids": {"components": ["C1"], "interactions": [], "threats": [], "risks": []}}
+
+    def test_read_import_source(self, client):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/variants/v1/context/import-source/source",
+                      params={"operation": "search", "query": "CSRF"}).mock(
+                return_value=httpx.Response(200, json={"name": "r.pdf", "matches": []}))
+            respx.get(f"{BASE_URL}/api/variants/v2/context/import-source/source").mock(
+                return_value=httpx.Response(404, json={"error": "No import source uploaded."}))
+            found = _import_source_impl(client, "v1", {"operation": "search", "query": "CSRF"})
+            missing = _import_source_impl(client, "v2", {})
+        assert json.loads(found)["name"] == "r.pdf"
+        assert missing == "Error: No import source uploaded."
