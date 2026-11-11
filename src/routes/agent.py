@@ -5,9 +5,7 @@ import contextlib
 import ipaddress
 import json
 import os
-import queue
 import re
-import secrets
 import shlex
 import socket
 import sys
@@ -20,7 +18,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
-from flask import Blueprint, Response, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from . import agent_skills
 from .config import _config_file_path, _has_control_characters, persist_env_keys
@@ -41,7 +39,6 @@ WRITE_TOOLS = (
     "write_assessment", "update_ai_assessment", "update_project_context",
     "update_variant_context", "update_variant_threat_model", "write_assessment_review",
 )
-COOKIE = "vulnscout_agent"
 MAX_SCOPE_VARIANTS = 1000
 MAX_PROMPT_VARIANTS = 50
 INVALID_PROVIDER_URL = "Invalid provider URL."
@@ -74,23 +71,27 @@ class AgentCredentials:
     device_interval: int = 5
 
 
+def _empty_usage():
+    return {"cost": None, "input_tokens": None, "output_tokens": None}
+
+
 @dataclass
 class Conversation:
+    """Credentials and SDK session state for agent turns.
+
+    The process-wide connection (see `_connection`) is one instance; it also carries the
+    device-flow fields and the lock that serializes connection changes.
+    """
     credentials: AgentCredentials = field(default_factory=AgentCredentials)
     session_id: str | None = None
     session_scope: str | None = None
-    profile: agent_skills.AgentProfile | None = None
     model: str = "auto"
-    usage: dict = field(default_factory=lambda: {"cost": None, "input_tokens": None, "output_tokens": None})
-    messages: list[dict[str, str]] = field(default_factory=list)
-    threads: dict[str, "Conversation"] = field(default_factory=dict)
-    root: "Conversation | None" = None
-    last_used: float = field(default_factory=time.monotonic)
+    usage: dict = field(default_factory=_empty_usage)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
-_conversations: dict[str, Conversation] = {}
-_store_lock = threading.Lock()
+# One operator per serve process (the agent API is localhost-only), so the connection is shared by every client.
+_agent_connection = Conversation()
 
 
 def _container_gateway():
@@ -118,44 +119,15 @@ def _container_host_forward_ip(gateway):
         return None
 
 
-def _conversation():
-    key = request.cookies.get(COOKIE, "")
-    thread_id = request.headers.get("X-Agent-Thread")
-    with _store_lock:
-        expired = [key for key, value in _conversations.items()
-                   if time.monotonic() - value.last_used > 3600]
-        for old_key in expired:
-            del _conversations[old_key]
-        if key not in _conversations:
-            key = secrets.token_urlsafe(32)
-            _conversations[key] = Conversation()
-        root = _conversations[key]
-        root.last_used = time.monotonic()
-    if thread_id:
-        # Restore the root model before a child snapshots its initial selection.
-        _load_env_credentials_nonblocking(root)
-    with _store_lock:
-        if thread_id:
-            thread_id = str(UUID(thread_id))
-            if thread_id not in root.threads:
-                if len(root.threads) >= 20:
-                    raise ValueError("Too many active agent conversations.")
-                root.threads[thread_id] = Conversation(
-                    credentials=root.credentials, model=root.model, root=root, lock=root.lock,
-                )
-            conversation = root.threads[thread_id]
-        else:
-            conversation = root
-        conversation.last_used = time.monotonic()
-    return key, conversation
+def _connection():
+    """Return the process-wide agent connection (credentials, device sign-in state and lock)."""
+    return _agent_connection
 
 
-def _response(payload, key, status=200):
+def _response(payload, status=200):
     response = jsonify(payload)
     response.status_code = status
     response.headers["Cache-Control"] = "no-store"
-    response.set_cookie(COOKIE, key, httponly=True, samesite="Strict",
-                        secure=request.is_secure, max_age=3600)
     return response
 
 
@@ -171,15 +143,10 @@ def _access_error():
         return jsonify(error="Agent chat is available only on localhost."), 403
     if urlsplit(request.host_url).hostname not in ("127.0.0.1", "localhost", "::1"):
         return jsonify(error="Agent chat requires a localhost host."), 403
+    # Reads too: the connection and queue are process-wide, and the app allows any CORS origin.
     origin = request.headers.get("Origin")
-    if request.method != "GET" and origin and origin.rstrip("/") != request.host_url.rstrip("/"):
+    if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
         return jsonify(error="Invalid request origin."), 403
-    thread_id = request.headers.get("X-Agent-Thread")
-    if thread_id:
-        try:
-            UUID(thread_id)
-        except ValueError:
-            return jsonify(error="Invalid agent conversation ID."), 400
     return None
 
 
@@ -463,26 +430,26 @@ async def _delete_session(token, session_id):
         await client.delete_session(session_id)
 
 
-def _delete_threads(root):
-    failed = False
-    for thread in (root, *root.threads.values()):
-        if not thread.session_id:
-            continue
-        try:
-            asyncio.run(_delete_session(root.credentials.token, thread.session_id))
-        except Exception:
-            current_app.logger.exception("Could not delete agent session")
-            failed = True
-    return failed
+def _delete_sessions(connection):
+    """Delete the connection's stored SDK session; return True if that failed.
+
+    Interim: the backend AI queue replaces this with `AgentQueue.reset_sessions`.
+    """
+    if not connection.session_id:
+        return False
+    try:
+        asyncio.run(_delete_session(connection.credentials.token, connection.session_id))
+    except Exception:
+        current_app.logger.exception("Could not delete agent session")
+        return True
+    return False
 
 
-def _clear_threads(root, model):
-    for thread in (root, *root.threads.values()):
-        thread.session_id = None
-        thread.session_scope = None
-        thread.messages.clear()
-        thread.model = model
-        thread.usage = {"cost": None, "input_tokens": None, "output_tokens": None}
+def _clear_sessions(connection, model):
+    connection.session_id = None
+    connection.session_scope = None
+    connection.model = model
+    connection.usage = _empty_usage()
 
 
 class UnavailableModelError(ValueError):
@@ -592,6 +559,14 @@ def _prompt_context(context):
     return prompt
 
 
+def chat_prompt(text, context):
+    """Return the agent prompt for a chat message, followed by its validated browser *context*, if any."""
+    if not context:
+        return text
+    return (f"{text}\n\nCurrent VulnScout browser view (selection only; verify facts with MCP): "
+            f"{json.dumps(_prompt_context(context), separators=(',', ':'))}")
+
+
 def _scope_for_context(context):
     ai_page = context is not None and context.get("page") == "ai"
     view = (context.get("view") or {}) if ai_page else {}
@@ -642,10 +617,12 @@ def _publish_event(event, publish, write_calls=None):
 
 
 async def _reply(conversation, message, path, model, scope, publish=None, *,
-                 tools=READ_TOOLS + WRITE_TOOLS, timeout=120, api_url=None, ephemeral=False, profile=None):
+                 tools=READ_TOOLS + WRITE_TOOLS, timeout=120, api_url=None, ephemeral=False, profile=None,
+                 on_session=None):
     """Run one agent turn; ephemeral turns never resume a session and delete theirs afterwards.
 
     A *profile* runs the turn with its bundled skills; its write tools replace *tools*.
+    *on_session* receives the SDK session ID as soon as the session is created or resumed.
     """
     from copilot.session import PermissionHandler
 
@@ -743,6 +720,8 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
         else:
             session = await client.create_session(**options)
         try:
+            if on_session:
+                on_session(session.session_id)
             live_events = []
             write_calls: set[str] = set()
 
@@ -772,32 +751,30 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
 
 @agent_blueprint.route("/api/agent", methods=["GET"])
 def agent_status():
-    """Return the localhost-only agent session and authentication state.
+    """Return the localhost-only agent connection and authentication state.
 
     OpenAPI:
-    response 200 AgentStatus Current provider, model, history, usage, and authentication state.
+    response 200 AgentStatus Current provider, model, and authentication state.
     """
     if error := _access_error():
         return error
-    key, conversation = _conversation()
-    root = conversation.root or conversation
-    config_error = _load_env_credentials_nonblocking(root)
+    state = _connection()
+    config_error = _load_env_credentials_nonblocking(state)
     path = _mcp_path()
     configured = path is not None and path.is_file()
-    if conversation.credentials.provider:
+    if state.credentials.provider:
         auth = {"authenticated": True, "login": None}
     else:
         try:
-            auth = asyncio.run(_auth_status(conversation.credentials.token))
+            auth = asyncio.run(_auth_status(state.credentials.token))
         except (ImportError, OSError, RuntimeError, ValueError):
             auth = {"authenticated": False, "login": None}
     return _response({**auth, "configured": configured,
                       "device_login": True,
-                      "token_connected": conversation.credentials.token is not None,
-                      "provider": conversation.credentials.provider.kind if conversation.credentials.provider else None,
+                      "token_connected": state.credentials.token is not None,
+                      "provider": state.credentials.provider.kind if state.credentials.provider else None,
                       "config_error": config_error,
-                      "messages": conversation.messages,
-                      "model": conversation.model, "usage": conversation.usage}, key)
+                      "messages": [], "model": state.model, "usage": _empty_usage()})
 
 
 @agent_blueprint.route("/api/agent/provider", methods=["POST", "DELETE"])
@@ -807,56 +784,55 @@ def agent_provider():
     OpenAPI:
     POST body AgentProviderRequest required Provider connection and model configuration.
     response 200 AgentProviderStatus Current provider and model.
-    response 409 Error Another request is using this conversation.
+    response 409 Error Another request is using the agent connection.
     response 500 Error Credentials could not be persisted.
     response 503 Error Previous conversation could not be cleared.
     """
     if error := _access_error():
         return error
-    key, conversation = _conversation()
-    root = conversation.root or conversation
-    _load_env_credentials_nonblocking(root)
+    state = _connection()
+    _load_env_credentials_nonblocking(state)
     if request.method == "POST":
         try:
             connection = _provider_connection(request.get_json(silent=True))
             connection.models = _provider_models(connection)
         except ValueError as exc:
-            return _response({"error": str(exc)}, key, 400)
+            return _response({"error": str(exc)}, 400)
     else:
         connection = None
-    if not root.lock.acquire(blocking=False):
-        return _response({"error": BUSY_AGENT_ERROR}, key, 409)
+    if not state.lock.acquire(blocking=False):
+        return _response({"error": BUSY_AGENT_ERROR}, 409)
     try:
-        if _delete_threads(root):
-            return _response({"error": "Could not clear the previous conversation."}, key, 503)
+        if _delete_sessions(state):
+            return _response({"error": "Could not clear the previous conversation."}, 503)
         try:
             _persist_agent_credentials(provider=connection)
         except RuntimeError as exc:
-            return _response({"error": str(exc)}, key, 500)
-        _clear_threads(root, connection.model if connection else "auto")
-        root.credentials.provider = connection
+            return _response({"error": str(exc)}, 500)
+        _clear_sessions(state, connection.model if connection else "auto")
+        state.credentials.provider = connection
         if connection:
-            root.credentials.token = None
-        return _response({"provider": connection.kind if connection else None, "model": conversation.model}, key)
+            state.credentials.token = None
+        return _response({"provider": connection.kind if connection else None, "model": state.model})
     finally:
-        root.lock.release()
+        state.lock.release()
 
 
-def _sign_out(root, key):
-    with root.lock:
+def _sign_out(state):
+    with state.lock:
         try:
             _persist_agent_credentials()
         except RuntimeError as exc:
-            return _response({"error": str(exc)}, key, 500)
+            return _response({"error": str(exc)}, 500)
         cleanup_error = ("Could not delete the stored conversation on the Copilot server."
-                         if _delete_threads(root) else None)
-        _clear_threads(root, "auto")
-        root.credentials.token = None
-        root.credentials.provider = None
-        root.credentials.device_code = None
-        root.credentials.device_expires = 0.0
-        root.credentials.device_interval = 5
-    return _response({"authenticated": False, "cleanup_error": cleanup_error}, key)
+                         if _delete_sessions(state) else None)
+        _clear_sessions(state, "auto")
+        state.credentials.token = None
+        state.credentials.provider = None
+        state.credentials.device_code = None
+        state.credentials.device_expires = 0.0
+        state.credentials.device_interval = 5
+    return _response({"authenticated": False, "cleanup_error": cleanup_error})
 
 
 @agent_blueprint.route("/api/agent/auth", methods=["POST", "DELETE"])
@@ -871,11 +847,10 @@ def agent_auth():
     """
     if error := _access_error():
         return error
-    key, conversation = _conversation()
-    root = conversation.root or conversation
-    _load_env_credentials_nonblocking(root)
+    state = _connection()
+    _load_env_credentials_nonblocking(state)
     if request.method == "DELETE":
-        return _sign_out(root, key)
+        return _sign_out(state)
     client_id = os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID
     try:
         result = _github_form(GITHUB_DEVICE_URL, {"client_id": client_id, "scope": "read:user"})
@@ -883,21 +858,21 @@ def agent_auth():
         expires_in = int(result.get("expires_in", 900))
     except (OSError, ValueError):
         current_app.logger.exception("Could not start GitHub device sign-in")
-        return _response({"error": "Could not reach GitHub."}, key, 503)
+        return _response({"error": "Could not reach GitHub."}, 503)
     if not isinstance(result.get("device_code"), str) or not isinstance(result.get("user_code"), str):
         return _response({"error": (
             "GitHub rejected the sign-in request. Check VULNSCOUT_AGENT_GITHUB_CLIENT_ID and that "
             "device flow is enabled for the OAuth App."
-        )}, key, 503)
+        )}, 503)
     verification_uri = result.get("verification_uri")
     if not isinstance(verification_uri, str) or not verification_uri.startswith("https://github.com/"):
         verification_uri = GITHUB_VERIFY_URL
-    with root.lock:
-        root.credentials.device_code = result["device_code"]
-        root.credentials.device_expires = time.monotonic() + expires_in
-        root.credentials.device_interval = interval
+    with state.lock:
+        state.credentials.device_code = result["device_code"]
+        state.credentials.device_expires = time.monotonic() + expires_in
+        state.credentials.device_interval = interval
     return _response({"user_code": result["user_code"], "verification_uri": verification_uri,
-                      "interval": interval}, key)
+                      "interval": interval})
 
 
 @agent_blueprint.route("/api/agent/auth/poll", methods=["POST"])
@@ -913,45 +888,44 @@ def agent_auth_poll():
     """
     if error := _access_error():
         return error
-    key, conversation = _conversation()
-    root = conversation.root or conversation
-    with root.lock:
-        if not root.credentials.device_code or time.monotonic() > root.credentials.device_expires:
-            root.credentials.device_code = None
-            return _response({"error": "The GitHub sign-in code expired. Start again."}, key, 410)
+    state = _connection()
+    with state.lock:
+        if not state.credentials.device_code or time.monotonic() > state.credentials.device_expires:
+            state.credentials.device_code = None
+            return _response({"error": "The GitHub sign-in code expired. Start again."}, 410)
         try:
             result = _github_form(GITHUB_TOKEN_URL, {
                 "client_id": os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID,
-                "device_code": root.credentials.device_code,
+                "device_code": state.credentials.device_code,
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             })
         except (OSError, ValueError):
             current_app.logger.exception("Could not poll GitHub device sign-in")
-            return _response({"error": "Could not reach GitHub."}, key, 503)
+            return _response({"error": "Could not reach GitHub."}, 503)
         if result.get("error") in ("authorization_pending", "slow_down"):
-            root.credentials.device_interval = _device_poll_interval(root.credentials.device_interval, result)
-            return _response({"status": "pending", "interval": root.credentials.device_interval}, key)
-        root.credentials.device_code = None
+            state.credentials.device_interval = _device_poll_interval(state.credentials.device_interval, result)
+            return _response({"status": "pending", "interval": state.credentials.device_interval})
+        state.credentials.device_code = None
         token = result.get("access_token")
         if not isinstance(token, str):
             message = {"access_denied": "GitHub sign-in was cancelled.",
                        "expired_token": "The GitHub sign-in code expired. Start again."}
-            return _response({"error": message.get(result.get("error"), "GitHub sign-in failed.")}, key, 401)
+            return _response({"error": message.get(result.get("error"), "GitHub sign-in failed.")}, 401)
         try:
             auth = asyncio.run(_token_status(token))
         except Exception:
             current_app.logger.exception("Could not verify agent sign-in")
-            return _response({"error": "Could not verify Copilot access."}, key, 503)
+            return _response({"error": "Could not verify Copilot access."}, 503)
         if not auth["authenticated"]:
-            return _response({"error": "This GitHub account does not have Copilot access."}, key, 401)
+            return _response({"error": "This GitHub account does not have Copilot access."}, 401)
         try:
             _persist_agent_credentials(token=token)
         except RuntimeError as exc:
-            return _response({"error": str(exc)}, key, 500)
-        _clear_threads(root, "auto")
-        root.credentials.token = token
-        root.credentials.provider = None
-    return _response({"status": "connected", **auth}, key)
+            return _response({"error": str(exc)}, 500)
+        _clear_sessions(state, "auto")
+        state.credentials.token = token
+        state.credentials.provider = None
+    return _response({"status": "connected", **auth})
 
 
 @agent_blueprint.route("/api/agent/models", methods=["GET"])
@@ -964,259 +938,64 @@ def agent_models():
     """
     if error := _access_error():
         return error
-    key, conversation = _conversation()
-    root = conversation.root or conversation
-    config_error = _load_env_credentials_nonblocking(root)
+    state = _connection()
+    config_error = _load_env_credentials_nonblocking(state)
     if config_error:
-        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
-    if conversation.credentials.provider:
-        return _response({"models": conversation.credentials.provider.models}, key)
+        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, 400)
+    if state.credentials.provider:
+        return _response({"models": state.credentials.provider.models})
     try:
-        models = asyncio.run(_models(conversation.credentials.token))
+        models = asyncio.run(_models(state.credentials.token))
     except Exception:
         current_app.logger.exception("Could not list agent models")
-        return _response({"error": "Unable to load available Copilot models."}, key, 503)
-    return _response({"models": models}, key)
+        return _response({"error": "Unable to load available Copilot models."}, 503)
+    return _response({"models": models})
 
 
 @agent_blueprint.route("/api/agent/model", methods=["POST"])
 def agent_model():
-    """Select and persist a model for the current agent conversation.
+    """Select and persist the agent model.
 
     OpenAPI:
     body AgentModelRequest required Available model identifier.
     response 200 AgentModelStatus Selected model.
-    response 409 Error Another request is using this conversation.
+    response 409 Error Another request is using the agent connection.
     response 500 Error Model selection could not be persisted.
     response 503 Error Copilot models could not be verified.
     """
     if error := _access_error():
         return error
-    key, conversation = _conversation()
-    root = conversation.root or conversation
-    config_error = _load_env_credentials_nonblocking(root)
+    state = _connection()
+    config_error = _load_env_credentials_nonblocking(state)
     if config_error:
-        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
+        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, 400)
     data = request.get_json(silent=True)
     if (not isinstance(data, dict) or not isinstance(data.get("model"), str)
             or len(data["model"]) > 100 or _has_control_characters(data["model"])):
-        return _response({"error": "Invalid model selection."}, key, 400)
-    if not conversation.lock.acquire(blocking=False):
-        return _response({"error": BUSY_AGENT_ERROR}, key, 409)
+        return _response({"error": "Invalid model selection."}, 400)
+    if not state.lock.acquire(blocking=False):
+        return _response({"error": BUSY_AGENT_ERROR}, 409)
     try:
-        if conversation.credentials.provider:
-            choices = conversation.credentials.provider.models
+        if state.credentials.provider:
+            choices = state.credentials.provider.models
         else:
             try:
-                choices = asyncio.run(_models(conversation.credentials.token))
+                choices = asyncio.run(_models(state.credentials.token))
             except Exception:
                 current_app.logger.exception("Could not verify agent model")
-                return _response({"error": "Unable to verify this Copilot model."}, key, 503)
+                return _response({"error": "Unable to verify this Copilot model."}, 503)
         if data["model"] not in {choice["id"] for choice in choices}:
-            return _response({"error": "Selected model is not available for this account."}, key, 400)
+            return _response({"error": "Selected model is not available for this account."}, 400)
         updates = {"AI_MODEL": data["model"]}
         if not Path(_config_file_path()).is_file():
             updates = {**_agent_environment(), **updates}
         ok, _ = persist_env_keys(updates)
         if not ok:
-            return _response({"error": "Failed to persist model to config.env."}, key, 500)
-        conversation.model = data["model"]
-        return _response({"model": conversation.model}, key)
+            return _response({"error": "Failed to persist model to config.env."}, 500)
+        state.model = data["model"]
+        return _response({"model": state.model})
     finally:
-        conversation.lock.release()
-
-
-@agent_blueprint.route("/api/agent/conversation", methods=["DELETE"])
-def agent_reset():
-    """Clear the current agent conversation and its usage counters.
-
-    OpenAPI:
-    response 200 AgentConversation Cleared message history and usage counters.
-    response 503 Error Stored Copilot conversation could not be deleted.
-    """
-    if error := _access_error():
-        return error
-    key, conversation = _conversation()
-    with conversation.lock:
-        if conversation.session_id:
-            try:
-                asyncio.run(_delete_session(conversation.credentials.token, conversation.session_id))
-            except Exception:
-                current_app.logger.exception("Could not delete agent session")
-                return _response({"error": "Could not delete the stored conversation."}, key, 503)
-        conversation.session_id = None
-        conversation.session_scope = None
-        conversation.messages.clear()
-        conversation.usage = {"cost": None, "input_tokens": None, "output_tokens": None}
-        if conversation.root:
-            thread_id = request.headers.get("X-Agent-Thread")
-            if thread_id:
-                conversation.root.threads.pop(str(UUID(thread_id)), None)
-    return _response({"messages": [], "usage": conversation.usage}, key)
-
-
-@agent_blueprint.route("/api/agent/messages", methods=["POST"])
-def agent_message():
-    """Send a message to the agent, optionally streaming newline-delimited JSON.
-
-    Set Accept to application/x-ndjson for streaming; otherwise the response
-    is JSON. Streaming events include status, heartbeat, tool activity, text deltas,
-    and a final done or error event. Errors after streaming starts are
-    reported in the stream rather than by changing the HTTP status.
-
-    OpenAPI:
-    body AgentMessageRequest required Message, optional model, browser context and thread action (assess or review).
-    response 400 Error Invalid message, context or action.
-    response 200 AgentReply Completed reply, selected model, and usage.
-    response 200 ndjson Newline-delimited agent events when Accept is application/x-ndjson.
-    response 409 Error Another request is using this conversation.
-    response 503 Error MCP server or AI provider unavailable.
-    """
-    if error := _access_error():
-        return error
-    key, conversation = _conversation()
-    root = conversation.root or conversation
-    config_error = _load_env_credentials_nonblocking(root)
-    if config_error:
-        return _response({"error": f"Invalid AI provider configuration: {config_error}"}, key, 400)
-    data = request.get_json(silent=True) or {}
-    if not isinstance(data, dict):
-        return _response({"error": "Expected a JSON object."}, key, 400)
-    message = data.get("message")
-    if not isinstance(message, str) or not message.strip() or len(message) > 8000:
-        return _response({"error": "Enter a message of at most 8000 characters."}, key, 400)
-    model = data.get("model", conversation.model)
-    if not isinstance(model, str) or not model or len(model) > 100:
-        return _response({"error": "Invalid model selection."}, key, 400)
-    try:
-        context = _validated_context(data.get("context"))
-    except ValueError as exc:
-        return _response({"error": str(exc)}, key, 400)
-    action = data.get("action")
-    if action is not None and (not isinstance(action, str) or action not in agent_skills.PROFILES):
-        return _response({"error": "Invalid agent action."}, key, 400)
-    if action and conversation.root is None:
-        return _response({"error": "Agent actions run only in their own conversation."}, key, 400)
-    if action and conversation.profile not in (None, agent_skills.PROFILES[action]):
-        return _response({"error": "This conversation already runs a different action."}, key, 400)
-    user_message = message.strip()
-    agent_prompt = user_message
-    if context:
-        agent_prompt = (f"{user_message}\n\nCurrent VulnScout browser view (selection only; verify facts with MCP): "
-                        f"{json.dumps(_prompt_context(context), separators=(',', ':'))}")
-    path = _mcp_path()
-    if path is None or not path.is_file():
-        return _response({"error": (
-            "Bundled MCP server not found. Check the installation or VULNSCOUT_MCP_SERVER_PATH override."
-        )}, key, 503)
-    if (action or conversation.profile) and agent_skills.skills_path() is None:
-        return _response({"error": agent_skills.SKILLS_MISSING_ERROR}, key, 503)
-    try:
-        scope = _scope_for_context(context)
-    except ValueError as exc:
-        return _response({"error": str(exc)}, key, 400)
-    if not conversation.lock.acquire(blocking=False):
-        return _response({"error": BUSY_AGENT_ERROR}, key, 409)
-    # Resolve the profile under the lock so a concurrent action turn's binding is neither lost nor switched.
-    profile = agent_skills.PROFILES[action] if action else conversation.profile
-    if conversation.profile not in (None, profile):
-        conversation.lock.release()
-        return _response({"error": "This conversation already runs a different action."}, key, 400)
-    conversation.profile = profile
-    options = {"profile": profile, "timeout": agent_skills.ACTION_TIMEOUT} if profile else {}
-    if request.headers.get("Accept") == "application/x-ndjson":
-        return _stream_reply(key, conversation, agent_prompt, user_message,
-                             path, model, scope, options)
-    return _json_reply(key, conversation, agent_prompt, user_message,
-                       path, model, scope, options)
-
-
-def _json_reply(key, conversation, agent_prompt, user_message, path, model, scope, options):
-    try:
-        try:
-            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope, **options))
-        except UnavailableModelError as exc:
-            return _response({"error": str(exc)}, key, 400)
-        except agent_skills.AgentSkillError as exc:
-            return _response({"error": str(exc)}, key, 503)
-        except Exception:
-            current_app.logger.exception("Agent request failed")
-            return _response({
-                "error": ("Agent request failed. Check the provider model, key, endpoint, and backend logs."
-                          if conversation.credentials.provider else
-                          "Agent request failed. Check Copilot sign-in, MCP server, and backend logs."),
-            }, key, 503)
-        conversation.messages.extend(({"role": "user", "content": user_message},
-                                      {"role": "assistant", "content": reply}))
-        conversation.model = model
-        conversation.usage = usage
-        return _response({"reply": reply, "model": model, "usage": usage}, key)
-    finally:
-        conversation.lock.release()
-
-
-def _stream_events(events, disconnected):
-    try:
-        yield json.dumps({"type": "status", "text": "Connecting to Copilot..."}) + "\n"
-        while True:
-            try:
-                event = events.get(timeout=10)
-            except queue.Empty:
-                yield json.dumps({"type": "heartbeat"}) + "\n"
-                continue
-            yield json.dumps(event) + "\n"
-            if event["type"] in ("done", "error"):
-                break
-    finally:
-        disconnected.set()
-
-
-def _stream_reply(key, conversation, agent_prompt, user_message, path, model, scope, options):
-    events: queue.Queue = queue.Queue(maxsize=256)
-    disconnected = threading.Event()
-    logger = current_app.logger
-
-    def publish(event):
-        while not disconnected.is_set():
-            try:
-                events.put(event, timeout=0.1)
-                return
-            except queue.Full:
-                continue
-
-    def run():
-        try:
-            reply, usage = asyncio.run(_reply(conversation, agent_prompt, path, model, scope, publish, **options))
-            conversation.messages.extend(({"role": "user", "content": user_message},
-                                          {"role": "assistant", "content": reply}))
-            conversation.model = model
-            conversation.usage = usage
-            terminal_event = {"type": "done", "reply": reply, "model": model, "usage": usage}
-        except (UnavailableModelError, agent_skills.AgentSkillError) as exc:
-            terminal_event = {"type": "error", "error": str(exc)}
-        except Exception:
-            logger.exception("Agent streaming request failed")
-            terminal_event = {
-                "type": "error",
-                "error": ("Agent request failed. Check the provider model, key, endpoint, and backend logs."
-                          if conversation.credentials.provider else
-                          "Agent request failed. Check Copilot sign-in, MCP server, and backend logs.")}
-        finally:
-            conversation.last_used = time.monotonic()
-            conversation.lock.release()
-        # A terminal event lets the frontend immediately submit the next queued request.
-        publish(terminal_event)
-
-    response = Response(_stream_events(events, disconnected), mimetype="application/x-ndjson",
-                        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
-    response.set_cookie(COOKIE, key, httponly=True, samesite="Strict", secure=request.is_secure, max_age=3600)
-    response.call_on_close(disconnected.set)
-    try:
-        threading.Thread(target=run, daemon=True).start()
-    except Exception:
-        conversation.lock.release()
-        raise
-    return response
+        state.lock.release()
 
 
 def init_app(app):
