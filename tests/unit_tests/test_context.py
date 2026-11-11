@@ -1004,3 +1004,124 @@ class TestAgentView:
         assert data["editor"]["stride"] == _stride_model()
         assert {"project_id", "description", "variant_id", "variant_description", "codebase_path",
                 "environment", "threat_model", "risks", "other_info", "files"} <= set(data)
+# ---------------------------------------------------------------------------
+# AI threat-model drafts
+# ---------------------------------------------------------------------------
+
+
+def _draft_values(**overrides):
+    values = {
+        "variant_description": None, "environment": None, "other_info": None,
+        "system": {"scope": "Gateway", "actors": None, "entry_points": None, "trust_boundaries": None},
+        "stride": {"components": [{"id": "C1", "name": "Web UI", "description": "", "trust_zone": ""}],
+                   "interactions": [], "threats": [], "risks": []},
+    }
+    values.update(overrides)
+    return values
+
+
+class TestContextDraftRoutes:
+
+    def _url(self, variant):
+        return f"/api/variants/{variant.id}/context/draft"
+
+    def _put(self, client, variant, base=None, **body):
+        return client.put(self._url(variant), json={
+            "source": "report.pdf", "base_updated_at": base, "values": _draft_values(), **body,
+        })
+
+    def test_put_creates_the_context_and_get_returns_a_current_draft(self, client, variant, tmp_path):
+        from src.models.variant_context import VariantContext
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            assert client.get(self._url(variant)).status_code == 404
+            put = self._put(client, variant)
+            got = client.get(self._url(variant))
+        assert put.status_code == 200 and put.get_json()["status"] == "current"
+        body = got.get_json()
+        assert got.status_code == 200
+        assert body["status"] == "current" and body["source"] == "report.pdf"
+        assert body["values"]["stride"]["components"][0]["name"] == "Web UI"
+        assert body["conflicts"] == [] and body["renumbered"] == {}
+        vc = VariantContext.get_by_variant(variant.id)
+        assert vc is not None and vc.updated_at is None  # drafting never outdates assessments
+
+    def test_put_rejects_invalid_values_with_fields(self, client, variant, tmp_path):
+        bad = _draft_values(stride={"components": [{"id": "X1", "name": ""}]})
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            resp = self._put(client, variant, values=bad)
+            missing_source = self._put(client, variant, source=" ")
+        assert resp.status_code == 400 and "components[0].id" in resp.get_json()["fields"]
+        assert missing_source.status_code == 400 and "source" in missing_source.get_json()["fields"]
+
+    def test_put_rejects_a_stale_base(self, client, variant, tmp_path):
+        from src.models.variant_context import VariantContext
+
+        VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values()})
+        saved_at = VariantContext.get_by_variant(variant.id).to_dict()["updated_at"]
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            stale = self._put(client, variant, base=None)
+            ok = self._put(client, variant, base=saved_at)
+        assert stale.status_code == 409 and stale.get_json()["updated_at"] == saved_at
+        assert ok.status_code == 200
+        assert VariantContext.get_by_variant(variant.id).to_dict()["updated_at"] == saved_at
+
+    def test_get_rebases_or_reports_conflicts_after_a_save(self, client, variant, tmp_path):
+        from src.models.variant_context import VariantContext
+
+        VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values()})
+        base = VariantContext.get_by_variant(variant.id).to_dict()["updated_at"]
+        proposal = _draft_values(stride={**_draft_values()["stride"], "components": [
+            {"id": "C1", "name": "Web UI", "description": "", "trust_zone": ""},
+            {"id": "C2", "name": "Updater", "description": "", "trust_zone": ""}]})
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            self._put(client, variant, base=base, values=proposal)
+            VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values(
+                system={"scope": "Gateway", "actors": "Admins", "entry_points": None, "trust_boundaries": None})})
+            rebased = client.get(self._url(variant)).get_json()
+            VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values(
+                stride={**_draft_values()["stride"], "components": [
+                    {"id": "C1", "name": "Renamed", "description": "", "trust_zone": ""}]})})
+            self._put(client, variant, base=VariantContext.get_by_variant(variant.id).to_dict()["updated_at"],
+                      values=_draft_values(stride={**_draft_values()["stride"], "components": [
+                          {"id": "C1", "name": "AI name", "description": "", "trust_zone": ""}]}))
+            VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values(
+                stride={**_draft_values()["stride"], "components": [
+                    {"id": "C1", "name": "Mine", "description": "", "trust_zone": ""}]})})
+            conflict = client.get(self._url(variant)).get_json()
+        assert rebased["status"] == "rebased"
+        assert rebased["values"]["system"]["actors"] == "Admins"
+        assert [c["id"] for c in rebased["values"]["stride"]["components"]] == ["C1", "C2"]
+        assert conflict["status"] == "conflict" and conflict["values"] is None
+        assert conflict["conflicts"] == [{"path": "components[C1]", "reason": "changed in both"}]
+
+    def test_corrupt_draft_is_a_404(self, client, variant, tmp_path):
+        from src.helpers import context_draft
+        from src.models.variant_context import VariantContext
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            self._put(client, variant)
+            directory = context_draft.context_dir(str(tmp_path), VariantContext.get_by_variant(variant.id).id)
+            with open(os.path.join(directory, context_draft.DRAFT_NAME), "w") as handle:
+                handle.write("{broken")
+            resp = client.get(self._url(variant))
+        assert resp.status_code == 404
+        assert not os.path.exists(os.path.join(directory, context_draft.DRAFT_NAME))
+
+    def test_delete_is_idempotent(self, client, variant, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            assert client.delete(self._url(variant)).status_code == 204
+            self._put(client, variant)
+            assert client.delete(self._url(variant)).status_code == 204
+            assert client.get(self._url(variant)).status_code == 404
+
+    def test_unknown_variant_and_bad_id(self, client, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            assert client.get(f"/api/variants/{uuid.uuid4()}/context/draft").status_code == 404
+            assert client.put("/api/variants/nope/context/draft", json={}).status_code == 400
+            assert client.delete(f"/api/variants/{uuid.uuid4()}/context/draft").status_code == 404
+
+    def test_storage_failure_is_a_500(self, client, variant, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
+                patch("src.helpers.context_draft.write_draft", side_effect=OSError("disk full")):
+            assert self._put(client, variant).status_code == 500

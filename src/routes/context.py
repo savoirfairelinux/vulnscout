@@ -4,12 +4,15 @@
 import os
 import uuid
 import logging
+from datetime import datetime, timezone
 
 from flask import jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
+from ..helpers import context_draft
+from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.codebase_reference import CodebaseReference, validate_reference
 from ..helpers.context_io import (
     build_export_document,
@@ -43,6 +46,32 @@ STRIDE_TEXT_READ_ONLY = "is generated from the STRIDE model; edit it in the AI C
 
 def _get_cache_dir() -> str:
     return os.getenv("VULNSCOUT_CACHE_DIR", "/cache/vulnscout")
+
+
+def _variant_uuid_or_error(variant_id):
+    """(variant UUID, None) for an existing variant, else (None, error response)."""
+    variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
+    if err or variant_uuid is None:
+        return None, err
+    if Variant.get_by_id(variant_uuid) is None:
+        return None, (jsonify({"error": "Variant not found"}), 404)
+    return variant_uuid, None
+
+
+def _revision(vc) -> str | None:
+    return ensure_utc_iso(vc.updated_at) if vc is not None else None
+
+
+def _draft_dir(vc) -> str:
+    return context_draft.context_dir(_get_cache_dir(), vc.id)
+
+
+def _draft_body(draft: dict, status: str, values, conflicts: list, renumbered: dict, saved_at) -> dict:
+    return {
+        "source": draft.get("source"), "status": status, "values": values, "conflicts": conflicts,
+        "renumbered": renumbered, "base_updated_at": draft.get("base_updated_at"),
+        "saved_updated_at": saved_at, "created_at": draft.get("created_at"), "updated_at": draft.get("updated_at"),
+    }
 
 
 def init_app(app):
@@ -177,6 +206,107 @@ def init_app(app):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify(VariantContextController.serialize(vc))
+
+    @app.route('/api/variants/<variant_id>/context/draft', methods=['GET'])
+    def get_context_draft(variant_id):
+        """Return the variant's pending AI threat-model draft against the saved model.
+
+        A draft built on an older saved revision is rebased on read; when the
+        same rows or fields changed on both sides it is reported as a conflict.
+
+        OpenAPI:
+        response 200 ContextDraft Pending draft and its status against the saved model.
+        response 400 Error Invalid variant identifier.
+        response 404 Error Variant or draft not found.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        vc = VariantContext.get_by_variant(variant_uuid)
+        draft = context_draft.read_draft(_draft_dir(vc)) if vc is not None else None
+        if draft is None:
+            return jsonify({"error": "No draft."}), 404
+        saved_at = _revision(vc)
+        if draft.get("base_updated_at") == saved_at:
+            return jsonify(_draft_body(draft, "current", draft["values"], [], {}, saved_at))
+        values, conflicts, renumbered = context_draft.rebase(
+            draft["base_values"], context_draft.saved_values(vc), draft["values"])
+        status = "conflict" if conflicts else "rebased"
+        return jsonify(_draft_body(draft, status, values, conflicts, renumbered, saved_at))
+
+    @app.route('/api/variants/<variant_id>/context/draft', methods=['PUT'])
+    def put_context_draft(variant_id):
+        """Store an AI threat-model draft for review; the saved context is unchanged.
+
+        OpenAPI:
+        body ContextDraftUpdate required Draft values and the saved revision they were built on.
+        response 200 ContextDraft Stored draft.
+        response 400 Error Invalid identifier or draft values.
+        response 404 Error Variant not found.
+        response 409 Error The saved context changed since base_updated_at.
+        response 500 Error Draft could not be stored.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({
+                "error": "Request body must be a JSON object.", "fields": {"body": "must be an object"},
+            }), 400
+        source = body.get("source")
+        if not isinstance(source, str) or not source.strip() or len(source) > 255:
+            return jsonify({"error": "source must contain 1-255 characters.",
+                            "fields": {"source": "must contain 1-255 characters"}}), 400
+        try:
+            values = context_draft.normalize_values(body.get("values"))
+        except StrideValidationError as exc:
+            return jsonify({"error": str(exc), "fields": exc.fields}), 400
+        vc = VariantContext.get_by_variant(variant_uuid)
+        if body.get("base_updated_at") != _revision(vc):
+            return jsonify({"error": "The variant context changed since base_updated_at; read it again.",
+                            "updated_at": _revision(vc)}), 409
+        try:
+            if vc is None:
+                vc = VariantContext.upsert(variant_uuid)
+            directory = _draft_dir(vc)
+            with context_draft.lock_for(vc.id):
+                previous = context_draft.read_draft(directory) or {}
+                now = ensure_utc_iso(datetime.now(timezone.utc))
+                draft = {
+                    "source": source.strip(), "created_at": previous.get("created_at", now), "updated_at": now,
+                    "base_updated_at": _revision(vc), "base_values": context_draft.saved_values(vc),
+                    "values": values,
+                }
+                context_draft.write_draft(directory, draft)
+        except (OSError, SQLAlchemyError):
+            db.session.rollback()
+            logger.exception("Failed to store the AI context draft")
+            return jsonify({"error": "Failed to store the draft on server"}), 500
+        return jsonify(_draft_body(draft, "current", values, [], {}, _revision(vc)))
+
+    @app.route('/api/variants/<variant_id>/context/draft', methods=['DELETE'])
+    def delete_context_draft(variant_id):
+        """Discard the variant's AI draft and its import source.
+
+        OpenAPI:
+        response 204 empty Draft and import source deleted (or there were none).
+        response 400 Error Invalid variant identifier.
+        response 404 Error Variant not found.
+        response 500 Error Draft could not be deleted.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        vc = VariantContext.get_by_variant(variant_uuid)
+        if vc is not None:
+            try:
+                with context_draft.lock_for(vc.id):
+                    context_draft.delete_draft(_draft_dir(vc))
+            except OSError:
+                logger.exception("Failed to delete the AI context draft")
+                return jsonify({"error": "Failed to delete the draft on server"}), 500
+        return "", 204
 
     @app.route('/api/context/export', methods=['GET'])
     def export_context():
