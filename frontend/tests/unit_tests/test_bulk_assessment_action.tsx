@@ -5,29 +5,46 @@ import type React from 'react';
 import MultiEditBar from '../../src/components/MultiEditBar';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 import * as store from '../../src/handlers/agentQueue';
+import type { AgentAction, AgentRequestRecord } from '../../src/types/agent';
 
-const { getAgentQueue, resetAgentQueue } = store;
 fetchMock.enableMocks();
-let runningId: string | undefined;
-// The real queue only drains with a connected chat; drive task status directly instead.
-const startQueued = () => act(() => {
-    const item = getAgentQueue()[0];
-    if (item) {
-        runningId = item.id;
-        item.status = 'running';
-        store.enqueueAgentMessages([], { page: 'vulnerabilities' });
-    }
+
+/** Stands in for the queue stream; `frame` delivers backend state to every open stream. */
+let streams: Array<{ handlers: Map<string, (event: MessageEvent) => void>; close: () => void; onerror: null }> = [];
+const frame = (requests: AgentRequestRecord[]) => act(() => {
+    const data = JSON.stringify({ paused: null, requests, history: [], conversations: [] });
+    streams.forEach(stream => stream.handlers.get('queue')?.({ data, lastEventId: '' } as MessageEvent));
 });
-const finishRunning = () => act(() => {
-    const item = getAgentQueue().find(task => task.id === runningId);
-    if (item) item.status = 'queued';
-    if (runningId) store.removeAgentTask(runningId);
+type Posted = { conversation: string; source: string; context: Record<string, unknown>; actions: Array<Extract<AgentAction, { kind: 'assess' }>> };
+let posted: Posted[] = [];
+let records: AgentRequestRecord[] = [];
+const record = (action: Posted['actions'][number], body: Posted, index: number): AgentRequestRecord => ({
+    id: `r${records.length + index + 1}`, key: action.key ?? '', kind: 'assess', lane: 'action',
+    conversation_id: `c${records.length + index + 1}`, source: body.source, title: `${action.vuln_id} · 1 target`, detail: '',
+    model: 'auto', status: 'queued', error: null, error_code: null, position: records.length + index + 1, created_at: 1,
+    started_at: null, finished_at: null, context: (action.context ?? body.context) as AgentRequestRecord['context'],
+    text: '', vuln_id: action.vuln_id, assessment_id: null, timeout: 900, result: null,
 });
-const failRunning = () => act(() => {
-    const item = getAgentQueue().find(task => task.id === runningId);
-    if (item) item.status = 'failed';
-    store.enqueueAgentMessages([], { page: 'vulnerabilities' });
-});
+/** Queue the posted actions like the backend does (skipping keys still active) and publish the queue. */
+const accept = (body: Posted) => {
+    const fresh = body.actions.filter(action => !records.some(item => item.key === action.key));
+    const created = fresh.map((action, index) => record(action, body, index));
+    records = [...records, ...created];
+    frame(records);
+    return {
+        requests: created.map(item => ({ id: item.id, key: item.key, conversation_id: item.conversation_id })),
+        skipped: body.actions.filter(action => !fresh.includes(action))
+            .map(action => ({ key: action.key, request_id: records.find(item => item.key === action.key)?.id })),
+    };
+};
+const setStatus = (index: number, status: AgentRequestRecord['status']) => {
+    records = records.map((item, at) => at === index ? { ...item, status, position: status === 'queued' ? item.position : null } : item);
+    frame(records);
+};
+const finish = (index: number) => {
+    records = records.filter((_, at) => at !== index);
+    frame(records);
+};
 
 const vulnerabilities = ['CVE-1', 'CVE-2', 'CVE-3'].map((id, index) => ({
     id, packages: [`pkg@${index + 1}`, 'old@1'], packages_current: [`pkg@${index + 1}`],
@@ -42,30 +59,49 @@ const baseProps = {
 type Props = React.ComponentProps<typeof MultiEditBar>;
 const bar = (props: Partial<Props> = {}) => <MultiEditBar {...baseProps} {...props} />;
 const assessButton = () => screen.getByRole('button', { name: /^Assess with AI/ });
-const queue = getAgentQueue;
+const queue = store.getAgentQueue;
 let openedBefore = 0;
 const chatOpenings = () => store.getAgentChatRequest().nonce - openedBefore;
+let queueResponse: ((body: Posted) => Promise<{ body: string; status: number; headers: Record<string, string> }>) | undefined;
+let restoreFactory: () => void;
 
 beforeEach(() => {
-    resetAgentQueue();
-    runningId = undefined;
+    store.__resetAgentQueue();
+    streams = [];
+    posted = [];
+    records = [];
+    queueResponse = undefined;
+    restoreFactory = store.__setEventSourceFactory(() => {
+        const handlers = new Map<string, (event: MessageEvent) => void>();
+        const stream = { handlers, close: () => undefined, onerror: null, addEventListener: (type: string, handler: (event: MessageEvent) => void) => handlers.set(type, handler) };
+        streams.push(stream);
+        return stream as unknown as EventSource;
+    });
     openedBefore = store.getAgentChatRequest().nonce;
     jest.clearAllMocks();
     fetchMock.resetMocks();
-    fetchMock.mockResponse(request => {
+    fetchMock.mockResponse(async request => {
+        if (request.url.endsWith('/api/agent/queue')) {
+            const body = await request.json() as Posted;
+            posted.push(body);
+            if (queueResponse) return queueResponse(body);
+            return { body: JSON.stringify(accept(body)), status: 202, headers: { 'content-type': 'application/json' } };
+        }
         if (request.url.includes('variant-active-packages')) {
             const id = request.url.match(/vulnerabilities\/([^/]+)/)?.[1];
             const index = vulnerabilities.findIndex(vuln => vuln.id === id);
-            return Promise.resolve(JSON.stringify([
+            return JSON.stringify([
                 { variant_id: 'variant-1', findings: [
                     { package: `pkg@${index + 1}`, outdated: false }, { package: 'old@1', outdated: true },
                 ] },
                 { variant_id: 'outside-scope', findings: [{ package: `pkg@${index + 1}`, outdated: false }] },
-            ]));
+            ]);
         }
-        return Promise.resolve('[]');
+        return '[]';
     });
 });
+
+afterEach(() => restoreFactory());
 
 test('offers disabled Assess with AI without a selection', () => {
     render(bar());
@@ -77,26 +113,19 @@ test('queues exactly the selected vulnerabilities, their own packages, and the c
     render(bar({ selectedVulns: ['CVE-1', 'CVE-2'] }));
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(2));
-    expect(queue()[0].text).toContain('Assess CVE-1');
-    expect(queue()[0].text).toContain('variant_id variant-1: pkg@1');
-    expect(queue()[0].text).not.toContain('pkg@2');
-    expect(queue()[1].text).toContain('Assess CVE-2');
-    expect(queue()[1].text).toContain('variant_id variant-1: pkg@2');
-    for (const item of queue()) {
-        expect(item.text).not.toContain('old@1');
-        expect(item.text).not.toContain('outside-scope');
-        expect(item.text).not.toContain('CVE-3');
-    }
-    expect(queue().map(item => item.context)).toEqual([1, 2].map(index => expect.objectContaining({
-        page: 'vulnerabilities', projectId: 'project-1', variantId: 'variant-1',
-        view: { selectedVulnerabilityIds: [`CVE-${index}`], selectionCount: 1 },
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toMatchObject({ conversation: 'per-action', source: 'Vulnerability selection',
+        context: { page: 'vulnerabilities', projectId: 'project-1', variantId: 'variant-1' } });
+    expect(posted[0].actions).toEqual([1, 2].map(index => ({
+        kind: 'assess', vuln_id: `CVE-${index}`,
+        targets: [{ variant_id: 'variant-1', package: `pkg@${index}` }],
+        key: expect.stringMatching(new RegExp(`^assess:.*:CVE-${index}$`)),
+        context: expect.objectContaining({
+            page: 'vulnerabilities', projectId: 'project-1', variantId: 'variant-1',
+            view: { selectedVulnerabilityIds: [`CVE-${index}`], selectionCount: 1 },
+        }),
     })));
-    expect(queue().every(item => item.source === 'Vulnerability selection')).toBe(true);
-    // Each vulnerability is assessed in its own conversation of the agent chat.
-    const [first, second] = queue().map(item => store.getAgentConversation(item.conversationId));
-    expect([first.title, second.title]).toEqual(['Assess CVE-1 · 1 target', 'Assess CVE-2 · 1 target']);
-    expect(first.threadId).not.toBe(second.threadId);
-    expect(chatOpenings()).toBe(1);
+    await waitFor(() => expect(chatOpenings()).toBe(1));
     expect(store.getAgentChatRequest()).toMatchObject({ view: 'conversations', taskId: undefined });
     expect(baseProps.resetVulns).not.toHaveBeenCalled();
     // Once queued, the button shows the queue position and opens the queued request instead of queueing it again.
@@ -105,45 +134,55 @@ test('queues exactly the selected vulnerabilities, their own packages, and the c
     expect(assessButton()).toHaveTextContent('Queued · #1');
     expect(assessButton()).toHaveTextContent('Assess with AI');
     fireEvent.click(assessButton());
-    expect(queue()).toHaveLength(2);
+    expect(posted).toHaveLength(1);
     expect(chatOpenings()).toBe(2);
     expect(store.getAgentChatRequest().view).toBe('conversations');
 });
 
-test('opens the main agent chat instead of rendering its own and skips overlapping actions when the selection changes', async () => {
+test('opens a single assessment in the chat and posts only vulnerabilities not already queued', async () => {
     const { rerender } = render(bar({ selectedVulns: ['CVE-1'] }));
     fireEvent.click(assessButton());
-    await waitFor(() => expect(queue()).toHaveLength(1));
-    expect(chatOpenings()).toBe(1);
+    await waitFor(() => expect(chatOpenings()).toBe(1));
+    expect(store.getAgentChatRequest()).toMatchObject({ view: 'chat', taskId: 'r1' });
     expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
     expect(screen.queryByRole('log', { name: 'Agent conversation' })).not.toBeInTheDocument();
-    rerender(bar({ selectedVulns: [] }));
-    expect(queue()).toHaveLength(1);
     rerender(bar({ selectedVulns: ['CVE-1', 'CVE-2'] }));
     expect(assessButton()).toBeEnabled();
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(2));
-    expect(chatOpenings()).toBe(2);
-    expect(queue().map(item => item.title.split(' · ')[0])).toEqual(['CVE-1', 'CVE-2']);
+    await waitFor(() => expect(chatOpenings()).toBe(2));
+    expect(posted[1].actions.map(action => action.vuln_id)).toEqual(['CVE-2']);
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('CVE-1/variant-active-packages'))).toHaveLength(1);
 });
 
-test('tracks running actions, clearing pending items, and allows retry only after completion', async () => {
+test('opens the existing request when the backend reports it already queued', async () => {
+    records = [{ ...record({ kind: 'assess', vuln_id: 'CVE-1', key: 'other' }, { conversation: '', source: '', context: {}, actions: [] }, 0), id: 'held' }];
+    queueResponse = async () => ({ body: JSON.stringify({ requests: [], skipped: [{ key: 'k', request_id: 'held' }] }), status: 202,
+        headers: { 'content-type': 'application/json' } });
+    render(bar({ selectedVulns: ['CVE-1'] }));
+    fireEvent.click(assessButton());
+    await waitFor(() => expect(chatOpenings()).toBe(1));
+    expect(store.getAgentChatRequest().taskId).toBe('held');
+});
+
+test('follows running and failed requests from the backend, allowing a new run once they finish', async () => {
     render(bar({ selectedVulns: ['CVE-1'] }));
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(1));
-    startQueued();
+    setStatus(0, 'running');
     expect(assessButton()).toHaveTextContent('Running…');
     expect(assessButton()).toHaveTextContent('Assess with AI');
     expect(assessButton()).toHaveAccessibleName('Assess with AI (running)');
-    act(() => store.clearAgentQueue());
-    expect(assessButton()).toHaveAccessibleName('Assess with AI (running)');
-    finishRunning();
+    setStatus(0, 'failed');
+    expect(assessButton()).toHaveTextContent('Failed · view');
+    fireEvent.click(assessButton());
+    expect(store.getAgentChatRequest()).toMatchObject({ view: 'chat', taskId: 'r1' });
+    finish(0);
     expect(assessButton()).toBeEnabled();
+    expect(assessButton()).toHaveAccessibleName('Assess with AI');
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(1));
-    act(() => store.removeAgentTask(queue()[0].id));
-    expect(assessButton()).toBeEnabled();
+    expect(posted).toHaveLength(2);
 });
 
 test('reports lookup failures atomically without launching a partial queue, and supports retry', async () => {
@@ -151,30 +190,26 @@ test('reports lookup failures atomically without launching a partial queue, and 
     render(bar({ selectedVulns: ['CVE-1', 'CVE-2'] }));
     fireEvent.click(assessButton());
     await waitFor(() => expect(baseProps.triggerBanner).toHaveBeenCalledWith(expect.any(String), 'error'));
-    expect(queue()).toEqual([]);
+    expect(posted).toEqual([]);
     expect(chatOpenings()).toBe(0);
     expect(assessButton()).toBeEnabled();
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(2));
 });
 
-test('retains a failed assessment and later CVEs until it succeeds or is removed', async () => {
-    render(bar({ selectedVulns: ['CVE-1', 'CVE-2'] }));
+test('reports a rejected assessment without opening the chat', async () => {
+    queueResponse = async () => ({ body: JSON.stringify({ error: 'Too many packages for variant v1 to assess in one request.' }),
+        status: 400, headers: { 'content-type': 'application/json' } });
+    render(bar({ selectedVulns: ['CVE-1'] }));
     fireEvent.click(assessButton());
-    await waitFor(() => expect(queue()).toHaveLength(2));
-    const firstId = queue()[0].id;
-    startQueued();
-    expect(queue()[0].id).toBe(firstId);
-    failRunning();
-    expect(queue()).toHaveLength(2);
-    expect(queue()[0].id).toBe(firstId);
-    expect(assessButton()).toHaveTextContent('Failed · view');
+    await waitFor(() => expect(baseProps.triggerBanner).toHaveBeenCalledWith(
+        'CVE-1: Too many packages for variant v1 to assess in one request. Open its details to refine the package selection.', 'error'));
+    expect(chatOpenings()).toBe(0);
+    expect(assessButton()).toBeEnabled();
+
+    fetchMock.mockRejectOnce(new TypeError('Failed to fetch'));
     fireEvent.click(assessButton());
-    expect(store.getAgentChatRequest().view).toBe('conversations');
-    expect(queue()).toHaveLength(2);
-    startQueued();
-    finishRunning();
-    expect(queue().map(item => item.title.split(' · ')[0])).toEqual(['CVE-2']);
+    await waitFor(() => expect(baseProps.triggerBanner).toHaveBeenLastCalledWith(expect.any(String), 'error'));
 });
 
 test('disables during preparation and cancels stale preparation when selection changes', async () => {
@@ -188,7 +223,7 @@ test('disables during preparation and cancels stale preparation when selection c
     rerender(bar({ selectedVulns: ['CVE-2'] }));
     expect(signal?.aborted).toBe(true);
     await act(async () => { resolve?.('[]'); });
-    expect(queue()).toEqual([]);
+    expect(posted).toEqual([]);
     expect(chatOpenings()).toBe(0);
     expect(assessButton()).toBeEnabled();
     expect(baseProps.triggerBanner).not.toHaveBeenCalled();
@@ -201,26 +236,12 @@ test('keeps the selected multi-variant scope in the agent context', async () => 
     }));
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(1));
-    expect(queue()[0].context).toMatchObject({
+    expect(posted[0].actions[0].context).toMatchObject({
         projectId: 'project-1', variantIds: ['variant-1', 'outside-scope'], multiOperation: 'intersection',
     });
-    expect(queue()[0].text).toContain('variant_id variant-1: pkg@1');
-    expect(queue()[0].text).toContain('variant_id outside-scope: pkg@1');
-});
-
-test('rejects an oversized vulnerability without queuing any selected vulnerabilities', async () => {
-    const packageId = 'x'.repeat(8000);
-    fetchMock.mockResponseOnce(JSON.stringify([
-        { variant_id: 'variant-1', findings: [{ package: packageId, outdated: false }] },
-    ]));
-    render(bar({
-        vulnerabilities: [{ ...vulnerabilities[0], packages: [packageId], packages_current: [packageId] }],
-        selectedVulns: ['CVE-1'],
-    }));
-    fireEvent.click(assessButton());
-    await waitFor(() => expect(baseProps.triggerBanner).toHaveBeenCalledWith(expect.stringContaining('Too many packages'), 'error'));
-    expect(queue()).toEqual([]);
-    expect(assessButton()).toBeEnabled();
+    expect(posted[0].actions[0]).toMatchObject({ targets: [
+        { variant_id: 'variant-1', package: 'pkg@1' }, { variant_id: 'outside-scope', package: 'pkg@1' },
+    ] });
 });
 
 test('limits concurrent target resolution and keeps selection order', async () => {
@@ -228,11 +249,14 @@ test('limits concurrent target resolution and keeps selection order', async () =
         ...vulnerabilities[0], id: `CVE-${index + 1}`,
     }));
     const resolve: (() => void)[] = [];
-    fetchMock.mockResponse(() => new Promise<string>(done => {
-        resolve.push(() => done(JSON.stringify([
-            { variant_id: 'variant-1', findings: [{ package: 'pkg@1', outdated: false }] },
-        ])));
-    }));
+    const respond = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input, init) => String(input instanceof Request ? input.url : input).includes('variant-active-packages')
+        ? new Promise<Response>(done => {
+            resolve.push(() => done(new Response(JSON.stringify([
+                { variant_id: 'variant-1', findings: [{ package: 'pkg@1', outdated: false }] },
+            ]))));
+        })
+        : respond!(input, init));
     render(bar({ vulnerabilities: selected, selectedVulns: selected.map(vuln => vuln.id) }));
     fireEvent.click(assessButton());
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -240,7 +264,7 @@ test('limits concurrent target resolution and keeps selection order', async () =
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
     await act(async () => { resolve.slice(2).forEach(done => done()); });
     await waitFor(() => expect(queue()).toHaveLength(6));
-    expect(queue().map(item => item.title.split(' · ')[0])).toEqual(selected.map(vuln => vuln.id));
+    expect(posted[0].actions.map(action => action.vuln_id)).toEqual(selected.map(vuln => vuln.id));
 });
 
 test('keeps scopes independent and preserves queued work after unmount', async () => {
@@ -251,10 +275,30 @@ test('keeps scopes independent and preserves queued work after unmount', async (
     expect(assessButton()).toBeEnabled();
     fireEvent.click(assessButton());
     await waitFor(() => expect(queue()).toHaveLength(2));
-    expect(queue().map(item => item.context.variantId)).toEqual(['variant-1', 'outside-scope']);
+    expect(queue().map(item => item.context?.variantId)).toEqual(['variant-1', 'outside-scope']);
     rerender(bar({ selectedVulns: ['CVE-1'] }));
     expect(assessButton()).toHaveTextContent('Queued');
     unmount();
-    expect(queue()).toHaveLength(2);
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/agent/'))).toBe(false);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url instanceof Request ? url.url : url).includes('/api/agent/'))).toHaveLength(2);
+});
+
+test('submits no further batch once the selection changes, keeping the accepted ones', async () => {
+    const limit = jest.replaceProperty(store as { ACTIONS_PER_REQUEST: number }, 'ACTIONS_PER_REQUEST', 1);
+    try {
+        let release: (() => void) | undefined;
+        queueResponse = body => new Promise(done => {
+            release = () => done({ body: JSON.stringify(accept(body)), status: 202, headers: { 'content-type': 'application/json' } });
+        });
+        const { rerender } = render(bar({ selectedVulns: ['CVE-1', 'CVE-2'] }));
+        fireEvent.click(assessButton());
+        await waitFor(() => expect(posted).toHaveLength(1));
+        rerender(bar({ selectedVulns: ['CVE-3'] }));
+        await act(async () => { release?.(); });
+        await waitFor(() => expect(queue()).toHaveLength(1));
+        expect(posted.map(body => body.actions.map(action => action.vuln_id))).toEqual([['CVE-1']]);
+        expect(chatOpenings()).toBe(0);
+        expect(baseProps.triggerBanner).not.toHaveBeenCalled();
+    } finally {
+        limit.restore();
+    }
 });

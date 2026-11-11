@@ -1,7 +1,7 @@
 import fetchMock from 'jest-fetch-mock';
-import { buildAiAssessmentMessages, loadAiAssessmentTargets } from '../../src/helpers/aiAssessment';
+import { assessmentKey, bulkAssessmentKeyPrefix, loadAiAssessmentTargets } from '../../src/helpers/aiAssessment';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
-import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext } from '../../src/types/agent';
+import type { AgentContext } from '../../src/types/agent';
 
 fetchMock.enableMocks();
 
@@ -126,40 +126,21 @@ describe('AI assessment targets', () => {
     });
 });
 
-describe('AI assessment prompts', () => {
-    test('uses the modal workflow with exact identifiers and MCP instructions', () => {
-        const messages = buildAiAssessmentMessages(vulnerability.id, [
-            { variant_id: 'v1', package: 'pkg@1::supplier' },
+describe('AI assessment keys', () => {
+    test('match the backend dedupe key of the same targets in any order', () => {
+        expect(assessmentKey(vulnerability.id, [
             { variant_id: 'v2', package: 'pkg@2' },
-        ], [{ id: 'v1', name: 'default', project_id: 'p1' }]);
-        expect(messages).toHaveLength(1);
-        expect(messages[0].text).toContain('Assess CVE-2026-1234 for exactly these targets');
-        expect(messages[0].text).toContain('variant "default" (variant_id v1): pkg@1::supplier');
-        expect(messages[0].text).toContain('variant variant_id v2: pkg@2');
-        expect(messages[0].text).toContain("each variant's merged context with VulnScout MCP first");
-        expect(messages[0].text).toContain('write_assessment for these targets only');
+            { variant_id: 'v1', package: 'pkg@1::supplier' },
+        ])).toBe('assess:CVE-2026-1234:v1|pkg@1::supplier,v2|pkg@2');
     });
 
-    test('batches whole variants within the backend limit without dropping any target', () => {
-        const selected = Array.from({ length: 160 }, (_, index) => ({
-            variant_id: `v${Math.floor(index / 40)}`,
-            package: `package-with-long-name-${index}-${'x'.repeat(45)}@1.0`,
-        }));
-        const messages = buildAiAssessmentMessages(vulnerability.id, selected);
-        expect(messages.length).toBeGreaterThan(1);
-        for (const message of messages) expect(message.text.length).toBeLessThanOrEqual(AGENT_MESSAGE_MAX_LENGTH);
-        for (const target of selected) {
-            expect(messages.filter(message => message.text.includes(target.package))).toHaveLength(1);
-        }
-        for (const variant of new Set(selected.map(target => target.variant_id))) {
-            expect(messages.filter(message => message.text.includes(`variant_id ${variant}:`))).toHaveLength(1);
-        }
-    });
-
-    test('rejects a single oversized variant and an empty target selection', () => {
-        expect(() => buildAiAssessmentMessages(vulnerability.id, [
-            { variant_id: 'v1', package: 'x'.repeat(AGENT_MESSAGE_MAX_LENGTH) },
-        ])).toThrow('Too many packages selected');
-        expect(() => buildAiAssessmentMessages(vulnerability.id, [])).toThrow('No active assessment targets');
+    test('a bulk scope of any size gives a short prefix, distinct per scope', () => {
+        const variantIds = Array.from({ length: 200 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+        const scope: AgentContext = { page: 'vulnerabilities', projectId: 'p', variantIds, multiOperation: 'union' };
+        const prefix = bulkAssessmentKeyPrefix(scope);
+        expect(prefix).toMatch(/^assess:scope:[0-9a-z]+:$/);
+        expect(prefix.length).toBeLessThan(40);
+        expect(bulkAssessmentKeyPrefix({ ...scope })).toBe(prefix);
+        expect(bulkAssessmentKeyPrefix({ ...scope, multiOperation: 'intersection' })).not.toBe(prefix);
     });
 });

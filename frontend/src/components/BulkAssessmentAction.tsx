@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Vulnerability } from '../handlers/vulnerabilities';
-import type { AgentContext, QueuedAgentMessage } from '../types/agent';
-import { buildAiAssessmentMessages, bulkAssessmentKeyPrefix, loadAiAssessmentTargets } from '../helpers/aiAssessment';
-import { agentActionState, enqueueAgentMessages, openAgentChat } from '../handlers/agentQueue';
+import type { AgentAction, AgentContext } from '../types/agent';
+import { bulkAssessmentKeyPrefix, loadAiAssessmentTargets } from '../helpers/aiAssessment';
+import { ACTIONS_PER_REQUEST, agentActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
 import useAgentQueue from '../hooks/useAgentQueue';
+import { agentErrorMessage } from '../handlers/agent';
 import AgentActionButton from './AgentActionButton';
 
 const BULK_SOURCE = 'Vulnerability selection';
@@ -26,10 +27,10 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
     const agentQueue = useAgentQueue();
     const queue = agentQueue.filter(item => item.key.startsWith(keyPrefix));
     const selectionKey = JSON.stringify([...selectedVulns].sort());
-    const activeIds = new Set(queue.flatMap(item => item.context.view?.selectedVulnerabilityIds ?? []));
+    const activeIds = new Set(queue.flatMap(item => item.context?.view?.selectedVulnerabilityIds ?? []));
     const selectionActive = selectedVulns.length > 0 && selectedVulns.every(id => activeIds.has(id));
     const selectionState = selectionActive ? agentActionState(agentQueue, item => item.key.startsWith(keyPrefix) &&
-        (item.context.view?.selectedVulnerabilityIds?.some(id => selectedVulns.includes(id)) ?? false)) : undefined;
+        (item.context?.view?.selectedVulnerabilityIds?.some(id => selectedVulns.includes(id)) ?? false)) : undefined;
 
     useEffect(() => {
         preparation.current?.abort();
@@ -49,7 +50,7 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                 if (!vulnerability) throw new Error(`Selected vulnerability ${id} is no longer available. Refresh the table and try again.`);
                 return vulnerability;
             });
-            const messages: QueuedAgentMessage[][] = [];
+            const actions: AgentAction[] = [];
             // Bound compatibility lookups instead of issuing one concurrent request per selected row.
             let next = 0;
             await Promise.all(Array.from({ length: Math.min(4, selected.length) }, async () => {
@@ -57,23 +58,31 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                     const index = next++;
                     const vulnerability = selected[index];
                     const targets = await loadAiAssessmentTargets(vulnerability, context, controller.signal);
-                    let actions: Omit<QueuedAgentMessage, 'id'>[];
-                    try {
-                        actions = buildAiAssessmentMessages(vulnerability.id, targets);
-                    } catch (error) {
-                        throw new Error(`${vulnerability.id}: ${error instanceof Error ? error.message : 'Unable to prepare assessment.'} Open its details to refine the package selection.`);
-                    }
-                    messages[index] = actions.map(message => ({
-                        ...message, id: crypto.randomUUID(), key: `${keyPrefix}${vulnerability.id}`,
-                        title: `${vulnerability.id} · ${message.title}`,
+                    actions[index] = {
+                        kind: 'assess', vuln_id: vulnerability.id, targets, key: `${keyPrefix}${vulnerability.id}`,
                         context: { ...context, view: { ...context.view, selectedVulnerabilityIds: [vulnerability.id], selectionCount: 1 } },
-                    }));
+                    };
                 }
             }));
             if (controller.signal.aborted) return;
-            const queued = messages.flat();
-            enqueueAgentMessages(queued, context, BULK_SOURCE, 'per-action');
-            openAgentChat(selectedVulns.length > 1 ? undefined : queued[0]?.id, selectedVulns.length > 1 ? 'conversations' : 'chat');
+            let first: string | undefined;
+            for (let start = 0; start < actions.length; start += ACTIONS_PER_REQUEST) {
+                // Stopped by a selection change or unmount: keep what was accepted, submit no more.
+                if (controller.signal.aborted) return;
+                const batch = actions.slice(start, start + ACTIONS_PER_REQUEST);
+                let submitted;
+                try {
+                    submitted = await enqueueAgentActions(batch, { conversation: 'per-action', source: BULK_SOURCE, context });
+                } catch (error) {
+                    if (!(error instanceof Error) || error instanceof TypeError) throw new Error(agentErrorMessage(error));
+                    const message = error.message;
+                    const subject = batch.length === 1 && batch[0].kind === 'assess' ? `${batch[0].vuln_id}: ` : '';
+                    throw new Error(`${subject}${message} Open its details to refine the package selection.`);
+                }
+                first ??= submitted.requests[0]?.id ?? submitted.skipped[0]?.request_id;
+            }
+            if (controller.signal.aborted) return;
+            openAgentChat(selectedVulns.length > 1 ? undefined : first, selectedVulns.length > 1 ? 'conversations' : 'chat');
         } catch (error) {
             if (!controller.signal.aborted) {
                 onError(error instanceof Error ? error.message : 'Unable to prepare AI assessments. Try again.');
