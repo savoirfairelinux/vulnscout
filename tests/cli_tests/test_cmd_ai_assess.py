@@ -1001,6 +1001,28 @@ def test_unbatchable_variant_fails_without_a_turn(app, ids, monkeypatch):
     assert calls == []
 
 
+def test_batches_of_one_vulnerability_fold_into_one_result(app, ids, monkeypatch):
+    from src.controllers import ai_actions
+
+    monkeypatch.setattr(ai_actions, "PROMPT_BUDGET", 330)
+
+    def behaviour(call):
+        if len(calls) == 1:
+            _write_ai(call, ids["x86"], "openssl")
+            return None
+        raise RuntimeError("boom")
+
+    calls = _fake_reply(monkeypatch, behaviour)
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
+    assert result.exit_code == 1 and len(calls) == 2
+    [entry] = json.loads(result.stdout)["results"]
+    assert (entry["outcome"], entry["error"], entry["reply"]) == ("failed", "boom", "done")
+    assert entry["usage"] == {"cost": 1.0, "input_tokens": 10, "output_tokens": 5}
+    assert [(t["variant"], t["package"]) for t in entry["targets"] if t["written"]] == [("x86", "openssl@3.0")]
+    assert "(2 targets, batch 1 of 2)" in result.stderr and "(1 targets, batch 2 of 2)" in result.stderr
+    assert result.stderr.count("CVE-2024-0001: failed") == 1
+
+
 def test_variant_active_packages_filters_by_project(app, ids):
     from uuid import UUID, uuid4
 

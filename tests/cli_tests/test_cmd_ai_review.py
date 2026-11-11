@@ -558,6 +558,23 @@ def test_target_removed_during_the_turn_is_reported_as_changed(app, ids, monkeyp
     assert set(_outcomes(_report(result)).values()) == {"changed"}
 
 
+def test_assessment_no_longer_custom_when_reached_is_reported_as_changed_without_a_turn(app, ids, monkeypatch):
+    with app.app_context():
+        first, second = _custom(ids, ["x86"]), _custom(ids, ["x86"])
+
+    def behaviour(call):
+        _write_all(call)
+        other = second if first in call["message"] else first
+        _edit_assessment(app, other, lambda assessment: setattr(assessment, "origin", "ai"))
+
+    calls = _fake_reply(monkeypatch, behaviour)
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
+    assert result.exit_code == 1 and len(calls) == 1
+    report = _report(result)
+    assert sorted(entry["targets"][0]["outcome"] for entry in report["results"]) == ["changed", "reviewed"]
+    assert "[2/2] Reviewing" not in result.stderr
+
+
 def test_stale_targets_are_reprocessed_and_fresh_ones_skipped(app, ids, monkeypatch):
     from src.models.assessment import Assessment
     from src.models.assessment_review import AssessmentReview
@@ -664,13 +681,13 @@ def test_interrupt_signal_between_assessments_marks_the_rest_not_started(app, id
     with app.app_context():
         _custom(ids, ["x86"])
         _custom(ids, ["x86"])
-    original = cmd_ai_review._review
+    original = cmd_ai_review._fold
 
     def review_then_signal(*args, **kwargs):
         original(*args, **kwargs)
         _ai_runner.interrupted.set()
 
-    monkeypatch.setattr(cmd_ai_review, "_review", review_then_signal)
+    monkeypatch.setattr(cmd_ai_review, "_fold", review_then_signal)
     calls = _fake_reply(monkeypatch, _write_all)
     result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
     assert result.exit_code == 1 and len(calls) == 1

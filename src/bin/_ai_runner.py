@@ -6,18 +6,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import signal
 import threading
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
 
 import click
 from flask import current_app
 
+from ..helpers.env_vars import get_bool_env
+
 if TYPE_CHECKING:
+    from ..controllers.ai_actions import TurnResult, TurnSpec
     from ..controllers.guarded_api import GuardedApi
 
 # Set by entrypoint.sh (ai-assess and ai-review) so the host wrapper can forward Ctrl-C to this process.
@@ -136,3 +140,58 @@ def guarded_api() -> Iterator[GuardedApi]:
         yield api
     finally:
         api.stop()
+
+
+def execute(specs: Iterable[TurnSpec], model: str | None, on_start: Callable[[TurnSpec], None],
+            on_done: Callable[[TurnSpec, TurnResult], None]) -> tuple[str, bool]:
+    """Run each of *specs* as one agent turn in this process; return the model used and whether the run was
+    interrupted.
+
+    *specs* is consumed lazily, one spec per turn, so a command can plan each item when it is reached.
+    ``on_start(spec)`` runs before the turn and ``on_done(spec, result)`` after it with its ``TurnResult``;
+    a completed turn's result carries its ``usage``. An unavailable model or missing skills ends the run with
+    a ``ClickException``; Ctrl-C stops it after recording what the current turn wrote.
+    """
+    from ..controllers import ai_actions
+    from ..routes import agent, agent_skills
+
+    # This process never runs the boot scan that normally opens the /api gate.
+    setattr(current_app, "_INT_SCAN_FINISHED", True)
+    credentials, selected, path = load_agent(model)
+    if not get_bool_env("VERBOSE_MODE"):
+        # The SDK logs every failed request with a traceback; the summary already reports the error.
+        logging.getLogger("copilot").setLevel(logging.ERROR)
+    if credentials.token and not credentials.provider:
+        check_github_sign_in(credentials.token)
+    with guarded_api() as api:
+        try:
+            for spec in specs:
+                on_start(spec)
+                turn = ai_actions.prepare(spec)
+                reply: str | None = None
+                usage: dict | None = None
+                error: tuple[str, str] | None = None
+                stopped = False
+                try:
+                    reply, usage = asyncio.run(ai_actions.run_turn(
+                        turn, agent.Conversation(credentials=credentials), selected, path, api))
+                except (agent.UnavailableModelError, agent_skills.AgentSkillError):
+                    raise
+                except KeyboardInterrupt:
+                    # SIGINT forwarded by the host wrapper: asyncio.run cancels the turn (the SDK session is
+                    # disconnected and deleted in _reply's finally); still record what it already wrote.
+                    stopped = True
+                except asyncio.TimeoutError:
+                    error = ("timeout", f"No reply within {spec.timeout} s.")
+                except Exception as exc:
+                    error = ("failed", str(exc) or type(exc).__name__)
+                # A cleanup error raised while the turn was being cancelled replaces the KeyboardInterrupt.
+                stopped = stopped or interrupted.is_set()
+                on_done(spec, ai_actions.verify(turn, error, stopped, reply, usage))
+                if stopped or interrupted.is_set():
+                    raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            return selected, True
+        except (agent.UnavailableModelError, agent_skills.AgentSkillError) as exc:
+            raise click.ClickException(str(exc)) from exc
+    return selected, False
