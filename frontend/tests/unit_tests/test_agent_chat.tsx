@@ -353,6 +353,24 @@ test('reset discards messages but retains the connection', async () => {
     expect(screen.getByRole('button', { name: 'Configure model provider' })).toBeInTheDocument();
 });
 
+test('the connector setup replaces the conversation instead of pushing it down', async () => {
+    global.fetch = async input => {
+        const path = String(input);
+        if (path.endsWith('/models')) return jsonResponse(models);
+        return jsonResponse({ ...signedIn, messages: [{ role: 'user', content: 'Previous question' }] });
+    };
+
+    render(<AgentChat onClose={() => undefined} context={context} />);
+    expect(await screen.findByText('Previous question')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Configure model provider' }));
+    expect(screen.getByRole('region', { name: 'Agent connection setup' })).toHaveTextContent('Select a connector');
+    expect(screen.queryByRole('log', { name: 'Agent conversation' })).not.toBeInTheDocument();
+    expect(screen.getByText('Previous question')).not.toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Configure model provider' }));
+    expect(screen.queryByRole('region', { name: 'Agent connection setup' })).not.toBeInTheDocument();
+    expect(screen.getByRole('log', { name: 'Agent conversation' })).toHaveTextContent('Previous question');
+});
+
 test('an interrupted response stays in the conversation with retry and pauses the composer', async () => {
     let attempts = 0;
     global.fetch = async input => {
