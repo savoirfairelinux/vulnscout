@@ -99,7 +99,7 @@ class Package(Base):
         back_populates="package",
         cascade="all, delete-orphan",
     )
-    upstream_repository: Mapped["PackageRepository | None"] = relationship(cascade="all, delete-orphan")
+    upstream_repository: Mapped[list["PackageRepository"]] = relationship(cascade="all, delete-orphan")
 
     # ------------------------------------------------------------------
     # Constructor with support for legacy arg calls

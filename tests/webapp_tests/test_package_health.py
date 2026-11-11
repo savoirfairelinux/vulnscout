@@ -10,6 +10,7 @@ import sqlite3
 import uuid
 
 import pytest
+from sqlalchemy import event
 
 from src.bin.cmd_process import read_inputs
 from src.bin.webapp import create_app
@@ -156,9 +157,11 @@ def _health(app, query):
 
 
 def _repository_key(package, scope):
+    variant_id = uuid.UUID(scope["variant"])
     scan_ids = health.active_sbom_scan_ids_for_variant(uuid.UUID(scope["variant"]))
-    evidence = health._evidence_by_package([package.id], scan_ids)[package.id]
-    cves = health._cve_ids_by_package([package.id], scan_ids).get(package.id, [])
+    key = package.id, variant_id
+    evidence = health._evidence_by_package([package.id], scan_ids)[key]
+    cves = health._cve_ids_by_package([package.id], scan_ids).get(key, [])
     return package.id, evidence.key(cves)
 
 
@@ -234,11 +237,14 @@ def test_shared_package_repository_is_scoped_to_variant(app, scope, apis):
     other_document = SBOMDocument.create("/other.json", "other.json", other_scan.id, format="spdx")
     _link(other_document, package, source_urls=["https://gitlab.com/a-other/shared"])
     db.session.commit()
-    _run([scope["variant"]], refresher)
+    _run([scope["variant"], scope["other"]], refresher)
     result = _health(app, f"variant_id={scope['variant']}")["packages"]["shared@1"]
     assert result["repository"] == "gitlab.com/z-first/shared"
-    _run([scope["other"]], refresher)
     result = _health(app, f"variant_id={scope['other']}")["packages"]["shared@1"]
+    assert result["repository"] == "gitlab.com/a-other/shared"
+    _run([scope["variant"]], refresher)
+    _run([scope["other"]], refresher)
+    result = _health(app, f"variant_ids={scope['variant']},{scope['other']}")["packages"]["shared@1"]
     assert result["repository"] == "gitlab.com/a-other/shared"
     result = _health(app, f"variant_id={scope['variant']}")["packages"]["shared@1"]
     assert result["repository"] == "gitlab.com/z-first/shared"
@@ -260,7 +266,8 @@ def test_cve_evidence_uses_only_selected_active_scans(app, scope):
         Observation.create(finding.id, scan.id)
     db.session.commit()
     scan_ids = health.active_sbom_scan_ids_for_variant(variant_id)
-    assert health._cve_ids_by_package([package.id], scan_ids) == {package.id: ["CVE-2026-0004"]}
+    assert health._cve_ids_by_package([package.id], scan_ids) == {
+        (package.id, variant_id): ["CVE-2026-0004"]}
 
 
 @pytest.mark.parametrize("app", ["file"], indirect=True)
@@ -286,6 +293,31 @@ def test_external_lookups_release_sqlite_writer(app, scope, apis):
     assert {url.rsplit("/", 1)[-1] for url in checked} == {"scorecard", "depsdev", "osv", "github"}
     assert _health(app, f"variant_id={scope['variant']}")["packages"]["react@18.2.0"]["repository"] == (
         "github.com/facebook/react")
+
+
+def test_refresh_commits_package_rows_in_bounded_batches(app, monkeypatch):
+    monkeypatch.setattr(health, "COMMIT_EVERY", 3)
+    project = Project.create("batched")
+    variant = Variant.create("board", project.id)
+    scan = Scan.create("SBOM", variant.id)
+    document = SBOMDocument.create("/batch.json", "batch.json", scan.id, format="spdx")
+    for index in range(10):
+        package = Package.find_or_create(f"package-{index}", "1")
+        _link(document, package)
+    db.session.commit()
+
+    commits = []
+    session = db.session()
+    def record_commit(_session):
+        commits.append(None)
+
+    event.listen(session, "after_commit", record_commit)
+    try:
+        _run([str(variant.id)], health.PackageHealthRefresher())
+    finally:
+        event.remove(session, "after_commit", record_commit)
+
+    assert len(commits) == 1 + 4
 
 
 def test_force_and_stale_rows_are_resolved_again(app, scope, apis):
@@ -398,6 +430,22 @@ def test_orphan_rows_are_removed(app, scope, apis):
     db.session.expunge_all()
     _run([scope["variant"]], refresher)
     assert db.session.query(PackageRepository).filter_by(package_id=orphan_id).count() == 0
+
+
+def test_package_delete_removes_all_repository_evidence_rows(app):
+    package = Package.find_or_create("shared", "1")
+    db.session.add_all([
+        PackageRepository(package_id=package.id, evidence_key="a" * 64, repository="github.com/a/shared",
+                          source="sbom", resolved_at=health._utcnow()),
+        PackageRepository(package_id=package.id, evidence_key="b" * 64, repository="github.com/b/shared",
+                          source="sbom", resolved_at=health._utcnow()),
+    ])
+    db.session.commit()
+
+    package.delete()
+    db.session.commit()
+
+    assert db.session.query(PackageRepository).filter_by(package_id=package.id).count() == 0
 
 
 def test_health_api_scopes(app, scope, apis):

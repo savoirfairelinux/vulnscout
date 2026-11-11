@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from packageurl import PackageURL
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, tuple_
 
 from ..extensions import db, write_lock
 from ..helpers.active_scans import (
@@ -133,6 +133,7 @@ def osv_repository(payload: dict, name: str, cpes: Iterable[str]) -> str | None:
     """Return the ``GIT`` range repository of an OSV record when it matches the package's CPE or name."""
     products = {pair for cpe in cpes if (pair := cpe_product(cpe)) is not None}
     names = {name.lower(), *(product for _, product in products)}
+    candidates: set[str] = set()
     for affected in payload.get("affected") or []:
         for item in (affected or {}).get("ranges") or []:
             if not isinstance(item, dict) or item.get("type") != "GIT":
@@ -146,10 +147,18 @@ def osv_repository(payload: dict, name: str, cpes: Iterable[str]) -> str | None:
             if affected_products:
                 if any(product == affected_product and vendor in {"*", affected_vendor}
                        for vendor, product in products for affected_vendor, affected_product in affected_products):
-                    return repository
+                    candidates.add(repository)
             elif repository.rsplit("/", 1)[-1].lower() in names:
-                return repository
-    return None
+                candidates.add(repository)
+    if not candidates:
+        return None
+
+    vendors = {vendor for vendor, _ in products}
+    return min(candidates, key=lambda repository: (
+        repository.rsplit("/", 1)[-1].lower() not in names,
+        repository.rsplit("/", 2)[-2].lower() not in vendors,
+        repository,
+    ))
 
 
 def _scorecard_checks(payload: dict) -> list[dict]:
@@ -311,16 +320,18 @@ def _chunks(values: list, size: int = DB_CHUNK) -> Iterable[list]:
         yield values[start:start + size]
 
 
-def _evidence_by_package(package_ids: list[uuid.UUID], scan_ids: list[uuid.UUID]) -> dict[uuid.UUID, _Evidence]:
-    evidence: dict[uuid.UUID, _Evidence] = {}
+def _evidence_by_package(package_ids: list[uuid.UUID],
+                         scan_ids: list[uuid.UUID]) -> dict[tuple[uuid.UUID, uuid.UUID], _Evidence]:
+    evidence: dict[tuple[uuid.UUID, uuid.UUID], _Evidence] = {}
     for chunk in _chunks(package_ids):
-        for package_id, purls, cpes, source_urls, upstream_urls, document_id in db.session.execute(
+        for package_id, purls, cpes, source_urls, upstream_urls, document_id, variant_id in db.session.execute(
             select(SBOMPackage.package_id, SBOMPackage.purl, SBOMPackage.cpe, SBOMPackage.source_urls,
-                   SBOMPackage.upstream_urls, SBOMPackage.sbom_document_id)
+                   SBOMPackage.upstream_urls, SBOMPackage.sbom_document_id, Scan.variant_id)
             .join(SBOMDocument, SBOMDocument.id == SBOMPackage.sbom_document_id)
+            .join(Scan, Scan.id == SBOMDocument.scan_id)
             .where(SBOMPackage.package_id.in_(chunk), SBOMDocument.scan_id.in_(scan_ids))
         ):
-            item = evidence.setdefault(package_id, _Evidence(set(), set(), set(), set()))
+            item = evidence.setdefault((package_id, variant_id), _Evidence(set(), set(), set(), set()))
             item.purls.update(purls or [])
             item.cpes.update(cpes or [])
             item.source_urls.update(source_urls or [])
@@ -329,19 +340,21 @@ def _evidence_by_package(package_ids: list[uuid.UUID], scan_ids: list[uuid.UUID]
     return evidence
 
 
-def _cve_ids_by_package(package_ids: list[uuid.UUID], scan_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[str]]:
-    result: dict[uuid.UUID, list[str]] = {}
+def _cve_ids_by_package(package_ids: list[uuid.UUID],
+                        scan_ids: list[uuid.UUID]) -> dict[tuple[uuid.UUID, uuid.UUID], list[str]]:
+    result: dict[tuple[uuid.UUID, uuid.UUID], list[str]] = {}
     variant_ids = db.session.scalars(select(Scan.variant_id).where(Scan.id.in_(scan_ids))).all()
     active_ids = sorted({scan_id for variant_id in variant_ids
                          for scan_id in active_scan_ids_for_variant(variant_id)})
     for chunk in _chunks(package_ids):
-        for package_id, vulnerability_id in db.session.execute(
-            select(Finding.package_id, Finding.vulnerability_id)
+        for package_id, variant_id, vulnerability_id in db.session.execute(
+            select(Finding.package_id, Scan.variant_id, Finding.vulnerability_id)
             .join(Observation, Observation.finding_id == Finding.id)
+            .join(Scan, Scan.id == Observation.scan_id)
             .where(Finding.package_id.in_(chunk), Finding.vulnerability_id.like("CVE-%"),
                    Observation.scan_id.in_(active_ids)).distinct()
         ):
-            result.setdefault(package_id, []).append(vulnerability_id)
+            result.setdefault((package_id, variant_id), []).append(vulnerability_id)
     # Recent CVEs are the likeliest to carry OSV git ranges.
     return {package_id: sorted(ids, reverse=True) for package_id, ids in result.items()}
 
@@ -355,15 +368,27 @@ def scoped_package_ids(variant_ids: Iterable[str]) -> list[uuid.UUID]:
 
 def _checkpoint(ctx: JobContext) -> None:
     if ctx.is_cancelled():
-        db.session.commit()
+        with write_lock():
+            db.session.commit()
         ctx.check_cancelled()
 
 
-def _repository_rows(package_ids: list[uuid.UUID]) -> list[PackageRepository]:
+def _repository_rows_for_keys(keys: dict[tuple[uuid.UUID, uuid.UUID], str]) -> list[PackageRepository]:
+    pairs = [(package_id, evidence_key) for (package_id, _variant_id), evidence_key in keys.items()]
     rows: list[PackageRepository] = []
-    for chunk in _chunks(package_ids):
-        rows.extend(db.session.scalars(select(PackageRepository).where(PackageRepository.package_id.in_(chunk))))
+    for chunk in _chunks(pairs, DB_CHUNK // 2):
+        rows.extend(db.session.scalars(select(PackageRepository).where(
+            tuple_(PackageRepository.package_id, PackageRepository.evidence_key).in_(chunk))))
     return rows
+
+
+def _repository_values_for_keys(keys: dict[tuple[uuid.UUID, uuid.UUID], str]) -> list[str]:
+    pairs = [(package_id, evidence_key) for (package_id, _variant_id), evidence_key in keys.items()]
+    repositories: list[str] = []
+    for chunk in _chunks(pairs, DB_CHUNK // 2):
+        repositories.extend(repository for repository in db.session.scalars(select(PackageRepository.repository).where(
+            tuple_(PackageRepository.package_id, PackageRepository.evidence_key).in_(chunk))) if repository)
+    return repositories
 
 
 def _scorecard_rows(repositories: list[str]) -> dict[str, RepositoryScorecard]:
@@ -372,6 +397,18 @@ def _scorecard_rows(repositories: list[str]) -> dict[str, RepositoryScorecard]:
         rows.update({row.repository: row for row in db.session.scalars(
             select(RepositoryScorecard).where(RepositoryScorecard.repository.in_(chunk)))})
     return rows
+
+
+def _stale_scorecard_repositories(repositories: list[str], refresher: PackageHealthRefresher,
+                                  force: bool) -> list[str]:
+    cached: dict[str, tuple[str, datetime.datetime]] = {}
+    for chunk in _chunks(repositories):
+        cached.update({repository: (status, fetched_at) for repository, status, fetched_at in db.session.execute(
+            select(RepositoryScorecard.repository, RepositoryScorecard.status, RepositoryScorecard.fetched_at)
+            .where(RepositoryScorecard.repository.in_(chunk)))})
+    return [repository for repository in repositories
+            if force or repository not in cached or cached[repository][0] == "error"
+            or cached[repository][1] <= refresher.now - SCORECARD_TTL]
 
 
 def run_scorecard_refresh(ctx: JobContext, refresher: PackageHealthRefresher | None = None) -> None:
@@ -390,37 +427,41 @@ def run_scorecard_refresh(ctx: JobContext, refresher: PackageHealthRefresher | N
     package_ids = sorted(active_package_ids_for_scans(scan_ids))
     evidence = _evidence_by_package(package_ids, scan_ids)
     cve_ids = _cve_ids_by_package(package_ids, scan_ids)
-    keys = {package_id: item.key(cve_ids.get(package_id, [])) for package_id, item in evidence.items()}
-    rows = {row.package_id: row for row in _repository_rows(package_ids)
-            if row.evidence_key == keys.get(row.package_id)}
-    packages: list[Package] = []
-    for chunk in _chunks(package_ids):
-        packages.extend(db.session.scalars(select(Package).where(Package.id.in_(chunk))))
-
-    total = len(packages)
+    keys = {key: item.key(cve_ids.get(key, [])) for key, item in evidence.items()}
+    evidence_items = list(evidence.items())
+    total = len(evidence_items)
     ctx.report(0, total, f"Resolving upstream repositories: 0/{total}")
-    for done, package in enumerate(packages, 1):
-        _checkpoint(ctx)
-        refresher.resolve(package, evidence.get(package.id, _Evidence(set(), set(), set(), set())),
-                          cve_ids.get(package.id, []), rows.get(package.id), force)
+    done = 0
+    for batch in _chunks(evidence_items, COMMIT_EVERY):
+        batch_keys = {key: keys[key] for key, _item in batch}
+        batch_package_ids = sorted({key[0] for key in batch_keys})
+        rows = {(row.package_id, row.evidence_key): row for row in _repository_rows_for_keys(batch_keys)}
+        packages = {package.id: package for package in db.session.scalars(
+            select(Package).where(Package.id.in_(batch_package_ids)))}
+        for key, item in batch:
+            _checkpoint(ctx)
+            package_id, _variant_id = key
+            refresher.resolve(packages[package_id], item, cve_ids.get(key, []),
+                              rows.get((package_id, batch_keys[key])), force)
+            done += 1
+            ctx.report(done, total, f"Resolving upstream repositories: {done}/{total}")
         with write_lock():
             db.session.commit()
-        ctx.report(done, total, f"Resolving upstream repositories: {done}/{total}")
-    db.session.commit()
 
-    resolved = [row.repository for row in _repository_rows(package_ids)
-                if row.repository is not None and row.evidence_key == keys.get(row.package_id)]
+    resolved = _repository_values_for_keys(keys)
     repositories = sorted({repository for repository in resolved if scorecard_supported(repository)})
-    cached = _scorecard_rows(repositories)
-    stale = [repository for repository in repositories if refresher.scorecard_is_stale(cached.get(repository), force)]
+    stale = _stale_scorecard_repositories(repositories, refresher, force)
     ctx.report(0, len(stale), f"Fetching OpenSSF Scorecard results: 0/{len(stale)}")
-    for done, repository in enumerate(stale, 1):
-        _checkpoint(ctx)
-        refresher.refresh_scorecard(repository, cached.get(repository))
+    done = 0
+    for batch in _chunks(stale, COMMIT_EVERY):
+        cached = _scorecard_rows(batch)
+        for repository in batch:
+            _checkpoint(ctx)
+            refresher.refresh_scorecard(repository, cached.get(repository))
+            done += 1
+            ctx.report(done, len(stale), f"Fetching OpenSSF Scorecard results: {done}/{len(stale)}")
         with write_lock():
             db.session.commit()
-        ctx.report(done, len(stale), f"Fetching OpenSSF Scorecard results: {done}/{len(stale)}")
-    db.session.commit()
     ctx.report(len(stale), len(stale),
                f"OpenSSF Scorecard refresh complete ({len(resolved)}/{total} packages with a repository, "
                f"{len(stale)} repositories fetched)")
@@ -455,11 +496,29 @@ def package_health(package_ids: Iterable[uuid.UUID], scan_ids: list[uuid.UUID],
     ids = list(package_ids)
     evidence = _evidence_by_package(ids, scan_ids)
     cve_ids = _cve_ids_by_package(ids, scan_ids)
-    rows = [row for row in _repository_rows(ids) if row.package_id in evidence
-            and row.evidence_key == evidence[row.package_id].key(cve_ids.get(row.package_id, []))]
-    scorecards = _scorecard_rows(sorted({row.repository for row in rows if row.repository is not None}))
+    keys = {key: item.key(cve_ids.get(key, [])) for key, item in evidence.items()}
+    rows = {(row.package_id, row.evidence_key): row for row in _repository_rows_for_keys(keys)}
+    by_package: dict[uuid.UUID, list[PackageRepository]] = {}
+    for key in keys:
+        row = rows.get((key[0], keys[key]))
+        if row is not None:
+            by_package.setdefault(key[0], []).append(row)
+    expected_counts: dict[uuid.UUID, int] = {}
+    for package_id, _variant_id in keys:
+        expected_counts[package_id] = expected_counts.get(package_id, 0) + 1
+    complete_rows = {package_id: matching for package_id, matching in by_package.items()
+                     if len(matching) == expected_counts[package_id]}
+    selected = {
+        package_id: min(matching, key=lambda row: (
+            {"sbom": 0, "deps_dev": 1, "osv": 2, "none": 3}.get(row.source, 4),
+            not scorecard_supported(row.repository) if row.repository else True,
+            row.repository or "",
+        ))
+        for package_id, matching in complete_rows.items()
+    }
+    scorecards = _scorecard_rows(sorted({row.repository for row in selected.values() if row.repository is not None}))
     return {
-        row.package_id: {
+        package_id: {
             "repository": row.repository,
             "repository_source": row.source,
             "repository_evidence": row.evidence,
@@ -469,5 +528,5 @@ def package_health(package_ids: Iterable[uuid.UUID], scan_ids: list[uuid.UUID],
             "scorecard": _scorecard_view(
                 row.repository, scorecards.get(row.repository) if row.repository else None, details),
         }
-        for row in rows
+        for package_id, row in selected.items()
     }
