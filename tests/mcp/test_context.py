@@ -520,8 +520,14 @@ class TestAiContextImportSkill:
             "```text", "update_variant_context", "update_project_context", "write_assessment",
             "Not imported", "include_model", "update_variant_threat_model",
             "explicitly confirmed", "expected_updated_at", "Never open, list or extract an archive",
+            "Embedded mode", "read_import_source", "propose_variant_threat_model", "replace=true", "Discard",
         ))
         assert "ai-context-import/SKILL.md" in readme
+        embedded = skill.split("## 7. Embedded mode", 1)[1].split("\n## ", 1)[0]
+        assert "update_variant_threat_model" not in embedded and "update_variant_context" not in embedded
+        assert "ai-context-import" in readme and "propose_variant_threat_model" in readme
+        guide = (self.ROOT / "vulnscout_mcp/ai_context_form_guide.md").read_text()
+        assert "propose_variant_threat_model" in guide
 
     def test_skill_save_example_passes_backend_validation(self):
         import re
