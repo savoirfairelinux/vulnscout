@@ -445,3 +445,56 @@ class TestUpdateAssessment:
             )
             with pytest.raises(VulnScoutError, match="Could not connect to VulnScout at http://vulnscout.test"):
                 client.update_assessment("a1", {"status": "not_affected"})
+
+
+class TestContextDraftClient:
+    BASE = "http://vulnscout.test"
+
+    def test_get_draft_returns_none_when_missing(self):
+        from vulnscout_mcp.client import VulnScoutClient
+
+        with respx.mock:
+            respx.get(f"{self.BASE}/api/variants/v1/context/draft").mock(
+                return_value=httpx.Response(404, json={"error": "No draft."}))
+            assert VulnScoutClient(self.BASE).get_context_draft("v1") is None
+
+    def test_put_draft_sends_the_body_and_maps_409(self):
+        import json as _json
+        from vulnscout_mcp.client import VulnScoutClient, VulnScoutConflict, VulnScoutError
+
+        client = VulnScoutClient(self.BASE)
+        with respx.mock:
+            route = respx.put(f"{self.BASE}/api/variants/v1/context/draft").mock(side_effect=[
+                httpx.Response(200, json={"status": "current"}),
+                httpx.Response(409, json={"error": "changed", "updated_at": "x"}),
+                httpx.Response(400, json={"error": "bad", "fields": {}}),
+            ])
+            assert client.put_context_draft("v1", {"source": "a"}) == {"status": "current"}
+            assert _json.loads(route.calls[0].request.content) == {"source": "a"}
+            with pytest.raises(VulnScoutConflict, match="changed"):
+                client.put_context_draft("v1", {})
+            with pytest.raises(VulnScoutError, match="bad") as exc:
+                client.put_context_draft("v1", {})
+            assert not isinstance(exc.value, VulnScoutConflict)
+
+    def test_import_source_passes_params_and_connection_errors(self):
+        from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+
+        with respx.mock:
+            respx.get(f"{self.BASE}/api/variants/v1/context/import-source/source",
+                      params={"operation": "read", "path": "a.md"}).mock(
+                return_value=httpx.Response(200, json={"name": "a.md", "content": "x"}))
+            result = VulnScoutClient(self.BASE).get_import_source("v1", {"operation": "read", "path": "a.md"})
+            assert result["content"] == "x"
+            respx.get(f"{self.BASE}/api/variants/v2/context/draft").mock(side_effect=httpx.ConnectError("down"))
+            with pytest.raises(VulnScoutError, match="Could not connect"):
+                VulnScoutClient(self.BASE).get_context_draft("v2")
+
+    def test_scoped_client_refuses_other_variants(self):
+        from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutError
+
+        client = ScopedVulnScoutClient(self.BASE, {"project_ids": ["p1"], "variant_ids": ["v1"]})
+        for call in (lambda: client.get_context_draft("v2"), lambda: client.put_context_draft("v2", {}),
+                     lambda: client.get_import_source("v2", {})):
+            with pytest.raises(VulnScoutError, match="outside the current agent scope"):
+                call()
