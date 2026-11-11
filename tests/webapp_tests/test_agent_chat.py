@@ -13,6 +13,26 @@ from uuid import uuid4
 import pytest
 
 
+USAGE = {"cost": 1, "input_tokens": 2, "output_tokens": 3}
+
+
+async def _answer(call):
+    """The AI queue's test runner: a reply that keeps its SDK session, as _reply does."""
+    call.on_session(f"s-{call.request.id}")
+    call.session.session_id, call.session.session_scope = f"s-{call.request.id}", call.scope
+    return "answer", dict(USAGE)
+
+
+def _queue():
+    from src.controllers import agent_queue as aq
+
+    return aq.agent_queue
+
+
+def _main_session():
+    return _queue()._conversations["main"].session
+
+
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
@@ -25,11 +45,14 @@ def client(monkeypatch, tmp_path):
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
     from src.bin.webapp import create_app
+    from src.controllers import agent_queue as aq
+    from src.controllers.event_bus import EventBus
     from src.extensions import db
     from src.routes import agent
 
-    # The agent connection is process-wide; give each test a fresh one, as a fresh process would have.
+    # The agent connection and AI queue are process-wide; give each test fresh ones, as a fresh process would have.
     monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
+    monkeypatch.setattr(aq, "agent_queue", aq.AgentQueue(runner=_answer, events=EventBus(), autostart=False))
     app = create_app()
     app.config.update(TESTING=True, SCAN_FILE=str(scan_file))
     with app.app_context():
@@ -1046,14 +1069,6 @@ def test_model_selection_rejects_invalid_payload(client, body):
     assert client.post("/api/agent/model", json=body).status_code == 400
 
 
-def test_busy_connection_rejects_model_selection(client):
-    from src.routes import agent
-
-    with agent._connection().lock:
-        response = client.post("/api/agent/model", json={"model": "auto"})
-        assert response.status_code == 409
-
-
 def test_signout_clears_identity(client):
     from src.routes import agent
 
@@ -1061,14 +1076,14 @@ def test_signout_clears_identity(client):
     connection.credentials.token = "invalid-test-credential"
     connection.credentials.device_code = "expired-code"
     connection.model = "chosen-model"
-    connection.usage["cost"] = 1
+    _main_session().usage["cost"] = 1
     response = client.delete("/api/agent/auth")
     assert response.status_code == 200
     assert response.get_json() == {"authenticated": False, "cleanup_error": None}
     assert connection.credentials.token is None
     assert connection.credentials.device_code is None
     assert connection.model == "auto"
-    assert connection.usage["cost"] is None
+    assert client.get("/api/agent").get_json()["usage"]["cost"] is None
 
 
 def test_signout_clears_local_identity_when_remote_session_is_unavailable(client):
@@ -1076,14 +1091,16 @@ def test_signout_clears_local_identity_when_remote_session_is_unavailable(client
 
     connection = agent._connection()
     connection.credentials.token = "invalid-test-credential"
-    connection.session_id = "missing-session"
-    connection.usage["cost"] = 1
+    session = _main_session()
+    session.credentials.token = "invalid-test-credential"
+    session.session_id = "missing-session"
+    session.usage["cost"] = 1
     response = client.delete("/api/agent/auth")
     assert response.status_code == 200
     assert response.get_json()["cleanup_error"]
     assert connection.credentials.token is None
-    assert connection.session_id is None
-    assert connection.usage["cost"] is None
+    assert _main_session().session_id is None
+    assert client.get("/api/agent").get_json()["usage"]["cost"] is None
 
 
 @pytest.mark.parametrize("method", ["post", "delete"])
@@ -1096,14 +1113,14 @@ def test_provider_change_keeps_connection_when_session_cleanup_fails(client, mon
     monkeypatch.setattr(agent, "_delete_session", unavailable)
     connection = agent._connection()
     connection.credentials.token = "github-key"
-    connection.session_id = "stored-session"
+    _main_session().session_id = "stored-session"
     response = getattr(client, method)("/api/agent/provider", json={
         "provider": "openai", "model": "gpt-4o", "api_key": "key",
     })
     assert response.status_code == 503
     assert response.get_json()["error"] == "Could not clear the previous conversation."
     assert connection.credentials.token == "github-key" and connection.credentials.provider is None
-    assert connection.session_id == "stored-session"
+    assert _main_session().session_id == "stored-session"
     assert not connection.lock.locked()
 
 
@@ -1119,13 +1136,118 @@ def test_provider_change_deletes_the_stored_session_and_respects_the_lock(client
     monkeypatch.setattr(agent, "_persist_agent_credentials", lambda **kwargs: None)
     connection = agent._connection()
     connection.credentials.token = "github-key"
-    connection.session_id = "stored-session"
+    _main_session().session_id = "stored-session"
     with connection.lock:
         assert client.delete("/api/agent/provider").status_code == 409
     response = client.delete("/api/agent/provider")
     assert response.status_code == 200
     assert deleted == ["stored-session"]
-    assert connection.session_id is None
+    assert _main_session().session_id is None
+
+
+def _configure_provider(monkeypatch):
+    """A provider the queue can run turns with (the runner is faked; the MCP server only has to exist)."""
+    from src.routes import agent
+
+    async def delete(token, session_id):
+        pass
+
+    monkeypatch.setattr(agent, "_delete_session", delete)
+    monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", __file__)
+    Path(os.environ["VULNSCOUT_CONFIG"]).write_text("AI_PROVIDER=openai\nAI_AUTH_CREDENTIALS=key\nAI_MODEL=gpt-4o\n")
+
+
+def _run_blocked(monkeypatch):
+    """Configure a provider and start a chat turn that runs until the returned event is set."""
+    _configure_provider(monkeypatch)
+    started, release = threading.Event(), threading.Event()
+
+    async def blocked(call):
+        started.set()
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+        return await _answer(call)
+
+    queue = _queue()
+    monkeypatch.setattr(queue, "_runner", blocked)
+    [request], _ = queue.enqueue("main", "web", [{"kind": "message", "text": "Hello"}])
+    thread = threading.Thread(target=queue.run_once, args=("chat",))
+    thread.start()
+    assert started.wait(10)
+    return request, release, thread
+
+
+def test_connection_changes_wait_for_the_running_request_but_model_selection_does_not(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setattr(agent, "_persist_agent_credentials", lambda **kwargs: None)
+    request, release, thread = _run_blocked(monkeypatch)
+    connection = agent._connection()
+    try:
+        for method, path in (("post", "/api/agent/provider"), ("delete", "/api/agent/provider"),
+                             ("delete", "/api/agent/auth")):
+            response = getattr(client, method)(path, json={"provider": "local", "model": "m",
+                                                           "base_url": "http://localhost:11434/v1"})
+            assert response.status_code == 409
+            assert response.get_json() == {"error": agent.BUSY_AGENT_ERROR}
+        connection.credentials.device_code, connection.credentials.device_expires = "code", time.monotonic() + 60
+        monkeypatch.setattr(agent, "_github_form", lambda *args: pytest.fail("the code must not be exchanged"))
+        assert client.post("/api/agent/auth/poll").status_code == 409
+        assert connection.credentials.device_code == "code"
+        assert not connection.lock.locked()
+        response = client.post("/api/agent/model", json={"model": "gpt-4o"})
+        assert response.status_code == 200 and response.get_json() == {"model": "gpt-4o"}
+    finally:
+        release.set()
+        thread.join(10)
+    assert _queue().get_request(request["id"])["status"] == "done"
+    assert connection.credentials.provider.kind == "openai"
+    assert client.delete("/api/agent/provider").status_code == 200
+
+
+def test_provider_change_fails_waiting_requests_of_conversations_with_history(client, monkeypatch):
+    from src.routes import agent
+
+    monkeypatch.setattr(agent, "_persist_agent_credentials", lambda **kwargs: None)
+    _configure_provider(monkeypatch)
+    queue = _queue()
+    message = {"kind": "message", "text": "Hello"}
+    queue.enqueue("main", "web", [message])
+    queue.run_once("chat")
+    status = client.get("/api/agent").get_json()
+    assert [entry["role"] for entry in status["messages"]] == ["user", "assistant"]
+    assert status["usage"]["cost"] == 1
+    [waiting], _ = queue.enqueue("main", "web", [message])
+    queue._pause("no_ai_config", "Paused.")
+    assert client.post("/api/agent/model", json={"model": "gpt-4o"}).status_code == 200
+    assert queue.paused is None
+    assert client.delete("/api/agent/provider").status_code == 200
+    assert queue.get_request(waiting["id"])["error_code"] == "connection_changed"
+    status = client.get("/api/agent").get_json()
+    assert status["messages"] == [] and status["usage"]["cost"] is None
+
+
+def test_device_sign_in_wakes_the_paused_queue(client, monkeypatch):
+    from src.routes import agent
+
+    async def signed_in(token):
+        return {"authenticated": True, "login": "octocat"}
+
+    monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", __file__)
+    queue = _queue()
+    [request], _ = queue.enqueue("main", "web", [{"kind": "message", "text": "Hello"}], model="gpt-4o")
+    assert queue.run_once("chat") is None and queue.paused["code"] == "no_ai_config"
+    connection = agent._connection()
+    connection.credentials.device_code, connection.credentials.device_expires = "code", time.monotonic() + 60
+    answers = [{"error": "authorization_pending"}, {"access_token": "gho_new"}]
+    monkeypatch.setattr(agent, "_github_form", lambda *args: answers.pop(0))
+    monkeypatch.setattr(agent, "_token_status", signed_in)
+    assert client.post("/api/agent/auth/poll").get_json()["status"] == "pending"
+    assert queue.paused is not None
+    assert client.post("/api/agent/auth/poll").get_json()["status"] == "connected"
+    assert queue.paused is None
+    assert queue.run_once("chat") == request["id"]
+    assert queue.get_request(request["id"])["status"] == "done"
 
 
 def test_copilot_model_lookup_failures_are_reported(client, monkeypatch):

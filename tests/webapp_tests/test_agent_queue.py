@@ -273,6 +273,22 @@ def test_a_request_that_is_no_longer_next_does_not_start(env, monkeypatch):
     assert env.q.run_once("chat") is None and env.fake.calls == []
 
 
+def test_credentials_loaded_before_a_connection_change_are_not_used(env, monkeypatch):
+    [request], _ = env.q.enqueue("per-action", "web", [_assess()], model="m")
+    load = env.q._load_credentials
+
+    def change_while_loading():
+        loaded = load()
+        with env.q.connection_change():
+            pass
+        monkeypatch.setattr(env.q, "_load_credentials", load)
+        return loaded
+
+    monkeypatch.setattr(env.q, "_load_credentials", change_while_loading)
+    assert env.q.run_once("action") is None and env.fake.calls == []
+    assert env.q.run_once("action") == request["id"]  # with the new connection's credentials
+
+
 def test_dedupe_skips_active_keys_and_batches_share_a_conversation(env, monkeypatch):
     from src.controllers import ai_actions
 
@@ -307,6 +323,20 @@ def test_dedupe_skips_active_keys_and_batches_share_a_conversation(env, monkeypa
     assert _status(env, message["id"]) == "failed"
     assert env.q.enqueue("main", "web", [_message(key="ask")], model="m")[1] == [
         {"key": "ask", "request_id": message["id"], "request_ids": [message["id"]]}]
+
+
+def test_a_skipped_key_whose_holder_left_while_planning_is_still_reported(env, monkeypatch):
+    [holder], _ = env.q.enqueue("per-action", "web", [_assess("k")], model="m")
+    plan = env.q._plan
+
+    def remove_after_planning(*args):
+        planned = plan(*args)
+        env.q.remove(holder["id"])
+        return planned
+
+    monkeypatch.setattr(env.q, "_plan", remove_after_planning)
+    assert env.q.enqueue("per-action", "web", [_assess("k")], model="m") == (
+        [], [{"key": "k", "request_id": holder["id"], "request_ids": [holder["id"]]}])
 
 
 def test_remove_clear_and_retry(env):
@@ -473,6 +503,27 @@ def test_requests_queued_before_setup_take_the_connected_models(env):
     assert _get(env.q, unset["id"])["model"] == "gpt-configured"
 
 
+def test_a_retry_takes_the_selected_model_unless_one_was_chosen(env):
+    from src.routes import agent
+
+    _config("AI_PROVIDER=openai\nAI_AUTH_CREDENTIALS=key\nAI_MODEL=first\n")
+    env.fake.script["message"] += [raising(RuntimeError("boom")), raising(RuntimeError("boom"))]
+    [unset], _ = env.q.enqueue("main", "web", [_message()])
+    [chosen], _ = env.q.enqueue("main", "web", [_message("pinned")], model="pinned")
+    env.q.run_once("chat")
+    env.q.run_once("chat")
+    [waiting], _ = env.q.enqueue("main", "web", [_message("waiting")])
+    agent._connection().model = "second"
+    env.q.model_changed()
+    env.q.retry(unset["id"])
+    env.q.retry(chosen["id"])
+    assert _get(env.q, unset["id"])["model"] is None
+    for _ in range(3):
+        env.q.run_once("chat")
+    # P6: the waiting request kept its model; the retried one takes the selected model.
+    assert [call.model for call in env.fake.calls[2:]] == ["first", "second", "pinned"]
+
+
 # ---------------------------------------------------------------- errors
 
 
@@ -518,6 +569,16 @@ def test_a_review_that_saves_nothing_fails(env):
     assert review["status"] == "failed" and review["error_code"] == "no_write"
     assert review["error"] == "The agent saved no review for this target." and review["assessment_id"] == assessment_id
     assert env.q.conversation(created[0]["conversation_id"])["profile"] == "review"
+
+
+def test_a_review_pinned_to_older_content_reports_its_targets_changed(env):
+    assessment_id = _custom(env, [("x86", "openssl")])
+    [review], _ = env.q.enqueue("per-action", "web", [
+        {"kind": "review", "assessment_id": assessment_id, "variant_id": env.ids["x86"], "fingerprint": "older"}],
+        model="m")
+    env.q.run_once("action")
+    result = env.q.get_request(review["id"])["result"]
+    assert [target["outcome"] for target in result["targets"]] == ["changed"]
 
 
 def test_a_review_pinned_to_new_content_replaces_its_failed_request(env):
@@ -591,6 +652,7 @@ def test_prepare_and_installation_errors_fail_the_request(env, monkeypatch):
     ("per-action", [{"kind": "review", "assessment_id": str(uuid.uuid4()), "finding_ids": []}], {}, "finding_ids"),
     ("per-action", [{"kind": "review", "assessment_id": str(uuid.uuid4()), "finding_ids": ["x"]}], {},
      "finding ID"),
+    ("per-action", [{"kind": "review", "assessment_id": str(uuid.uuid4()), "fingerprint": 3}], {}, "fingerprint"),
     ("per-action", [_assess(), {"kind": "review", "assessment_id": str(uuid.uuid4())}], {}, "."),
 ])
 def test_enqueue_validates_every_action_before_queuing_any(env, conversation, actions, options, match):
@@ -657,9 +719,13 @@ def test_connection_change_holds_the_queue_and_resets_unless_aborted(env):
             raise RuntimeError("provider rejected")
     assert env.q.main_transcript()["messages"]
 
+    assert env.q.snapshot()["connection_revision"] == 0  # aborted or failed: nothing changed
     with env.q.connection_change():
         pass
     assert env.q.main_transcript()["messages"] == [] and _status(env, waiting["id"]) == "failed"
+    assert env.q.snapshot()["connection_revision"] == 1 == env.events.of("queue")[-1]["connection_revision"]
+    env.q.model_changed()
+    assert env.events.of("queue")[-1]["connection_revision"] == 2
 
 
 def test_reset_sessions_reports_failures_and_keeps_those_sessions(env, monkeypatch):
