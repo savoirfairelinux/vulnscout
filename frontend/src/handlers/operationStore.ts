@@ -13,7 +13,7 @@ import { isActive } from "../types/operation";
 const STREAM_PATH = "/api/events/stream";
 
 /** Backoff schedule for reconnects, in milliseconds. */
-const RECONNECT_DELAYS_MS = [500, 1000, 2000, 5000, 10000];
+export const RECONNECT_DELAYS_MS = [500, 1000, 2000, 5000, 10000];
 
 export type ConnectionState = "idle" | "connecting" | "open" | "reconnecting";
 
