@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import os
 import signal
 import threading
@@ -16,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import click
-from flask import Response, abort, current_app, request_finished, request_started
+from flask import Response, current_app
 
 # Set by entrypoint.sh (ai-assess and ai-review) so the host wrapper can forward Ctrl-C to this process.
 PID_FILE_ENV = "VULNSCOUT_AI_ASSESS_PID_FILE"
@@ -28,8 +27,8 @@ NO_AI_CONFIG = ("No AI provider configured. Connect an AI provider in the web UI
 GITHUB_SIGNED_OUT = ("GitHub Copilot rejected the configured token (expired or invalid). Reconnect in the "
                      "web UI Agent panel or update AI_AUTH_CREDENTIALS with `vulnscout config`.")
 
-Guard = Callable[[], "Response | None"]  # runs in request_started; may abort
-Recorder = Callable[["Response"], None]  # runs in request_finished
+Guard = Callable[[], "Response | None"]  # runs before a mutating request; a Response rejects it
+Recorder = Callable[["Response"], None]  # runs after every response
 
 
 def empty_usage() -> dict[str, Any]:
@@ -122,38 +121,32 @@ def release_pid_file() -> None:
             Path(path).unlink()
 
 
+class _CallableGuard:
+    """Adapt a (guard, recorder) pair to ``guarded_api.TurnGuard``."""
+
+    def __init__(self, guard: Guard, recorder: Recorder) -> None:
+        self._guard, self._recorder = guard, recorder
+
+    def allow(self) -> Response | None:
+        return self._guard()
+
+    def record(self, response: Response) -> None:
+        self._recorder(response)
+
+
 @contextmanager
 def private_api(guard: Guard, recorder: Recorder) -> Iterator[str]:
     """Serve the app on 127.0.0.1:<free port> for one run; yield its base URL.
 
-    ``guard`` is called before every request and may return a Response to reject it;
-    ``recorder`` sees every finished response, including guard rejections.
+    ``guard`` is called before every mutating request to that port and may return a Response to
+    reject it; ``recorder`` sees every finished response from that port, including guard rejections.
+    Requests that do not come through this port are not guarded.
     """
-    from werkzeug.serving import make_server
+    from ..controllers.guarded_api import GuardedApi
 
-    app = current_app._get_current_object()  # type: ignore[attr-defined]
-    # This process never runs the boot scan that normally opens the /api gate.
-    setattr(app, "_INT_SCAN_FINISHED", True)
-    logging.getLogger("werkzeug").setLevel(logging.WARNING)
-
-    def on_started(sender, **extra) -> None:
-        rejection = guard()
-        if rejection is not None:
-            abort(rejection)
-
-    def on_finished(sender, response, **extra) -> None:
-        recorder(response)
-
-    request_started.connect(on_started, app, weak=False)
-    request_finished.connect(on_finished, app, weak=False)
-    server = make_server("127.0.0.1", 0, app, threaded=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    api = GuardedApi(current_app._get_current_object())  # type: ignore[attr-defined]
+    api.arm(_CallableGuard(guard, recorder))
     try:
-        yield f"http://127.0.0.1:{server.server_port}"
+        yield api.start()
     finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        request_finished.disconnect(on_finished, app)
-        request_started.disconnect(on_started, app)
+        api.stop()

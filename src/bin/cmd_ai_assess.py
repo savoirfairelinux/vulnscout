@@ -15,7 +15,7 @@ from typing import Any, Iterator
 from uuid import UUID
 
 import click
-from flask import Response, make_response, request
+from flask import Response, current_app, make_response, request
 from flask.cli import with_appcontext
 
 from ..controllers import ConditionParser, ControllersCache
@@ -468,6 +468,9 @@ def _assess(result: Result, label: str, credentials, model: str, path, api_url: 
 
 def _run(results: list[Result], model: str | None, timeout: int) -> str | None:
     from ..routes import agent
+
+    # This process never runs the boot scan that normally opens the /api gate.
+    setattr(current_app, "_INT_SCAN_FINISHED", True)
 
     pending = [result for result in results if result.outcome == "pending"]
     if not pending:
