@@ -512,6 +512,23 @@ def _review_selection(spec: TurnSpec) -> ReviewSelection:
     return ReviewSelection(current.assessment_id, current.vuln_id, current.fingerprint, targets)
 
 
+def merge_scopes(previous: str | None, scope: str) -> str:
+    """The agent scope covering both *previous* and *scope*: what a conversation's batches may write.
+
+    Without *previous* it is *scope* itself.
+    """
+    if not previous:
+        return scope
+    merged, new = json.loads(previous), json.loads(scope)
+    for name in ("project_ids", "variant_ids"):
+        merged[name] = sorted({*merged.get(name, []), *new.get(name, [])})
+    for name in ("write_targets", "review_targets"):
+        if name in merged or name in new:
+            targets = [*merged.get(name, []), *new.get(name, [])]
+            merged[name] = list({json.dumps(t, sort_keys=True): t for t in targets}.values())
+    return json.dumps(merged, separators=(",", ":"))
+
+
 def prepare(spec: TurnSpec) -> PreparedTurn:
     """The prompt, agent scope and guard of *spec*'s turn, right before it runs.
 
