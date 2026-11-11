@@ -5,6 +5,8 @@
 import csv
 import io
 import json
+import threading
+import time
 import urllib.error
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -12,13 +14,13 @@ from unittest.mock import patch
 
 import pytest
 from flask import Flask
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 
 from src.bin.webapp import create_app
 from src.controllers.job_context import CancelledError, JobContext
 from src.controllers.refresh_jobs import run_epss_refresh
 from src.extensions import db
-from src.helpers.refresh_runs import capture_source, create_run, finish_source, target_result
+from src.helpers.refresh_runs import capture_source, create_run, finish_source, source_statuses, target_result
 from src.models import Finding, Observation, Project, Scan, Variant, Vulnerability
 from src.models.metrics import Metrics
 from src.models.refresh_run import RefreshChange, RefreshRun
@@ -55,8 +57,8 @@ def _change(run_id, score, *, source="epss"):
         db.session.commit()
 
 
-@pytest.mark.parametrize("length", [39, 128])
-def test_caller_run_id_fits_history_and_preserves_changes_on_postgresql(postgres_uri, length):
+@pytest.fixture()
+def postgres_app(postgres_uri):
     engine = create_engine(postgres_uri)
     schema = f"vulnscout_refresh_{uuid.uuid4().hex}"
     with engine.begin() as connection:
@@ -64,30 +66,15 @@ def test_caller_run_id_fits_history_and_preserves_changes_on_postgresql(postgres
     application = Flask(__name__)
     application.config.update(
         SQLALCHEMY_DATABASE_URI=postgres_uri,
-        SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"options": f"-csearch_path={schema}"}},
+        SQLALCHEMY_ENGINE_OPTIONS={
+            "connect_args": {"options": f"-csearch_path={schema} -cstatement_timeout=10000"},
+        },
     )
     db.init_app(application)
     try:
         with application.app_context():
             db.create_all()
-            Vulnerability.create_record(id=CVE, epss_score=0.1)
-            invalid_id = "x" * length
-            with pytest.raises(ValueError, match="up to 38"):
-                create_run({"epss": [CVE]}, run_id=invalid_id)
-            assert db.session.get(RefreshRun, invalid_id) is None
-
-            run = create_run({"epss": [CVE]}, run_id="caller-" + "x" * 31)
-            _change(run, 0.8)
-            finish_source(run, "epss")
-            db.session.expire_all()
-            assert float(db.session.get(Vulnerability, CVE).epss_score) == pytest.approx(0.8)
-            history = db.session.scalar(db.select(VulnerabilityHistory).where(
-                VulnerabilityHistory.queue_id == run, VulnerabilityHistory.field == "epss_score",
-            ))
-            assert history.old_value == pytest.approx(0.1)
-            change = db.session.scalar(db.select(RefreshChange).where(RefreshChange.run_id == run))
-            assert change.snapshot["before"] == pytest.approx(0.1)
-            assert change.snapshot["after"] == pytest.approx(0.8)
+        yield application
     finally:
         with application.app_context():
             db.session.remove()
@@ -95,6 +82,160 @@ def test_caller_run_id_fits_history_and_preserves_changes_on_postgresql(postgres
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
         engine.dispose()
+
+
+@pytest.mark.parametrize("length", [39, 128])
+def test_caller_run_id_fits_history_and_preserves_changes_on_postgresql(postgres_app, length):
+    with postgres_app.app_context():
+        Vulnerability.create_record(id=CVE, epss_score=0.1)
+        invalid_id = "x" * length
+        with pytest.raises(ValueError, match="up to 38"):
+            create_run({"epss": [CVE]}, run_id=invalid_id)
+        assert db.session.get(RefreshRun, invalid_id) is None
+
+        run = create_run({"epss": [CVE]}, run_id="caller-" + "x" * 31)
+        _change(run, 0.8)
+        finish_source(run, "epss")
+        db.session.expire_all()
+        assert float(db.session.get(Vulnerability, CVE).epss_score) == pytest.approx(0.8)
+        history = db.session.scalar(db.select(VulnerabilityHistory).where(
+            VulnerabilityHistory.queue_id == run, VulnerabilityHistory.field == "epss_score",
+        ))
+        assert history.old_value == pytest.approx(0.1)
+        change = db.session.scalar(db.select(RefreshChange).where(RefreshChange.run_id == run))
+        assert change.snapshot["before"] == pytest.approx(0.1)
+        assert change.snapshot["after"] == pytest.approx(0.8)
+
+
+def _wait_for_postgres_overlap(engine, pid, source_updated=None):
+    deadline = time.monotonic() + 10
+    with engine.connect() as connection:
+        while time.monotonic() < deadline:
+            if source_updated is not None and source_updated.is_set():
+                return False
+            if connection.scalar(text("SELECT cardinality(pg_blocking_pids(:pid)) > 0"), {"pid": pid}):
+                return True
+            time.sleep(0.01)
+    raise AssertionError("The second connection neither updated its source nor waited for the first writer")
+
+
+@pytest.mark.parametrize("metric", [False, True])
+def test_overlapping_postgresql_refreshes_capture_the_locked_predecessor(postgres_app, metric):
+    with postgres_app.app_context():
+        Vulnerability.create_record(id=CVE, epss_score=0.1)
+        metric_record = Metrics.create(vulnerability_id=CVE, version="3.1", author="provider", score=5)
+        model, identifier, field = (Metrics, metric_record.id, "score") if metric else (Vulnerability, CVE, "epss_score")
+        source = "nvd" if metric else "epss"
+        first_value, second_value = (6, 7) if metric else (0.2, 0.3)
+        first_run = create_run({source: [CVE]}, run_id="overlap-first")
+        second_run = create_run({source: [CVE]}, run_id="overlap-second")
+        engine = db.engine
+        loaded = threading.Event()
+        write = threading.Event()
+        second_pid = []
+        errors = []
+
+        def second_writer():
+            try:
+                with Session(engine) as session:
+                    record = session.get(model, identifier)
+                    second_pid.append(session.scalar(text("SELECT pg_backend_pid()")))
+                    loaded.set()
+                    assert write.wait(10)
+                    with capture_source(second_run, source):
+                        setattr(record, field, second_value)
+                        session.commit()
+            except BaseException as exc:
+                errors.append(exc)
+
+        with Session(engine) as first:
+            record = first.get(model, identifier)
+            worker = threading.Thread(target=second_writer)
+            worker.start()
+            try:
+                assert loaded.wait(10)
+                with capture_source(first_run, source):
+                    setattr(record, field, first_value)
+                    first.flush()
+                    write.set()
+                    assert _wait_for_postgres_overlap(engine, second_pid[0])
+                    first.commit()
+            finally:
+                write.set()
+                first.rollback()
+                worker.join(15)
+        assert not worker.is_alive()
+        assert not errors
+        changes = db.session.scalars(db.select(RefreshChange).where(
+            RefreshChange.run_id == second_run,
+        )).all()
+        assert len(changes) == 1
+        before, after = changes[0].snapshot["before"], changes[0].snapshot["after"]
+        if metric:
+            before, after = before["score"], after["score"]
+        assert (before, after) == pytest.approx((first_value, second_value))
+
+
+def test_concurrent_postgresql_cancellations_finish_the_parent_run(postgres_app):
+    with postgres_app.app_context():
+        Vulnerability.create_record(id=CVE, epss_score=0.1)
+        run = create_run({"nvd": [CVE], "epss": [CVE]}, run_id="cancel-overlap")
+        engine = db.engine
+        source_updated = [threading.Event(), threading.Event()]
+        second_connected = threading.Event()
+        release = threading.Event()
+        decisions = threading.Barrier(2)
+        concurrent_sources = [False]
+        second_pid = []
+        errors = []
+
+        def pause_after_source_write(_connection, _cursor, statement, _parameters, _context, _executemany):
+            name = threading.current_thread().name
+            if name not in ("refresh-cancel-0", "refresh-cancel-1"):
+                return
+            index = int(name[-1])
+            if statement.startswith("UPDATE refresh_run_sources"):
+                source_updated[index].set()
+                assert release.wait(10)
+            elif statement.startswith("UPDATE refresh_runs SET finished_at") and concurrent_sources[0]:
+                decisions.wait(10)
+
+        def cancel(index, source):
+            try:
+                with postgres_app.app_context():
+                    pid = db.session.scalar(text("SELECT pg_backend_pid()"))
+                    if index == 1:
+                        second_pid.append(pid)
+                        second_connected.set()
+                    finish_source(run, source, "cancelled", "Cancelled before start")
+            except BaseException as exc:
+                errors.append(exc)
+
+        workers = [threading.Thread(target=cancel, args=(index, source), name=f"refresh-cancel-{index}")
+                   for index, source in enumerate(("nvd", "epss"))]
+        event.listen(engine, "after_cursor_execute", pause_after_source_write)
+        try:
+            workers[0].start()
+            assert source_updated[0].wait(10)
+            workers[1].start()
+            assert second_connected.wait(10)
+            blocked = _wait_for_postgres_overlap(engine, second_pid[0], source_updated[1])
+            concurrent_sources[0] = not blocked
+            release.set()
+            for worker in workers:
+                worker.join(15)
+        finally:
+            release.set()
+            decisions.abort()
+            for worker in workers:
+                if worker.ident is not None:
+                    worker.join(15)
+            event.remove(engine, "after_cursor_execute", pause_after_source_write)
+        assert all(not worker.is_alive() for worker in workers)
+        assert not errors
+        db.session.expire_all()
+        assert source_statuses(run) == {"nvd": "incomplete", "epss": "incomplete"}
+        assert db.session.get(RefreshRun, run).finished_at is not None
 
 
 @pytest.mark.parametrize("scope", [{}, {"project_id": PROJECT}, {"variant_id": VARIANT}])
@@ -316,6 +457,28 @@ def test_invalid_epss_response_is_failed_not_missing(app, client):
     assert data["coverage"][0]["status"] == "failed"
     assert data["status"] == "incomplete"
     assert data["changes"] == []
+
+
+def test_consecutive_epss_failures_release_the_transaction_before_the_next_request(app, client, monkeypatch):
+    from src import extensions
+    from src.controllers import refresh_jobs as jobs
+    states = []
+    with app.app_context():
+        ids = [CVE, "CVE-2099-1111", "CVE-2099-1112"]
+        for identifier in ids[1:]:
+            Vulnerability.create_record(id=identifier, epss_score=0.1)
+        run = create_run({"epss": ids})
+        monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 1)
+
+        def unavailable(_request, timeout):
+            states.append((db.session().in_transaction(), getattr(extensions._write_lock_state, "held", False)))
+            raise urllib.error.URLError("EPSS unavailable")
+
+        with patch("src.controllers.epss_db.urllib.request.urlopen", side_effect=unavailable):
+            run_epss_refresh(JobContext("test", {"ids": ids}, run))
+    assert states[1:] == [(False, False), (False, False)]
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert [row["status"] for row in data["coverage"]] == ["failed", "failed", "failed"]
 
 
 def test_expired_exact_run_never_substitutes_latest_and_can_be_pruned(app, client):

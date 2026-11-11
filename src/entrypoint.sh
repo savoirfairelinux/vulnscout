@@ -541,6 +541,11 @@ cmd_scan() {
             esac
         done
     fi
+    if [[ "$has_inputs" == "true" && "${REFRESH_VULNERABILITY_DATA:-false}" == "true" &&
+          -n "${REFRESH_RUN_ID:-}" ]]; then
+        console_err error "Error: refresh --run-id cannot process pending inputs. Process them with scan before retrying refresh."
+        return 1
+    fi
     (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade) || return $?
 
     local has_condition=false

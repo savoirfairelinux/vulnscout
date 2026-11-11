@@ -80,3 +80,33 @@ def test_container_entrypoint_forwards_exact_id_format_and_scope(wrapper):
     assert "--app src.bin.webapp export-refresh-changes --run-id exact --format csv --project demo --variant x86" in (
         log.read_text()
     )
+
+
+@pytest.mark.parametrize("pending_input", [False, True])
+def test_container_refresh_keeps_caller_identity_or_rejects_pending_inputs(wrapper, pending_input):
+    _, log, directory, env = wrapper
+    inputs = directory / "inputs" / "cdx"
+    inputs.mkdir(parents=True)
+    pending = inputs / "pending.json"
+    if pending_input:
+        pending.write_text('{"bomFormat":"CycloneDX"}')
+    flask = directory / "bin" / "flask"
+    flask.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALL_LOG"\n')
+    flask.chmod(0o755)
+    env = {
+        **env, "VULNSCOUT_BASE_DIR": str(ROOT), "VULNSCOUT_INPUTS_DIR": str(inputs.parent),
+        "VULNSCOUT_CONFIG": str(directory / "absent.env"),
+    }
+    result = subprocess.run(
+        ["bash", str(ROOT / "src/entrypoint.sh"), "--project", "demo", "--variant", "x86",
+         "--refresh-vulnerability-data", "--refresh-run-id", "ci-123"],
+        cwd=ROOT, env=env, text=True, capture_output=True,
+    )
+    if pending_input:
+        assert result.returncode != 0
+        assert "pending inputs" in result.stderr
+        assert not log.exists()
+        assert pending.exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert "refresh-vulnerability-data --project demo --variant x86 --run-id ci-123" in log.read_text()
