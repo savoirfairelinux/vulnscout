@@ -25,6 +25,7 @@ _SCAN_EXEMPT_PATHS = {
     "/api/scan/status",
     "/api/version",
     "/api/events/stream",
+    "/api/agent/queue/stream",
 }
 
 
@@ -90,7 +91,8 @@ def _build_operation(app: Flask, rule: Rule, method: str) -> dict[str, Any]:
         "operationId": _build_operation_id(path, method),
         "summary": summary or _build_summary(rule.rule, method),
         "tags": [_build_tag(rule.rule)],
-        "responses": _build_responses(path, metadata),
+        # The agent blueprint bypasses the scan gate; the AI queue routes are registered on the app.
+        "responses": _build_responses(path, metadata, gated=not rule.endpoint.startswith("agent.")),
     }
     if description:
         operation["description"] = description
@@ -156,11 +158,11 @@ def _build_tag(path: str) -> str:
     return suffix.split("/", 1)[0]
 
 
-def _build_responses(path: str, metadata: dict[str, Any]) -> dict[str, Any]:
+def _build_responses(path: str, metadata: dict[str, Any], gated: bool = True) -> dict[str, Any]:
     responses = dict(metadata["responses"])
     if not any(status.startswith("2") for status in responses):
         responses["200"] = _build_success_response(path)
-    if path not in _SCAN_EXEMPT_PATHS and not (path == "/api/agent" or path.startswith("/api/agent/")):
+    if gated and path not in _SCAN_EXEMPT_PATHS:
         responses.setdefault("503", {
             "description": "Scan not finished",
             "content": _json_content(_schema_ref("Error")),
