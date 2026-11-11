@@ -146,6 +146,26 @@ class TestRebase:
         assert [c["name"] for c in values["stride"]["components"]] == ["Web UI", "Cloud", "Updater"]
         assert values["stride"]["threats"][1]["target_ids"] == ["C3"]
 
+    def test_new_rows_already_saved_are_not_added_again(self):
+        draft = copy.deepcopy(BASE)
+        draft["stride"]["components"].append(comp("C2", "DB"))
+        draft["stride"]["threats"].append(threat("T2", ["C2"]))
+        saved = copy.deepcopy(draft)
+        values, conflicts, renumbered = cd.rebase(BASE, saved, draft)
+        assert conflicts == [] and renumbered == {}
+        assert values["stride"] == cd.normalize_values(saved)["stride"]
+
+    def test_new_row_saved_with_other_content_is_still_renumbered(self):
+        draft = copy.deepcopy(BASE)
+        draft["stride"]["components"].append(comp("C2", "DB"))
+        draft["stride"]["threats"].append(threat("T2", ["C2"]))
+        saved = copy.deepcopy(BASE)
+        saved["stride"]["components"].append(comp("C2", "Cloud"))
+        saved["stride"]["threats"].append(threat("T2", ["C2"]))
+        values, conflicts, renumbered = cd.rebase(BASE, saved, draft)
+        assert conflicts == [] and renumbered == {"C2": "C3", "T2": "T3"}
+        assert values["stride"]["threats"][2] == threat("T3", ["C3"])
+
     def test_dangling_reference_is_a_conflict_with_a_row_path(self):
         base = model([comp("C1", "Web UI"), comp("C2", "Browser")], [threat("T1", ["C1"])])
         saved = copy.deepcopy(base)

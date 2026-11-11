@@ -166,35 +166,41 @@ def _number(row_id: object) -> int:
 
 
 def _renumbering(base: dict, saved: dict, draft: dict) -> dict[str, str]:
-    """New draft IDs that rows saved since already use get the next free ID of their prefix."""
+    """New draft IDs that other rows saved since already use get the next free ID of their prefix.
+
+    A new draft row saved unchanged (references included) was already accepted, so it keeps
+    its ID and is merged once. Sections only reference earlier ones, so their order suffices.
+    """
     mapping: dict[str, str] = {}
     for section in SECTIONS:
         base_ids = {row.get("id") for row in base[section]}
-        saved_ids = {row.get("id") for row in saved[section]}
-        taken = base_ids | saved_ids | {row.get("id") for row in draft[section]}
+        saved_by_id = {row.get("id"): row for row in saved[section]}
+        taken = base_ids | set(saved_by_id) | {row.get("id") for row in draft[section]}
         top = max((_number(row_id) for row_id in taken), default=0)
         for row in draft[section]:
-            if row.get("id") not in base_ids and row.get("id") in saved_ids:
-                top += 1
-                mapping[row["id"]] = f"{PREFIX[section]}{top}"
+            row_id = row.get("id")
+            if row_id in base_ids or row_id not in saved_by_id:
+                continue
+            if _rewrite_row(section, row, mapping) == saved_by_id[row_id]:
+                continue
+            top += 1
+            mapping[row_id] = f"{PREFIX[section]}{top}"
     return mapping
 
 
-def _rewrite(stride: dict, mapping: dict[str, str]) -> dict:
+def _rewrite_row(section: str, row: dict, mapping: dict[str, str]) -> dict:
     def ref(value: object) -> object:
         return mapping.get(value, value) if isinstance(value, str) else value
 
-    out = {}
-    for section in SECTIONS:
-        rows = []
-        for row in stride[section]:
-            row = {**row, "id": ref(row.get("id"))}
-            for key in _REFS.get(section, ()):
-                value = row.get(key)
-                row[key] = [ref(item) for item in value] if isinstance(value, list) else ref(value)
-            rows.append(row)
-        out[section] = rows
-    return out
+    row = {**row, "id": ref(row.get("id"))}
+    for key in _REFS.get(section, ()):
+        value = row.get(key)
+        row[key] = [ref(item) for item in value] if isinstance(value, list) else ref(value)
+    return row
+
+
+def _rewrite(stride: dict, mapping: dict[str, str]) -> dict:
+    return {section: [_rewrite_row(section, row, mapping) for row in stride[section]] for section in SECTIONS}
 
 
 def _merge_rows(section: str, base: list, saved: list, draft: list, conflicts: list) -> list:
@@ -223,7 +229,8 @@ def _merge_rows(section: str, base: list, saved: list, draft: list, conflicts: l
     for row_id, original in base_by_id.items():
         if row_id not in saved_ids and row_id in draft_by_id and draft_by_id[row_id] != original:
             conflicts.append({"path": f"{section}[{row_id}]", "reason": "changed in draft, deleted since"})
-    merged.extend(row for row in draft if row.get("id") not in base_by_id)
+    # A new draft row still sharing a saved ID was saved unchanged (see _renumbering): it is already in.
+    merged.extend(row for row in draft if row.get("id") not in base_by_id and row.get("id") not in saved_ids)
     return merged
 
 
