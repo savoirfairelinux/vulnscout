@@ -700,7 +700,7 @@ def test_interrupt_after_the_last_turn_saved_its_reviews_still_fails(app, ids, m
 
 
 def test_long_target_lists_are_split_into_labelled_batches(app, ids, monkeypatch):
-    from src.bin import cmd_ai_review
+    from src.controllers import ai_actions
     from src.models.assessment import Assessment
 
     with app.app_context():
@@ -709,7 +709,7 @@ def test_long_target_lists_are_split_into_labelled_batches(app, ids, monkeypatch
             (uuid.UUID(ids["x86"]), uuid.UUID(ids["findings"]["zlib"]))])
         _db.session.commit()
         aid = str(assessment.id)
-    monkeypatch.setattr(cmd_ai_review, "PROMPT_BUDGET", 650)
+    monkeypatch.setattr(ai_actions, "PROMPT_BUDGET", 650)
     calls = _fake_reply(monkeypatch, _write_all)
     result = _invoke(app, "--project", "demo", "--assessment-id", aid, "--json")
     assert result.exit_code == 0, result.stderr

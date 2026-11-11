@@ -445,9 +445,9 @@ def test_pid_file_is_removed_only_when_it_names_this_process(app, ids, monkeypat
 
 
 def test_dry_run_reports_model_and_unbatchable_variants(app, ids, monkeypatch):
-    from src.bin import cmd_ai_assess
+    from src.controllers import ai_actions
 
-    monkeypatch.setattr(cmd_ai_assess, "PROMPT_BUDGET", 10)
+    monkeypatch.setattr(ai_actions, "PROMPT_BUDGET", 10)
     result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--dry-run", "--model", "m1")
     assert result.exit_code == 1
     assert "failed" in result.stdout and "Too many packages for variant" in result.stdout
@@ -868,7 +868,7 @@ def test_sigint_is_reported_when_cancellation_cleanup_fails(app, ids, monkeypatc
 
 
 def test_sigint_after_a_turn_marks_its_cve_interrupted(app, ids, monkeypatch, production_signals):
-    from src.bin import cmd_ai_assess
+    from src.controllers import ai_actions
 
     snapshots = []
 
@@ -878,8 +878,8 @@ def test_sigint_after_a_turn_marks_its_cve_interrupted(app, ids, monkeypatch, pr
             _ctrl_c()
         return original(row_ids)
 
-    original = cmd_ai_assess._ai_targets
-    monkeypatch.setattr(cmd_ai_assess, "_ai_targets", interrupting)
+    original = ai_actions._ai_targets
+    monkeypatch.setattr(ai_actions, "_ai_targets", interrupting)
     calls = _fake_reply(monkeypatch, lambda call: None)
     result = _invoke(app, "--project", "demo", "--variant", "x86",
                      "--cve", "CVE-2024-0001", "--cve", "CVE-2024-0003", "--json")
@@ -990,9 +990,9 @@ def test_model_override_applies_to_a_configured_provider_model(app, ids, monkeyp
 
 
 def test_unbatchable_variant_fails_without_a_turn(app, ids, monkeypatch):
-    from src.bin import cmd_ai_assess
+    from src.controllers import ai_actions
 
-    monkeypatch.setattr(cmd_ai_assess, "PROMPT_BUDGET", 10)
+    monkeypatch.setattr(ai_actions, "PROMPT_BUDGET", 10)
     calls = _fake_reply(monkeypatch, lambda call: None)
     result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
     assert result.exit_code == 1
