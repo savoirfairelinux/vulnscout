@@ -92,6 +92,14 @@ function renderSettings(path = "/settings", props: React.ComponentProps<typeof S
   );
 }
 
+function renameInTree(label: string, value: string) {
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  const input = screen.getByRole("textbox", { name: label });
+  fireEvent.change(input, { target: { value } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  return input;
+}
+
 function FullLocationProbe() {
   const location = useLocation();
   return <span data-testid="full-location">{`${location.pathname}${location.search}${location.hash}`}</span>;
@@ -246,7 +254,7 @@ describe("Settings scoped project and variant views", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
 
-    expect(await screen.findByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Variants" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete Project" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add project" })).not.toBeInTheDocument();
@@ -255,15 +263,15 @@ describe("Settings scoped project and variant views", () => {
   test("opens a project from its URL", async () => {
     renderSettings("/settings/projects/project-1");
 
-    expect(await screen.findByDisplayValue("Apollo")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Rename Project" })).not.toBeInTheDocument();
   });
 
   test.each([
     ["/settings", "Report Metadata"],
     ["/settings/transfer", "Copy Custom Assessments"],
-    ["/settings/projects/project-1", "Rename Project"],
-    ["/settings/projects/project-1/", "Rename Project"],
+    ["/settings/projects/project-1", "Danger Zone"],
+    ["/settings/projects/project-1/", "Danger Zone"],
     ["/settings/projects/project-1/variant-1", "Import SBOM"],
   ])("renders %s", async (path, heading) => {
     renderSettings(path);
@@ -304,36 +312,51 @@ describe("Settings scoped project and variant views", () => {
   test("a failed project list reload after a rename keeps the page", async () => {
     projectsList.mockResolvedValueOnce([project]).mockRejectedValue(new Error("boom"));
     renderSettings("/settings/projects/project-1");
-    fireEvent.change(await screen.findByLabelText("New name"), { target: { value: "Apollo Renamed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
-    expect(await screen.findByText("Project renamed.")).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Danger Zone" });
+    renameInTree("Rename project Apollo", "Apollo Renamed");
+    expect(await screen.findByRole("button", { name: /^Apollo Renamed/ })).toBeInTheDocument();
     await waitFor(() => expect(projectsList).toHaveBeenCalledTimes(2));
     expect(screen.queryByText("Page not found")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Apollo/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
   });
 
-  test("switching between same-named variants resets an unsaved rename", async () => {
-    const zeus = { id: "project-2", name: "Zeus" };
-    const zeusRelease = { id: "variant-3", name: "Release", project_id: zeus.id };
-    projectsList.mockResolvedValue([project, zeus]);
-    variantsList.mockImplementation(async (projectId) => (projectId === zeus.id ? [zeusRelease] : [variant]));
-    renderSettings("/settings/projects/project-1/variant-1");
-    fireEvent.change(await screen.findByLabelText("New name"), { target: { value: "Stale edit" } });
-    fireEvent.click(screen.getByRole("button", { name: "Expand Zeus" }));
-    fireEvent.click(screen.getAllByRole("button", { name: "Release" })[1]);
-    expect(screen.getByTestId("location")).toHaveTextContent("/settings/projects/project-2/variant-3");
-    await waitFor(() => expect(screen.getByLabelText("New name")).toHaveValue("Release"));
+  test("renames a project that is not selected without leaving the current page", async () => {
+    const onDataChanged = jest.fn();
+    renderSettings("/settings", { onDataChanged });
+    await screen.findByRole("heading", { name: "Report Metadata" });
+    projectsList.mockResolvedValue([{ ...project, name: "Apollo Renamed" }]);
+    renameInTree("Rename project Apollo", "Apollo Renamed");
+    await waitFor(() => expect(projectsRename).toHaveBeenCalledWith(project.id, "Apollo Renamed"));
+    expect(await screen.findByRole("button", { name: /^Apollo Renamed/ })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Rename project Apollo" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/settings$/);
+    expect(onDataChanged).toHaveBeenCalledWith("Renaming project...");
   });
 
-  test("switching between same-named projects resets an unsaved rename", async () => {
-    const twin = { id: "project-2", name: "Apollo" };
-    projectsList.mockResolvedValue([project, twin]);
-    renderSettings("/settings/projects/project-1");
-    fireEvent.change(await screen.findByLabelText("New name"), { target: { value: "Stale edit" } });
-    fireEvent.click(screen.getAllByRole("button", { name: /^Apollo/ })[1]);
-    expect(screen.getByTestId("location")).toHaveTextContent("/settings/projects/project-2");
-    await waitFor(() => expect(screen.getByLabelText("New name")).toHaveValue("Apollo"));
+  test("double-clicking a tree item starts an in-place rename", async () => {
+    renderSettings();
+    fireEvent.doubleClick(await screen.findByRole("button", { name: /^Apollo/ }));
+    expect(screen.getByRole("textbox", { name: "Rename project Apollo" })).toHaveValue("Apollo");
+  });
+
+  test("escape, blur, and an unchanged name cancel an in-place rename", async () => {
+    renderSettings();
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Rename variant Release" }));
+    const input = screen.getByRole("textbox", { name: "Rename variant Release" });
+    fireEvent.change(input, { target: { value: "Discarded" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Rename variant Release" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename variant Release" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Rename variant Release" }), { target: { value: "Discarded" } });
+    fireEvent.blur(screen.getByRole("textbox", { name: "Rename variant Release" }));
+    expect(screen.queryByRole("textbox", { name: "Rename variant Release" })).not.toBeInTheDocument();
+
+    renameInTree("Rename variant Release", " Release ");
+    expect(screen.queryByRole("textbox", { name: "Rename variant Release" })).not.toBeInTheDocument();
+    expect(variantsRename).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument();
   });
 
   test("a create flash does not reappear on history navigation", async () => {
@@ -356,7 +379,7 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.queryByText('Project "Zeus" created.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "History forward" }));
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/settings/projects/project-2"));
-    expect(await screen.findByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
     expect(screen.queryByText('Project "Zeus" created.')).not.toBeInTheDocument();
   });
 
@@ -399,7 +422,7 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("/settings/projects/project-2");
     expect(screen.queryByText("List failed")).not.toBeInTheDocument();
     expect(screen.queryByText("Page not found")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
     expect(onDataChanged).toHaveBeenCalledWith("Creating project...");
   });
 
@@ -496,7 +519,7 @@ describe("Settings scoped project and variant views", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Import SBOM" })).toBeInTheDocument();
     });
-    expect(screen.getByRole("heading", { name: "Rename Variant" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Rename Variant" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete Variant" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("SBOM Files")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Complete refresh/ })).toBeChecked();
@@ -556,9 +579,11 @@ describe("Settings scoped project and variant views", () => {
     expect(await screen.findByText('Project "Zeus" created.')).toBeInTheDocument();
     expect(projectsCreate).toHaveBeenCalledWith("Zeus");
 
-    fireEvent.change(screen.getByLabelText("New name"), { target: { value: "Apollo Renamed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
-    expect(await screen.findByText("Project renamed.")).toBeInTheDocument();
+    projectsRename.mockResolvedValueOnce({ ...createdProject, name: "Zeus Renamed" });
+    projectsList.mockResolvedValue([{ ...createdProject, name: "Zeus Renamed" }]);
+    renameInTree("Rename project Zeus", "Zeus Renamed");
+    expect(await screen.findByRole("button", { name: /^Zeus Renamed/ })).toBeInTheDocument();
+    expect(projectsRename).toHaveBeenCalledWith("project-2", "Zeus Renamed");
 
     fireEvent.click(screen.getByRole("button", { name: "Delete Project" }));
     fireEvent.click(await screen.findByRole("button", { name: "Yes, delete" }));
@@ -566,20 +591,23 @@ describe("Settings scoped project and variant views", () => {
   });
 
   test("renames and deletes the selected variant", async () => {
-    renderSettings();
+    const onDataChanged = jest.fn();
+    renderSettings("/settings", { onDataChanged });
 
     fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
     fireEvent.click(screen.getByRole("button", { name: "Release" }));
-    fireEvent.change(await screen.findByLabelText("New name"), { target: { value: "Release Renamed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
-    expect(await screen.findByText("Variant renamed.")).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Import SBOM" });
+    variantsList.mockResolvedValue([{ ...variant, name: "Release Renamed" }]);
+    renameInTree("Rename variant Release", "Release Renamed");
+    expect(await screen.findByRole("button", { name: "Release Renamed" })).toBeInTheDocument();
     expect(variantsRename).toHaveBeenCalledWith(variant.id, "Release Renamed");
+    expect(onDataChanged).toHaveBeenCalledWith("Renaming variant...");
 
     fireEvent.click(screen.getByRole("button", { name: /^Apollo/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Delete Release" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete Release Renamed" }));
     fireEvent.click(await screen.findByRole("button", { name: "Yes, delete" }));
     await waitFor(() => expect(variantsDelete).toHaveBeenCalledWith(variant.id));
-    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
   });
 
   test("deleting a variant row keeps the project page open", async () => {
@@ -592,7 +620,7 @@ describe("Settings scoped project and variant views", () => {
     await waitFor(() => expect(variantsDelete).toHaveBeenCalledWith(variant.id));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Delete Release" })).not.toBeInTheDocument());
     expect(screen.getByTestId("location")).toHaveTextContent(/^\/settings\/projects\/project-1$/);
-    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Import SBOM" })).not.toBeInTheDocument();
   });
 
@@ -985,9 +1013,10 @@ describe("Settings scoped project and variant views", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
     fireEvent.click(await screen.findByRole("button", { name: /^Apollo/ }));
-    fireEvent.change(screen.getByLabelText("New name"), { target: { value: "Renamed" } });
-    fireEvent.keyDown(screen.getByLabelText("New name"), { key: "Enter" });
+    const renameInput = renameInTree("Rename project Apollo", "Renamed");
     expect(await screen.findByText("Rename failed")).toBeInTheDocument();
+    expect(renameInput).toHaveValue("Renamed");
+    fireEvent.keyDown(renameInput, { key: "Escape" });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete Project" }));
     fireEvent.click(await screen.findByRole("button", { name: "Yes, delete" }));
@@ -1010,11 +1039,11 @@ describe("Settings scoped project and variant views", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "General Settings" }));
     // The tree stays expanded after visiting the project page.
-    fireEvent.click(await screen.findByRole("button", { name: "Release" }));
-    const newName = await screen.findByLabelText("New name");
-    fireEvent.change(newName, { target: { value: "Broken rename" } });
-    fireEvent.keyDown(newName, { key: "Enter" });
+    await screen.findByRole("button", { name: "Release" });
+    const newName = renameInTree("Rename variant Release", "Broken rename");
     expect(await screen.findByText("Variant rename failed")).toBeInTheDocument();
+    expect(newName).toHaveValue("Broken rename");
+    fireEvent.keyDown(newName, { key: "Escape" });
 
     fireEvent.click(screen.getByRole("button", { name: /^Apollo/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete Release" }));
@@ -1167,7 +1196,7 @@ describe("Settings scoped project and variant views", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create project" }));
     expect(await screen.findByText('Project "Zeus" created.')).toBeInTheDocument();
     expect(screen.queryByText("Could not load projects.")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
   });
 
   test("openNewProject state is consumed so history navigation does not reopen the input", async () => {
@@ -1218,6 +1247,6 @@ describe("Settings scoped project and variant views", () => {
     await act(async () => initialList.resolve([project]));
     expect(screen.getByTestId("location")).toHaveTextContent("/settings/projects/project-2");
     expect(screen.queryByText("Page not found")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Rename Project" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Danger Zone" })).toBeInTheDocument();
   });
 });
