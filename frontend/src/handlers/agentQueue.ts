@@ -1,268 +1,370 @@
-import { agentErrorMessage, agentRequest } from './agent';
-import { prepareAssessmentReviewVerification } from '../helpers/aiAssessmentReview';
-import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type Activity, type AgentActionState, type AgentContext, type AgentMessage, type AgentUsage, type QueuedAgentMessage } from '../types/agent';
+/**
+ * Mirror of the backend AI queue (src/controllers/agent_queue.py).
+ *
+ * The backend owns the queue, its conversations and their transcripts; every tab follows it over one
+ * `EventSource` while something is subscribed, and changes it through the queue routes. The state is
+ * exposed through the `useSyncExternalStore` contract.
+ */
+import { agentRequest } from './agent';
+import { RECONNECT_DELAYS_MS } from './operationStore';
+import {
+    AGENT_WRITE_EVENT, type Activity, type AgentAction, type AgentActionKind, type AgentActionState, type AgentContext,
+    type AgentConversationDetail, type AgentConversationSummary, type AgentLiveTurn, type AgentMessage, type AgentQueuePaused,
+    type AgentQueueState, type AgentQueueSubmitted, type AgentRequestRecord, type AgentRequestStatus, type AgentUsage,
+} from '../types/agent';
 
+export { RECONNECT_DELAYS_MS };
 export const MAIN_CONVERSATION = 'main';
 export const AGENT_CHAT_SOURCE = 'Agent chat';
-/** Finished action conversations kept live on the backend (which caps active threads at 20). */
-const LIVE_CONVERSATION_LIMIT = 12;
-const HISTORY_LIMIT = 50;
 export const agentActionLabels = { assess: 'Assess', review: 'Review', message: 'Message' } as const;
+const STREAM_PATH = '/api/agent/queue/stream';
 
-export type AgentTask = QueuedAgentMessage & {
+export type AgentTask = {
+    id: string;
+    key: string;
+    kind: AgentActionKind;
+    title: string;
+    detail?: string;
+    /** The message sent to the agent (for actions, the prompt the backend built). */
+    text: string;
     source: string;
-    context: AgentContext;
+    context?: AgentContext;
     conversationId: string;
-    status: 'queued' | 'running' | 'failed' | 'done';
+    status: AgentRequestStatus;
     error?: string;
+    errorCode?: string;
+    /** For a queued request, its place in its lane (1 = next to run). */
+    position?: number;
+    vulnId?: string;
+    assessmentId?: string;
+    result?: Record<string, unknown>;
 };
 export type AgentConversation = {
     id: string;
     title: string;
-    /** Backend thread for action conversations; the main conversation uses the root session. */
-    threadId?: string;
+    kind: 'main' | 'action';
+    /** The scope of the conversation's latest request, reused by follow-ups. */
     context?: AgentContext;
     messages: AgentMessage[];
+    messageCount: number;
     usage: AgentUsage;
     pendingMessage: string;
     pendingTaskId?: string;
     liveReply: string;
     activity: Activity[];
     progress: string;
-    initialized: boolean;
-    /** Released on the backend to stay within its thread limit; the transcript stays readable. */
+    /** Released on the backend; the transcript stays readable. */
     archived: boolean;
     createdAt: number;
     lastUsed: number;
 };
 /** Where a conversation stands, from the most to the least urgent of its requests. */
 export type AgentConversationStatus = 'failed' | 'running' | 'queued' | 'idle';
-type Connection = { ready: boolean; model: string };
 /** A request to open the agent chat, optionally on one request of the AI queue. */
 export type AgentChatRequest = { nonce: number; taskId?: string; view?: 'chat' | 'conversations' };
+export type EnqueueOptions = {
+    conversation: string | 'per-action';
+    source: string;
+    context?: AgentContext;
+    timeout?: number;
+};
+
+type Transcript = { fingerprint: string; messages: AgentMessage[] };
 
 const emptyUsage = (): AgentUsage => ({ cost: null, input_tokens: null, output_tokens: null });
-const newConversation = (id: string, title: string, extra: Partial<AgentConversation> = {}): AgentConversation => ({
-    id, title, messages: [], usage: emptyUsage(), pendingMessage: '', liveReply: '', activity: [], progress: '',
-    initialized: false, archived: false, createdAt: Date.now(), lastUsed: Date.now(), ...extra,
-});
-const mainConversation = () => newConversation(MAIN_CONVERSATION, AGENT_CHAT_SOURCE);
+const placeholderMain: AgentConversationSummary = {
+    id: MAIN_CONVERSATION, title: AGENT_CHAT_SOURCE, kind: 'main', profile: null, archived: false,
+    created_at: 0, last_used: 0, message_count: 0, usage: emptyUsage(), live: null,
+};
+const fingerprint = (summary: AgentConversationSummary) => `${summary.created_at}:${summary.message_count}`;
 
 const listeners = new Set<() => void>();
+const chatListeners = new Set<() => void>();
 let tasks: AgentTask[] = [];
 let history: AgentTask[] = [];
-let conversations: Record<string, AgentConversation> = { [MAIN_CONVERSATION]: mainConversation() };
+let paused: AgentQueuePaused | null = null;
+let summaries = new Map<string, AgentConversationSummary>();
+let conversations: Record<string, AgentConversation> = {};
+const transcripts = new Map<string, Transcript>();
+/** The transcript fingerprint last requested per conversation; only its response is kept. */
+const requested = new Map<string, string>();
+/** Failed transcript fetches retried per conversation (at most one per reconnect delay), and their timers. */
+const transcriptRetries = new Map<string, number>();
+const transcriptTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const loading = new Set<string>();
+/** The last running turn per conversation, displayed until the transcript including it is loaded. */
+const lingering = new Map<string, AgentLiveTurn>();
 let activeConversationId = MAIN_CONVERSATION;
-let running = false;
-let connection: Connection | undefined;
 let chatRequest: AgentChatRequest = { nonce: 0 };
+/** A request `openAgentChat` asked for before the stream reported it. */
+let pendingFocus: string | undefined;
+let connectionRevision: number | undefined;
+
+let source: EventSource | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
+let lastEventId: string | null = null;
+/** Swappable so tests can drive the store without a live server; jsdom has no EventSource. */
+let createEventSource: (url: string) => EventSource | null = url =>
+    typeof EventSource === 'undefined' ? null : new EventSource(url);
+
 const emit = () => listeners.forEach(listener => listener());
+const emitChatRequest = () => {
+    chatListeners.forEach(listener => listener());
+    emit();
+};
+
+function toTask(record: AgentRequestRecord): AgentTask {
+    return {
+        id: record.id, key: record.key, kind: record.kind, title: record.title, detail: record.detail || undefined,
+        text: record.text ?? '', source: record.source, context: record.context ?? undefined,
+        conversationId: record.conversation_id, status: record.status, error: record.error ?? undefined,
+        errorCode: record.error_code ?? undefined, position: record.position ?? undefined,
+        vulnId: record.vuln_id ?? undefined, assessmentId: record.assessment_id ?? undefined, result: record.result ?? undefined,
+    };
+}
+
+function buildConversations() {
+    const ordered = [...summaries.values()].sort((a, b) =>
+        Number(b.id === MAIN_CONVERSATION) - Number(a.id === MAIN_CONVERSATION) || a.created_at - b.created_at);
+    if (!summaries.has(MAIN_CONVERSATION)) ordered.unshift(placeholderMain);
+    const latest = [...tasks].reverse().concat([...history].reverse());
+    conversations = Object.fromEntries(ordered.map(summary => {
+        const transcript = transcripts.get(summary.id);
+        const current = transcript?.fingerprint === fingerprint(summary);
+        if (summary.live) lingering.set(summary.id, summary.live);
+        else if (current || !loading.has(summary.id)) lingering.delete(summary.id);
+        const live = summary.live ?? lingering.get(summary.id);
+        const context = summary.kind === 'main' ? undefined
+            : latest.find(task => task.conversationId === summary.id && task.context)?.context;
+        const conversation: AgentConversation = {
+            id: summary.id, title: summary.title, kind: summary.kind, context,
+            messages: transcript && transcript.fingerprint.startsWith(`${summary.created_at}:`) ? transcript.messages : [],
+            messageCount: summary.message_count, usage: summary.usage,
+            pendingMessage: live?.pending_message ?? '', pendingTaskId: live?.request_id, liveReply: live?.live_reply ?? '',
+            activity: live?.activity ?? [], progress: live?.progress ?? '', archived: summary.archived,
+            createdAt: summary.created_at * 1000, lastUsed: summary.last_used * 1000,
+        };
+        return [summary.id, conversation];
+    }));
+}
+
+/** Fetch the transcript again after a failure, a few times with growing delays. */
+function retryTranscript(id: string, wanted: string) {
+    const attempt = transcriptRetries.get(id) ?? 0;
+    if (attempt >= RECONNECT_DELAYS_MS.length || transcriptTimers.has(id)) return;
+    transcriptRetries.set(id, attempt + 1);
+    transcriptTimers.set(id, setTimeout(() => {
+        transcriptTimers.delete(id);
+        if (requested.get(id) !== wanted) return;
+        requested.delete(id);
+        update();
+    }, RECONNECT_DELAYS_MS[attempt]));
+}
+
+/** Fetch the active conversation's transcript once per change of its message count. */
+function syncTranscript() {
+    const id = activeConversationId;
+    const summary = summaries.get(id);
+    if (!summary) return;
+    const wanted = fingerprint(summary);
+    if (transcripts.get(id)?.fingerprint === wanted || requested.get(id) === wanted) return;
+    requested.set(id, wanted);
+    if (!summary.message_count) {
+        transcripts.set(id, { fingerprint: wanted, messages: [] });
+        return;
+    }
+    loading.add(id);
+    agentRequest<AgentConversationDetail>(`/conversations/${encodeURIComponent(id)}`).then(detail => {
+        // A newer fetch replaced this one: its response may arrive first, so this one must not overwrite it.
+        if (requested.get(id) !== wanted) return;
+        transcriptRetries.delete(id);
+        transcripts.set(id, { fingerprint: fingerprint(detail), messages: detail.messages });
+    }, () => {
+        if (requested.get(id) === wanted) retryTranscript(id, wanted);
+    }).finally(() => {
+        if (requested.get(id) !== wanted) return;
+        loading.delete(id);
+        update();
+    });
+}
+
+function resolveFocus() {
+    if (!pendingFocus) return;
+    const task = findAgentTask(pendingFocus);
+    if (!task) return;
+    pendingFocus = undefined;
+    if (summaries.has(task.conversationId)) activeConversationId = task.conversationId;
+}
+
+function update() {
+    resolveFocus();
+    if (summaries.size && !summaries.has(activeConversationId)) activeConversationId = MAIN_CONVERSATION;
+    syncTranscript();
+    buildConversations();
+    emit();
+}
+
+function applyState(state: AgentQueueState) {
+    paused = state.paused;
+    tasks = state.requests.map(toTask);
+    history = state.history.map(toTask);
+    summaries = new Map(state.conversations.map(summary => [summary.id, summary]));
+    connectionRevision = state.connection_revision;
+    for (const id of [...transcripts.keys()]) if (!summaries.has(id)) transcripts.delete(id);
+    update();
+}
+
+function parse<T>(event: Event): T | null {
+    const message = event as MessageEvent;
+    if (message.lastEventId) lastEventId = message.lastEventId;
+    try {
+        return JSON.parse(message.data) as T;
+    } catch {
+        return null;
+    }
+}
+
+function scheduleReconnect() {
+    if (reconnectTimer !== null) return;
+    const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
+    reconnectAttempt += 1;
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        openStream();
+    }, delay);
+}
+
+function closeStream() {
+    source?.close();
+    source = null;
+}
+
+function openStream() {
+    if (source !== null || reconnectTimer !== null) return;
+    const base = import.meta.env.VITE_API_URL + STREAM_PATH;
+    const stream = createEventSource(lastEventId === null ? base : `${base}?last_event_id=${encodeURIComponent(lastEventId)}`);
+    if (!stream) return;
+    source = stream;
+    const onState = (event: Event) => {
+        const state = parse<AgentQueueState>(event);
+        if (state) applyState(state);
+    };
+    stream.addEventListener('snapshot', event => {
+        reconnectAttempt = 0;
+        onState(event);
+    });
+    stream.addEventListener('queue', onState);
+    stream.addEventListener('request_progress', event => {
+        const frame = parse<{ conversation_id: string; live: AgentLiveTurn | null }>(event);
+        const summary = frame && summaries.get(frame.conversation_id);
+        if (!summary) return;
+        summaries.set(summary.id, { ...summary, live: frame.live });
+        update();
+    });
+    stream.addEventListener('conversation', event => {
+        const summary = parse<AgentConversationSummary>(event);
+        if (!summary) return;
+        summaries.set(summary.id, summary);
+        update();
+    });
+    stream.addEventListener('agent_write', event => {
+        const frame = parse<{ tool: string }>(event);
+        if (frame) window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: frame.tool } }));
+    });
+    stream.addEventListener('heartbeat', event => {
+        parse(event);
+        reconnectAttempt = 0;
+    });
+    // The server is going away; reconnecting resumes from the last event, or resnapshots.
+    stream.addEventListener('bye', () => {
+        closeStream();
+        scheduleReconnect();
+    });
+    stream.onerror = () => {
+        closeStream();
+        scheduleReconnect();
+    };
+}
+
+function teardown() {
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    closeStream();
+    reconnectAttempt = 0;
+}
+
+buildConversations();
+
+// ---- useSyncExternalStore API ----
 
 export const subscribeAgentQueue = (listener: () => void) => {
     listeners.add(listener);
-    return () => { listeners.delete(listener); };
+    openStream();
+    return () => {
+        listeners.delete(listener);
+        if (!listeners.size) teardown();
+    };
 };
+/** Follow chat open requests only, without opening the queue stream. */
+export const subscribeAgentChatRequest = (listener: () => void) => {
+    chatListeners.add(listener);
+    return () => { chatListeners.delete(listener); };
+};
+
 /** Active work only: running, waiting and failed requests. */
 export const getAgentQueue = () => tasks;
-/** Requests completed since the connection or main conversation was last reset, oldest first. */
+/** Recently finished (done or cancelled) requests, oldest first. */
 export const getAgentHistory = () => history;
 export const getAgentConversations = () => conversations;
 export const getAgentConversation = (id = MAIN_CONVERSATION) => conversations[id] ?? conversations[MAIN_CONVERSATION];
 export const getActiveConversationId = () => activeConversationId;
+/** Why the backend does not start requests, if it does not. */
+export const getAgentQueuePaused = () => paused;
 export const getAgentChatRequest = () => chatRequest;
+/** Changes when the agent connection or model changed in any tab; undefined until the first snapshot. */
+export const getAgentConnectionRevision = () => connectionRevision;
 export const findAgentTask = (id: string) => tasks.find(task => task.id === id) ?? history.find(task => task.id === id);
 
 export function setActiveConversation(id: string) {
     if (!conversations[id] || id === activeConversationId) return;
     activeConversationId = id;
-    emit();
+    update();
 }
 
 export function conversationStatus(queue: AgentTask[], id: string): AgentConversationStatus {
     const own = queue.filter(task => task.conversationId === id);
     return own.find(task => task.status === 'failed') ? 'failed' : own.find(task => task.status === 'running') ? 'running'
-        : own.length ? 'queued' : 'idle';
+        : own.some(task => task.status === 'queued') ? 'queued' : 'idle';
 }
 
 /** Open the agent chat from anywhere in the app, optionally on one request and its conversation. */
 export function openAgentChat(taskId?: string, view: 'chat' | 'conversations' = 'chat') {
-    const task = taskId ? findAgentTask(taskId) : undefined;
-    if (task && conversations[task.conversationId]) activeConversationId = task.conversationId;
-    chatRequest = { nonce: chatRequest.nonce + 1, taskId: task?.id, view };
-    emit();
+    pendingFocus = taskId;
+    resolveFocus();
+    chatRequest = { nonce: chatRequest.nonce + 1, taskId, view };
+    syncTranscript();
+    buildConversations();
+    emitChatRequest();
 }
 
 export function clearAgentChatFocus() {
     if (!chatRequest.taskId) return;
     chatRequest = { ...chatRequest, taskId: undefined };
-    emit();
+    emitChatRequest();
 }
 
-/** Where the first active request matching an AI action stands; position counts from the next request to run. */
+/** Where the first active request matching an AI action stands, positioned by the backend. */
 export function agentActionState(queue: AgentTask[], matches: (task: AgentTask) => boolean): AgentActionState | undefined {
     const task = queue.find(matches);
-    if (!task || task.status === 'done') return undefined;
+    if (!task) return undefined;
     if (task.status === 'running' || task.status === 'failed') return { status: task.status, taskId: task.id };
-    return { status: 'queued', taskId: task.id, position: queue.filter(item => item.status !== 'running').indexOf(task) + 1 };
+    if (task.status !== 'queued') return undefined;
+    return { status: 'queued', taskId: task.id, position: task.position ?? 1 };
 }
 
-function updateConversation(id: string, update: Partial<AgentConversation>) {
-    const current = conversations[id];
-    if (!current) return;
-    conversations = { ...conversations, [id]: { ...current, ...update } };
-    emit();
-}
-
-export function initializeAgentConversation(messages: AgentMessage[], usage: AgentUsage) {
-    if (conversations[MAIN_CONVERSATION].initialized) return;
-    updateConversation(MAIN_CONVERSATION, { messages, usage, initialized: true });
-}
-
-/** Start the main conversation afresh; action conversations keep their own transcripts. */
-export function resetAgentConversation() {
-    conversations = { ...conversations, [MAIN_CONVERSATION]: { ...mainConversation(), initialized: true } };
-    history = history.filter(task => task.conversationId !== MAIN_CONVERSATION);
-    activeConversationId = MAIN_CONVERSATION;
-    emit();
-}
-
-export function resetAgentQueue(preserveWaiting = false) {
-    if (running) throw new Error('Wait for the running AI request to finish before changing the connection.');
-    const previous = conversations;
-    tasks = preserveWaiting ? tasks.map(task => previous[task.conversationId]?.messages.length ? {
-        ...task, status: 'failed' as const,
-        error: 'The agent connection changed. Retry to start a fresh conversation without the previous provider history.',
-    } : task) : [];
-    history = [];
-    conversations = { [MAIN_CONVERSATION]: mainConversation() };
-    for (const task of tasks) {
-        const old = previous[task.conversationId];
-        if (task.conversationId !== MAIN_CONVERSATION && old) {
-            conversations[old.id] = newConversation(old.id, old.title, {
-                threadId: old.threadId, context: old.context, initialized: true,
-            });
-        }
-    }
-    activeConversationId = MAIN_CONVERSATION;
-    connection = undefined;
-    chatRequest = { nonce: chatRequest.nonce };
-    emit();
-}
-
-export function configureAgentQueue(next: Connection) {
-    connection = next;
-    void drain();
-}
-
-const conversationTitle = (message: QueuedAgentMessage) =>
-    `${agentActionLabels[message.kind]} ${message.title.replace(/ · batch \d+ of \d+$/, '')}`;
-
-/**
- * Queue requests into the single agent chat. Messages go to an existing conversation (the main one by default),
- * or with `'per-action'` each action key (an assessed vulnerability or reviewed assessment) gets a new conversation.
- */
-export function enqueueAgentMessages(
-    messages: QueuedAgentMessage[], context: AgentContext, source = AGENT_CHAT_SOURCE,
-    conversation: string | 'per-action' = MAIN_CONVERSATION,
-) {
-    const ids = new Set(tasks.map(task => task.id));
-    const keys = new Set(tasks.map(task => task.key));
-    // Batches may deliberately share a key; deduplicate against existing work, not siblings.
-    const added = messages.filter(message => !ids.has(message.id) && !keys.has(message.key));
-    if (added.some(message => !message.text.trim() || message.text.length > AGENT_MESSAGE_MAX_LENGTH)) {
-        throw new Error(`AI messages must contain between 1 and ${AGENT_MESSAGE_MAX_LENGTH} characters.`);
-    }
-    if (conversation !== 'per-action' && !conversations[conversation]) throw new Error('This conversation is no longer available.');
-    const created: Record<string, AgentConversation> = {};
-    const byKey = new Map<string, string>();
-    const queued = added.map(message => {
-        const taskContext = structuredClone(message.context ?? context);
-        let conversationId = conversation;
-        if (conversation === 'per-action') {
-            conversationId = byKey.get(message.key) ?? crypto.randomUUID();
-            if (!byKey.has(message.key)) {
-                byKey.set(message.key, conversationId);
-                created[conversationId] = newConversation(conversationId, conversationTitle(message), {
-                    threadId: conversationId, context: taskContext, initialized: true,
-                });
-            }
-        }
-        return { ...message, context: taskContext, source, conversationId, status: 'queued' as const };
-    });
-    conversations = { ...conversations, ...created };
-    tasks = [...tasks, ...queued];
-    emit();
-    void drain();
-}
-
-/** Drop action conversations whose only requests were removed before they ever ran. */
-function discardUnstartedConversations() {
-    const used = new Set(tasks.map(task => task.conversationId));
-    const unused = Object.values(conversations).filter(item =>
-        item.id !== MAIN_CONVERSATION && !used.has(item.id) && !item.messages.length);
-    if (!unused.length) return;
-    conversations = Object.fromEntries(Object.entries(conversations).filter(([id]) => !unused.some(item => item.id === id)));
-    if (!conversations[activeConversationId]) activeConversationId = MAIN_CONVERSATION;
-}
-
-export function removeAgentTask(id: string) {
-    const task = tasks.find(item => item.id === id);
-    if (!task || task.status === 'running') return;
-    tasks = tasks.filter(item => item.id !== id);
-    discardUnstartedConversations();
-    emit();
-    void drain();
-}
-
-export function clearAgentQueue() {
-    tasks = tasks.filter(task => task.status === 'running');
-    discardUnstartedConversations();
-    emit();
-}
-
-/** Delete a finished action conversation, like removing a chat from its history. */
-export function deleteAgentConversation(id: string) {
-    const target = conversations[id];
-    if (!target || id === MAIN_CONVERSATION || tasks.some(task => task.conversationId === id)) return;
-    conversations = Object.fromEntries(Object.entries(conversations).filter(([key]) => key !== id));
-    history = history.filter(task => task.conversationId !== id);
-    if (activeConversationId === id) activeConversationId = MAIN_CONVERSATION;
-    emit();
-    if (target.threadId && !target.archived) {
-        agentRequest('/conversation', { method: 'DELETE', headers: { 'X-Agent-Thread': target.threadId } }).catch(() => undefined);
-    }
-}
-
-/** Delete every finished action conversation. */
-export function clearFinishedConversations() {
-    Object.keys(conversations).forEach(deleteAgentConversation);
-}
-
-export function retryAgentTask(id: string) {
-    tasks = tasks.map(task => task.id === id && task.status === 'failed' ? { ...task, status: 'queued', error: undefined } : task);
-    emit();
-    void drain();
-}
-
-/** Release the oldest idle action conversations so the backend never hits its thread limit. */
-async function releaseIdleConversations() {
-    const busy = new Set(tasks.map(task => task.conversationId));
-    const idle = Object.values(conversations)
-        .filter(item => item.threadId && !item.archived && item.id !== activeConversationId && !busy.has(item.id))
-        .sort((a, b) => b.lastUsed - a.lastUsed)
-        .slice(LIVE_CONVERSATION_LIMIT);
-    for (const item of idle) {
-        try {
-            await agentRequest('/conversation', { method: 'DELETE', headers: { 'X-Agent-Thread': item.threadId! } });
-            updateConversation(item.id, { archived: true });
-        } catch {
-            // Retried after the next completed request.
-        }
-    }
-}
-
-/** Trim view lists only; explicit assessment scope must never be truncated. */
-function contextForTurn(context: AgentContext): AgentContext {
+/** Trim view lists the backend would reject (over 100 IDs); explicit assessment scope is never truncated. */
+export function boundedAgentContext(context: AgentContext): AgentContext {
     const view = context.view;
     if (!view) return context;
     const { visibleVulnerabilityIds, visiblePackageIds, visibleScanIds, selectedExportKeys,
@@ -282,75 +384,91 @@ function contextForTurn(context: AgentContext): AgentContext {
     } };
 }
 
-async function drain() {
-    const task = tasks[0];
-    if (running || !task || task.status === 'failed' || !connection?.ready) return;
-    const { model } = connection;
-    const id = task.conversationId;
-    const target = conversations[id];
-    const headers: Record<string, string> = target?.threadId ? { 'X-Agent-Thread': target.threadId } : {};
-    running = true;
-    tasks = tasks.map(item => item.id === task.id ? { ...item, status: 'running' } : item);
-    emit();
-    let currentMessageId = '';
-    let activity: Activity[] = [];
-    let succeeded = false;
-    try {
-        if (!target) throw new Error('This conversation is no longer available.');
-        if (target.archived) throw new Error('This conversation was archived. Continue in the main conversation.');
-        if (!target.initialized) {
-            const state = await agentRequest<{ messages: AgentMessage[]; usage: AgentUsage }>('', { headers });
-            if (!conversations[id].initialized) updateConversation(id, { messages: state.messages, usage: state.usage, initialized: true });
-        }
-        updateConversation(id, {
-            pendingMessage: task.text, pendingTaskId: task.id, liveReply: '', activity: [], progress: 'Connecting to Copilot...',
-        });
-        if (task.kind === 'review' && !task.assessmentId) throw new Error('Missing assessment ID for review verification.');
-        const verify = task.kind === 'review' ? await prepareAssessmentReviewVerification(task.assessmentId!) : undefined;
-        const result = await agentRequest<{ reply: string; model: string; usage: AgentUsage }>('/messages', {
-            method: 'POST', headers,
-            body: JSON.stringify({
-                message: task.text, context: contextForTurn(task.context), model,
-                ...(task.kind !== 'message' && target.threadId ? { action: task.kind } : {}),
-            }),
-        }, event => {
-            if (event.type === 'status') updateConversation(id, { progress: event.text });
-            if (event.type === 'delta') {
-                const continued = currentMessageId === event.message_id;
-                currentMessageId = event.message_id;
-                updateConversation(id, {
-                    liveReply: (continued ? conversations[id].liveReply : '') + event.text,
-                    progress: 'Writing response...',
-                });
-            }
-            if (event.type === 'tool_start') {
-                activity = [...activity, { id: event.id, name: event.name, status: 'running' as const }].slice(-50);
-                updateConversation(id, { activity, progress: 'Checking VulnScout...' });
-            }
-            if (event.type === 'tool_end') {
-                const tool = activity.find(item => item.id === event.id)?.name;
-                activity = activity.map(item => item.id === event.id ? { ...item, status: event.success ? 'done' : 'failed' } : item);
-                updateConversation(id, { activity, progress: 'Preparing response...' });
-                if (event.success && event.write) window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool } }));
-            }
-        });
-        await verify?.();
-        updateConversation(id, {
-            messages: [...conversations[id].messages,
-                { role: 'user', content: task.text, taskId: task.id }, { role: 'assistant', content: result.reply, activity, taskId: task.id }],
-            usage: result.usage, lastUsed: Date.now(),
-        });
-        tasks = tasks.filter(item => item.id !== task.id);
-        history = [...history, { ...task, status: 'done' as const }].slice(-HISTORY_LIMIT);
-        succeeded = true;
-    } catch (reason) {
-        const error = agentErrorMessage(reason);
-        tasks = tasks.map(item => item.id === task.id ? { ...item, status: 'failed', error } : item);
-    } finally {
-        running = false;
-        updateConversation(id, { pendingMessage: '', pendingTaskId: undefined });
-        emit();
-        if (succeeded) void releaseIdleConversations();
-        void drain();
-    }
+/**
+ * Queue actions on the backend. Assess and review actions go to `'per-action'` (one new conversation per
+ * action key); a message goes to the main conversation or an existing one. Actions whose key is already
+ * waiting are reported in `skipped` with the request holding it. View lists over the backend limit are dropped.
+ * Requests take the model selected on the server (persisted by the agent chat), resolved by the backend.
+ */
+export function enqueueAgentActions(actions: AgentAction[], options: EnqueueOptions) {
+    const bounded = actions.map(action => action.kind !== 'message' && action.context
+        ? { ...action, context: boundedAgentContext(action.context) } : action);
+    return agentRequest<AgentQueueSubmitted>('/queue', {
+        method: 'POST',
+        body: JSON.stringify({
+            conversation: options.conversation, source: options.source, actions: bounded,
+            ...(options.context ? { context: boundedAgentContext(options.context) } : {}),
+            ...(options.timeout ? { timeout: options.timeout } : {}),
+        }),
+    });
 }
+
+const requestPath = (id: string) => `/queue/requests/${encodeURIComponent(id)}`;
+
+/** Remove a waiting or failed request. */
+export async function removeAgentTask(id: string) {
+    await agentRequest(requestPath(id), { method: 'DELETE' });
+}
+
+/** Stop a running request (it keeps what it saved), or remove a waiting one. */
+export async function stopAgentTask(id: string) {
+    await agentRequest(`${requestPath(id)}/stop`, { method: 'POST' });
+}
+
+export async function retryAgentTask(id: string) {
+    await agentRequest(`${requestPath(id)}/retry`, { method: 'POST' });
+}
+
+/** Remove every waiting and failed request; running ones continue. */
+export async function clearAgentQueue() {
+    await agentRequest('/queue', { method: 'DELETE' });
+}
+
+/** Delete a finished action conversation, like removing a chat from its history. */
+export async function deleteAgentConversation(id: string) {
+    await agentRequest(`/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** Delete every finished action conversation. */
+export async function clearFinishedConversations() {
+    await agentRequest('/conversations', { method: 'DELETE' });
+}
+
+/** Start the main conversation afresh; action conversations keep their own transcripts. */
+export async function resetAgentConversation() {
+    await agentRequest('/conversations/main/reset', { method: 'POST' });
+    activeConversationId = MAIN_CONVERSATION;
+    update();
+}
+
+// ---- test seams ----
+
+/** Replaces the EventSource factory. Returns a function restoring the default. */
+export const __setEventSourceFactory = (factory: (url: string) => EventSource | null): (() => void) => {
+    const previous = createEventSource;
+    createEventSource = factory;
+    return () => { createEventSource = previous; };
+};
+
+export const __resetAgentQueue = () => {
+    teardown();
+    listeners.clear();
+    chatListeners.clear();
+    tasks = [];
+    history = [];
+    paused = null;
+    summaries = new Map();
+    transcripts.clear();
+    requested.clear();
+    transcriptTimers.forEach(timer => clearTimeout(timer));
+    transcriptTimers.clear();
+    transcriptRetries.clear();
+    loading.clear();
+    lingering.clear();
+    activeConversationId = MAIN_CONVERSATION;
+    chatRequest = { nonce: 0 };
+    pendingFocus = undefined;
+    connectionRevision = undefined;
+    lastEventId = null;
+    buildConversations();
+};
