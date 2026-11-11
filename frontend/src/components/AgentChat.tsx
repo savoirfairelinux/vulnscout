@@ -93,6 +93,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     const queueRunning = sharedQueue.some(item => item.status === 'running');
     const mainBusy = sharedQueue.some(item => item.conversationId === MAIN_CONVERSATION);
     const ready = Boolean(state?.authenticated && state.configured && models.length && selectedModel && !showConnections);
+    const showSetup = Boolean(state && (!state.authenticated || showConnections));
     const pageLabel = pageLabels[context.page] ?? context.page;
     const scopeLabel = scope.view?.openVulnerabilityId ?? (scope.view?.selectedVulnerabilityIds?.length === 1 ? scope.view.selectedVulnerabilityIds[0] : undefined)
         ?? scope.view?.selectedVariantName ?? scope.view?.selectedProjectName;
@@ -523,14 +524,8 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         </dialog>
 
         {view === 'conversations' ? <AgentConversationList activeConversationId={conversation.id} onOpen={openConversation} /> : <>
-        <div ref={conversationLog} className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-6" role="log" aria-label="Agent conversation" aria-live="polite" onScroll={event => {
-            const log = event.currentTarget;
-            followMessages.current = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
-            setAwayFromBottom(!followMessages.current);
-        }}>
-            {!state && !error && <p role="status" className="flex items-center gap-2 py-6 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin /> Connecting...</p>}
-            {state?.authenticated && state.configured && !models.length && !error && <p role="status" className="flex items-center gap-2 py-6 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin /> Loading models...</p>}
-            {state && !state.configured && <div className="space-y-3 border-b border-neutral-200 pb-5 text-sm dark:border-neutral-800">
+        {state && showSetup && <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-6" role="region" aria-label="Agent connection setup">
+            {!state.configured && <div className="space-y-3 border-b border-neutral-200 pb-5 text-sm dark:border-neutral-800">
                 <h3 className="font-semibold">Agent setup required</h3>
                 <details className="text-neutral-500 dark:text-neutral-400">
                     <summary className="cursor-pointer text-sm">Backend configuration</summary>
@@ -538,7 +533,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 </details>
                 <button type="button" onClick={() => { setError(''); setRefresh(value => value + 1); }} className="inline-flex items-center gap-2 text-cyan-700 hover:underline dark:text-cyan-400"><FontAwesomeIcon icon={faArrowRotateRight} /> Check connection</button>
             </div>}
-            {state && (!state.authenticated || showConnections) && <div className="space-y-5 py-2 text-sm">
+            <div className="space-y-5 py-2 text-sm">
                 <div className="border-b border-neutral-200 pb-4 dark:border-neutral-800">
                     <h3 className="text-lg font-semibold">Connect an agent</h3>
                     {state.authenticated && <div className="mt-3 flex items-center justify-between gap-3">
@@ -605,6 +600,22 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                         </>}
                     </>}
                 </div>}
+            </div>
+        </div>}
+        <div ref={conversationLog} hidden={showSetup} className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-6" role="log" aria-label="Agent conversation" aria-live="polite" onScroll={event => {
+            const log = event.currentTarget;
+            followMessages.current = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+            setAwayFromBottom(!followMessages.current);
+        }}>
+            {!state && !error && <p role="status" className="flex items-center gap-2 py-6 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin /> Connecting...</p>}
+            {state?.authenticated && state.configured && !models.length && !error && <p role="status" className="flex items-center gap-2 py-6 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin /> Loading models...</p>}
+            {state && !state.configured && !showSetup && <div className="space-y-3 border-b border-neutral-200 pb-5 text-sm dark:border-neutral-800">
+                <h3 className="font-semibold">Agent setup required</h3>
+                <details className="text-neutral-500 dark:text-neutral-400">
+                    <summary className="cursor-pointer text-sm">Backend configuration</summary>
+                    <p className="mt-2 break-words text-xs leading-relaxed">The bundled MCP server is missing. Check the backend installation or remove an outdated <code>VULNSCOUT_MCP_SERVER_PATH</code> override.</p>
+                </details>
+                <button type="button" onClick={() => { setError(''); setRefresh(value => value + 1); }} className="inline-flex items-center gap-2 text-cyan-700 hover:underline dark:text-cyan-400"><FontAwesomeIcon icon={faArrowRotateRight} /> Check connection</button>
             </div>}
             {ready && inMain && conversation.messages.length === 0 && !pendingMessage && <div className="space-y-6 py-6 text-sm">
                 <h3 className="text-lg font-semibold leading-snug">What needs your attention?</h3>
@@ -656,10 +667,10 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             </div>)}
             {pendingMessage && <><div id={conversation.pendingTaskId ? taskAnchor(conversation.pendingTaskId) : undefined} className="flex justify-end"><div className="max-w-[90%] whitespace-pre-wrap break-words rounded-lg bg-neutral-100 px-4 py-3 text-sm leading-7 [overflow-wrap:anywhere] dark:bg-neutral-800">{pendingMessage}</div></div><div><ActivityLog items={activity} pending />{liveReply && <div className="mb-3 whitespace-pre-wrap break-words text-sm leading-7 [overflow-wrap:anywhere]">{liveReply}</div>}<div role="status" className="flex items-center gap-2 text-sm text-neutral-500"><FontAwesomeIcon icon={faCircleNotch} spin />{progress}</div></div></>}
         </div>
-        {awayFromBottom && <button type="button" aria-label="Jump to latest message" title="Jump to latest message" onClick={() => { if (conversationLog.current) conversationLog.current.scrollTop = conversationLog.current.scrollHeight; }} className={`${iconButton} mx-auto mb-2 border border-neutral-200 dark:border-neutral-700`}><FontAwesomeIcon icon={faArrowDown} /></button>}
+        {awayFromBottom && !showSetup && <button type="button" aria-label="Jump to latest message" title="Jump to latest message" onClick={() => { if (conversationLog.current) conversationLog.current.scrollTop = conversationLog.current.scrollHeight; }} className={`${iconButton} mx-auto mb-2 border border-neutral-200 dark:border-neutral-700`}><FontAwesomeIcon icon={faArrowDown} /></button>}
         {error && <div className="mx-4 mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><p role="alert" className="min-w-0 flex-1 break-words leading-relaxed">{error}</p><button type="button" title="Retry connection" aria-label="Retry connection" disabled={busy} onClick={() => { setError(''); setRefresh(value => value + 1); }} className={iconButton}><FontAwesomeIcon icon={faArrowRotateRight} /></button><button type="button" title="Dismiss error" aria-label="Dismiss error" onClick={() => setError('')} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button></div>}
 
-        {state && (!state.authenticated || showConnections) && <div className="flex shrink-0 items-center justify-between gap-3 border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
+        {state && showSetup && <div className="flex shrink-0 items-center justify-between gap-3 border-t border-neutral-200 px-4 py-3 dark:border-neutral-800">
             <button type="button" onClick={() => { setDevice(null); setSetupStep(step => step === 3 ? 2 : 1); setCheckState('idle'); setError(''); }} disabled={setupStep === 1 || busy} className="rounded border border-neutral-300 px-4 py-2 text-sm font-semibold hover:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:hover:bg-neutral-800">Back</button>
             {setupStep === 1 ? <button type="button" onClick={() => setSetupStep(2)} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600">Next</button>
                 : setupStep === 3 ? <button type="button" onClick={() => { setShowConnections(false); setSetupStep(1); setDevice(null); setError(''); }} disabled={checkState !== 'success'} className="rounded bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-600 disabled:opacity-50">Start using</button>
