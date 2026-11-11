@@ -5,12 +5,13 @@ export const AGENT_MESSAGE_MAX_LENGTH = 8000;
 export type Activity = { id: string; name: string; status: 'running' | 'done' | 'failed' };
 export type AgentMessage = { role: 'user' | 'assistant'; content: string; activity?: Activity[]; taskId?: string };
 export type AgentUsage = { cost: number | null; input_tokens: number | null; output_tokens: number | null };
-export type AgentActionKind = 'assess' | 'review' | 'message';
+export type AgentActionKind = 'assess' | 'review' | 'message' | 'context-import';
 export type AgentTarget = { variant_id: string | null; package: string };
 /** One structured action for the backend AI queue (POST /api/agent/queue). */
 export type AgentAction =
     | { kind: 'assess'; vuln_id: string; targets?: AgentTarget[]; key?: string; context?: AgentContext }
     | { kind: 'review'; assessment_id: string; variant_id?: string; finding_ids?: string[]; key?: string; context?: AgentContext }
+    | { kind: 'context-import'; text: string; title: string; detail: string; key?: string; context?: AgentContext }
     | { kind: 'message'; text: string; key?: string };
 export type AgentRequestStatus = 'queued' | 'running' | 'failed' | 'done' | 'cancelled';
 /** The running turn of a conversation, as the backend reports it. */

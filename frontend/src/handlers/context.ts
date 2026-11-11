@@ -80,6 +80,32 @@ type VariantDraft = {
     stride: StrideModel;
 };
 
+/** Values of an AI draft. A null Context text keeps the saved value; "" clears it. */
+type AiContextDraftValues = {
+    variant_description: string | null;
+    environment: string | null;
+    other_info: string | null;
+    system: SystemFields;
+    stride: StrideModel;
+};
+
+type AiDraftConflict = { path: string; reason: string };
+
+/** The variant's AI draft, rebased onto the saved context; `values` is null on a conflict. */
+type AiContextDraft = {
+    source: string;
+    status: 'current' | 'rebased' | 'conflict';
+    values: AiContextDraftValues | null;
+    conflicts: AiDraftConflict[];
+    renumbered: Record<string, string>;
+    base_updated_at: string | null;
+    saved_updated_at: string | null;
+    created_at: string;
+    updated_at: string;
+};
+
+type ImportSource = { name: string; size: number };
+
 type ContextFile = {
     id: string;
     original_name: string;
@@ -144,6 +170,10 @@ export type {
     SystemFields,
     VariantEditorData,
     VariantDraft,
+    AiContextDraftValues,
+    AiDraftConflict,
+    AiContextDraft,
+    ImportSource,
 };
 
 /** Rejected variant save; `fields` maps field paths to validation messages. */
@@ -192,6 +222,8 @@ async function jsonOrThrow<T>(res: Response, failure: string): Promise<T> {
     return await res.json() as T;
 }
 
+const TOO_LARGE_TEXT = "Upload rejected as too large (HTTP 413). A server or proxy request-size limit may apply.";
+
 class Context {
     static async uploadFile(variantId: string, file: File, description: string): Promise<ContextFile> {
         const body = new FormData();
@@ -201,11 +233,7 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/files`,
             { mode: 'cors', method: 'POST', body }
         );
-        if (res.status === 413) {
-            throw new Error(
-                "Upload rejected as too large (HTTP 413). A server or proxy request-size limit may apply."
-            );
-        }
+        if (res.status === 413) throw new Error(TOO_LARGE_TEXT);
         return jsonOrThrow<ContextFile>(res, 'Failed to upload reference');
     }
 
@@ -215,6 +243,39 @@ class Context {
             { mode: 'cors', method: 'DELETE' }
         );
         if (!res.ok) throw new Error((await errorReply(res)).error || `Failed to delete reference (${res.status})`);
+    }
+
+    /** The variant's AI draft, or null when there is none. */
+    static async getAiDraft(variantId: string): Promise<AiContextDraft | null> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/draft`,
+            { mode: 'cors' }
+        );
+        if (res.status === 404) return null;
+        return jsonOrThrow<AiContextDraft>(res, 'Failed to load the AI draft');
+    }
+
+    /** Deletes the AI draft and its import source; a missing draft is not an error. */
+    static async deleteAiDraft(variantId: string): Promise<void> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/draft`,
+            { mode: 'cors', method: 'DELETE' }
+        );
+        if (!res.ok && res.status !== 404) {
+            throw new Error((await errorReply(res)).error || `Failed to discard the AI draft (${res.status})`);
+        }
+    }
+
+    /** Stores the document the agent drafts from; this replaces any previous draft. */
+    static async uploadImportSource(variantId: string, file: File): Promise<ImportSource> {
+        const body = new FormData();
+        body.append('file', file);
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/import-source`,
+            { mode: 'cors', method: 'POST', body }
+        );
+        if (res.status === 413) throw new Error(TOO_LARGE_TEXT);
+        return jsonOrThrow<ImportSource>(res, 'Failed to upload the document');
     }
 
     static async get(projectId: string, variantId: string): Promise<MergedContext> {
