@@ -127,9 +127,13 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     ))
     assert "get_ai_context_form_guide" in agent.READ_TOOLS
     assert "get_ai_context_form_guide" not in agent.WRITE_TOOLS
+    assert "read_import_source" in agent.READ_TOOLS
+    assert "propose_variant_threat_model" in agent.WRITE_TOOLS
+    assert "update_variant_threat_model" not in agent.READ_TOOLS + agent.WRITE_TOOLS
     assert "mcp:vulnscout-get_ai_context_form_guide" in captured["available_tools"]
     assert all(term in instructions for term in (
         "get_ai_context_form_guide", "copy-ready", "view.section", "unsaved", "explicitly asks to save",
+        "propose_variant_threat_model",
     ))
 
 
@@ -1496,6 +1500,19 @@ def test_on_session_receives_the_created_or_resumed_session(monkeypatch, stored,
     asyncio.run(agent._reply(conversation, "Hi", agent._mcp_path(), "model", "{}", on_session=on_session))
     assert sessions == ["assess-session"]
     assert ("resumed" in captured) is resumed
+
+
+def test_context_import_action_uses_its_profile(monkeypatch):
+    from src.routes import agent, agent_skills
+
+    captured, _ = _assess_sdk(monkeypatch)
+    asyncio.run(agent._reply(
+        agent.Conversation(), "Fill", agent._mcp_path(), "model", "{}",
+        profile=agent_skills.CONTEXT_IMPORT, timeout=agent_skills.ACTION_TIMEOUT,
+    ))
+    assert captured["agent"] == "vulnscout-context-import"
+    assert captured["custom_agents"][0]["skills"] == ["ai-context-import"]
+    assert "mcp:vulnscout-propose_variant_threat_model" in captured["available_tools"]
 
 
 def test_failed_on_session_still_disconnects_and_deletes_ephemeral_session(monkeypatch):
