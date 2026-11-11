@@ -92,6 +92,18 @@ def test_unreachable_hosts_raise():
         JsonApi(f"http://127.0.0.1:{port}", timeout=2, retries=1).get("x")
 
 
+def test_osv_repository_prefers_exact_package_name_among_matching_git_ranges():
+    cpe = "cpe:2.3:a:openssl:openssl:3.0.1:*:*:*:*:*:*:*"
+    payload = {"affected": [{"ranges": [
+        {"type": "GIT", "repo": "https://github.com/alsyundawy/openssl-1.0.2",
+         "database_specific": {"extracted_events": [{"cpe": cpe}]}},
+        {"type": "GIT", "repo": "https://github.com/openssl/openssl",
+         "database_specific": {"extracted_events": [{"cpe": cpe}]}},
+    ]}]}
+
+    assert osv_repository(payload, "openssl", [cpe]) == "github.com/openssl/openssl"
+
+
 @pytest.fixture()
 def live_network():
     try:

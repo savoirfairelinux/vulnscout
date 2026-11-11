@@ -133,6 +133,7 @@ def osv_repository(payload: dict, name: str, cpes: Iterable[str]) -> str | None:
     """Return the ``GIT`` range repository of an OSV record when it matches the package's CPE or name."""
     products = {pair for cpe in cpes if (pair := cpe_product(cpe)) is not None}
     names = {name.lower(), *(product for _, product in products)}
+    candidates: set[str] = set()
     for affected in payload.get("affected") or []:
         for item in (affected or {}).get("ranges") or []:
             if not isinstance(item, dict) or item.get("type") != "GIT":
@@ -146,10 +147,18 @@ def osv_repository(payload: dict, name: str, cpes: Iterable[str]) -> str | None:
             if affected_products:
                 if any(product == affected_product and vendor in {"*", affected_vendor}
                        for vendor, product in products for affected_vendor, affected_product in affected_products):
-                    return repository
+                    candidates.add(repository)
             elif repository.rsplit("/", 1)[-1].lower() in names:
-                return repository
-    return None
+                candidates.add(repository)
+    if not candidates:
+        return None
+
+    vendors = {vendor for vendor, _ in products}
+    return min(candidates, key=lambda repository: (
+        repository.rsplit("/", 1)[-1].lower() not in names,
+        repository.rsplit("/", 2)[-2].lower() not in vendors,
+        repository,
+    ))
 
 
 def _scorecard_checks(payload: dict) -> list[dict]:

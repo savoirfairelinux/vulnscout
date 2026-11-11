@@ -179,6 +179,26 @@ def test_deferred_refresh_is_reserved_with_its_scan_batch(client, ids):
     assert refresh["cancellable"] is True
 
 
+def test_scorecard_refresh_keeps_variant_scope_and_uses_its_runner(client, ids):
+    from src.controllers.refresh_jobs import run_scorecard_refresh
+
+    with patch("src.controllers.operation_queue.OperationQueue.submit") as submit:
+        response = client.post("/api/operations", json={"jobs": [
+            {"kind": "refresh", "source": "scorecard", "variant_ids": [ids["variant_a"]]},
+        ]})
+
+    assert response.status_code == 202
+    operation = response.get_json()["operations"][0]
+    assert operation["options"] == {"variant_ids": [ids["variant_a"]], "force": False}
+    assert operation["scope"] == {
+        "project_id": None,
+        "variant_id": None,
+        "variant_ids": [ids["variant_a"]],
+        "variants": [{"variant_id": ids["variant_a"], "project_id": ids["project_id"]}],
+    }
+    assert submit.call_args.kwargs["runner"] is run_scorecard_refresh
+
+
 def test_scan_options_are_carried_onto_the_operation(client, ids):
     response = client.post("/api/operations", json={"jobs": [
         {"kind": "scan", "source": "nvd", "variant_ids": [ids["variant_a"]],
