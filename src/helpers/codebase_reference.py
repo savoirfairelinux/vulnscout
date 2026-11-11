@@ -6,6 +6,7 @@
 import gzip
 import io
 import stat
+import subprocess
 import tarfile
 import tempfile
 import zipfile
@@ -20,6 +21,8 @@ MAX_EXPANDED_BYTES = 100 * 1024 * 1024
 MAX_ENTRIES = 5000
 MAX_RESPONSE_BYTES = 64 * 1024
 ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz")
+PDF_TEXT_LIMIT = 2 * 1024 * 1024
+PDF_TIMEOUT = 30
 
 
 def _safe_path(name: str) -> str:
@@ -29,6 +32,34 @@ def _safe_path(name: str) -> str:
             or ".." in path.parts or ":" in name or not path.parts):
         raise ValueError("Archive contains an unsafe path.")
     return str(path)
+
+
+def _pdf_text(content: bytes) -> str:
+    """Text of a PDF via poppler's pdftotext, one '--- page N ---' header per page."""
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
+        handle.write(content)
+        handle.flush()
+        try:
+            result = subprocess.run(
+                ["pdftotext", "-layout", "-enc", "UTF-8", handle.name, "-"],
+                capture_output=True, timeout=PDF_TIMEOUT, check=False,
+            )
+        except FileNotFoundError as exc:
+            raise ValueError("PDF text extraction is unavailable on this server (pdftotext is missing).") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(f"PDF text extraction timed out after {PDF_TIMEOUT} s.") from exc
+    if result.returncode != 0:
+        if b"password" in result.stderr.lower():
+            raise ValueError("PDF is encrypted; provide an unencrypted copy or a text export.")
+        raise ValueError("PDF could not be read.")
+    pages = result.stdout.decode("utf-8", errors="replace").split("\f")
+    if pages and not pages[-1].strip():
+        pages.pop()
+    if not any(page.strip() for page in pages):
+        raise ValueError("PDF has no extractable text (it may be a scan); provide a text export.")
+    text = "".join(f"--- page {number} ---\n{page.rstrip()}\n" for number, page in enumerate(pages, 1))
+    encoded = text.encode("utf-8")
+    return encoded[:PDF_TEXT_LIMIT].decode("utf-8", errors="ignore") if len(encoded) > PDF_TEXT_LIMIT else text
 
 
 class CodebaseReference:
@@ -142,6 +173,8 @@ class CodebaseReference:
         return content
 
     def text(self, path: str) -> str:
+        if path.lower().endswith(".pdf"):
+            return _pdf_text(self.read_bytes(path))
         content = self.read_bytes(path)
         if b"\x00" in content:
             raise ValueError("Source file is binary; only UTF-8 text can be read.")
@@ -154,6 +187,9 @@ class CodebaseReference:
         if path not in self.entries:
             raise LookupError("Source file not found.")
         _, member = self.entries[path]
+        if path.lower().endswith(".pdf"):
+            yield from io.StringIO(self.text(path))
+            return
         if member is None and self.archive is None:
             self.stream.seek(0)
             reader = io.TextIOWrapper(self.stream, encoding="utf-8-sig", errors="strict", newline="")
