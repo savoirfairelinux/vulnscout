@@ -13,6 +13,8 @@ type Props = {
     notify: (message: string, type: 'success' | 'error') => void;
     fieldErrors: Record<string, string>;
     disabled?: boolean;
+    /** Also makes the texts and the codebase source read-only, while the AI drafts the variant. */
+    locked?: boolean;
 };
 
 type TextKey = 'variant_description' | 'environment' | 'other_info';
@@ -25,13 +27,14 @@ const SOURCES: Choice<VariantDraft['codebase_source']>[] = [
 
 const fieldId = (key: string) => `ai-variant-${key.replace(/_/g, '-')}`;
 
-function RadioGroup<T extends string>({ name, label, options, value, onChange, errors }: Readonly<{
+function RadioGroup<T extends string>({ name, label, options, value, onChange, errors, disabled }: Readonly<{
     name: string;
     label: string;
     options: Choice<T>[];
     value: T;
     onChange: (value: T) => void;
     errors: Record<string, string>;
+    disabled: boolean;
 }>) {
     const labelId = `${fieldId(name)}-label`;
     return (
@@ -46,6 +49,7 @@ function RadioGroup<T extends string>({ name, label, options, value, onChange, e
                             value={option.value}
                             checked={value === option.value}
                             onChange={() => onChange(option.value)}
+                            disabled={disabled}
                             className="accent-cyan-400"
                         />
                         {option.label}
@@ -105,7 +109,7 @@ function CodebasePathsTable({ paths, onChange, errors, disabled }: Readonly<{
     );
 }
 
-function ContextTab({ draft, onDraftChange, variantId, files, notify, fieldErrors, disabled = false }: Readonly<Props>) {
+function ContextTab({ draft, onDraftChange, variantId, files, notify, fieldErrors, disabled = false, locked = false }: Readonly<Props>) {
     const setText = (key: TextKey, value: string) => onDraftChange({ ...draft, [key]: value });
     const textArea = (key: TextKey, label: string) => (
         <>
@@ -115,6 +119,7 @@ function ContextTab({ draft, onDraftChange, variantId, files, notify, fieldError
                 className={TEXTAREA}
                 value={draft[key]}
                 onChange={e => setText(key, e.target.value)}
+                disabled={locked}
                 {...describeField(key, fieldErrors)}
             />
             <FieldErrorText path={key} errors={fieldErrors} />
@@ -132,6 +137,7 @@ function ContextTab({ draft, onDraftChange, variantId, files, notify, fieldError
                     value={draft.codebase_source}
                     onChange={value => onDraftChange({ ...draft, codebase_source: value })}
                     errors={fieldErrors}
+                    disabled={locked}
                 />
                 {/* Both editors stay mounted so the hidden one keeps its state. */}
                 <div hidden={draft.codebase_source !== 'references'}>
