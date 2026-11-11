@@ -1631,7 +1631,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
 
     return (
         <div>
-            <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
+            <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
                 <ExplicitSearchInput
                     id="review-search"
                     ref={searchInputRef}
