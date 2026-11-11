@@ -19,8 +19,9 @@ forwarding through the gateway or rootless Podman pasta. It is intended for a
 single user, not a shared or remotely accessible deployment. Do not forward it
 to other users: the backend can access the local user's Copilot identity and
 configured provider keys, and the agent can change assessments and context.
-Conversation state is managed in memory; this is not a durable multi-user
-session service.
+The connection, AI queue and conversations are process-wide and kept in the
+server's memory: every tab and CLI run shares them, and a restart forgets them.
+This is not a durable multi-user session service.
 
 Free chat exposes only the allowed VulnScout MCP tools. Assess and review actions
 (each in its own conversation), `./vulnscout assess` and `./vulnscout review` additionally load the
@@ -43,22 +44,28 @@ prompt injection in them could still try to encode data into a URL. Disable web
 access for confidential projects or untrusted uploads.
 ```
 
-`flask ai-assess` (`./vulnscout assess`) runs the same SDK turn without the web
-session. Each turn is ephemeral (its SDK session is deleted) and runs the
-`cve-assessment` skill with the read tools plus `write_assessment` and
-`update_ai_assessment`. The command serves the app's API on an ephemeral
-`127.0.0.1` port for the MCP server, because the CLI process does not run the
-web server. That API accepts only new AI assessments on the current turn's
-targets, and revisions of the AI assessments that turn created while all their
-targets remain the turn's; every other write is rejected. It reads provider
-settings from the same `config.env`.
+Assess and review actions, from the web UI or the CLI, run in the server's AI
+queue (`src/controllers/agent_queue.py`) when `./vulnscout serve` is running.
+Each action turn loads its skill and gets the read tools plus write access
+limited to its own targets: the MCP server reaches the app's API through a
+separate `127.0.0.1` port served for these turns, which accepts only new AI
+assessments on the current turn's targets (and revisions of the AI assessments
+that turn created while all their targets remain the turn's) or reviews of the
+current turn's review targets; every other write is rejected. The action's SDK
+session is kept for follow-up messages, which, like free chat, use the regular
+API.
 
-`flask ai-review` (`./vulnscout review`) does the same for AI reviews of custom
-assessments, with `assessment-review` and write access limited to the review
-targets of the current turn; see
+`flask ai-assess` (`./vulnscout assess`) and `flask ai-review`
+(`./vulnscout review`) first probe the web server's queue
+(`http://127.0.0.1:${FLASK_RUN_PORT:-7275}`). When it answers, they submit
+their turns with `require_ready` (missing configuration or GitHub sign-in fails
+at once), follow the requests, and fold their results into the usual report.
+Otherwise they run the same turns in process, each ephemeral (its SDK session is
+deleted), with the same write guard on their own ephemeral port, and print
+`note: web server not running; this run is not visible in the web AI queue`.
+Both read provider settings from the same `config.env`; see
+[Assess from the CLI or CI](ai-assessments.md#assess-from-the-cli-or-ci) and
 [Reviewing custom assessments from the CLI](ai-assessments.md#reviewing-custom-assessments-from-the-cli).
-CLI reviews use the same provider and skills as the web agent, but do not
-appear in **Conversations**.
 
 ## Configuration and Credentials
 
@@ -95,7 +102,10 @@ restarting a non-GitHub provider that has no saved model, the toolbar requires
 an explicit selection rather than sending Copilot's `auto` model ID to that
 provider.
 The **Model** selector above the chat stays visible in both conversation and
-**Conversations** views and is disabled while any request is running.
+**Conversations** views and is disabled while any request is running. Each
+request keeps the model it was queued with; `POST /api/agent/model` is accepted
+while a request runs and applies to later requests. Provider changes, sign-in
+and sign-out return `409` while a request runs.
 
 ### GitHub Device Sign-in
 
@@ -211,26 +221,36 @@ In two-variant intersections, base-variant packages are checked against active
 vulnerability observations, not just packages still installed in the SBOM.
 
 Bulk custom-assessment reviews validate the complete target set before queuing.
-A queued review succeeds only when every expected target has a freshly saved,
-non-stale review; a text response is not proof of persistence.
+When a review turn starts, the server pins the assessment fingerprint; the write
+guard rejects reviews of other targets or for another fingerprint. After the
+turn, the server reads the reviews back: the request succeeds only when every
+expected target has a freshly saved, non-stale review for that fingerprint; a
+text response is not proof of persistence.
 
-## Streaming and Session Behavior
+## AI Queue and Streaming
 
-The messages endpoint supports `Accept: application/x-ndjson` for status, text
-delta, tool activity, heartbeat, and terminal `done` or `error` records.
-Clients without this header still receive a single JSON response. Validation
-errors remain JSON HTTP errors. Proxies must not buffer streamed responses.
+The server keeps one AI queue per process (`agent_queue`), shared by every tab
+and CLI run. Requests run on two lanes, each with one worker thread: `action`
+(assess and review, one at a time) and `chat` (messages), so a chat never waits
+behind an action. A request also waits for the earlier requests of its own
+conversation. A failed request blocks nothing and stays listed for retry or
+removal; **Stop** cancels a running turn's task, which ends `cancelled` with
+what it saved. When no request can run (no AI configuration, invalid
+configuration, GitHub signed out), the queue is paused with a reason; sign-in,
+provider and model changes resume it.
 
-Activity events expose tool names and execution status, not internal reasoning,
-tool arguments, or raw tool results. Usage displays sum `assistant.usage.cost`
-across the current conversation without inferring a currency or token price.
+Clients mirror the queue through `GET /api/agent/queue/stream` (server-sent
+events: a snapshot, then queue changes, live progress, conversation updates and
+agent writes) and fetch the transcript of the conversation they display; see
+[AI Queue](api.md#ai-queue). Activity events expose tool names and execution
+status, not internal reasoning, tool arguments, or raw tool results. Usage
+displays sum `assistant.usage.cost` across a conversation without inferring a
+currency or token price. Proxies must not buffer the stream.
 Connector logos use Lobe Icons Static SVG (MIT).
 
-One agent panel hosts the main conversation and separate action conversations,
-all served by a shared FIFO queue. Hiding the panel, changing scope, or
-navigating away does not cancel queued or running work. Reloading the browser
-discards the in-memory queue and conversations, but does not guarantee
-cancellation of a backend turn; inspect stored results before retrying writes
-after an interruption. For user-facing
-conversation lifetimes, queue controls, and retry behavior, see
+One agent panel hosts the main conversation and separate action conversations.
+Hiding the panel, changing scope, navigating away or reloading the page does
+not cancel queued or running work: a reloaded tab shows the same queue and
+transcripts until the server restarts. For user-facing conversation lifetimes,
+queue controls, and retry behavior, see
 [AI Assessments](ai-assessments.md#chat-scope-and-conversations).
