@@ -279,14 +279,14 @@ def test_run_turn_arms_the_guard_for_the_turn_only(app, ctx, monkeypatch):  # no
     api = GuardedApi(app)
     api.start()
     try:
-        publish = object()
+        publish, on_session = object(), object()
         reply, _ = asyncio.run(ai_actions.run_turn(turn, agent.Conversation(), "m", Path("mcp"), api, publish,
-                                                   ephemeral=False))
+                                                   ephemeral=False, on_session=on_session))
         assert json.loads(reply) == [200, 403]
         [(message, scope, published, kwargs)] = calls
         assert (message, scope, published) == (turn.prompt, turn.scope, publish)
         assert kwargs == {"profile": turn.profile, "timeout": turn.spec.timeout, "api_url": api.url,
-                          "ephemeral": False}
+                          "ephemeral": False, "on_session": on_session}
         assert isinstance(turn.guard, ai_actions.AssessGuard) and len(turn.guard.written) == 1
         assert _post(api.url, "/api/vulnerabilities/CVE-2024-0001/assessments", payload) == (403, {"error": NO_TURN})
     finally:

@@ -79,24 +79,8 @@ def _build_operation(app: Flask, rule: Rule, method: str) -> dict[str, Any]:
     summary, description, metadata = _parse_docstring(view_func, method)
     path = _normalize_rule_path(rule.rule)
     if path == "/api/agent" or path.startswith("/api/agent/"):
-        metadata["parameters"].extend([
-            {
-                "name": "X-Agent-Thread",
-                "in": "header",
-                "required": False,
-                "schema": {"type": "string", "format": "uuid"},
-                "description": "Isolate a conversation within the browser's agent session.",
-            },
-            {
-                "name": "vulnscout_agent",
-                "in": "cookie",
-                "required": False,
-                "schema": {"type": "string"},
-                "description": "Session cookie set automatically by the agent endpoints.",
-            },
-        ])
         for status, message in {
-            "400": "Invalid conversation header, provider configuration, or request payload.",
+            "400": "Invalid provider configuration or request payload.",
             "403": "Agent access requires localhost and a same-origin request.",
         }.items():
             metadata["responses"].setdefault(

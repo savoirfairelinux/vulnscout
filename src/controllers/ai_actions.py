@@ -542,15 +542,19 @@ def prepare(spec: TurnSpec) -> PreparedTurn:
 
 
 async def run_turn(turn: PreparedTurn, conversation: agent.Conversation, model: str, path: Path,
-                   api: GuardedApi, publish=None, ephemeral: bool = True) -> tuple[str, dict]:
-    """Run *turn* as one agent turn whose writes go through *api*, armed with the turn's guard."""
+                   api: GuardedApi, publish=None, ephemeral: bool = True,
+                   on_session=None) -> tuple[str, dict]:
+    """Run *turn* as one agent turn whose writes go through *api*, armed with the turn's guard.
+
+    *on_session* receives the SDK session ID as soon as the session exists.
+    """
     from ..routes import agent
 
     api.arm(turn.guard)
     try:
         return await agent._reply(conversation, turn.prompt, path, model, turn.scope, publish,
                                   profile=turn.profile, timeout=turn.spec.timeout, api_url=api.url,
-                                  ephemeral=ephemeral)
+                                  ephemeral=ephemeral, on_session=on_session)
     finally:
         api.arm(None)
 

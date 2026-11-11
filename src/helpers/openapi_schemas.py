@@ -545,30 +545,6 @@ SCHEMAS: dict[str, Any] = {
         "cost": _NUMBER, "input_tokens": {**_INT, "nullable": True},
         "output_tokens": {**_INT, "nullable": True},
     }, ("cost", "input_tokens", "output_tokens")),
-    "AgentMessageRequest": _object({
-        "message": {"type": "string", "minLength": 1, "maxLength": 8000},
-        "model": {"type": "string", "minLength": 1, "maxLength": 100},
-        "action": {"type": "string", "enum": ["assess", "review"]},
-        "context": _object({
-            "page": {"type": "string", "enum": [
-                "metrics", "packages", "vulnerabilities", "scans", "review",
-                "exports", "settings", "ai", "unknown",
-            ]},
-            **{name: {"type": "string", "maxLength": 100} for name in (
-                "projectId", "variantId", "baseVariantId", "compareOperation", "multiOperation",
-            )},
-            "variantIds": _STRINGS, "view": _ref("JsonObject"),
-        }, ("page",), nullable=True),
-    }, ("message",)),
-    "AgentReply": _object({
-        "reply": _STRING, "model": _STRING, "usage": _ref("AgentUsage"),
-    }, ("reply", "model", "usage")),
-    "AgentConversation": _object({
-        "messages": _array(_object({
-            "role": {"type": "string", "enum": ["user", "assistant"]}, "content": _STRING,
-        }, ("role", "content"))),
-        "usage": _ref("AgentUsage"),
-    }, ("messages", "usage")),
     "AgentStatus": _object({
         "authenticated": _BOOL, "login": _TEXT, "configured": _BOOL, "device_login": _BOOL,
         "token_connected": _BOOL, "provider": _TEXT, "config_error": _TEXT,

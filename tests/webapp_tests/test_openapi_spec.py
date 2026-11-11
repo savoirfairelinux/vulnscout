@@ -223,7 +223,6 @@ def test_complete_spec_validates_against_openapi_30(client):
 @pytest.mark.parametrize("path,statuses", [
     ("/api/operations", {"202", "400", "404", "409", "503"}),
     ("/api/documents/export", {"200", "202", "400", "404", "500", "503"}),
-    ("/api/agent/messages", {"200", "400", "403", "409", "503"}),
 ])
 def test_explicit_success_statuses_do_not_get_fictional_defaults(client, path, statuses):
     responses = client.get("/api/openapi").get_json()["paths"][path]["post"]["responses"]
@@ -300,7 +299,6 @@ def test_repeated_variant_filters_are_arrays(client, path):
 
 @pytest.mark.parametrize("path,method,status,media_types", [
     ("/api/events/stream", "get", "200", {"text/event-stream"}),
-    ("/api/agent/messages", "post", "200", {"application/json", "application/x-ndjson"}),
     ("/api/documents/export", "post", "200", {"application/zip"}),
     ("/api/documents/export/{op_id}/download", "get", "200", {"application/zip"}),
     ("/api/assessments/review/export", "get", "200", {"application/json"}),
@@ -312,7 +310,7 @@ def test_stream_and_download_media_types(client, path, method, status, media_typ
     assert set(response["content"]) == media_types
 
 
-def test_agent_contract_models_local_access_and_session_without_scan_gate(client):
+def test_agent_contract_models_local_access_without_session_or_scan_gate(client):
     paths = client.get("/api/openapi").get_json()["paths"]
     for path, methods in paths.items():
         if not (path == "/api/agent" or path.startswith("/api/agent/")):
@@ -320,9 +318,9 @@ def test_agent_contract_models_local_access_and_session_without_scan_gate(client
         for operation in methods.values():
             assert "403" in operation["responses"]
             assert operation["responses"].get("503", {}).get("description") != "Scan not finished"
-            parameters = {(p["in"], p["name"]): p for p in operation["parameters"]}
-            assert ("cookie", "vulnscout_agent") in parameters
-            assert parameters["header", "X-Agent-Thread"]["schema"]["format"] == "uuid"
+            parameters = {(p["in"], p["name"]) for p in operation.get("parameters", [])}
+            assert ("cookie", "vulnscout_agent") not in parameters
+            assert ("header", "X-Agent-Thread") not in parameters
 
 
 def _assert_payload_matches(spec, schema, payload):
@@ -543,42 +541,20 @@ def test_runtime_sse_matches_its_documented_media_type(client):
         response.close()
 
 
-@pytest.mark.parametrize("streaming", [False, True])
-def test_runtime_agent_replies_match_documented_media_types(client, monkeypatch, tmp_path, streaming):
+def test_runtime_agent_status_matches_its_schema(client, monkeypatch):
     from src.routes import agent
-    mcp_path = tmp_path / "server.py"
-    mcp_path.write_text("")
-    monkeypatch.setattr(agent, "_mcp_path", lambda: mcp_path)
-    monkeypatch.setattr(agent, "_container_gateway", lambda: None)
+
+    async def auth_status(token):
+        return {"authenticated": False, "login": None}
+
+    monkeypatch.setattr(agent, "_auth_status", auth_status)
     monkeypatch.setattr(agent, "_load_env_credentials_nonblocking", lambda root: None)
-    monkeypatch.setattr(agent, "_scope_for_context", lambda context: None)
-    monkeypatch.setattr(agent, "_conversation", lambda: ("contract-session", agent.Conversation()))
-
-    async def reply(conversation, prompt, path, model, scope, publish=None):
-        if publish:
-            publish({"type": "delta", "text": "Hello."})
-        return "Hello.", {"cost": None, "input_tokens": 3, "output_tokens": 2}
-
-    monkeypatch.setattr(agent, "_reply", reply)
+    monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
     spec = client.get("/api/openapi").get_json()
-    operation = spec["paths"]["/api/agent/messages"]["post"]
-    payload = {"message": "Hello"}
-    _assert_payload_matches(spec, operation["requestBody"]["content"]["application/json"]["schema"], payload)
-    media_type = "application/x-ndjson" if streaming else "application/json"
-    response = client.post("/api/agent/messages", json=payload, headers={"Accept": media_type})
-    try:
-        assert response.status_code == 200
-        assert response.mimetype == media_type
-        if streaming:
-            events = [json.loads(line) for line in response.get_data(as_text=True).splitlines()]
-            assert events[-1]["type"] == "done"
-            assert events[-1]["reply"] == "Hello."
-        else:
-            _assert_payload_matches(
-                spec, operation["responses"]["200"]["content"][media_type]["schema"], response.get_json(),
-            )
-    finally:
-        response.close()
+    response = client.get("/api/agent")
+    assert response.status_code == 200
+    _assert_payload_matches(spec, spec["paths"]["/api/agent"]["get"]["responses"]["200"]["content"][
+        "application/json"]["schema"], response.get_json())
 
 
 def _minimal_scan_import():
