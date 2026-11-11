@@ -59,14 +59,19 @@ Use the plug button to reopen connector setup. The provider is shared across
 the main and action conversations, but their messages remain separate.
 The **Model** selector stays visible in both conversation and **Conversations**
 views and is disabled while any request is running. Switching models preserves
-the current conversation. **Sign out** or **Disconnect provider** clears the
-stored credentials and conversation state.
-Actions queued before sign-in or the first connection wait until setup finishes.
-Replacing or disconnecting an existing connection requires an empty queue;
-finish or remove its requests first. Opening connection settings pauses waiting
-work until you return to the chat. New actions submitted during a connection
-change are retained. Follow-ups to a previous provider's conversation pause with
-an explanation and require an explicit retry to start a fresh conversation.
+the current conversation. Each request keeps the model selected when it was
+queued, so a new selection applies only to later requests. Requests queued
+before AI is configured, retried, or waiting across a connection change take
+the model selected when they start.
+**Sign out** or **Disconnect provider** clears the stored credentials and
+conversation state.
+While AI is not configured or GitHub is signed out, the queue is **paused**:
+requests stay queued, a banner shows the reason, and they start once you sign in,
+connect a provider or select a model.
+Replacing or disconnecting a connection is refused while a request is running;
+wait for it or stop it first. Waiting requests are kept: new conversations run
+with the new connection, while follow-ups to a previous provider's conversation
+fail with an explanation and need an explicit retry to start a fresh conversation.
 
 Provider credentials are handled by the backend and persisted in the private
 configuration file so the connection can survive restarts. They are not returned
@@ -94,7 +99,15 @@ conversation inside that same panel. Each request keeps the active page,
 project/variant scope, and relevant displayed or selected records captured when
 it was queued. Unsaved form text and API keys are not sent automatically.
 
-All requests share one **AI queue**, running one at a time in submission order.
+All requests go to one **AI queue** kept by the VulnScout server and shared by
+every browser tab and by `./vulnscout assess`/`review` (see
+[Assess from the CLI or CI](#assess-from-the-cli-or-ci)). Every tab shows the
+same requests and their live progress. The queue has two lanes: assess and
+review actions run one at a time in submission order, while chat messages run
+in their own lane and never wait behind an action. The requests of one
+conversation always run in order. A failed request does not block the queue:
+later requests keep running, and the failed one stays listed until you retry or
+remove it.
 The person button in the header switches to **Conversations**: the main
 conversation first, then action conversations grouped into **Needs attention**,
 **Running**, **Waiting**, and **Finished**. Each shows its origin, queue position,
@@ -107,6 +120,8 @@ icon. An empty or paused queue shows a standing person; a warning mark identifie
 a paused queue.
 
 A waiting conversation displays its pending request and **Remove from queue**.
+**Stop**, in a running conversation or next to it in **Conversations**, cancels
+the running request; whatever it already saved is kept.
 **Clear waiting** removes waiting and failed requests, never the running one.
 Finished conversations can be deleted individually or with **Delete all**.
 VulnScout keeps the 12 most recently used finished action conversations live;
@@ -114,9 +129,10 @@ older conversations are archived with their transcripts but cannot accept
 follow-ups. This queue is separate from the navigation bar's scan/upload/export
 operation queue.
 
-Closing the panel, changing scope, or navigating away does not cancel queued or
-running work. Reloading the browser discards the in-memory queue and
-conversations. **+ → New conversation** deletes the main SDK session and resets
+Closing the panel, changing scope, navigating away, closing the tab or reloading
+the page does not cancel queued or running work. The queue and the conversation
+transcripts are kept in the server's memory: they survive a reload and are lost
+when the server restarts. **+ → New conversation** deletes the main SDK session and resets
 its messages, draft, and usage while keeping the connection, selected model,
 and action conversations. **Never ask again** remembers the confirmation
 preference in this browser. Older SDK session files may remain on the backend.
@@ -140,12 +156,13 @@ the agent panel on a new action conversation for those exact targets.
 For several vulnerabilities, select rows in **Vulnerabilities** and choose
 **Assess with AI** in the selection bar. Each vulnerability gets its own
 conversation; bulk assessments open **Conversations** so you can follow the
-queue. If an action fails, retry it or remove it before the queue continues.
-Narrow large selections when asked.
+queue. Narrow large selections when asked.
 Historical/outdated packages and unselected vulnerabilities are excluded.
 If targets cannot be resolved, VulnScout reports an error instead of queuing a
 partial selection. Large requests are split within the message limit while
-keeping each variant's packages together.
+keeping each variant's packages together; each batch is a fresh agent session in
+the same conversation, and follow-up messages may save for any of its batches'
+targets.
 
 Closing the panel or resetting the row selection preserves queued and running
 work. Additional selections queue only new vulnerabilities; a queued or running
@@ -157,8 +174,8 @@ Queued action buttons retain their labels and add **Queued · #N**, **Running...
 or **Failed · view**. Clicking them opens the existing request rather than
 queueing a duplicate. The status disappears when the request finishes.
 A failed request shows its error, **Retry failed action**, and **Remove failed
-action** in its conversation. The shared queue pauses until it is retried or
-removed; other conversations show a banner linking to it.
+action** in its conversation; other conversations show a banner linking to it.
+Retrying moves the request to the end of the queue.
 
 The **Assess vulnerability** chat suggestion sends immediately for the open
 vulnerability. To assess several vulnerabilities, check the desired rows and
@@ -191,7 +208,8 @@ other targets and approved assessments are preserved.
 
 Responses stream as text arrives. Expand **Activity** to inspect tool names and
 their running, completed, or failed status. This log does not expose internal
-reasoning, tool arguments, or raw tool results; it lasts until the page reloads.
+reasoning, tool arguments, or raw tool results; it is kept with the transcript
+until the server restarts.
 Each assistant response has a copy action, and each code block in a response
 has its own **Copy code block** button.
 
@@ -200,9 +218,9 @@ input/output tokens when provided by the SDK and reported usage cost. The UI
 does not infer a currency or token price; missing cost is shown as **Cost not
 reported**.
 
-Failures restore the draft for retry. If a stream is interrupted, the backend
-may still finish the request: reload and check the stored result before
-retrying a write.
+If a message cannot be queued, the draft is kept for retry. A request runs on
+the server even when no tab follows it; if the page lost its connection, it
+reconnects and shows the current state.
 
 ### Assess from the CLI or CI
 
@@ -215,15 +233,17 @@ retrying a write.
 ./vulnscout assess -p demo --filter "(id == CVE-2024-3094 or id == CVE-2023-4863) and pending"
 ```
 
+When `./vulnscout serve` is running, `assess` and `review` submit their agent turns to the web server's [AI queue](#chat-scope-and-conversations) instead of running them in the command's process. The requests appear in every tab's **Conversations** with the origin `CLI`, wait behind the actions already queued, and use the server's AI connection; the command follows them and prints the same report and exit code. A server that is still starting is awaited for up to 60 s. An action that is already in the queue (for example a vulnerability queued from the web) is followed instead of being queued twice, and retried if it had failed. Without a running server, the command runs the turns itself and prints `note: web server not running; this run is not visible in the web AI queue` on stderr.
+
 - Select vulnerabilities with repeatable `--cve` **or** one `--filter` ([match-condition syntax](ci_conditions.md)); use exactly one, as they cannot be combined. To restrict specific IDs with other conditions, list them in the filter with `id == <id>`. Filters evaluate each active target with its own newest assessment, including pending AI ones, so an assessment of a removed version or of another package never hides an unassessed target.
 - Scope follows `match-condition`: `-p` alone covers every variant, `-p -v` one variant (repeat `-v` to select several), and no scope means `default/default`. Each vulnerability is assessed on its active (variant, package) targets in scope: the exact package, supplier included, is in the variant's current SBOM and the vulnerability is found by the variant's current scans. Historical/outdated packages and findings are excluded, as in the web UI. With `--filter`, only the matching targets are assessed.
 - As in the web UI, a new AI assessment replaces the earlier pending AI assessment on the same targets. Approved assessments are never changed.
-- CLI runs may only read data and write AI assessments for the vulnerability and (variant, package) targets of each agent turn; any other write, including context and review changes, is rejected, and they do not appear in the browser's **Conversations** queue.
+- CLI runs may only read data and write AI assessments for the vulnerability and (variant, package) targets of each agent turn; any other write, including context and review changes, is rejected.
 - `--timeout` limits each agent turn (positive integer, default 600 s). `--model` overrides `AI_MODEL`. `--dry-run` lists the targets without calling the AI. An expired or invalid GitHub Copilot token stops the run before the first assessment.
 - Outcomes: `assessed`, `partial` (some targets written), `no_write`, `failed`, `timeout`, `not_found` (a `--cve` ID with no active target in scope; filter matches without one are skipped), `interrupted`, `planned` (dry run). The command exits **1** if any vulnerability has an outcome other than `assessed` or `planned`, and exits 0 when nothing matched.
 - The summary lists each target under its vulnerability: after a run, `written` with the saved AI assessment IDs, or `not written`; with `--dry-run`, the packages per variant.
 - `--json` prints `{"model", "scope", "results": [{"id", "outcome", "targets", "reply", "usage", "error"}]}` on stdout; progress, including container startup, goes to stderr. `scope` is `{"project", "variants"}`, where `variants` is `null` when every variant of the project is selected. Each `targets` entry is `{"variant_id", "variant", "package", "written", "assessment_ids"}`; `assessment_ids` lists the pending AI assessments this run's agent saved for the target; assessments written meanwhile by the web agent or another run are not counted.
-- Ctrl-C, or a CI job cancellation (SIGTERM), stops the run inside the container after cancelling the current agent turn. The summary still lists what was written, and the exit code is 1. Press Ctrl-C a second time to stop immediately without a summary.
+- Ctrl-C, or a CI job cancellation (SIGTERM), stops the run after cancelling the current agent turn. Without `serve`, the run stops inside the container. With `serve`, only the requests this run created are stopped: the running one is cancelled and its waiting ones are removed, while other requests in the web AI queue continue, including one already queued (from the web UI or another run) that this run was only following. The summary still lists what was written, and the exit code is 1. Press Ctrl-C a second time to stop immediately without a summary. A request of the run stopped or removed from the web UI is reported as `interrupted`; if the web server stops during the run, the unfinished vulnerabilities are reported as `failed` (`web server stopped`).
 
 ### Reviewing custom assessments from the CLI
 
@@ -240,7 +260,7 @@ retrying a write.
   - `--cve <id>` (repeatable) reviews the custom assessments of that vulnerability: every target in the project, or only the variants given with `-v` (repeatable). Non-custom assessments of the CVE are ignored and counted in `ignored_non_custom`. A CVE with no custom assessment in scope is an error that says whether it has no assessment at all or only SBOM-scan or pending AI ones.
 - All selection errors are listed together and the command exits 1 before any AI call.
 - A target whose review is **fresh** is skipped (`skipped_fresh`); targets with no review or a **stale** one are always reviewed. `--re-review` also reviews fresh targets. When every target is fresh, no agent is loaded and the command exits 0.
-- Each agent turn covers one variant of one assessment; many packages are split into batches shown as `(batch N of M)`. A turn may only save reviews for its own listed targets, against the assessment content selected at the start of the run: any other write, including changing the assessment, is rejected. After each turn the outcome is read back from the database, not from the agent's reply.
+- Each agent turn covers one variant of one assessment; many packages are split into batches shown as `(batch N of M)`. A turn may only save reviews for its own listed targets, against the assessment content selected at the start of the run: any other write, including changing the assessment, is rejected. After each turn the outcome is read back from the database, not from the agent's reply. With `serve` running, each turn is one request in the web AI queue, as described for [`assess`](#assess-from-the-cli-or-ci).
 - `--timeout` limits each agent turn (positive integer, default 600 s). `--model` overrides `AI_MODEL`. `--dry-run` lists the targets without calling the AI. An expired or invalid GitHub Copilot token stops the run before the first review.
 - Target outcomes: `reviewed` (a review for the pinned assessment content was saved), `skipped_fresh`, `planned` (dry run), and the failing ones `changed` (the assessment was edited, retargeted or deleted during the run; run it again), `no_write` (the agent saved no review), `failed`, `timeout`, `interrupted`.
 - Assessment outcomes: `planned`, `skipped` (every target fresh), `reviewed`, `partial` (some targets reviewed) and `failed`.
@@ -274,7 +294,7 @@ retrying a write.
   ```
 
   `scope.variants` is `null` when every variant of the project is selected. `interrupted` is `true` when the run was stopped by Ctrl-C or SIGTERM. `counts` is per target: `failed` counts the failing outcomes above. `review` is `null` unless the target was reviewed; its `status` is the VEX status the agent concluded and `verdict` is `agrees` or `differs` relative to the assessment. `error` is the failure message of a failing target.
-- Ctrl-C, or a CI job cancellation (SIGTERM), stops the run after cancelling the current agent turn: reviews already saved stay `reviewed`, the remaining targets are reported as `interrupted` and the summary is still printed, with `Interrupted.` (`"interrupted": true` in `--json`) and exit code 1. Press Ctrl-C a second time to stop immediately without a summary.
+- Ctrl-C, or a CI job cancellation (SIGTERM), stops the run after cancelling the current agent turn, with or without `serve` as for `assess` (with `serve`, only this run's requests are stopped): reviews already saved stay `reviewed`, the remaining targets are reported as `interrupted` and the summary is still printed, with `Interrupted.` (`"interrupted": true` in `--json`) and exit code 1. Press Ctrl-C a second time to stop immediately without a summary.
 - The web **Review with AI** button is unchanged; CLI and web reviews of a target replace each other.
 
 ## AI Context page
@@ -411,21 +431,23 @@ an independent second opinion on an existing **user-authored** assessment
 (`origin = "custom"`), not a scan-imported assessment or pending AI suggestion.
 Use **Review with AI** on a custom assessment in the vulnerability
 modal, or select assessments on the **Review** page and click **Review selected
-with AI**. Requests run sequentially in the agent chat, one complete
-assessment per request and per conversation; every target is reviewed even when the table is scoped
+with AI**. Requests run one at a time with the other actions of the AI queue,
+one complete assessment per conversation; every target is reviewed even when the table is scoped
 to one variant. You can close and reopen the chat while it works, inspect errors,
-and remove queued requests without altering your selection.
+stop the running review, and remove queued requests without altering your selection.
 Unresolved targets prevent the entire selection from being queued.
-An agent reply alone is not proof of a saved review: queued reviews succeed only
-once every expected target has a fresh, non-stale review. A failed action pauses
-the queue; use **Retry failed action** in its conversation or remove the failed action
-to continue.
+When a review starts, the server pins the assessment's current content by its
+fingerprint; the agent may only save reviews of its own targets against that
+fingerprint. Afterwards the server checks the database, not the agent's reply:
+the request succeeds only once every expected target has a fresh, non-stale
+review. A failed request does not block the queue; use **Retry failed action**
+in its conversation or remove the failed action.
 
 The agent independently derives a conclusion for **each (variant, package)
 target**, then saves a separate review for each one. An assessment covering multiple targets
-can therefore have different review verdicts for different targets. Each
-review is checked against the assessment content the agent read. If the
-authored content changed meanwhile, the write is rejected: request a new review
+can therefore have different review verdicts for different targets. If the
+authored content changed after the review started, the write is rejected (the
+target is reported as changed): request a new review
 of the updated assessment rather than reusing the old conclusion.
 Re-reviewing a target replaces only that target's previous review; **no review
 changes the underlying assessment**.
@@ -462,8 +484,11 @@ support and vendor/distribution backports are separate questions.
   references; **Codebase Path** does not mount that directory.
 - **A request failed** — inspect the error and **Activity** before retrying.
   For queued work, use **Retry failed action** in its conversation, or remove the
-  failed action. If a stream was interrupted, check for a saved result before
-  retrying a write.
+  failed action; other requests keep running meanwhile. Check for a saved
+  result before retrying a write.
+- **Requests stay queued** — the queue is paused while AI is not configured or
+  GitHub is signed out; the banner shows why. Sign in, connect a provider or
+  select a model to resume it.
 - **`assess` reports `no_write` or `partial`** — the agent replied without recording every target. Read the `reply` in `--json` output, then rerun for those vulnerabilities; a rerun replaces any pending AI assessment it wrote.
 
 ## Optional: External AI Clients

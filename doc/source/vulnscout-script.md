@@ -23,8 +23,8 @@ v0.25; see [Migrating from Legacy CLI Flags](cli-migration.md).
 | `refresh` | Refresh EPSS, NVD, ENISA EUVD and GitHub Advisory data. | optional; all data when omitted | optional; needs `-p` |
 | `export refresh-changes --run-id <id> [--format json\|csv]` | Export one exact persisted refresh artifact to stdout. | optional visibility filter | optional; needs `-p` |
 | `match-condition <condition>` | Exit 2 when a vulnerability matches the condition. | optional; all variants of the project | optional; needs `-p` |
-| `assess --cve <id>...\|--filter <expr> [--model <id>] [--timeout <s>] [--dry-run] [--json]` | Create pending AI assessments with the configured AI provider. Use `--cve` or `--filter`, not both; see [Assess from the CLI or CI](ai-assessments.md#assess-from-the-cli-or-ci). | optional; all variants of the project | optional, repeatable; needs `-p` |
-| `review --assessment-id <uuid>...\|--cve <id>... [--re-review] [--model <id>] [--timeout <s>] [--dry-run] [--json]` | Record AI reviews of custom assessments with the configured AI provider, one per target; the assessments are never changed. Use `--assessment-id` or `--cve`, not both; see [Reviewing custom assessments from the CLI](ai-assessments.md#reviewing-custom-assessments-from-the-cli). | required | optional, repeatable; `--cve` only, needs `-p` |
+| `assess --cve <id>...\|--filter <expr> [--model <id>] [--timeout <s>] [--dry-run] [--json]` | Create pending AI assessments with the configured AI provider. Use `--cve` or `--filter`, not both; see [Assess from the CLI or CI](ai-assessments.md#assess-from-the-cli-or-ci) and [AI commands and the web server](#ai-commands-and-the-web-server). | optional; all variants of the project | optional, repeatable; needs `-p` |
+| `review --assessment-id <uuid>...\|--cve <id>... [--re-review] [--model <id>] [--timeout <s>] [--dry-run] [--json]` | Record AI reviews of custom assessments with the configured AI provider, one per target; the assessments are never changed. Use `--assessment-id` or `--cve`, not both; see [Reviewing custom assessments from the CLI](ai-assessments.md#reviewing-custom-assessments-from-the-cli) and [AI commands and the web server](#ai-commands-and-the-web-server). | required | optional, repeatable; `--cve` only, needs `-p` |
 | `report <template\|path>... [--format pdf\|html] [--condition <expr>]` | Generate reports. | default `default` | optional; all variants when omitted |
 | `export <kind>... [--amend]` | Write `spdx`, `cdx`, `openvex`, `custom-data`, `custom-openvex` or `context` to the outputs directory. `--amend` applies to `custom-*` only. | default `default` | optional; all variants when omitted |
 | `export vulnerability-history --since <timestamp> [--until <timestamp>] [--format json\|csv]` | Export recorded field changes to stdout. | optional; all data when omitted | optional; needs `-p` |
@@ -66,6 +66,31 @@ Example:
   --spdx "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.spdx.json" \
   --cve-check "$(pwd)/example/yocto-wrynose-spdx3/core-image-minimal-qemux86-64.rootfs.json"
 ```
+
+## AI Commands and the Web Server
+
+`assess` and `review` use the web server's AI queue when `./vulnscout serve` is
+running, and run in their own process otherwise:
+
+```bash
+./vulnscout serve
+./vulnscout assess -p demo --cve CVE-2024-3094   # queued in the web UI, origin CLI
+./vulnscout stop
+./vulnscout review -p demo --cve CVE-2024-3094   # runs in process
+```
+
+- **With `serve`**: the run's requests appear in every tab's **Conversations**
+  and wait behind the actions already queued there; chat messages are not
+  delayed. The command follows them and prints the usual report and exit code.
+  While the server is still starting, the command waits up to 60 s for it.
+- **Without `serve`**: the command runs the agent turns itself and first prints
+  `note: web server not running; this run is not visible in the web AI queue`
+  on stderr.
+- **Ctrl-C** (or SIGTERM in CI) cancels the current agent turn, keeps what it
+  already saved, prints the summary and exits 1. With `serve`, only the
+  requests this run created are stopped (the waiting ones are removed from the
+  queue); other requests continue, including those it was only following. A second Ctrl-C stops the command immediately without a
+  summary.
 
 ## Export Vulnerability Changes
 
