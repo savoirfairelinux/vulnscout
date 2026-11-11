@@ -1428,12 +1428,12 @@ describe('AIContext page', () => {
     });
 });
 
-function GuardHarness({ save }: Readonly<{ save: () => Promise<boolean> }>) {
+function GuardHarness({ save, discard }: Readonly<{ save: () => Promise<boolean>; discard?: () => void }>) {
     const { registerGuard, hasGuard, confirmLeave } = useUnsavedGuard();
     const [result, setResult] = useState('');
     return (
         <div>
-            <button type="button" onClick={() => registerGuard({ label: 'Thing', save })}>register</button>
+            <button type="button" onClick={() => registerGuard({ label: 'Thing', save, discard })}>register</button>
             <button type="button" onClick={() => registerGuard(null)}>unregister</button>
             <button type="button" onClick={() => { void confirmLeave().then(ok => setResult(String(ok))); }}>leave</button>
             <span data-testid="has-guard">{String(hasGuard)}</span>
@@ -1478,6 +1478,18 @@ describe('useUnsavedGuard', () => {
         fireEvent.click(leave);
         fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save' }));
         await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('false'));
+    });
+
+    test('Discard runs the guard discard callback and lets leaving proceed', async () => {
+        const save = jest.fn().mockResolvedValue(true);
+        const discard = jest.fn();
+        render(<UnsavedGuardProvider><GuardHarness save={save} discard={discard} /></UnsavedGuardProvider>);
+        fireEvent.click(screen.getByRole('button', { name: 'register' }));
+        fireEvent.click(screen.getByRole('button', { name: 'leave' }));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('true'));
+        expect(discard).toHaveBeenCalledTimes(1);
+        expect(save).not.toHaveBeenCalled();
     });
 
     test('beforeunload is prevented only while a guard is registered', () => {
