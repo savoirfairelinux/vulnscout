@@ -299,6 +299,7 @@ def test_repeated_variant_filters_are_arrays(client, path):
 
 @pytest.mark.parametrize("path,method,status,media_types", [
     ("/api/events/stream", "get", "200", {"text/event-stream"}),
+    ("/api/agent/queue/stream", "get", "200", {"text/event-stream"}),
     ("/api/documents/export", "post", "200", {"application/zip"}),
     ("/api/documents/export/{op_id}/download", "get", "200", {"application/zip"}),
     ("/api/assessments/review/export", "get", "200", {"application/json"}),
@@ -315,9 +316,12 @@ def test_agent_contract_models_local_access_without_session_or_scan_gate(client)
     for path, methods in paths.items():
         if not (path == "/api/agent" or path.startswith("/api/agent/")):
             continue
+        # The AI queue routes wait for the scan (the CLI relies on that 503), except its stream.
+        gated = path.startswith(("/api/agent/queue", "/api/agent/conversations")) and not path.endswith("/stream")
         for operation in methods.values():
             assert "403" in operation["responses"]
-            assert operation["responses"].get("503", {}).get("description") != "Scan not finished"
+            scan_gate = operation["responses"].get("503", {}).get("description") == "Scan not finished"
+            assert scan_gate == gated, path
             parameters = {(p["in"], p["name"]) for p in operation.get("parameters", [])}
             assert ("cookie", "vulnscout_agent") not in parameters
             assert ("header", "X-Agent-Thread") not in parameters
