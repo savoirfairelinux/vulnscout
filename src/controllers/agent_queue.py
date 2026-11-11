@@ -12,7 +12,8 @@ Each lane has one worker thread that runs a turn in its own event loop, so ``sto
 turn from any thread. Every change is published on ``agent_events`` (a private, localhost-only bus;
 transcripts never travel on the public operations stream):
 
-- ``queue``: ``{paused, requests, history, conversations}`` (request dicts and conversation summaries);
+- ``queue``: ``{paused, requests, history, conversations, connection_revision}`` (request dicts and
+  conversation summaries; the revision changes with the agent connection or model);
 - ``request_progress``: ``{request_id, conversation_id, live}``, at most every ``PROGRESS_INTERVAL`` s;
 - ``conversation``: a conversation summary, when its transcript or usage changed;
 - ``agent_write``: ``{tool, request_id, conversation_id}``, when the agent saved something.
@@ -315,6 +316,8 @@ class AgentQueue:
         self._running: dict[str, _Running | None] = {lane: None for lane in LANES}
         self._paused: dict[str, str] | None = None
         self._changing = False
+        self._generation = 0  # bumped when a connection change starts; a turn's credentials must predate none
+        self._revision = 0  # bumped when the connection or model changed; tabs reload their setup on a change
         self._stopping = False
         self._verified_token: str | None = None
         self._threads: dict[str, threading.Thread] = {}
@@ -350,12 +353,15 @@ class AgentQueue:
         return {"paused": dict(self._paused) if self._paused else None,
                 "requests": [request.to_dict(positions.get(request.id), full=False) for request in self._requests],
                 "history": [request.to_dict(full=False) for request in self._history],
-                "conversations": [conversation.summary() for conversation in conversations]}
+                "conversations": [conversation.summary() for conversation in conversations],
+                "connection_revision": self._revision}
 
     def snapshot(self) -> dict[str, Any]:
-        """``{epoch, seq, paused, requests, history, conversations}``; ``seq`` is the last event it includes.
+        """``{epoch, seq, paused, requests, history, conversations, connection_revision}``.
 
-        A queued request's ``position`` counts from the next request to run in its lane (1 = next).
+        ``seq`` is the last event it includes. A queued request's ``position`` counts from the next
+        request to run in its lane (1 = next). ``connection_revision`` changes with the agent connection
+        or model.
         """
         with self._lock:
             return {"epoch": self.events.epoch, "seq": self.events.seq, **self._state()}
@@ -868,13 +874,14 @@ class AgentQueue:
         """Hold the queue while the caller changes the agent connection.
 
         Raises QueueBusy if a request runs (or another change is in progress); otherwise no request starts
-        until the block exits, which resets the conversations (unless ``abort()`` was called) and wakes
-        the queue. An exception leaves the conversations untouched.
+        until the block exits, which resets the conversations and wakes the queue, unless ``abort()`` was
+        called. An exception leaves the conversations untouched.
         """
         with self._cond:
             if self._changing or self._any_running():
                 raise QueueBusy(BUSY)
             self._changing = True
+            self._generation += 1
         change = ConnectionChange()
         try:
             yield change
@@ -885,8 +892,18 @@ class AgentQueue:
             raise
         with self._cond:
             if not change.aborted:
+                self._revision += 1
                 self._reset_connection_locked()
             self._changing = False
+            self._cond.notify_all()
+        if not change.aborted:
+            self.wake()
+
+    def model_changed(self) -> None:
+        """The selected model changed: tell every tab (``connection_revision``) and resume a paused queue."""
+        with self._cond:
+            self._revision += 1
+            self._publish_queue()
         self.wake()
 
     def wake(self) -> None:
@@ -925,11 +942,14 @@ class AgentQueue:
         return request.id if self._attempt(lane, request.id) else None
 
     def _attempt(self, lane: Lane, request_id: str) -> bool:
-        with self._lock:
+        with self._cond:
+            generation = self._generation
             unresolved = any(request.id == request_id and request.model is None for request in self._requests)
         credentials, problem = self._load_credentials()
         model = self._configured_model()[0] if unresolved else None
         with self._cond:
+            if self._generation != generation:
+                return False  # the connection changed while loading: the worker reloads them
             if problem is not None:
                 self._pause(problem["code"], problem["error"])
                 return False

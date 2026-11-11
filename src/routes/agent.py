@@ -71,6 +71,17 @@ class AgentCredentials:
     device_interval: int = 5
 
 
+def _queue_module():
+    # Imported late: the queue module builds agent Conversations at import time.
+    from ..controllers import agent_queue
+    return agent_queue
+
+
+def _queue():
+    """The process-wide AI queue (looked up per call, so tests can replace it)."""
+    return _queue_module().agent_queue
+
+
 def _empty_usage():
     return {"cost": None, "input_tokens": None, "output_tokens": None}
 
@@ -430,28 +441,6 @@ async def _delete_session(token, session_id):
         await client.delete_session(session_id)
 
 
-def _delete_sessions(connection):
-    """Delete the connection's stored SDK session; return True if that failed.
-
-    Interim: the backend AI queue replaces this with `AgentQueue.reset_sessions`.
-    """
-    if not connection.session_id:
-        return False
-    try:
-        asyncio.run(_delete_session(connection.credentials.token, connection.session_id))
-    except Exception:
-        current_app.logger.exception("Could not delete agent session")
-        return True
-    return False
-
-
-def _clear_sessions(connection, model):
-    connection.session_id = None
-    connection.session_scope = None
-    connection.model = model
-    connection.usage = _empty_usage()
-
-
 class UnavailableModelError(ValueError):
     pass
 
@@ -774,7 +763,7 @@ def agent_status():
                       "token_connected": state.credentials.token is not None,
                       "provider": state.credentials.provider.kind if state.credentials.provider else None,
                       "config_error": config_error,
-                      "messages": [], "model": state.model, "usage": _empty_usage()})
+                      **_queue().main_transcript(), "model": state.model})
 
 
 @agent_blueprint.route("/api/agent/provider", methods=["POST", "DELETE"])
@@ -784,7 +773,7 @@ def agent_provider():
     OpenAPI:
     POST body AgentProviderRequest required Provider connection and model configuration.
     response 200 AgentProviderStatus Current provider and model.
-    response 409 Error Another request is using the agent connection.
+    response 409 Error An AI request is running, or another request is using the agent connection.
     response 500 Error Credentials could not be persisted.
     response 503 Error Previous conversation could not be cleared.
     """
@@ -803,17 +792,22 @@ def agent_provider():
     if not state.lock.acquire(blocking=False):
         return _response({"error": BUSY_AGENT_ERROR}, 409)
     try:
-        if _delete_sessions(state):
-            return _response({"error": "Could not clear the previous conversation."}, 503)
-        try:
-            _persist_agent_credentials(provider=connection)
-        except RuntimeError as exc:
-            return _response({"error": str(exc)}, 500)
-        _clear_sessions(state, connection.model if connection else "auto")
-        state.credentials.provider = connection
-        if connection:
-            state.credentials.token = None
+        with _queue().connection_change() as change:
+            if _queue().reset_sessions():
+                change.abort()
+                return _response({"error": "Could not clear the previous conversation."}, 503)
+            try:
+                _persist_agent_credentials(provider=connection)
+            except RuntimeError as exc:
+                change.abort()
+                return _response({"error": str(exc)}, 500)
+            state.model = connection.model if connection else "auto"
+            state.credentials.provider = connection
+            if connection:
+                state.credentials.token = None
         return _response({"provider": connection.kind if connection else None, "model": state.model})
+    except _queue_module().QueueBusy:
+        return _response({"error": BUSY_AGENT_ERROR}, 409)
     finally:
         state.lock.release()
 
@@ -821,17 +815,22 @@ def agent_provider():
 def _sign_out(state):
     with state.lock:
         try:
-            _persist_agent_credentials()
-        except RuntimeError as exc:
-            return _response({"error": str(exc)}, 500)
-        cleanup_error = ("Could not delete the stored conversation on the Copilot server."
-                         if _delete_sessions(state) else None)
-        _clear_sessions(state, "auto")
-        state.credentials.token = None
-        state.credentials.provider = None
-        state.credentials.device_code = None
-        state.credentials.device_expires = 0.0
-        state.credentials.device_interval = 5
+            with _queue().connection_change() as change:
+                try:
+                    _persist_agent_credentials()
+                except RuntimeError as exc:
+                    change.abort()
+                    return _response({"error": str(exc)}, 500)
+                cleanup_error = ("Could not delete the stored conversation on the Copilot server."
+                                 if _queue().reset_sessions() else None)
+                state.model = "auto"
+                state.credentials.token = None
+                state.credentials.provider = None
+                state.credentials.device_code = None
+                state.credentials.device_expires = 0.0
+                state.credentials.device_interval = 5
+        except _queue_module().QueueBusy:
+            return _response({"error": BUSY_AGENT_ERROR}, 409)
     return _response({"authenticated": False, "cleanup_error": cleanup_error})
 
 
@@ -843,6 +842,7 @@ def agent_auth():
     POST response 200 AgentDeviceLogin Device code, verification URL, and polling interval.
     POST response 503 Error GitHub device sign-in is unavailable.
     DELETE response 200 AgentAuthStatus Signed-out state and any conversation cleanup error.
+    DELETE response 409 Error An AI request is running.
     DELETE response 500 Error Credentials could not be cleared.
     """
     if error := _access_error():
@@ -882,6 +882,7 @@ def agent_auth_poll():
     OpenAPI:
     response 200 AgentAuthStatus Pending or connected authentication state.
     response 401 Error Sign-in denied or Copilot access unavailable.
+    response 409 Error An AI request is running.
     response 410 Error Device sign-in code expired or missing.
     response 500 Error Credentials could not be persisted.
     response 503 Error GitHub or Copilot verification unavailable.
@@ -894,37 +895,50 @@ def agent_auth_poll():
             state.credentials.device_code = None
             return _response({"error": "The GitHub sign-in code expired. Start again."}, 410)
         try:
-            result = _github_form(GITHUB_TOKEN_URL, {
-                "client_id": os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID,
-                "device_code": state.credentials.device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            })
-        except (OSError, ValueError):
-            current_app.logger.exception("Could not poll GitHub device sign-in")
-            return _response({"error": "Could not reach GitHub."}, 503)
-        if result.get("error") in ("authorization_pending", "slow_down"):
-            state.credentials.device_interval = _device_poll_interval(state.credentials.device_interval, result)
-            return _response({"status": "pending", "interval": state.credentials.device_interval})
-        state.credentials.device_code = None
-        token = result.get("access_token")
-        if not isinstance(token, str):
-            message = {"access_denied": "GitHub sign-in was cancelled.",
-                       "expired_token": "The GitHub sign-in code expired. Start again."}
-            return _response({"error": message.get(result.get("error"), "GitHub sign-in failed.")}, 401)
-        try:
-            auth = asyncio.run(_token_status(token))
-        except Exception:
-            current_app.logger.exception("Could not verify agent sign-in")
-            return _response({"error": "Could not verify Copilot access."}, 503)
-        if not auth["authenticated"]:
-            return _response({"error": "This GitHub account does not have Copilot access."}, 401)
-        try:
-            _persist_agent_credentials(token=token)
-        except RuntimeError as exc:
-            return _response({"error": str(exc)}, 500)
-        _clear_sessions(state, "auto")
-        state.credentials.token = token
-        state.credentials.provider = None
+            # Held before the code is exchanged, so a running request cannot lose the token.
+            with _queue().connection_change() as change:
+                response = _complete_device_sign_in(state)
+                if response.get_json().get("status") != "connected":
+                    change.abort()
+                return response
+        except _queue_module().QueueBusy:
+            return _response({"error": BUSY_AGENT_ERROR}, 409)
+
+
+def _complete_device_sign_in(state):
+    """Exchange the pending device code; store the token once GitHub and Copilot accept it."""
+    try:
+        result = _github_form(GITHUB_TOKEN_URL, {
+            "client_id": os.getenv("VULNSCOUT_AGENT_GITHUB_CLIENT_ID") or GITHUB_COPILOT_CLIENT_ID,
+            "device_code": state.credentials.device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        })
+    except (OSError, ValueError):
+        current_app.logger.exception("Could not poll GitHub device sign-in")
+        return _response({"error": "Could not reach GitHub."}, 503)
+    if result.get("error") in ("authorization_pending", "slow_down"):
+        state.credentials.device_interval = _device_poll_interval(state.credentials.device_interval, result)
+        return _response({"status": "pending", "interval": state.credentials.device_interval})
+    state.credentials.device_code = None
+    token = result.get("access_token")
+    if not isinstance(token, str):
+        message = {"access_denied": "GitHub sign-in was cancelled.",
+                   "expired_token": "The GitHub sign-in code expired. Start again."}
+        return _response({"error": message.get(result.get("error"), "GitHub sign-in failed.")}, 401)
+    try:
+        auth = asyncio.run(_token_status(token))
+    except Exception:
+        current_app.logger.exception("Could not verify agent sign-in")
+        return _response({"error": "Could not verify Copilot access."}, 503)
+    if not auth["authenticated"]:
+        return _response({"error": "This GitHub account does not have Copilot access."}, 401)
+    try:
+        _persist_agent_credentials(token=token)
+    except RuntimeError as exc:
+        return _response({"error": str(exc)}, 500)
+    state.model = "auto"
+    state.credentials.token = token
+    state.credentials.provider = None
     return _response({"status": "connected", **auth})
 
 
@@ -959,7 +973,6 @@ def agent_model():
     OpenAPI:
     body AgentModelRequest required Available model identifier.
     response 200 AgentModelStatus Selected model.
-    response 409 Error Another request is using the agent connection.
     response 500 Error Model selection could not be persisted.
     response 503 Error Copilot models could not be verified.
     """
@@ -973,9 +986,8 @@ def agent_model():
     if (not isinstance(data, dict) or not isinstance(data.get("model"), str)
             or len(data["model"]) > 100 or _has_control_characters(data["model"])):
         return _response({"error": "Invalid model selection."}, 400)
-    if not state.lock.acquire(blocking=False):
-        return _response({"error": BUSY_AGENT_ERROR}, 409)
-    try:
+    # Queued requests keep the model they were queued with, once resolved (P6), so no 409 while one runs.
+    with state.lock:
         if state.credentials.provider:
             choices = state.credentials.provider.models
         else:
@@ -993,10 +1005,11 @@ def agent_model():
         if not ok:
             return _response({"error": "Failed to persist model to config.env."}, 500)
         state.model = data["model"]
-        return _response({"model": state.model})
-    finally:
-        state.lock.release()
+    _queue().model_changed()
+    return _response({"model": data["model"]})
 
 
 def init_app(app):
     app.register_blueprint(agent_blueprint)
+    # The queue's workers start with its first request, so binding it costs nothing in tests or the CLI.
+    _queue().init_app(app)
