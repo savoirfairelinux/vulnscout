@@ -32,6 +32,7 @@ RUN apk add --no-cache \
     git \
     gcompat \
     icu \
+    poppler-utils \
     python3 \
     py3-pip \
     ruby \
