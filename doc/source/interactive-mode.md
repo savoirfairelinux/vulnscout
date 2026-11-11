@@ -86,7 +86,6 @@ The column's help tooltip explains this distinction. Click the count to inspect
 paths, original file
 properties (including recorded hashes and license information), source documents,
 and build-input associations. The details view supports filtering by path or
-<<<<<<< HEAD
 document. SPDX 2 explicitly contained binaries and output artifacts are included,
 with a separate **Binary / output** label and filter. The details separately report
 the number of files with compilation evidence.
