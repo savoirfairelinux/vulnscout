@@ -17,7 +17,7 @@ multipart file controls, collection shapes, explicit success statuses, and
 stream/download media types. Bodyless responses have no content schema.
 Vulnerability, operation, and queue identifiers remain strings rather than being
 inferred as UUIDs from their names. Agent operations describe their localhost
-restrictions, session cookie, optional conversation header, and JSON/NDJSON replies.
+restrictions; they use no cookie or conversation header.
 Schemas remain extensible where responses carry computed enrichment or external
 SBOM/VEX fields. These are documentation contracts, not additional runtime validation.
 Swagger UI loads the canonical *spec URL*, not a separately curated specification;
@@ -2027,14 +2027,13 @@ Omitting `refresh_sources` defaults to EPSS; send `none` alone for no refresh. U
 
 ## Agent Chat
 
-Agent routes use the `vulnscout_agent` cookie to retain a browser conversation; preserve cookies between calls.
-An optional `X-Agent-Thread` UUID selects an independent thread sharing root credentials and the response lock
-(at most 20 child threads). Conversations expire after one hour of inactivity.
+The agent connection is process-wide: provider credentials, device sign-in state, and the selected model are
+shared by every local client. Agent routes set no cookie and need no conversation header.
 Responses use `Cache-Control: no-store`; credentials are never included in status responses.
 
 All agent operations require a localhost host name and a trusted local client connection;
-non-GET browser requests with an `Origin` must match the server origin (`403` otherwise).
-Malformed thread IDs return `400`. The bootstrap import gate does not apply, but individual operations can still
+browser requests with an `Origin`, reads included, must match the server origin (`403` otherwise).
+The bootstrap import gate does not apply, but individual operations can still
 fail when the provider, Copilot SDK, MCP server, or database scope is unavailable.
 Agent POSTs return `200` on success, not `201`.
 
@@ -2047,7 +2046,7 @@ GET /api/agent
 Returns `200` with `authenticated`, nullable `login`, `configured` (bundled MCP server file exists),
 `device_login`, `token_connected`, nullable `provider`, nullable `config_error`, `messages` (role/content objects),
 `model`, and `usage` (`cost`, `input_tokens`, `output_tokens`, each nullable).
-Provider authentication/configuration and conversation history are scoped to the cookie/root thread.
+`messages` is currently always empty and every `usage` value is null.
 
 ### Connect or Disconnect a Provider
 
@@ -2075,7 +2074,7 @@ Hosted providers require a nonblank `api_key`; local providers do not.
 Hosted URLs require HTTPS; local URLs require HTTP and an allowed loopback/container host. URLs cannot include credentials, query strings, or fragments.
 
 POST uses the supplied model or discovers the provider's model list; supplying a model does not itself probe the provider.
-DELETE clears the provider. Both clear prior conversation threads and persist configuration to `config.env`.
+DELETE clears the provider. Both clear the stored agent session and persist configuration to `config.env`.
 **Response:** `200` with `{"provider":"local","model":"my-local-model"}` (DELETE uses null provider and resets the model).
 Errors: `400` invalid configuration or model discovery failure, `409` agent already responding,
 `500` persistence failure, `503` failure clearing the previous stored conversation.
@@ -2090,7 +2089,7 @@ DELETE /api/agent/auth
 
 No request bodies are needed. POST auth starts GitHub device sign-in and returns `200` with
 `user_code`, HTTPS `verification_uri`, and polling `interval` in seconds. Complete sign-in at that URI.
-POST poll uses the cookie's stored device code; wait at least the returned interval between calls.
+POST poll uses the device code stored by the server; wait at least the returned interval between calls.
 
 **Poll responses:** `200` with `{"status":"pending","interval":5}` while waiting (the interval can increase),
 or `{"status":"connected","authenticated":true,"login":"account-name"}` on verified Copilot access.
@@ -2099,10 +2098,10 @@ or `{"status":"connected","authenticated":true,"login":"account-name"}` on verif
 `503` means GitHub/Copilot verification is unavailable; `500` means credentials could not be persisted.
 Starting sign-in can also return `503`.
 
-DELETE signs out, clears provider/device credentials and all threads, and returns
+DELETE signs out, clears provider/device credentials and the stored agent session, and returns
 `200` with `{"authenticated":false,"cleanup_error":null}`.
 A remote-session cleanup error may be reported in `cleanup_error` despite successful local sign-out;
-persistence failure returns `500`. Successful sign-in persists credentials and resets prior threads.
+persistence failure returns `500`. Successful sign-in persists credentials and resets the stored agent session.
 
 ### List or Select Models
 
@@ -2116,59 +2115,3 @@ POST accepts `{"model":"model-id"}`; the string must be at most 100 characters, 
 and identify an available model. It persists `AI_MODEL` and returns `200` with `{"model":"model-id"}`.
 Errors: `400` invalid configuration/model, `503` unavailable Copilot model lookup;
 POST additionally returns `409` while the agent is responding or `500` if persistence fails.
-
-### Reset a Conversation
-
-```
-DELETE /api/agent/conversation
-```
-
-Deletes the selected thread's stored session, messages, and usage without signing out.
-With `X-Agent-Thread`, only that child thread is removed.
-Returns `200` with `{"messages":[],"usage":{"cost":null,"input_tokens":null,"output_tokens":null}}`,
-or `503` if deleting the stored session fails.
-
-### Send a Message
-
-```
-POST /api/agent/messages
-```
-
-```json
-{
-  "message": "Summarize the selected variant's pending assessments.",
-  "context": {
-    "page": "review",
-    "projectId": "11111111-1111-1111-1111-111111111111",
-    "variantId": "22222222-2222-2222-2222-222222222222"
-  }
-}
-```
-
-`message` is required, nonblank, and at most 8000 characters. Optional `model` defaults to the conversation model
-(nonempty string, at most 100 characters). Optional `context` describes browser selection, not trusted project facts.
-Its `page` must be `metrics`, `packages`, `vulnerabilities`, `scans`, `review`, `exports`, `settings`, `ai`, or `unknown`.
-Optional scope strings `projectId`, `variantId`, `baseVariantId`, `compareOperation`, `multiOperation` are at most 100 characters;
-`variantIds` permits at most 1000 strings of that length. Selected variant UUIDs must belong to the selected project.
-With no context/project on non-AI pages, the agent scope spans all projects.
-AI-page scope instead uses `view.selectedProjectId` and `view.selectedVariantId`, with no project selection yielding no project scope.
-
-Optional `context.view` accepts UI selection metadata:
-
-- Strings up to 200 characters: `openVulnerabilityId`, `search`, `section`, `selectedProjectId`, `selectedProjectName`,
-  `selectedVariantId`, `selectedVariantName`, `openScanId`, `exportType`, `exportMode`, `exportCategory`, `refreshMode`.
-- Arrays of up to 100 strings (each up to 200 characters): `visibleVulnerabilityIds`, `selectedVulnerabilityIds`,
-  `visiblePackageIds`, `visibleScanIds`, `matchingVariantIds`, `selectedVariantIds`, `selectedExportKeys`,
-  `enabledExportDocuments`, `selectedScanTypes`, `selectedRefreshTypes`.
-- Integers from 0 to 1,000,000: `visibleCount`, `selectionCount`.
-- Booleans: `hideEmptyScans`, `excludeKernel`, `excludeNative`.
-
-**Default response:** `200` JSON with `reply`, `model`, and accumulated `usage`.
-Set the exact header `Accept: application/x-ndjson` for a `200` newline-delimited JSON stream instead.
-Stream event `type` values include `status`, `heartbeat`, `delta`, `tool_start`, `tool_end`, and terminal
-`done` (with `reply`, `model`, `usage`) or `error` (with `error` message).
-Once streaming starts, failures are events rather than changed HTTP statuses.
-
-Before streaming/JSON processing, invalid messages/configuration/context return `400`,
-concurrent responses return `409`, and a missing bundled MCP server returns `503`.
-For nonstreaming requests, unavailable model selection returns `400` and provider/agent execution failures return `503`.

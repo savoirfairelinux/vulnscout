@@ -1,6 +1,6 @@
+import asyncio
 import json
 import os
-import queue
 import socket
 import subprocess
 import threading
@@ -26,7 +26,10 @@ def client(monkeypatch, tmp_path):
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
     from src.bin.webapp import create_app
     from src.extensions import db
+    from src.routes import agent
 
+    # The agent connection is process-wide; give each test a fresh one, as a fresh process would have.
+    monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
     app = create_app()
     app.config.update(TESTING=True, SCAN_FILE=str(scan_file))
     with app.app_context():
@@ -120,7 +123,7 @@ def test_agent_accepts_container_gateway(client):
     gateway = _container_gateway()
     if gateway is None:
         pytest.skip("Container gateway not available")
-    response = client.delete("/api/agent/conversation", environ_overrides={"REMOTE_ADDR": gateway})
+    response = client.get("/api/agent", environ_overrides={"REMOTE_ADDR": gateway})
     assert response.status_code == 200
 
 
@@ -134,49 +137,47 @@ def test_agent_accepts_pasta_forwarded_host_but_rejects_remote(client, monkeypat
     assert client.get("/api/agent", environ_overrides={"REMOTE_ADDR": "192.0.2.3"}).status_code == 403
     assert client.get("/api/agent", environ_overrides=local,
                       headers={"Host": "example.org"}).status_code == 403
-    assert client.post("/api/agent/messages", environ_overrides=local,
-                       json={"message": "Hello"}, headers={"Origin": "https://example.org"}).status_code == 403
+    assert client.post("/api/agent/model", environ_overrides=local,
+                       json={"model": "auto"}, headers={"Origin": "https://example.org"}).status_code == 403
 
 
 def test_agent_rejects_non_local_host(client):
     response = client.get("/api/agent", headers={"Host": "example.org"})
     assert response.status_code == 403
-    response = client.delete("/api/agent/conversation", headers={"Host": "[::1]:7275"})
+    response = client.get("/api/agent", headers={"Host": "[::1]:7275"})
     assert response.status_code == 200
 
 
 def test_agent_rejects_foreign_origin(client):
-    response = client.post("/api/agent/messages", json={"message": "Hello"},
+    response = client.post("/api/agent/model", json={"model": "auto"},
                            headers={"Origin": "https://example.org"})
     assert response.status_code == 403
+    # Reads too: the connection is process-wide, so another site must not read it.
+    response = client.get("/api/agent", headers={"Origin": "https://example.org"})
+    assert response.status_code == 403
+    assert client.get("/api/agent", headers={"Origin": "http://localhost"}).status_code == 200
 
 
-def test_message_requires_text_and_configured_mcp(client):
-    assert client.post("/api/agent/messages", json=["Hello"]).status_code == 400
-    assert client.post("/api/agent/messages", json={"message": ""}).status_code == 400
-    response = client.post("/api/agent/messages", json={"message": "Hello"})
-    assert response.status_code == 503
-    assert "VULNSCOUT_MCP_SERVER_PATH" in response.get_json()["error"]
-    assert response.headers["Cache-Control"] == "no-store"
+def test_context_rejects_malformed_and_unbounded_rows():
+    from src.routes.agent import _validated_context
 
-
-def test_context_rejects_malformed_and_unbounded_rows(client):
     for context in ({"page": "invalid"}, {"page": "vulnerabilities", "view": {"visibleVulnerabilityIds": ["CVE-1"] * 101}},
                     {"page": "review", "view": {"visibleCount": -1}}):
-        response = client.post("/api/agent/messages", json={"message": "Assess", "context": context})
-        assert response.status_code == 400
+        with pytest.raises(ValueError):
+            _validated_context(context)
 
 
-def test_page_selections_pass_validation_before_mcp_setup(client):
-    context = {"page": "scans", "projectId": "project", "view": {
+def test_page_selections_pass_validation():
+    from src.routes.agent import _validated_context
+
+    view = {
         "section": "scan history", "visibleScanIds": ["scan-id"],
         "selectedScanTypes": ["grype"], "selectedRefreshTypes": ["nvd"],
         "refreshMode": "custom", "hideEmptyScans": False,
         "excludeKernel": True, "excludeNative": True,
-    }}
-    response = client.post("/api/agent/messages", json={"message": "Review scans", "context": context})
-    assert response.status_code == 503
-    assert "VULNSCOUT_MCP_SERVER_PATH" in response.get_json()["error"]
+    }
+    assert _validated_context({"page": "scans", "projectId": "project", "view": view}) == {
+        "page": "scans", "projectId": "project", "view": view}
 
 
 def test_large_variant_selection_keeps_full_scope_and_compacts_prompt(client):
@@ -198,17 +199,20 @@ def test_large_variant_selection_keeps_full_scope_and_compacts_prompt(client):
     assert context["variantIds"] == selected
     small = {"page": "metrics", "variantIds": ["variant"]}
     assert _prompt_context(small) is small
-    response = client.post("/api/agent/messages", json={
-        "message": "Summarize", "context": {"page": "metrics", "variantIds": ["x"] * 1001},
-    })
-    assert response.status_code == 400
-    assert "at most 1000 variants" in response.get_json()["error"]
+    with pytest.raises(ValueError, match="at most 1000 variants"):
+        _validated_context({"page": "metrics", "variantIds": ["x"] * 1001})
 
 
-def test_new_conversation_does_not_clear_authentication(client):
-    result = client.delete("/api/agent/conversation").get_json()
-    assert result["messages"] == []
-    assert result["usage"]["cost"] is None
+def test_chat_prompt_appends_the_compacted_browser_view():
+    from src.routes.agent import MAX_PROMPT_VARIANTS, chat_prompt
+
+    assert chat_prompt("Hello", None) == "Hello"
+    context = {"page": "metrics", "variantIds": ["v"] * (MAX_PROMPT_VARIANTS + 1)}
+    text, view = chat_prompt("Summarize", context).split(
+        "\n\nCurrent VulnScout browser view (selection only; verify facts with MCP): ")
+    assert text == "Summarize"
+    assert json.loads(view) == {"page": "metrics", "variantCount": MAX_PROMPT_VARIANTS + 1}
+    assert chat_prompt("Help", {"page": "unknown"}).endswith(': {"page":"unknown"}')
 
 
 def test_device_login_without_client_id(client, monkeypatch):
@@ -275,7 +279,27 @@ def test_status_uses_real_copilot_runtime(client):
     assert isinstance(response.get_json()["authenticated"], bool)
     assert response.get_json()["token_connected"] is False
     assert response.get_json()["messages"] == []
-    assert response.headers["Set-Cookie"].startswith("vulnscout_agent=")
+    assert "Set-Cookie" not in response.headers
+
+
+def test_connection_is_process_wide_without_cookies_or_threads(client):
+    payload = {"provider": "local", "model": "qwen3:8b", "base_url": "http://localhost:11434/v1"}
+    response = client.post("/api/agent/provider", json=payload)
+    assert response.status_code == 200
+    assert "Set-Cookie" not in response.headers
+    other = client.application.test_client()
+    for headers in ({}, {"X-Agent-Thread": "invalid"}, {"X-Agent-Thread": str(uuid4())}):
+        response = other.get("/api/agent", headers=headers)
+        assert response.status_code == 200
+        assert response.get_json()["provider"] == "local"
+        assert "Set-Cookie" not in response.headers
+    assert other.delete("/api/agent/provider").status_code == 200
+    assert client.get("/api/agent").get_json()["provider"] is None
+
+
+@pytest.mark.parametrize("method,path", [("post", "/api/agent/messages"), ("delete", "/api/agent/conversation")])
+def test_legacy_conversation_endpoints_are_removed(client, method, path):
+    assert getattr(client, method)(path, json={"message": "Hello"}).status_code in (404, 405)
 
 
 def test_bundled_mcp_is_configured_by_default(client, monkeypatch):
@@ -283,10 +307,10 @@ def test_bundled_mcp_is_configured_by_default(client, monkeypatch):
     assert client.get("/api/agent").get_json()["configured"] is True
 
 
-def test_unknown_route_context_is_supported(client):
-    response = client.post("/api/agent/messages", json={"message": "Help", "context": {"page": "unknown"}})
-    assert response.status_code == 503
-    assert "Bundled MCP server" in response.get_json()["error"]
+def test_unknown_route_context_is_supported():
+    from src.routes.agent import _validated_context
+
+    assert _validated_context({"page": "unknown"}) == {"page": "unknown"}
 
 
 def test_models_use_signed_in_account(client):
@@ -331,20 +355,18 @@ def test_github_chatbox_model_survives_restart(client, monkeypatch, token_connec
     assert client.get("/api/agent").get_json()["model"] == "auto"
     assert client.post("/api/agent/model", json={"model": "gpt-4o"}).status_code == 200
     assert "AI_MODEL=gpt-4o" in Path(os.environ["VULNSCOUT_CONFIG"]).read_text()
-    agent._conversations.clear()
+    monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
     status = client.get("/api/agent").get_json()
     assert status["model"] == "gpt-4o"
     assert status["token_connected"] is token_connected
-    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
-
-    async def reply(conversation, prompt, path, model, scope, publish=None):
-        assert model == "gpt-4o"
-        return "Restarted successfully", conversation.usage
-
-    monkeypatch.setattr(agent, "_reply", reply)
-    response = client.post("/api/agent/messages", json={"message": "Hello"})
-    assert response.status_code == 200
-    assert response.get_json()["reply"] == "Restarted successfully"
+    restarted = agent._connection()
+    assert restarted.model == "gpt-4o"
+    captured, _ = _assess_sdk(monkeypatch, models=("auto", "gpt-4o"))
+    reply, _ = asyncio.run(agent._reply(restarted, "Hello", agent._mcp_path(), restarted.model, "{}"))
+    assert reply == "Assessed"
+    assert captured["model"] == "gpt-4o" and "provider" not in captured
+    with pytest.raises(agent.UnavailableModelError, match="this account"):
+        asyncio.run(agent._reply(restarted, "Hello", agent._mcp_path(), "removed-model", "{}"))
 
 
 def test_github_model_write_failure_keeps_previous_selection(client, monkeypatch):
@@ -359,8 +381,7 @@ def test_github_model_write_failure_keeps_previous_selection(client, monkeypatch
     response = client.post("/api/agent/model", json={"model": "gpt-4o"})
     assert response.status_code == 500
     assert response.get_json()["error"] == "Failed to persist model to config.env."
-    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
-    assert root.model == "auto"
+    assert agent._connection().model == "auto"
     assert "AI_MODEL" not in Path(os.environ["VULNSCOUT_CONFIG"]).read_text()
 
 
@@ -496,18 +517,17 @@ def test_connect_select_restart_send(client, monkeypatch):
     assert client.post("/api/agent/model", json={"model": "gpt-4o"}).status_code == 200
     for key in ("AI_PROVIDER", "AI_AUTH_CREDENTIALS", "AI_MODEL", "AI_BASE_URL"):
         monkeypatch.delenv(key, raising=False)
-    agent._conversations.clear()
+    monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
     assert client.get("/api/agent").get_json()["model"] == "gpt-4o"
-    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
-
-    async def reply(conversation, prompt, path, model, scope, publish=None):
-        assert model in {entry["id"] for entry in conversation.credentials.provider.models}
-        return "Restarted successfully", conversation.usage
-
-    monkeypatch.setattr(agent, "_reply", reply)
-    response = client.post("/api/agent/messages", json={"message": "Hello"})
-    assert response.status_code == 200
-    assert response.get_json()["reply"] == "Restarted successfully"
+    restarted = agent._connection()
+    captured, _ = _assess_sdk(monkeypatch)
+    reply, _ = asyncio.run(agent._reply(restarted, "Hello", agent._mcp_path(), restarted.model, "{}"))
+    assert reply == "Assessed"
+    assert captured["model"] == "gpt-4o"
+    assert captured["provider"] == {"type": "openai", "model_id": "gpt-4o", "wire_model": "gpt-4o",
+                                    "api_key": "key"}
+    with pytest.raises(agent.UnavailableModelError, match="this provider"):
+        asyncio.run(agent._reply(restarted, "Hello", agent._mcp_path(), "model", "{}"))
 
 
 @pytest.mark.parametrize("provider", ["github", "openai", "local"])
@@ -548,13 +568,12 @@ def test_environment_only_model_selection_preserves_connection(client, monkeypat
 @pytest.mark.parametrize("provider,model", [
     ("openai", "gpt-4o"), ("openai", ""), ("github", "gpt-4o"),
 ])
-def test_first_thread_request_restores_saved_model(client, monkeypatch, provider, model):
+def test_fresh_connection_restores_saved_model(client, monkeypatch, provider, model):
     from src.routes import agent
 
     Path(os.environ["VULNSCOUT_CONFIG"]).write_text(
         f"AI_PROVIDER={provider}\nAI_AUTH_CREDENTIALS=saved-key\nAI_MODEL={model}\n"
     )
-    agent._conversations.clear()
     monkeypatch.setattr(agent, "_fetch_provider_models",
                         lambda *args: json.dumps({"data": [{"id": "gpt-4o"}]}))
 
@@ -562,7 +581,7 @@ def test_first_thread_request_restores_saved_model(client, monkeypatch, provider
         return {"authenticated": True, "login": "test-user"}
 
     monkeypatch.setattr(agent, "_auth_status", auth_status)
-    response = client.get("/api/agent", headers={"X-Agent-Thread": str(uuid4())})
+    response = client.get("/api/agent")
     assert response.status_code == 200
     assert response.get_json()["model"] == model
 
@@ -684,128 +703,50 @@ def test_provider_enrollment_requires_a_reachable_model_endpoint(client):
     assert client.get("/api/agent").get_json()["provider"] is None
 
 
-def test_modal_threads_keep_global_history_separate_and_share_provider(client):
-    from src.routes.agent import COOKIE, _conversations
-
-    first, second = str(uuid4()), str(uuid4())
-    payload = {"provider": "local", "model": "qwen3:8b", "base_url": "http://localhost:11434/v1"}
-    assert client.post("/api/agent/provider", json=payload).status_code == 200
-    for thread_id in (first, second):
-        response = client.get("/api/agent", headers={"X-Agent-Thread": thread_id})
-        assert response.get_json()["provider"] == "local"
-        assert response.get_json()["messages"] == []
-
-    root = _conversations[client.get_cookie(COOKIE).value]
-    assert root.threads[first] is not root.threads[second]
-    assert root.threads[first].credentials is root.credentials
-    assert root.threads[first].lock is root.lock
-    assert client.delete("/api/agent/conversation", headers={"X-Agent-Thread": first}).status_code == 200
-    assert first not in root.threads
-    assert second in root.threads
-    assert client.delete("/api/agent/provider").status_code == 200
-    assert client.get("/api/agent", headers={"X-Agent-Thread": second}).get_json()["provider"] is None
-    assert client.get("/api/agent", headers={"X-Agent-Thread": "invalid"}).status_code == 400
-
-
-def test_streaming_validation_still_returns_json(client):
-    response = client.post("/api/agent/messages", json={"message": ""},
-                           headers={"Accept": "application/x-ndjson"})
-    assert response.status_code == 400
-    assert response.is_json
-
-
-@pytest.mark.parametrize("outcome", ["done", "unavailable", "error"])
-def test_stream_releases_shared_lock_before_publishing_terminal_event(client, monkeypatch, tmp_path, outcome):
+def test_live_streaming_reply_resumes_its_session(client, monkeypatch):
+    import asyncio
     from src.routes import agent
 
-    server = tmp_path / "server.py"
-    server.touch()
-    monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", str(server))
-    client.get("/api/agent")
-    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
-    terminal_locks = []
-    original_queue = queue.Queue
-
-    class ObservedQueue(original_queue):
-        def put(self, event, *args, **kwargs):
-            if event["type"] in ("done", "error"):
-                terminal_locks.append(root.lock.locked())
-            return super().put(event, *args, **kwargs)
-
-    async def reply(*args):
-        if outcome == "unavailable":
-            raise agent.UnavailableModelError("Unavailable model")
-        if outcome == "error":
-            raise RuntimeError("Provider failed")
-        return "Assessed", {"cost": None, "input_tokens": None, "output_tokens": None}
-
-    monkeypatch.setattr(agent.queue, "Queue", ObservedQueue)
-    monkeypatch.setattr(agent, "_reply", reply)
-    # Action conversations and the main conversation share the same backend lock.
-    for thread_id in [str(uuid4()), str(uuid4())]:
-        response = client.post("/api/agent/messages", json={"message": "Assess this CVE"},
-                               headers={"Accept": "application/x-ndjson", "X-Agent-Thread": thread_id})
-        assert response.status_code == 200
-        events = [json.loads(chunk) for chunk in response.response]
-        assert events[-1]["type"] == ("done" if outcome == "done" else "error")
-        response.close()
-    assert terminal_locks == [False, False]
-
-
-def test_live_streaming_reply_and_conversation_lock(client, monkeypatch):
     if os.getenv("VULNSCOUT_TEST_MCP_SERVER_PATH"):
         monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", os.environ["VULNSCOUT_TEST_MCP_SERVER_PATH"])
     else:
         monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
     authenticated = client.get("/api/agent").get_json()["authenticated"]
-    response = client.post("/api/agent/messages", json={
-        "message": "Use get_vulnerability to retrieve CVE-2009-3555 and summarize it in one sentence. Do not make changes.",
-    }, headers={"Accept": "application/x-ndjson"}, buffered=False)
-    try:
-        assert response.status_code == 200
-        assert response.mimetype == "application/x-ndjson"
-        assert response.headers["X-Accel-Buffering"] == "no"
-        assert response.headers["Cache-Control"] == "no-store"
-        assert client.post("/api/agent/messages", json={"message": "Another request"}).status_code == 409
-        events = [json.loads(chunk) for chunk in response.response]
-        assert events[0]["type"] == "status"
-        status = client.get("/api/agent").get_json()
-        if authenticated:
-            assert events[-1]["type"] == "done", events[-1]
-            assert any(event["type"] == "delta" and event["text"] for event in events)
-            assert any(event["type"] == "tool_start" for event in events)
-            assert any(event["type"] == "tool_end" for event in events)
-            assert {event["type"] for event in events} <= {"status", "heartbeat", "delta", "tool_start", "tool_end", "done"}
-            assert status["messages"][-1]["content"] == events[-1]["reply"]
-            assert status["usage"] == events[-1]["usage"]
-            from src.routes.agent import COOKIE, _conversations
+    connection = agent._connection()
+    with client.application.app_context():
+        scope = agent._scope_for_context(None)
+    events, sessions = [], []
 
-            session = _conversations[client.get_cookie(COOKIE).value]
-            previous_session_id = session.session_id
-            follow_up = client.post("/api/agent/messages", json={
-                "message": "Which vulnerability did we just discuss? Do not make changes.",
-            }, headers={"Accept": "application/x-ndjson"}, buffered=False)
-            try:
-                follow_up_events = [json.loads(chunk) for chunk in follow_up.response]
-                assert follow_up_events[-1]["type"] == "done", follow_up_events[-1]
-                assert session.session_id == previous_session_id
-            finally:
-                follow_up.close()
-        else:
-            assert events[-1]["type"] == "error"
-            assert "Agent request failed" in events[-1]["error"]
-            assert status["messages"] == []
+    def turn(message):
+        return asyncio.run(agent._reply(connection, message, agent._mcp_path(), connection.model, scope,
+                                        events.append, on_session=sessions.append))
+
+    prompt = "Use get_vulnerability to retrieve CVE-2009-3555 and summarize it in one sentence. Do not make changes."
+    if not authenticated:
+        with pytest.raises(Exception):
+            turn(prompt)
+        assert connection.session_id is None
+        return
+    try:
+        reply, _ = turn(prompt)
+        assert reply
+        assert any(event["type"] == "delta" and event["text"] for event in events)
+        assert any(event["type"] == "tool_start" for event in events)
+        assert any(event["type"] == "tool_end" for event in events)
+        assert {event["type"] for event in events} <= {"delta", "tool_start", "tool_end"}
+        assert sessions == [connection.session_id]
+        turn("Which vulnerability did we just discuss? Do not make changes.")
+        assert sessions == [connection.session_id] * 2
     finally:
-        response.close()
-        client.delete("/api/agent/conversation")
+        if connection.session_id:
+            asyncio.run(agent._delete_session(connection.credentials.token, connection.session_id))
 
 
 @pytest.mark.parametrize("method,path", [
     ("post", "/api/agent/auth"), ("delete", "/api/agent/auth"),
     ("post", "/api/agent/provider"), ("delete", "/api/agent/provider"),
     ("post", "/api/agent/auth/poll"), ("get", "/api/agent/models"),
-    ("post", "/api/agent/model"), ("delete", "/api/agent/conversation"),
-    ("post", "/api/agent/messages"),
+    ("post", "/api/agent/model"),
 ])
 def test_every_agent_endpoint_rejects_remote_requests(client, method, path):
     response = getattr(client, method)(path, environ_overrides={"REMOTE_ADDR": "192.0.2.1"})
@@ -822,10 +763,11 @@ def test_every_agent_endpoint_rejects_remote_requests(client, method, path):
     {"page": "metrics", "view": {"visibleCount": 1000001}},
     {"page": "metrics", "view": {"hideEmptyScans": "true"}},
 ])
-def test_context_boundaries_reject_invalid_values(client, context):
-    response = client.post("/api/agent/messages", json={"message": "Review", "context": context})
-    assert response.status_code == 400
-    assert "error" in response.get_json()
+def test_context_boundaries_reject_invalid_values(context):
+    from src.routes.agent import _validated_context
+
+    with pytest.raises(ValueError):
+        _validated_context(context)
 
 
 def test_context_retains_only_allowed_fields():
@@ -844,7 +786,7 @@ def test_context_retains_only_allowed_fields():
     assert _validated_context(None) is None
 
 
-def test_agent_scope_verifies_membership_in_backend(client, monkeypatch):
+def test_agent_scope_verifies_membership_in_backend(client):
     from src.models.project import Project
     from src.models.variant import Variant
     from src.routes.agent import _scope_for_context
@@ -859,13 +801,6 @@ def test_agent_scope_verifies_membership_in_backend(client, monkeypatch):
         assert scope == {"project_ids": [str(selected_project.id)], "variant_ids": [str(selected_variant.id)]}
         with pytest.raises(ValueError, match="do not belong"):
             _scope_for_context({"projectId": str(selected_project.id), "variantId": str(other_variant.id)})
-
-    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
-    response = client.post("/api/agent/messages", json={"message": "Review", "context": {
-        "page": "metrics", "projectId": str(selected_project.id), "variantId": str(other_variant.id),
-    }})
-    assert response.status_code == 400
-    assert "do not belong" in response.get_json()["error"]
 
 
 def test_ai_context_scope_uses_its_own_selection(client):
@@ -890,7 +825,7 @@ def test_ai_context_scope_uses_its_own_selection(client):
 
 
 @pytest.mark.parametrize("target_count", [1, 2])
-def test_bulk_review_message_preserves_full_assessment_scope(client, monkeypatch, target_count):
+def test_bulk_review_context_preserves_full_assessment_scope(client, target_count):
     from src.extensions import db
     from src.models.assessment import Assessment
     from src.models.finding import Finding
@@ -923,35 +858,17 @@ def test_bulk_review_message_preserves_full_assessment_scope(client, monkeypatch
     # The detail endpoint, unlike the visible table, returns the complete target set.
     full = client.get(f"/api/assessments/{assessment_id}").get_json()
     assert sorted(target["variant_id"] for target in full["targets"]) == variant_ids
-    captured = []
-
-    async def reply(conversation, message, path, model, scope, publish=None):
-        scoped = json.loads(scope)
-        assert scoped["variant_ids"] == variant_ids
-        assert scoped["project_ids"] == [project_id]
-        assert excluded_id not in scoped["variant_ids"]
-        result = ScopedVulnScoutClient("http://localhost", scoped)._assessment(full)
-        assert result["targets"] == full["targets"]
-        captured.append(scoped)
-        return "Reviewed every target", {"cost": None, "input_tokens": None, "output_tokens": None}
-
-    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
-    monkeypatch.setattr(agent, "_reply", reply)
-    headers = {"X-Agent-Thread": str(uuid4())}
-    client.delete("/api/agent/conversation", headers=headers)
-    invalid = client.post("/api/agent/messages", json={
-        "message": "Review", "context": {"page": "review", "variantId": first_id},
-    }, headers=headers)
-    assert invalid.status_code == 400
-    assert "do not belong" in invalid.get_json()["error"]
-    context = {"page": "review", "projectId": project_id,
-               "variantIds": variant_ids, "view": {"section": "assessments"}}
-    response = client.post("/api/agent/messages", json={
-        "message": f"Review the user assessment {assessment_id}", "context": context,
-    }, headers=headers)
-    assert response.status_code == 200, response.get_json()
-    assert response.get_json()["reply"] == "Reviewed every target"
-    assert len(captured) == 1
+    with client.application.app_context():
+        with pytest.raises(ValueError, match="do not belong"):
+            agent._scope_for_context(agent._validated_context({"page": "review", "variantId": first_id}))
+        context = agent._validated_context({"page": "review", "projectId": project_id,
+                                            "variantIds": variant_ids, "view": {"section": "assessments"}})
+        scoped = json.loads(agent._scope_for_context(context))
+    assert scoped["variant_ids"] == variant_ids
+    assert scoped["project_ids"] == [project_id]
+    assert excluded_id not in scoped["variant_ids"]
+    result = ScopedVulnScoutClient("http://localhost", scoped)._assessment(full)
+    assert result["targets"] == full["targets"]
 
 
 def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypatch, tmp_path):
@@ -1124,129 +1041,130 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
         server_thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("model", [None, "", "x" * 101, 42])
-def test_message_rejects_invalid_model(client, model):
-    response = client.post("/api/agent/messages", json={"message": "Review", "model": model})
-    assert response.status_code == 400
-    assert response.get_json()["error"] == "Invalid model selection."
-
-
 @pytest.mark.parametrize("body", [None, [], {}, {"model": 42}, {"model": "x" * 101}])
 def test_model_selection_rejects_invalid_payload(client, body):
     assert client.post("/api/agent/model", json=body).status_code == 400
 
 
-def test_conversation_expiry_and_busy_model_selection(client):
-    from src.routes.agent import COOKIE, _conversations
+def test_busy_connection_rejects_model_selection(client):
+    from src.routes import agent
 
-    client.delete("/api/agent/conversation")
-    key = client.get_cookie(COOKIE).value
-    conversation = _conversations[key]
-    with conversation.lock:
+    with agent._connection().lock:
         response = client.post("/api/agent/model", json={"model": "auto"})
         assert response.status_code == 409
-    conversation.last_used = time.monotonic() - 3601
-    client.delete("/api/agent/conversation")
-    assert client.get_cookie(COOKIE).value != key
-    assert key not in _conversations
 
 
-def test_reset_retains_identity_and_signout_clears_it(client):
-    from src.routes.agent import COOKIE, _conversations
+def test_signout_clears_identity(client):
+    from src.routes import agent
 
-    client.delete("/api/agent/conversation")
-    conversation = _conversations[client.get_cookie(COOKIE).value]
-    conversation.credentials.token = "invalid-test-credential"
-    conversation.credentials.device_code = "expired-code"
-    conversation.model = "chosen-model"
-    conversation.messages.append({"role": "user", "content": "Previous message"})
-    conversation.usage["cost"] = 1
-    response = client.delete("/api/agent/conversation")
-    assert response.status_code == 200
-    assert conversation.credentials.token == "invalid-test-credential"
-    assert conversation.model == "chosen-model"
-    assert conversation.messages == []
-    assert conversation.usage["cost"] is None
+    connection = agent._connection()
+    connection.credentials.token = "invalid-test-credential"
+    connection.credentials.device_code = "expired-code"
+    connection.model = "chosen-model"
+    connection.usage["cost"] = 1
     response = client.delete("/api/agent/auth")
     assert response.status_code == 200
-    assert conversation.credentials.token is None
-    assert conversation.credentials.device_code is None
-    assert conversation.model == "auto"
+    assert response.get_json() == {"authenticated": False, "cleanup_error": None}
+    assert connection.credentials.token is None
+    assert connection.credentials.device_code is None
+    assert connection.model == "auto"
+    assert connection.usage["cost"] is None
 
 
 def test_signout_clears_local_identity_when_remote_session_is_unavailable(client):
-    from src.routes.agent import COOKIE, _conversations
+    from src.routes import agent
 
-    client.delete("/api/agent/conversation")
-    conversation = _conversations[client.get_cookie(COOKIE).value]
-    conversation.credentials.token = "invalid-test-credential"
-    conversation.session_id = "missing-session"
-    conversation.messages.append({"role": "user", "content": "Previous message"})
-    conversation.usage["cost"] = 1
+    connection = agent._connection()
+    connection.credentials.token = "invalid-test-credential"
+    connection.session_id = "missing-session"
+    connection.usage["cost"] = 1
     response = client.delete("/api/agent/auth")
     assert response.status_code == 200
     assert response.get_json()["cleanup_error"]
-    assert conversation.credentials.token is None
-    assert conversation.session_id is None
-    assert conversation.messages == []
-    assert conversation.usage["cost"] is None
+    assert connection.credentials.token is None
+    assert connection.session_id is None
+    assert connection.usage["cost"] is None
+
+
+@pytest.mark.parametrize("method", ["post", "delete"])
+def test_provider_change_keeps_connection_when_session_cleanup_fails(client, monkeypatch, method):
+    from src.routes import agent
+
+    async def unavailable(token, session_id):
+        raise RuntimeError("Copilot unavailable")
+
+    monkeypatch.setattr(agent, "_delete_session", unavailable)
+    connection = agent._connection()
+    connection.credentials.token = "github-key"
+    connection.session_id = "stored-session"
+    response = getattr(client, method)("/api/agent/provider", json={
+        "provider": "openai", "model": "gpt-4o", "api_key": "key",
+    })
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "Could not clear the previous conversation."
+    assert connection.credentials.token == "github-key" and connection.credentials.provider is None
+    assert connection.session_id == "stored-session"
+    assert not connection.lock.locked()
+
+
+def test_provider_change_deletes_the_stored_session_and_respects_the_lock(client, monkeypatch):
+    from src.routes import agent
+
+    deleted = []
+
+    async def delete(token, session_id):
+        deleted.append(session_id)
+
+    monkeypatch.setattr(agent, "_delete_session", delete)
+    monkeypatch.setattr(agent, "_persist_agent_credentials", lambda **kwargs: None)
+    connection = agent._connection()
+    connection.credentials.token = "github-key"
+    connection.session_id = "stored-session"
+    with connection.lock:
+        assert client.delete("/api/agent/provider").status_code == 409
+    response = client.delete("/api/agent/provider")
+    assert response.status_code == 200
+    assert deleted == ["stored-session"]
+    assert connection.session_id is None
+
+
+def test_copilot_model_lookup_failures_are_reported(client, monkeypatch):
+    from src.routes import agent
+
+    async def unavailable(token):
+        raise RuntimeError("Copilot unavailable")
+
+    monkeypatch.setattr(agent, "_auth_status", unavailable)
+    monkeypatch.setattr(agent, "_models", unavailable)
+    agent._connection().credentials.token = "github-key"
+    assert client.get("/api/agent").get_json()["authenticated"] is False
+    assert client.get("/api/agent/models").status_code == 503
+    response = client.post("/api/agent/model", json={"model": "auto"})
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "Unable to verify this Copilot model."
+
+
+@pytest.mark.parametrize("context, error", [
+    ({"page": "ai", "view": {"selectedProjectId": "invalid"}}, "Invalid project scope."),
+    ({"page": "ai", "view": {"selectedProjectId": "00000000-0000-0000-0000-000000000000"}}, "Project not found."),
+    ({"page": "metrics", "variantId": "invalid"}, "Invalid variant scope."),
+])
+def test_scope_rejects_unknown_projects_and_variants(client, context, error):
+    from src.routes import agent
+
+    with client.application.app_context():
+        with pytest.raises(ValueError, match=error):
+            agent._scope_for_context(context)
 
 
 def test_expired_device_code_is_cleared(client):
-    from src.routes.agent import COOKIE, _conversations
+    from src.routes import agent
 
-    client.delete("/api/agent/conversation")
-    conversation = _conversations[client.get_cookie(COOKIE).value]
-    conversation.credentials.device_code = "expired-code"
-    conversation.credentials.device_expires = time.monotonic() - 1
+    connection = agent._connection()
+    connection.credentials.device_code = "expired-code"
+    connection.credentials.device_expires = time.monotonic() - 1
     assert client.post("/api/agent/auth/poll").status_code == 410
-    assert conversation.credentials.device_code is None
-
-
-def test_json_reply_failure_preserves_conversation_and_unlocks(client, monkeypatch):
-    from src.routes.agent import COOKIE, _conversations
-
-    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
-    client.delete("/api/agent/conversation")
-    conversation = _conversations[client.get_cookie(COOKIE).value]
-    conversation.credentials.token = "invalid-test-credential"
-    response = client.post("/api/agent/messages", json={"message": "Review", "context": {"page": "metrics"}})
-    assert response.status_code == 503
-    assert "Agent request failed" in response.get_json()["error"]
-    assert conversation.messages == []
-    assert not conversation.lock.locked()
-
-
-def test_stream_records_and_disconnect_cleanup():
-    from src.routes.agent import _stream_events
-
-    events = queue.Queue()
-    disconnected = threading.Event()
-    records = [{"type": "delta", "text": "First\nSecond"}, {"type": "done", "reply": "First\nSecond"}]
-    for record in records:
-        events.put(record)
-    stream = _stream_events(events, disconnected)
-    assert json.loads(next(stream))["type"] == "status"
-    assert [json.loads(chunk) for chunk in stream] == records
-    assert disconnected.is_set()
-    disconnected.clear()
-    stream = _stream_events(events, disconnected)
-    next(stream)
-    stream.close()
-    assert disconnected.is_set()
-
-
-def test_stream_heartbeat_and_terminal_error():
-    from src.routes.agent import _stream_events
-
-    events = queue.Queue()
-    disconnected = threading.Event()
-    stream = _stream_events(events, disconnected)
-    assert json.loads(next(stream))["type"] == "status"
-    assert json.loads(next(stream)) == {"type": "heartbeat"}
-    events.put({"type": "error", "error": "Request failed"})
-    assert [json.loads(chunk) for chunk in stream] == [{"type": "error", "error": "Request failed"}]
-    assert disconnected.is_set()
+    assert connection.credentials.device_code is None
 
 
 def test_usage_aggregation_ignores_unreported_metrics():
@@ -1291,7 +1209,7 @@ def test_public_event_projection_excludes_tool_payloads():
     assert len(records) == 5
 
 
-def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None):
+def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None, models=("model",)):
     """Install a fake SDK client; return (captured create/resume options + sent message, deleted session ids)."""
     import asyncio
     from src.routes import agent
@@ -1323,7 +1241,7 @@ def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None):
             pass
 
         async def list_models(self):
-            return [SimpleNamespace(id="model", policy=None)]
+            return [SimpleNamespace(id=model, policy=None) for model in models]
 
         async def create_session(self, **options):
             captured.update(options)
@@ -1434,123 +1352,35 @@ def test_ephemeral_session_is_deleted_when_disconnect_fails(monkeypatch):
     assert deleted == ["assess-session"]
 
 
-def _capture_reply(monkeypatch, error=None):
+@pytest.mark.parametrize("stored, resumed", [(None, False), ("thread-session", True)])
+def test_on_session_receives_the_created_or_resumed_session(monkeypatch, stored, resumed):
+    import asyncio
     from src.routes import agent
 
-    calls = []
+    captured, _ = _assess_sdk(monkeypatch)
+    sessions = []
 
-    async def reply(conversation, prompt, path, model, scope, publish=None, **kwargs):
-        calls.append(kwargs)
-        if error:
-            raise error
-        return "ok", {"cost": None, "input_tokens": None, "output_tokens": None}
+    def on_session(session_id):
+        assert "message" not in captured  # before the turn is sent
+        sessions.append(session_id)
 
-    monkeypatch.delenv("VULNSCOUT_MCP_SERVER_PATH")
-    monkeypatch.setattr(agent, "_reply", reply)
-    return calls
-
-
-def test_action_binds_a_skill_profile_to_its_thread(client, monkeypatch):
-    from src.routes import agent_skills
-
-    calls = _capture_reply(monkeypatch)
-    thread = {"X-Agent-Thread": str(uuid4())}
-    assert client.post("/api/agent/messages", json={"message": "Hi"}).status_code == 200
-    assert client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
-                       headers=thread).status_code == 200
-    assert client.post("/api/agent/messages", json={"message": "Why?"}, headers=thread).status_code == 200
-    assert calls == [{}, {"profile": agent_skills.ASSESS, "timeout": agent_skills.ACTION_TIMEOUT},
-                     {"profile": agent_skills.ASSESS, "timeout": agent_skills.ACTION_TIMEOUT}]
-    switched = client.post("/api/agent/messages", json={"message": "Review", "action": "review"}, headers=thread)
-    assert switched.status_code == 400 and "different action" in switched.get_json()["error"]
+    conversation = agent.Conversation(session_id=stored, session_scope="{}")
+    asyncio.run(agent._reply(conversation, "Hi", agent._mcp_path(), "model", "{}", on_session=on_session))
+    assert sessions == ["assess-session"]
+    assert ("resumed" in captured) is resumed
 
 
-@pytest.mark.parametrize("body, thread, error", [
-    ({"action": "hack"}, True, "Invalid agent action."),
-    ({"action": ["assess"]}, True, "Invalid agent action."),
-    ({"action": "assess"}, False, "own conversation"),
-])
-def test_invalid_actions_are_rejected(client, monkeypatch, body, thread, error):
-    calls = _capture_reply(monkeypatch)
-    headers = {"X-Agent-Thread": str(uuid4())} if thread else {}
-    response = client.post("/api/agent/messages", json={"message": "Go", **body}, headers=headers)
-    assert response.status_code == 400 and error in response.get_json()["error"]
-    assert calls == []
-
-
-def test_action_requires_bundled_skills(client, monkeypatch, tmp_path):
-    from src.routes import agent_skills
-
-    calls = _capture_reply(monkeypatch)
-    monkeypatch.setenv("VULNSCOUT_SKILLS_PATH", str(tmp_path / "missing"))
-    response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
-                           headers={"X-Agent-Thread": str(uuid4())})
-    assert response.status_code == 503 and response.get_json()["error"] == agent_skills.SKILLS_MISSING_ERROR
-    assert calls == []
-
-
-def test_busy_thread_does_not_bind_a_profile(client, monkeypatch):
+def test_failed_on_session_still_disconnects_and_deletes_ephemeral_session(monkeypatch):
+    import asyncio
     from src.routes import agent
 
-    _capture_reply(monkeypatch)
-    thread_id = str(uuid4())
-    headers = {"X-Agent-Thread": thread_id}
-    client.delete("/api/agent/conversation", headers=headers)
-    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
-    client.post("/api/agent/messages", json={"message": "Hi"}, headers=headers)
-    thread = root.threads[thread_id]
-    with thread.lock:
-        response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"},
-                               headers=headers)
-    assert response.status_code == 409 and thread.profile is None
+    captured, deleted = _assess_sdk(monkeypatch)
 
+    def on_session(session_id):
+        raise RuntimeError("stopped")
 
-@pytest.mark.parametrize("action, status, bound", [(None, 200, "review"), ("assess", 400, "review")])
-def test_profile_is_resolved_after_taking_the_thread_lock(client, monkeypatch, action, status, bound):
-    """A thread bound by a concurrent action turn keeps that binding."""
-    from src.routes import agent, agent_skills
-
-    calls = _capture_reply(monkeypatch)
-    thread_id = str(uuid4())
-    headers = {"X-Agent-Thread": thread_id}
-    client.delete("/api/agent/conversation", headers=headers)
-    root = agent._conversations[client.get_cookie(agent.COOKIE).value]
-    client.post("/api/agent/messages", json={"message": "Hi"}, headers=headers)
-    thread = root.threads[thread_id]
-    real_lock = thread.lock
-
-    class BoundWhileWaiting:
-        def acquire(self, blocking=True):
-            thread.profile = agent_skills.REVIEW
-            return real_lock.acquire(blocking)
-
-        def release(self):
-            real_lock.release()
-
-        def locked(self):
-            return real_lock.locked()
-
-    thread.lock = BoundWhileWaiting()
-    body = {"message": "Next", **({"action": action} if action else {})}
-    response = client.post("/api/agent/messages", json=body, headers=headers)
-    assert response.status_code == status
-    assert thread.profile.action == bound and not real_lock.locked()
-    if status == 200:
-        assert calls[-1] == {"profile": agent_skills.REVIEW, "timeout": agent_skills.ACTION_TIMEOUT}
-
-
-@pytest.mark.parametrize("stream", [False, True])
-def test_skill_errors_are_reported(client, monkeypatch, stream):
-    from src.routes import agent_skills
-
-    _capture_reply(monkeypatch, agent_skills.AgentSkillError("Agent skill cve-assessment could not be loaded."))
-    headers = {"X-Agent-Thread": str(uuid4())}
-    if stream:
-        headers["Accept"] = "application/x-ndjson"
-    response = client.post("/api/agent/messages", json={"message": "Assess", "action": "assess"}, headers=headers)
-    if stream:
-        events = [json.loads(line) for line in response.get_data(as_text=True).splitlines()]
-        assert events[-1] == {"type": "error", "error": "Agent skill cve-assessment could not be loaded."}
-    else:
-        assert response.status_code == 503
-        assert response.get_json()["error"] == "Agent skill cve-assessment could not be loaded."
+    with pytest.raises(RuntimeError, match="stopped"):
+        asyncio.run(agent._reply(agent.Conversation(), "Hi", agent._mcp_path(), "model", "{}",
+                                 ephemeral=True, on_session=on_session))
+    assert "message" not in captured
+    assert deleted == ["assess-session"]
