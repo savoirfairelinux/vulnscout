@@ -1198,3 +1198,9 @@ class TestImportSourceRoutes:
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
                 patch("werkzeug.datastructures.FileStorage.save", side_effect=OSError("disk full")):
             assert self._post(client, variant, b"text", "a.md").status_code == 500
+
+    def test_pdf_without_text_is_rejected_on_upload(self, client, variant, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
+                patch("src.helpers.codebase_reference._pdf_text", side_effect=ValueError("PDF has no extractable text")):
+            resp = self._post(client, variant, b"%PDF-1.4", "scan.pdf")
+        assert resp.status_code == 400 and "no extractable text" in resp.get_json()["error"]

@@ -225,3 +225,92 @@ def test_read_response_byte_limit_and_long_lines(monkeypatch):
     with CodebaseReference(BytesIO(b"12345\n"), "a.txt") as ref:
         with pytest.raises(ValueError, match="line exceeds"):
             ref.read_lines("a.txt")
+
+
+import shutil
+import subprocess
+import zipfile as _zipfile
+from io import BytesIO as _BytesIO
+from unittest.mock import patch as _patch
+
+from src.helpers.codebase_reference import CodebaseReference as _Reference
+
+needs_pdftotext = pytest.mark.skipif(shutil.which("pdftotext") is None, reason="pdftotext not installed")
+
+
+def make_pdf(pages):
+    """A minimal valid PDF with one Helvetica text line per page."""
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>", None,
+               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for text in pages:
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET"
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                       f"/Resources << /Font << /F1 3 0 R >> >> /Contents {len(objects)} 0 R >>")
+        kids.append(f"{len(objects)} 0 R")
+    objects[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {len(kids)} >>"
+    out, offsets = b"%PDF-1.4\n", []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += "".join(f"{offset:010d} 00000 n \n" for offset in offsets).encode()
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+@needs_pdftotext
+def test_pdf_pages_are_marked_read_and_searched():
+    with _Reference(_BytesIO(make_pdf(["Gateway overview", "CSRF on admin UI"])), "report.pdf") as reference:
+        text = reference.text("report.pdf")
+        read = reference.read_lines("report.pdf", 1, 200)
+        found = reference.search("CSRF")
+    assert text.startswith("--- page 1 ---\n") and "--- page 2 ---\n" in text
+    assert "Gateway overview" in read["content"]
+    assert found["matches"][0]["path"] == "report.pdf"
+    assert found["matches"][0]["line"] > 2 and found["skipped_binary_files"] == 0
+
+
+@needs_pdftotext
+def test_pdf_inside_a_zip_is_readable():
+    archive = _BytesIO()
+    with _zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("docs/report.pdf", make_pdf(["Inside zip"]))
+    with _Reference(archive, "bundle.zip") as reference:
+        text = reference.text("docs/report.pdf")
+    assert text.startswith("--- page 1 ---\n") and "Inside zip" in text
+
+
+@needs_pdftotext
+def test_pdf_without_text_and_garbage_pdf_are_errors():
+    with _Reference(_BytesIO(make_pdf([""])), "scan.pdf") as reference:
+        with pytest.raises(ValueError, match="no extractable text"):
+            reference.text("scan.pdf")
+    with _Reference(_BytesIO(b"%PDF-1.4 garbage"), "bad.pdf") as reference:
+        with pytest.raises(ValueError, match="could not be read"):
+            reference.text("bad.pdf")
+        assert reference.search("x")["skipped_binary_files"] == 1
+
+
+@pytest.mark.parametrize("outcome,message", [
+    (subprocess.CompletedProcess([], 1, b"", b"Command Line Error: Incorrect password\n"), "encrypted"),
+    (subprocess.TimeoutExpired("pdftotext", 30), "timed out"),
+    (FileNotFoundError("pdftotext"), "unavailable"),
+])
+def test_pdf_failures_are_value_errors(outcome, message):
+    effect = {"side_effect": outcome} if isinstance(outcome, BaseException) else {"return_value": outcome}
+    with _patch("src.helpers.codebase_reference.subprocess.run", **effect):
+        with _Reference(_BytesIO(b"%PDF-1.4"), "locked.pdf") as reference:
+            with pytest.raises(ValueError, match=message):
+                reference.text("locked.pdf")
+
+
+def test_pdf_text_is_capped():
+    from src.helpers import codebase_reference
+
+    big = subprocess.CompletedProcess([], 0, b"a" * 100 + b"\f", b"")
+    with _patch("src.helpers.codebase_reference.subprocess.run", return_value=big), \
+            _patch.object(codebase_reference, "PDF_TEXT_LIMIT", 50):
+        assert len(codebase_reference._pdf_text(b"%PDF").encode()) == 50
