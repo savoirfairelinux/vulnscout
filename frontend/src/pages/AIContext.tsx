@@ -270,6 +270,17 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         lastFillRef.current = { key: fillKey, status: fillState?.status };
         if (last.key === fillKey && last.status === 'running' && fillState?.status !== 'running') void loadAiDraftRef.current();
     }, [fillKey, fillState?.status]);
+    // A running agent may write its draft in several calls; loading a partial one would make
+    // the editor dirty mid-run, so write events are held until the turn ends.
+    const agentRunning = agentQueue.some(task => task.status === 'running');
+    const agentRunningRef = useRef(agentRunning);
+    agentRunningRef.current = agentRunning;
+    const heldDraftLoadRef = useRef(false);
+    useEffect(() => {
+        if (agentRunning || !heldDraftLoadRef.current) return;
+        heldDraftLoadRef.current = false;
+        void loadAiDraftRef.current();
+    }, [agentRunning]);
     // Field errors and the active tab belong to the open item, however it changed.
     useEffect(() => {
         setFieldError('');
@@ -441,7 +452,10 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 if (variantDraft.dirty) showBanner(DIRTY_VARIANT_AGENT_TEXT, "error");
                 else reloadVariant();
             }
-            if (tool === 'propose_variant_threat_model' && selected?.kind === 'variant') void loadAiDraftRef.current();
+            if (tool === 'propose_variant_threat_model' && selected?.kind === 'variant') {
+                if (agentRunningRef.current) heldDraftLoadRef.current = true;
+                else void loadAiDraftRef.current();
+            }
         };
     });
     useEffect(() => {

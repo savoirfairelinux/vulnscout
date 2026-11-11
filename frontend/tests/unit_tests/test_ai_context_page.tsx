@@ -1664,6 +1664,44 @@ describe('AI threat-model drafts', () => {
         expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
     });
 
+    describe('while an agent task is running', () => {
+        let queue: agentStore.AgentTask[] = [];
+        const setQueue = (next: agentStore.AgentTask[]) => act(() => {
+            queue = next;
+            agentStore.openAgentChat();
+        });
+        const runningTask = (kind: agentStore.AgentTask['kind'], key: string): agentStore.AgentTask => ({
+            id: 't1', text: '', key, kind, title: 'Variant 1', source: 'AI Context Variant 1',
+            context: { page: 'ai' }, conversationId: agentStore.MAIN_CONVERSATION, status: 'running',
+        });
+        let spy: jest.SpyInstance;
+        beforeEach(() => {
+            queue = [];
+            spy = jest.spyOn(agentStore, 'getAgentQueue').mockImplementation(() => queue);
+        });
+        afterEach(() => spy.mockRestore());
+
+        test.each([
+            ['the import', 'context-import' as const, 'context-import:v1'],
+            ['a chat turn', 'message' as const, 'chat'],
+        ])('partial drafts written during %s load only once it ends', async (_label, kind, key) => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft', 'GET')).toHaveLength(1));
+            setQueue([runningTask(kind, key)]);
+            backend.drafts = { v1: aiDraftReply() };
+            agentWrite('propose_variant_threat_model');
+            await act(async () => { await Promise.resolve(); });
+            expect(requestsTo(backend, '/api/variants/v1/context/draft', 'GET')).toHaveLength(1);
+            expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+
+            setQueue([]);
+            expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
+            expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        });
+    });
+
     test('a draft arriving over unsaved edits waits until they are saved', async () => {
         const backend = mockBackend();
         renderPage({ projectId: 'p1' });
