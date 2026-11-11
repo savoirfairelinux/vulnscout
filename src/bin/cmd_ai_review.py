@@ -12,7 +12,7 @@ from typing import Any
 from uuid import UUID
 
 import click
-from flask import Response, make_response, request
+from flask import Response, current_app, make_response, request
 from flask.cli import with_appcontext
 
 from ..helpers.env_vars import get_bool_env
@@ -224,6 +224,9 @@ def _review(result: ReviewResult, label: str, credentials, model: str, path, api
 def _run(results: list[ReviewResult], model: str | None, timeout: int) -> tuple[str | None, bool]:
     """Review every pending target; returns the model used and whether the run was interrupted."""
     from ..routes import agent, agent_skills
+
+    # This process never runs the boot scan that normally opens the /api gate.
+    setattr(current_app, "_INT_SCAN_FINISHED", True)
 
     pending = [r for r in results if any(t.outcome == "pending" for t in r.targets)]
     if not pending:

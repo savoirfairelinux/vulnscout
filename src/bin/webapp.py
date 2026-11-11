@@ -11,6 +11,7 @@ from ..helpers.logging import configure_console_logging
 from ..extensions import db, migrate, setup_write_serialization
 from ..controllers.operation_queue import queue as operation_queue
 from ..controllers.event_bus import operation_events
+from ..controllers import guarded_api
 from ..routes import init_app
 from ..routes.documents import MAX_ASSET_UPLOAD_BYTES, MAX_TEMPLATE_UPLOAD_BYTES
 from ..routes.events import STREAM_PATH
@@ -203,6 +204,9 @@ def create_app():
                     _schedule_background_tasks(app)
                 return True
         return False
+
+    # Before any route hook, so a GuardedApi turn guard sees requests first and records them last.
+    guarded_api.init_app(app)
 
     @app.after_request
     def add_CORS_header(response):
