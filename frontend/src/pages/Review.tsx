@@ -28,11 +28,11 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
-import { AGENT_MESSAGE_MAX_LENGTH, AGENT_WRITE_EVENT, type AgentViewContext } from '../types/agent';
-import { agentActionState, enqueueAgentMessages, openAgentChat } from '../handlers/agentQueue';
+import { AGENT_WRITE_EVENT, type AgentAction, type AgentViewContext } from '../types/agent';
+import { ACTIONS_PER_REQUEST, agentActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
 import AgentActionButton from '../components/AgentActionButton';
 import useAgentQueue from '../hooks/useAgentQueue';
-import { assessmentReviewKey, resolveAssessmentReviewAction } from '../helpers/aiAssessmentReview';
+import { assessmentReviewKey } from '../helpers/aiAssessmentReview';
 
 type AssessmentMutation =
     | { type: 'delete'; vulnId: string; ids: string[] }
@@ -934,19 +934,29 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         const version = reviewScopeVersion.current;
         reviewPreparingRef.current = true;
         setReviewPreparing(true);
+        const actions: AgentAction[] = reviewableRows.map(row => ({ kind: 'review', assessment_id: row.id }));
+        let queued = 0;
+        let first: string | undefined;
         try {
-            const variants = await Variants.listAll();
-            const actions = await Promise.all(reviewableRows.map(row => resolveAssessmentReviewAction(row.id, variants)));
-            if (version !== reviewScopeVersion.current) return;
-            if (actions.some(action => action.text.length > AGENT_MESSAGE_MAX_LENGTH)) {
-                showMessage('An assessment review request exceeds the AI message limit. Check the selected assessment identifiers.', 'error');
-                return;
+            for (let start = 0; start < actions.length; start += ACTIONS_PER_REQUEST) {
+                const batch = actions.slice(start, start + ACTIONS_PER_REQUEST);
+                const { requests, skipped } = await enqueueAgentActions(batch, {
+                    conversation: 'per-action', source: 'Review',
+                    context: { page: 'review', projectId, view: { section: 'assessments' } },
+                });
+                if (version !== reviewScopeVersion.current) return;
+                queued += batch.length;
+                first ??= requests[0]?.id ?? skipped[0]?.request_id;
             }
-            const queued = actions.map(action => ({ ...action, id: crypto.randomUUID() }));
-            enqueueAgentMessages(queued, actions[0].context ?? { page: 'review' }, 'Review', 'per-action');
-            openAgentChat(queued[0]?.id);
+            openAgentChat(first);
         } catch (error) {
-            if (version === reviewScopeVersion.current) showMessage(`Unable to queue AI reviews: ${String(error)}`, 'error');
+            if (version !== reviewScopeVersion.current) return;
+            if (queued) {
+                showMessage(`Queued ${queued} of ${actions.length} AI reviews; the rest failed: ${String(error)}`, 'error');
+                openAgentChat(first);
+            } else {
+                showMessage(`Unable to queue AI reviews: ${String(error)}`, 'error');
+            }
         } finally {
             if (version === reviewScopeVersion.current) {
                 reviewPreparingRef.current = false;
