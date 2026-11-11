@@ -404,13 +404,18 @@ def _batch_label(number: int, total: int) -> tuple[int, int] | None:
     return (number, total) if total > 1 else None
 
 
+def assess_key(vuln_id: str, pairs: Iterable[tuple[str, str]]) -> str:
+    """The canonical queue key of assessing *vuln_id* on (variant_id, package) *pairs* (the web UI's assessmentKey)."""
+    return f"assess:{vuln_id}:" + ",".join(sorted(f"{variant}|{package}" for variant, package in pairs))
+
+
 def plan_assess(vuln_id: str, targets: list[Target], key: str | None = None) -> list[TurnSpec]:
     """Turns assessing *targets*; raises ValueError when there are none or a variant cannot fit one prompt."""
     if not targets:
         raise ValueError(f"No active assessment targets for {vuln_id}.")
     batches = build_prompts(vuln_id, targets)
-    # The web UI's assessmentKey: one key for every batch of the action.
-    key = key or f"assess:{vuln_id}:" + ",".join(sorted(f"{t.variant_id}|{t.package}" for t in targets))
+    # One key for every batch of the action.
+    key = key or assess_key(vuln_id, ((t.variant_id, t.package) for t in targets))
     specs = []
     for number, (prompt, batch) in enumerate(batches, 1):
         part = f" · batch {number} of {len(batches)}" if len(batches) > 1 else ""
