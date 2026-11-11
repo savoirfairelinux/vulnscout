@@ -359,6 +359,29 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument();
   });
 
+  test("keyboard focus on Save keeps the rename open until Escape or leaving the editor", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
+    const editorLabel = "Rename variant Release";
+
+    await user.click(await screen.findByRole("button", { name: editorLabel }));
+    await user.clear(screen.getByRole("textbox", { name: editorLabel }));
+    await user.type(screen.getByRole("textbox", { name: editorLabel }), "Discarded");
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Save variant name" })).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: editorLabel })).toBeInTheDocument();
+    await user.tab();
+    expect(screen.queryByRole("textbox", { name: editorLabel })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: editorLabel }));
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Save variant name" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: editorLabel })).not.toBeInTheDocument();
+    expect(variantsRename).not.toHaveBeenCalled();
+  });
+
   test("a create flash does not reappear on history navigation", async () => {
     projectsList.mockResolvedValueOnce([project]).mockResolvedValue([project, { id: "project-2", name: "Zeus" }]);
     render(
