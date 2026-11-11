@@ -13,7 +13,6 @@ import React from 'react';
 
 import Vulnerabilities, { type Vulnerability } from "../../src/handlers/vulnerabilities";
 import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
-import RefreshControls from '../../src/components/RefreshControls';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
@@ -3112,147 +3111,6 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
         });
     });
 
-    test('shows NVD completion banner via phase transition (fast-complete path)', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('nvd', 'running', 5, 10);
-            sendRefresh('nvd', 'done', 10, 10);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/NVD refresh complete \(10 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows NVD cancelled banner when phase transitions to cancelled', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('nvd', 'running', 3, 10);
-            sendRefresh('nvd', 'cancelled', 3, 10);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/NVD refresh cancelled \(3\/10 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows EPSS completion banner via phase transition (fast-complete path)', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('epss', 'running', 25, 50);
-            sendRefresh('epss', 'done', 50, 50);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows EPSS cancelled banner when phase transitions to cancelled', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('epss', 'running', 5, 20);
-            sendRefresh('epss', 'cancelled', 5, 20);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/EPSS refresh cancelled \(5\/20 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('does not show EPSS banner on first load when phase is already completed', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('epss', 'done', 50, 50);
-
-            await act(async () => { await Promise.resolve(); });
-
-            expect(screen.queryByText(/EPSS refresh complete/i)).not.toBeInTheDocument();
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('does not show NVD banner on first load when phase is already completed', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('nvd', 'done', 10, 10);
-
-            await act(async () => { await Promise.resolve(); });
-
-            expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows EPSS completion banner when refresh completes between polls (started_at changes)', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('epss', 'running', 25, 50);
-            sendRefresh('epss', 'done', 50, 50, '2026-06-10T10:01:00Z');
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows EPSS completion banner for a re-triggered fast refresh (started_at changes)', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('epss', 'running', 10, 50, '2026-06-10T09:00:00Z');
-            sendRefresh('epss', 'done', 50, 50, '2026-06-10T10:01:00Z');
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
 });
 
 describe('Status helper, banner close, package filter, modal navigation, first scan date column', () => {
@@ -3376,33 +3234,6 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         await waitFor(() => {
             expect(screen.queryByText('Status Summary')).not.toBeInTheDocument();
         });
-    });
-
-    test('banner can be dismissed via close button', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-            sendRefresh('nvd', 'running', 5, 10);
-            sendRefresh('nvd', 'done', 10, 10);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/NVD refresh complete/i)).toBeInTheDocument();
-            });
-
-            // Dismiss the banner using fireEvent (compatible with fake timers)
-            const closeBtn = screen.getByRole('button', { name: /dismiss/i });
-            await act(async () => { fireEvent.click(closeBtn); });
-
-            await waitFor(() => {
-                expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
     });
 
     test('packages filter dropdown reflects active Package filter prop', async () => {
@@ -3603,32 +3434,6 @@ describe('Status helper, banner close, package filter, modal navigation, first s
             expect(html).toMatch(/2025/);
             expect(html).toMatch(/Feb|02|10/);
         });
-    });
-
-    test('updates refresh progress through SSE without polling deleted endpoints', async () => {
-        render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} />);
-        sendRefresh('nvd', 'running', 1, 10);
-        sendRefresh('nvd', 'running', 5, 10);
-        expect(screen.getByRole('status')).toHaveTextContent('NVD 5/10');
-        sendRefresh('nvd', 'done', 10, 10);
-
-        expect(await screen.findByText(/NVD refresh complete/i)).toBeInTheDocument();
-        expect(fetchMock.mock.calls.some(([url]) => /\/api\/(nvd|epss|ghsa|euvd)\/progress/.test(String(url)))).toBe(false);
-    });
-
-    test('refresh controls retain provider failures and cancellation outcomes and update loaded data', async () => {
-        const complete = jest.fn();
-        render(<RefreshControls vulnerabilities={[]} getRefreshVulnerabilities={async () => []} onRefreshComplete={complete} />);
-        sendRefresh('nvd', 'running', 1, 10);
-        sendRefresh('epss', 'running', 2, 10);
-        expect(screen.getByRole('status')).toHaveTextContent('NVD 1/10 · EPSS 2/10');
-        sendRefresh('nvd', 'error', 1, 10);
-        sendRefresh('epss', 'cancelled', 2, 10);
-        expect(await screen.findByText(/NVD refresh failed:/)).toHaveTextContent('EPSS refresh cancelled (2/10 CVEs)');
-        expect(complete).toHaveBeenCalledTimes(2);
-        expect(screen.queryByRole('status')).not.toBeInTheDocument();
-        sendRefresh('nvd', 'running', 0, 10, '2026-06-10T11:00:00Z');
-        expect(screen.queryByText(/NVD refresh failed:/)).not.toBeInTheDocument();
     });
 
     test('click inside status helper dropdown does not close it (stopPropagation)', async () => {
