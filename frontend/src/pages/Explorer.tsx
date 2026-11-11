@@ -525,7 +525,7 @@ function Explorer() {
         return () => { window.requestAnimationFrame(() => { if (previousFocus?.isConnected) previousFocus.focus(); }); };
     }, [agentOpen]);
 
-    // The chat floats beside an open vulnerability; modal overlays shrink to keep it visible.
+    // The chat keeps its place below the navigation and stacks above an open vulnerability's overlay, which shrinks to keep it visible.
     useEffect(() => {
         document.body.classList.toggle('agent-docked', agentDocked);
         return () => document.body.classList.remove('agent-docked');
@@ -803,7 +803,7 @@ function Explorer() {
                         first?.focus();
                     }
                 }
-            }} className={`fixed inset-0 z-[110] h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentContext.view?.openVulnerabilityId ? 'lg:inset-y-0 lg:right-0 lg:left-auto lg:shadow-2xl' : 'lg:static lg:h-auto'}`}>
+            }} className={`fixed inset-0 z-[110] h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:relative lg:inset-auto lg:h-auto lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentDocked ? 'lg:shadow-2xl' : 'lg:z-auto'}`}>
                 <AgentChat active={agentOpen} context={agentContext} onClose={() => setAgentOpen(false)} />
             </aside>}
             </div>
