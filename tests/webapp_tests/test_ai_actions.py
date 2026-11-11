@@ -113,6 +113,13 @@ def test_plan_review_lists_every_target_in_one_prompt_or_one_spec_per_variant(ct
     [only] = ai_actions.plan_review(aid, uuid.UUID(ctx["x86"]), {uuid.UUID(ctx["findings"]["zlib"])},
                                     key="k", per_variant=True)
     assert only.key == "k" and [t.package for t in only.review_targets] == ["zlib@1.2"]
+    x86_id, zlib, openssl = (uuid.UUID(value)
+                             for value in (ctx["x86"], ctx["findings"]["zlib"], ctx["findings"]["openssl"]))
+    [one] = ai_actions.plan_review(aid, x86_id, {zlib}, per_variant=True)
+    [both] = ai_actions.plan_review(aid, x86_id, {zlib, openssl}, per_variant=True)
+    [again] = ai_actions.plan_review(aid, x86_id, {openssl, zlib}, per_variant=True)
+    # The selected findings are part of the key: a run selecting more never follows one selecting fewer.
+    assert one.key.startswith(f"review:{aid}:{x86_id}:") and one.key != both.key == again.key
 
 
 def test_plan_review_rejects_unreviewable_assessments(ctx):

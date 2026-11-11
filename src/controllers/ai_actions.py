@@ -10,6 +10,7 @@ never relies on the agent's reply.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -404,13 +405,18 @@ def _batch_label(number: int, total: int) -> tuple[int, int] | None:
     return (number, total) if total > 1 else None
 
 
+def assess_key(vuln_id: str, pairs: Iterable[tuple[str, str]]) -> str:
+    """The canonical queue key of assessing *vuln_id* on (variant_id, package) *pairs* (the web UI's assessmentKey)."""
+    return f"assess:{vuln_id}:" + ",".join(sorted(f"{variant}|{package}" for variant, package in pairs))
+
+
 def plan_assess(vuln_id: str, targets: list[Target], key: str | None = None) -> list[TurnSpec]:
     """Turns assessing *targets*; raises ValueError when there are none or a variant cannot fit one prompt."""
     if not targets:
         raise ValueError(f"No active assessment targets for {vuln_id}.")
     batches = build_prompts(vuln_id, targets)
-    # The web UI's assessmentKey: one key for every batch of the action.
-    key = key or f"assess:{vuln_id}:" + ",".join(sorted(f"{t.variant_id}|{t.package}" for t in targets))
+    # One key for every batch of the action.
+    key = key or assess_key(vuln_id, ((t.variant_id, t.package) for t in targets))
     specs = []
     for number, (prompt, batch) in enumerate(batches, 1):
         part = f" · batch {number} of {len(batches)}" if len(batches) > 1 else ""
@@ -461,7 +467,9 @@ def plan_review(assessment_id: UUID, variant_id: UUID | None = None, finding_ids
 
     Optionally restricted to *variant_id* and *finding_ids*. Without *per_variant* (web) every target
     goes in one prompt, split only past PROMPT_BUDGET; with it (CLI) each variant gets its own turns.
-    Raises ValueError for unknown or non-custom assessments, no target left, or targets in several projects.
+    Without *key*, restricted findings are part of each group's key: a run selecting other findings of
+    the same variant never follows this one. Raises ValueError for unknown or non-custom assessments,
+    no target left, or targets in several projects.
     """
     from ..models.assessment import Assessment
 
@@ -484,6 +492,9 @@ def plan_review(assessment_id: UUID, variant_id: UUID | None = None, finding_ids
     specs = []
     for group_variant, group in groups.items():
         group_key = key or f"review:{assessment_id}" + (f":{group_variant}" if group_variant else "")
+        if key is None and finding_ids is not None:
+            selected = ",".join(sorted(dict.fromkeys(str(t.finding_id) for t in group)))
+            group_key += ":" + hashlib.sha256(selected.encode()).hexdigest()[:16]
         batches = build_review_prompts(selection, group)
         for number, (prompt, batch) in enumerate(batches, 1):
             specs.append(TurnSpec(
