@@ -28,7 +28,7 @@ import AIContext from './AIContext';
 import type { AiContextScope } from './AIContext';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import AgentChat from '../components/AgentChat';
-import { getAgentChatRequest, subscribeAgentQueue } from '../handlers/agentQueue';
+import { getAgentChatRequest, subscribeAgentChatRequest } from '../handlers/agentQueue';
 import { AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
@@ -122,7 +122,7 @@ function Explorer() {
     const loadGeneration = useRef(0);
     const scopeReady = useRef(false);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
-    const agentChatRequest = useSyncExternalStore(subscribeAgentQueue, getAgentChatRequest).nonce;
+    const agentChatRequest = useSyncExternalStore(subscribeAgentChatRequest, getAgentChatRequest).nonce;
 
     // AI actions anywhere in the app open the single agent chat through the queue store.
     useEffect(() => {
