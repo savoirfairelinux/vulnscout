@@ -1125,3 +1125,76 @@ class TestContextDraftRoutes:
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
                 patch("src.helpers.context_draft.write_draft", side_effect=OSError("disk full")):
             assert self._put(client, variant).status_code == 500
+
+
+class TestImportSourceRoutes:
+
+    def _post(self, client, variant, content, name):
+        from io import BytesIO
+        return client.post(f"/api/variants/{variant.id}/context/import-source",
+                           data={"file": (BytesIO(content), name)}, content_type="multipart/form-data")
+
+    def _source(self, client, variant, **params):
+        return client.get(f"/api/variants/{variant.id}/context/import-source/source", query_string=params)
+
+    def test_upload_then_list_read_search(self, client, variant, tmp_path):
+        from src.models.variant_context import ContextFile, VariantContext
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            assert self._source(client, variant).status_code == 404
+            resp = self._post(client, variant, b"line one\nneedle two\n", "model.yaml")
+            listed = self._source(client, variant).get_json()
+            read = self._source(client, variant, operation="read", path="model.yaml", max_lines=1).get_json()
+            found = self._source(client, variant, operation="search", query="needle").get_json()
+            bad = self._source(client, variant, operation="nope")
+        assert resp.status_code == 201 and resp.get_json() == {"name": "model.yaml", "size": 20}
+        assert listed["name"] == "model.yaml" and listed["files"] == [{"path": "model.yaml", "size": 20}]
+        assert read["content"] == "line one\n" and read["next_line"] == 2
+        assert found["matches"] == [{"path": "model.yaml", "line": 2, "text": "needle two"}]
+        assert bad.status_code == 400
+        vc = VariantContext.get_by_variant(variant.id)
+        assert vc.updated_at is None and ContextFile.count_for_variant_context(vc.id) == 0
+
+    def test_new_upload_replaces_the_source_and_clears_the_draft(self, client, variant, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            self._post(client, variant, b"first", "a.md")
+            client.put(f"/api/variants/{variant.id}/context/draft",
+                       json={"source": "a.md", "base_updated_at": None, "values": _draft_values()})
+            self._post(client, variant, b"second", "b.md")
+            listed = self._source(client, variant).get_json()
+            draft = client.get(f"/api/variants/{variant.id}/context/draft")
+        assert [f["path"] for f in listed["files"]] == ["b.md"]
+        assert draft.status_code == 404
+
+    @pytest.mark.parametrize("content,name,error", [
+        (b"\x00\x01binary", "blob.bin", "binary"),
+        (b"\xff\xfe\xfa", "latin.txt", "UTF-8"),
+        (b"not a zip", "bundle.zip", "Invalid or unsupported source archive"),
+    ])
+    def test_unreadable_content_is_rejected(self, client, variant, tmp_path, content, name, error):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            resp = self._post(client, variant, content, name)
+        assert resp.status_code == 400 and error in resp.get_json()["error"]
+
+    def test_unsafe_names_never_clobber_the_draft(self, client, variant, tmp_path):
+        from src.helpers import context_draft
+        from src.models.variant_context import VariantContext
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            for name in ("..", ".", "a\x01b.md", "x" * 256 + ".md"):
+                assert self._post(client, variant, b"text", name).status_code == 400, name
+            assert self._post(client, variant, b"text", "draft.json").status_code == 201
+            assert self._post(client, variant, b"text", "..\\..\\evil.md").get_json()["name"] == "evil.md"
+            directory = context_draft.context_dir(str(tmp_path), VariantContext.get_by_variant(variant.id).id)
+        assert sorted(os.listdir(directory)) == ["import"]
+        assert os.listdir(os.path.join(directory, "import")) == ["evil.md"]
+
+    def test_missing_file_and_unknown_variant(self, client, variant, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            assert client.post(f"/api/variants/{variant.id}/context/import-source").status_code == 400
+            assert client.post(f"/api/variants/{uuid.uuid4()}/context/import-source").status_code == 404
+
+    def test_storage_failure_is_a_500(self, client, variant, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
+                patch("werkzeug.datastructures.FileStorage.save", side_effect=OSError("disk full")):
+            assert self._post(client, variant, b"text", "a.md").status_code == 500
