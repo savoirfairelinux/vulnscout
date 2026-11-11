@@ -4,22 +4,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Iterator
 from uuid import UUID
 
 import click
-from flask import current_app
 from flask.cli import with_appcontext
 
 from ..controllers import ai_actions
 # build_review_prompts is re-exported for the CLI tests.
 from ..controllers.ai_actions import CVE_ID_PATTERN, TargetResult, build_review_prompts  # noqa: F401
-from ..controllers.guarded_api import GuardedApi
-from ..helpers.env_vars import get_bool_env
 from ..helpers.review_selection import ReviewSelection, select_by_cve, select_by_ids
 from . import _ai_runner
 from ..helpers.export_scope import compute_export_scope
@@ -53,14 +48,12 @@ class ReviewResult:
                 "reply": "\n\n".join(self.replies) or None, "usage": self.usage}
 
 
-def _review(result: ReviewResult, label: str, credentials, model: str, path, api: GuardedApi, timeout: int) -> None:
-    from ..routes import agent, agent_skills
-
+def _plan(result: ReviewResult, timeout: int) -> list[ai_actions.TurnSpec]:
+    """One turn per variant of *result*'s pending targets; targets no turn covers are reported as changed."""
     by_variant: dict[UUID, list[TargetResult]] = {}
     for item in result.targets:
         if item.outcome == "pending":
             by_variant.setdefault(item.target.variant_id, []).append(item)
-    lookup = {(item.target.variant_id, item.target.finding_id): item for items in by_variant.values() for item in items}
     specs: list[ai_actions.TurnSpec] = []
     for variant_id, items in by_variant.items():
         try:
@@ -69,74 +62,55 @@ def _review(result: ReviewResult, label: str, credentials, model: str, path, api
         except ValueError:
             pass  # changed since the selection: reported below
     planned = {(t.variant_id, t.finding_id) for spec in specs for t in spec.review_targets}
-    for pair, item in lookup.items():
-        if pair not in planned:
-            item.outcome, item.error = "changed", ai_actions.CHANGED
-    for spec in specs:
-        batch = spec.review_targets
-        echo(f"{label} Reviewing {str(result.selection.assessment_id)[:8]}\u2026 {result.selection.vuln_id} "
-             f"on {batch[0].variant} "
-             f"({len(batch)} target{'s' if len(batch) != 1 else ''})...", err=True)
-        # Pinned at selection, so an edit since then is reported as "changed".
-        turn = ai_actions.prepare(replace(spec, fingerprint=result.selection.fingerprint, timeout=timeout))
-        error: tuple[str, str] | None = None
-        interrupted = False
-        try:
-            reply, usage = asyncio.run(ai_actions.run_turn(
-                turn, agent.Conversation(credentials=credentials), model, path, api))
-            result.replies.append(reply)
-            result.usage = agent._add_usage(result.usage, usage)
-        except (agent.UnavailableModelError, agent_skills.AgentSkillError):
-            raise
-        except KeyboardInterrupt:
-            # SIGINT forwarded by the host wrapper: asyncio.run cancels the turn.
-            interrupted = True
-        except asyncio.TimeoutError:
-            error = ("timeout", f"No reply within {timeout} s.")
-        except Exception as exc:
-            error = ("failed", str(exc) or type(exc).__name__)
-        # A cleanup error raised while the turn was being cancelled replaces the KeyboardInterrupt.
-        interrupted = interrupted or _ai_runner.interrupted.is_set()
-        for target in ai_actions.verify(turn, error, interrupted)["targets"]:
-            item = lookup[(UUID(target["variant_id"]), UUID(target["finding_id"]))]
-            item.outcome, item.review, item.error = target["outcome"], target["review"], target["error"]
-        if interrupted:
-            raise KeyboardInterrupt
+    for items in by_variant.values():
+        for item in items:
+            if (item.target.variant_id, item.target.finding_id) not in planned:
+                item.outcome, item.error = "changed", ai_actions.CHANGED
+    # Pinned at selection, so an edit since then is reported as "changed".
+    return [replace(spec, fingerprint=result.selection.fingerprint, timeout=timeout) for spec in specs]
+
+
+def _fold(result: ReviewResult, turn: ai_actions.TurnResult) -> None:
+    from ..routes import agent
+
+    if turn["usage"] is not None:
+        result.replies.append(turn["reply"])
+        result.usage = agent._add_usage(result.usage, turn["usage"])
+    items = {(item.target.variant_id, item.target.finding_id): item for item in result.targets}
+    for target in turn["targets"]:
+        item = items[(UUID(target["variant_id"]), UUID(target["finding_id"]))]
+        item.outcome, item.review, item.error = target["outcome"], target["review"], target["error"]
 
 
 def _run(results: list[ReviewResult], model: str | None, timeout: int) -> tuple[str | None, bool]:
     """Review every pending target; returns the model used and whether the run was interrupted."""
-    from ..routes import agent, agent_skills
-
-    # This process never runs the boot scan that normally opens the /api gate.
-    setattr(current_app, "_INT_SCAN_FINISHED", True)
-
     pending = [r for r in results if any(t.outcome == "pending" for t in r.targets)]
     if not pending:
         return _ai_runner.configured_model(model), False
-    credentials, selected, path = _ai_runner.load_agent(model)
-    if not get_bool_env("VERBOSE_MODE"):
-        # The SDK logs every failed request with a traceback; the summary already reports the error.
-        logging.getLogger("copilot").setLevel(logging.ERROR)
-    if credentials.token and not credentials.provider:
-        _ai_runner.check_github_sign_in(credentials.token)
+    owners: dict[int, tuple[ai_actions.TurnSpec, str, ReviewResult]] = {}
+
+    def specs() -> Iterator[ai_actions.TurnSpec]:
+        for number, result in enumerate(pending, 1):
+            for spec in _plan(result, timeout):
+                owners[id(spec)] = (spec, f"[{number}/{len(pending)}]", result)
+                yield spec
+
+    def on_start(spec: ai_actions.TurnSpec) -> None:
+        _, label, result = owners[id(spec)]
+        batch = spec.review_targets
+        echo(f"{label} Reviewing {str(result.selection.assessment_id)[:8]}\u2026 {result.selection.vuln_id} "
+             f"on {batch[0].variant} "
+             f"({len(batch)} target{'s' if len(batch) != 1 else ''})...", err=True)
+
     # Run-level: an interrupt after the last turn saved its reviews leaves no failing target.
-    interrupted = False
-    with _ai_runner.guarded_api() as api:
-        try:
-            for number, result in enumerate(pending, 1):
-                _review(result, f"[{number}/{len(pending)}]", credentials, selected, path, api, timeout)
-                if _ai_runner.interrupted.is_set():
-                    raise KeyboardInterrupt
-        except KeyboardInterrupt:
-            interrupted = True
-            echo("Interrupted; reporting completed reviews.", role="warning", err=True)
-            for result in pending:
-                for item in result.targets:
-                    if item.outcome == "pending":
-                        item.outcome, item.error = "interrupted", "Not started."
-        except (agent.UnavailableModelError, agent_skills.AgentSkillError) as exc:
-            raise click.ClickException(str(exc)) from exc
+    selected, interrupted = _ai_runner.execute(specs(), model, on_start,
+                                               lambda spec, turn: _fold(owners[id(spec)][2], turn))
+    if interrupted:
+        echo("Interrupted; reporting completed reviews.", role="warning", err=True)
+        for result in pending:
+            for item in result.targets:
+                if item.outcome == "pending":
+                    item.outcome, item.error = "interrupted", "Not started."
     return selected, interrupted
 
 
