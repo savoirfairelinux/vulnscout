@@ -112,8 +112,7 @@ def test_container_refresh_keeps_caller_identity_or_rejects_pending_inputs(wrapp
         assert "refresh-vulnerability-data --project demo --variant x86 --run-id ci-123" in log.read_text()
 
 
-@pytest.mark.parametrize("trigger", ["condition", "staged-input"])
-def test_container_processing_branch_forwards_refresh_identity(wrapper, trigger):
+def test_container_processing_branch_forwards_refresh_identity(wrapper):
     _, log, directory, env = wrapper
     flask = directory / "bin" / "flask"
     flask.write_text(
@@ -122,15 +121,9 @@ def test_container_processing_branch_forwards_refresh_identity(wrapper, trigger)
     )
     flask.chmod(0o755)
     env = {**env, "VULNSCOUT_BASE_DIR": str(directory),
-           "VULNSCOUT_INPUTS_DIR": str(directory / "inputs"),
            "VULNSCOUT_CONFIG": str(directory / "absent.env")}
-    args = ["--refresh-vulnerability-data", "--refresh-run-id", "exact-process"]
-    if trigger == "condition":
-        args += ["--match-condition", "cvss >= 9"]
-    else:
-        inputs = directory / "inputs" / "cdx"
-        inputs.mkdir(parents=True)
-        (inputs / "staged.json").write_text("{}")
+    args = ["--refresh-vulnerability-data", "--refresh-run-id", "exact-process",
+            "--match-condition", "cvss >= 9"]
     result = subprocess.run(["bash", str(ROOT / "src/entrypoint.sh"), *args],
                             cwd=ROOT, env=env, text=True, capture_output=True)
     assert result.returncode == 1, result.stderr

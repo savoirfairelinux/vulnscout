@@ -311,6 +311,7 @@ def tracked_refresh(source: str):
                 create_run({source: list(ctx.options.get("ids", []))}, run_id=run_id)
             try:
                 add_targets(run_id, source, list(ctx.options.get("ids", [])))
+                db.session.commit()
                 with capture_source(run_id, source):
                     result = function(ctx)
                     db.session.commit()

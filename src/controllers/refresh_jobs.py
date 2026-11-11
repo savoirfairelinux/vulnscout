@@ -277,7 +277,6 @@ def run_epss_refresh(ctx: JobContext) -> None:
             print(f"[bulk EPSS refresh] batch error: {exc}", flush=True)
             _safe_commit("bulk EPSS refresh failed batch")
             processed += len(chunk)
-            _safe_commit("bulk EPSS refresh failed batch")
             ctx.report(processed, total, f"EPSS refresh: {processed}/{total}")
             continue
 
