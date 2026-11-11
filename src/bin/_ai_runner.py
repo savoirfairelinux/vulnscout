@@ -19,10 +19,12 @@ import click
 from flask import current_app
 
 from ..helpers.env_vars import get_bool_env
+from ._console import echo
 
 if TYPE_CHECKING:
     from ..controllers.ai_actions import TurnResult, TurnSpec
     from ..controllers.guarded_api import GuardedApi
+    from ._ai_queue_client import QueueClient
 
 # Set by entrypoint.sh (ai-assess and ai-review) so the host wrapper can forward Ctrl-C to this process.
 PID_FILE_ENV = "VULNSCOUT_AI_ASSESS_PID_FILE"
@@ -115,6 +117,33 @@ def interrupt_signals() -> Iterator[None]:
                 signal.signal(signum, handler)
 
 
+@contextmanager
+def deferred_interrupt() -> Iterator[None]:
+    """Hold a first Ctrl-C (SIGINT) until the block ends, then raise ``KeyboardInterrupt``.
+
+    For a call the server may accept even when the client gives up on it (submitting a batch to the web
+    AI queue): its answer names the requests to stop. A further SIGINT, or SIGTERM, still stops at once.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    held = threading.Event()
+
+    def hold(signum, frame) -> None:
+        interrupted.set()
+        if held.is_set():
+            signal.default_int_handler(signum, frame)
+        held.set()
+
+    previous = signal.signal(signal.SIGINT, hold)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous if previous is not None else signal.SIG_DFL)
+    if held.is_set():
+        raise KeyboardInterrupt
+
+
 def release_pid_file() -> None:
     """Remove the entrypoint's pidfile if it still names this process (it ``exec``s into flask)."""
     path = os.environ.get(PID_FILE_ENV)
@@ -142,16 +171,39 @@ def guarded_api() -> Iterator[GuardedApi]:
         api.stop()
 
 
-def execute(specs: Iterable[TurnSpec], model: str | None, on_start: Callable[[TurnSpec], None],
-            on_done: Callable[[TurnSpec, TurnResult], None]) -> tuple[str, bool]:
-    """Run each of *specs* as one agent turn in this process; return the model used and whether the run was
-    interrupted.
+LOCAL_NOTE = "note: web server not running; this run is not visible in the web AI queue"
 
-    *specs* is consumed lazily, one spec per turn, so a command can plan each item when it is reached.
+
+def queue_client() -> QueueClient:
+    """The client of the web server's AI queue in this container (replaced in tests)."""
+    from ._ai_queue_client import QueueClient
+
+    return QueueClient()
+
+
+def execute(specs: Iterable[TurnSpec], model: str | None, on_start: Callable[[TurnSpec], None],
+            on_done: Callable[[TurnSpec, TurnResult], None]) -> tuple[str | None, bool]:
+    """Run each of *specs* as one agent turn; return the model used and whether the run was interrupted.
+
     ``on_start(spec)`` runs before the turn and ``on_done(spec, result)`` after it with its ``TurnResult``;
     a completed turn's result carries its ``usage``. An unavailable model or missing skills ends the run with
     a ``ClickException``; Ctrl-C stops it after recording what the current turn wrote.
+
+    When ``vulnscout serve`` runs, the turns go through its AI queue (visible in the web UI, after the web's
+    queued actions); otherwise they run in this process, *specs* consumed lazily so a command can plan each
+    item when it is reached.
     """
+    from ._ai_queue_client import run_remote
+
+    client = queue_client()
+    if client.probe() is not None:
+        return run_remote(client, specs, model, on_start, on_done)
+    echo(LOCAL_NOTE, err=True)
+    return _execute_local(specs, model, on_start, on_done)
+
+
+def _execute_local(specs: Iterable[TurnSpec], model: str | None, on_start: Callable[[TurnSpec], None],
+                   on_done: Callable[[TurnSpec, TurnResult], None]) -> tuple[str, bool]:
     from ..controllers import ai_actions
     from ..routes import agent, agent_skills
 
