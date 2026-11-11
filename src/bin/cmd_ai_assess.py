@@ -4,24 +4,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Iterator
 from uuid import UUID
 
 import click
-from flask import current_app
 from flask.cli import with_appcontext
 
 from ..controllers import ConditionParser, ControllersCache, ai_actions
 # MESSAGE_LIMIT and build_prompts are re-exported for the CLI tests.
 from ..controllers.ai_actions import (  # noqa: F401
     CVE_ID_PATTERN, MESSAGE_LIMIT, Target, active_targets, build_prompts)
-from ..controllers.guarded_api import GuardedApi
-from ..helpers.env_vars import get_bool_env
 from ..helpers.export_scope import compute_export_scope
 from . import _ai_runner
 from ._common import resolve_project_variant
@@ -198,91 +193,70 @@ def _ai_assess(project_name, variant_names, cve_ids, condition, model, timeout, 
         raise SystemExit(1)
 
 
-def _assess(result: Result, label: str, credentials, model: str, path, api: GuardedApi, timeout: int) -> None:
-    from ..routes import agent, agent_skills
-
-    try:
-        specs = ai_actions.plan_assess(result.id, result.targets)
-    except ValueError as exc:
-        result.outcome, result.error = "failed", str(exc)
-        return
-    errors: list[tuple[str, str]] = []
-    for spec in specs:
-        part = f", batch {spec.batch[0]} of {spec.batch[1]}" if spec.batch else ""
-        echo(f"{label} Assessing {result.id} ({len(spec.assess_targets)} targets{part})...", err=True)
-        turn = ai_actions.prepare(replace(spec, timeout=timeout))
-        error: tuple[str, str] | None = None
-        interrupted = False
-        try:
-            reply, usage = asyncio.run(ai_actions.run_turn(
-                turn, agent.Conversation(credentials=credentials), model, path, api))
-            result.replies.append(reply)
-            result.usage = agent._add_usage(result.usage, usage)
-        except agent.UnavailableModelError:
-            raise
-        except agent_skills.AgentSkillError as exc:
-            raise click.ClickException(str(exc)) from exc
-        except KeyboardInterrupt:
-            # SIGINT forwarded by the host wrapper: asyncio.run cancels the turn (the SDK session is
-            # disconnected and deleted in _reply's finally); still record what it already wrote.
-            interrupted = True
-        except asyncio.TimeoutError:
-            error = ("timeout", f"No reply within {timeout} s.")
-        except Exception as exc:
-            error = ("failed", str(exc) or type(exc).__name__)
-        if error is not None:
-            errors.append(error)
-        # A cleanup error raised while the turn was being cancelled replaces the KeyboardInterrupt.
-        interrupted = interrupted or _ai_runner.interrupted.is_set()
-        outcome = ai_actions.verify(turn, error, interrupted)
-        for target, item in zip(spec.assess_targets, outcome["targets"]):
-            if item["written"]:
-                result.written.add(target)
-                result.assessment_ids[target] = item["assessment_ids"]
-        if interrupted:
-            result.outcome, result.error = "interrupted", "Interrupted."
-            raise KeyboardInterrupt
-    if errors:
-        result.outcome, result.error = errors[0][0], "; ".join(message for _, message in errors)
-    elif len(result.written) == len(result.targets):
-        result.outcome = "assessed"
-    else:
-        result.outcome = "partial" if result.written else "no_write"
-    echo(f"{label} {result.id}: {result.outcome}", role="success" if result.outcome == "assessed" else "error",
-         err=True)
-
-
 def _run(results: list[Result], model: str | None, timeout: int) -> str | None:
-    from ..routes import agent
-
-    # This process never runs the boot scan that normally opens the /api gate.
-    setattr(current_app, "_INT_SCAN_FINISHED", True)
-
     pending = [result for result in results if result.outcome == "pending"]
     if not pending:
         return _ai_runner.configured_model(model)
-    credentials, selected, path = _ai_runner.load_agent(model)
-    if not get_bool_env("VERBOSE_MODE"):
-        # The SDK logs every failed request with a traceback; the summary already reports the error.
-        logging.getLogger("copilot").setLevel(logging.ERROR)
-    if credentials.token and not credentials.provider:
-        _ai_runner.check_github_sign_in(credentials.token)
-    with _ai_runner.guarded_api() as api:
-        try:
-            for number, result in enumerate(pending, 1):
-                try:
-                    _assess(result, f"[{number}/{len(pending)}]", credentials, selected, path, api, timeout)
-                except KeyboardInterrupt:
-                    if result.outcome == "pending":
-                        result.outcome, result.error = "interrupted", "Interrupted."
-                    raise
-                if _ai_runner.interrupted.is_set():
-                    raise KeyboardInterrupt
-        except KeyboardInterrupt:
-            echo("Interrupted; reporting completed assessments.", role="warning", err=True)
-            for result in pending:
-                if result.outcome == "pending":
-                    result.outcome, result.error = "interrupted", "Not started."
-        except agent.UnavailableModelError as exc:
-            raise click.ClickException(str(exc)) from exc
+    # Per spec: its result's progress label and result; per result: its turn errors and unfinished turns.
+    owners: dict[int, tuple[ai_actions.TurnSpec, str, Result]] = {}
+    errors: dict[str, list[tuple[str, str]]] = {}
+    remaining: dict[str, int] = {}
+    current: list[Result] = []
+
+    def specs() -> Iterator[ai_actions.TurnSpec]:
+        for number, result in enumerate(pending, 1):
+            current[:] = [result]
+            try:
+                planned = ai_actions.plan_assess(result.id, result.targets)
+            except ValueError as exc:
+                result.outcome, result.error = "failed", str(exc)
+                continue
+            errors[result.id], remaining[result.id] = [], len(planned)
+            for spec in planned:
+                spec = replace(spec, timeout=timeout)
+                owners[id(spec)] = (spec, f"[{number}/{len(pending)}]", result)
+                yield spec
+
+    def on_start(spec: ai_actions.TurnSpec) -> None:
+        _, label, result = owners[id(spec)]
+        part = f", batch {spec.batch[0]} of {spec.batch[1]}" if spec.batch else ""
+        echo(f"{label} Assessing {result.id} ({len(spec.assess_targets)} targets{part})...", err=True)
+
+    def on_done(spec: ai_actions.TurnSpec, turn: ai_actions.TurnResult) -> None:
+        from ..routes import agent
+
+        _, label, result = owners[id(spec)]
+        if turn["usage"] is not None:
+            result.replies.append(turn["reply"])
+            result.usage = agent._add_usage(result.usage, turn["usage"])
+        for target, item in zip(spec.assess_targets, turn["targets"]):
+            if item["written"]:
+                result.written.add(target)
+                result.assessment_ids[target] = item["assessment_ids"]
+        if turn["outcome"] == "interrupted":
+            result.outcome, result.error = "interrupted", turn["error"]
+            return
+        if turn["outcome"] in ("failed", "timeout"):
+            errors[result.id].append((turn["outcome"], turn["error"]))
+        remaining[result.id] -= 1
+        if remaining[result.id]:
+            return
+        if errors[result.id]:
+            result.outcome = errors[result.id][0][0]
+            result.error = "; ".join(message for _, message in errors[result.id])
+        elif len(result.written) == len(result.targets):
+            result.outcome = "assessed"
+        else:
+            result.outcome = "partial" if result.written else "no_write"
+        echo(f"{label} {result.id}: {result.outcome}", role="success" if result.outcome == "assessed" else "error",
+             err=True)
+
+    selected, interrupted = _ai_runner.execute(specs(), model, on_start, on_done)
+    if interrupted:
+        echo("Interrupted; reporting completed assessments.", role="warning", err=True)
+        for result in pending:
+            if result.outcome == "pending":
+                # The item being assessed when the interrupt came; the others never started.
+                result.outcome = "interrupted"
+                result.error = "Interrupted." if current and result is current[0] else "Not started."
     return selected
