@@ -52,7 +52,8 @@ def _aware(value: datetime) -> datetime:
 
 def _write(statement, rows: list[dict] | None = None):
     """Execute a Core write under the session's serialised write transaction."""
-    hold_write_lock()
+    if db.session.get_bind().dialect.name == "sqlite":
+        hold_write_lock()
     # Pending provider writes keep their own flush/commit cadence.
     with db.session.no_autoflush:
         if rows is not None:
@@ -254,6 +255,8 @@ def finish_source(run_id: str, source: str, status: str = "failed", error: str |
                RefreshTarget.status == "pending")
         .values(status=status, error=error or "Target was not checked")
     )
+    # Lock the parent before changing sources or deciding whether all have settled.
+    _heartbeat(run_id, force=True)
     _ensure_source(run_id, source)
     unchecked = exists().where(RefreshTarget.run_id == run_id, RefreshTarget.source == source,
                                RefreshTarget.status != "complete")
@@ -271,7 +274,6 @@ def finish_source(run_id: str, source: str, status: str = "failed", error: str |
         .where(RefreshRun.run_id == run_id, RefreshRun.finished_at.is_(None), ~pending)
         .values(finished_at=now)
     ).rowcount
-    _heartbeat(run_id, force=True)
     db.session.commit()
     if finished:
         _last_heartbeat.pop(run_id, None)
@@ -414,7 +416,7 @@ def capture_changes(session, rows: list[dict]) -> None:
 
 @event.listens_for(Session, "before_flush")
 def _capture_persisted_before(session, _flush_context, _instances):
-    """Read the actual predecessor while holding the existing session write lock.
+    """Lock rows in model/primary-key order and read their actual predecessors.
 
     An ORM instance may have been loaded before another refresh committed.
     Its attribute history is then insufficient evidence of the value replaced.
@@ -427,20 +429,25 @@ def _capture_persisted_before(session, _flush_context, _instances):
     from ..models.vulnerability_history import TRACKED_FIELDS, cvss_field, cvss_value, normalize_value
     before = {}
     connection = session.connection()
-    for obj in session.dirty:
-        if isinstance(obj, Vulnerability):
-            columns = [getattr(Vulnerability, field) for field in TRACKED_FIELDS]
-            row = connection.execute(db.select(*columns).where(Vulnerability.id == obj.id)).first()
-            if row:
-                before.update({(obj.id, field): normalize_value(value) for field, value in zip(TRACKED_FIELDS, row)})
-    for obj in list(session.dirty) + list(session.deleted):
-        if isinstance(obj, Metrics):
-            row = connection.execute(db.select(
-                Metrics.vulnerability_id, Metrics.variant_id,
-                Metrics.version, Metrics.author, Metrics.score, Metrics.vector,
-            ).where(Metrics.id == obj.id)).first()
-            if row and row.variant_id is None:
-                before[(row.vulnerability_id, cvss_field(row.version, row.author, obj.id))] = (
+    vuln_ids = [obj.id for obj in session.dirty if isinstance(obj, Vulnerability)]
+    if vuln_ids:
+        columns = [getattr(Vulnerability, field) for field in TRACKED_FIELDS]
+        # NO KEY UPDATE excludes competing writes without blocking history FK checks.
+        rows = connection.execute(
+            select(Vulnerability.id, *columns).where(Vulnerability.id.in_(vuln_ids))
+            .order_by(Vulnerability.id).with_for_update(key_share=True)
+        )
+        for row in rows:
+            before.update({(row.id, field): normalize_value(value) for field, value in zip(TRACKED_FIELDS, row[1:])})
+    metric_ids = [obj.id for obj in list(session.dirty) + list(session.deleted) if isinstance(obj, Metrics)]
+    if metric_ids:
+        rows = connection.execute(select(
+            Metrics.id, Metrics.vulnerability_id, Metrics.variant_id,
+            Metrics.version, Metrics.author, Metrics.score, Metrics.vector,
+        ).where(Metrics.id.in_(metric_ids)).order_by(Metrics.id).with_for_update(key_share=True))
+        for row in rows:
+            if row.variant_id is None:
+                before[(row.vulnerability_id, cvss_field(row.version, row.author, row.id))] = (
                     cvss_value(row.score, row.vector)
                 )
     session.info["refresh_before"] = before

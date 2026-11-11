@@ -247,7 +247,7 @@ def test_apply_and_run_epss_refresh(monkeypatch):
     ctx = job_context(["CVE-2024-1", "CVE-2024-2"])
     jobs.run_epss_refresh(ctx)
     applied.assert_called_once()
-    assert committed.call_count == 1
+    assert committed.call_count == 2
     assert ctx.report.call_args_list[-1].args[-1] == "EPSS refresh complete"
 
 

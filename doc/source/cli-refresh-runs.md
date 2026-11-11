@@ -15,6 +15,10 @@ run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 ./vulnscout export refresh-changes -p demo -v x86 --run-id "$run_id" --format csv > changes.csv
 ```
 
+If staged input files remain, `refresh --run-id` fails before processing them or
+changing the database. Process those pending inputs with `scan` before retrying
+the exact-ID refresh; the import path does not accept caller refresh identities.
+
 Scope options belong **after** the command. Without `-p`, refresh covers all
 stored vulnerabilities; with only `-p`, it covers that project's active scope.
 `-v` requires `-p`, and an empty `-p`/`-v` value is rejected rather than

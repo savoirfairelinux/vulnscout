@@ -277,6 +277,7 @@ def run_epss_refresh(ctx: JobContext) -> None:
             for cve_id in chunk:
                 target_result("epss", cve_id, "failed", str(exc)[:500])
             print(f"[bulk EPSS refresh] batch error: {exc}", flush=True)
+            _safe_commit("bulk EPSS refresh failed batch")
             processed += len(chunk)
             ctx.report(processed, total, f"EPSS refresh: {processed}/{total}")
             continue
