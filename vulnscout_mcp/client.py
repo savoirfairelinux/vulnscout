@@ -9,6 +9,10 @@ class VulnScoutError(Exception):
     pass
 
 
+class VulnScoutConflict(VulnScoutError):
+    """Raised on HTTP 409: the resource changed since it was read."""
+
+
 class VulnScoutClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
@@ -252,6 +256,44 @@ class VulnScoutClient:
             except ValueError:
                 error_msg = response.text
             raise VulnScoutError(error_msg)
+        return response.json()
+
+    def _send(self, method: str, url: str, *, missing_ok: bool = False, **kwargs) -> Optional[httpx.Response]:
+        try:
+            with httpx.Client(timeout=30) as http:
+                response = http.request(method, url, **kwargs)
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if response.is_success:
+            return response
+        if missing_ok and response.status_code == 404:
+            return None
+        try:
+            error_msg = response.json().get("error", response.text)
+        except ValueError:
+            error_msg = response.text
+        if response.status_code == 409:
+            raise VulnScoutConflict(error_msg)
+        raise VulnScoutError(error_msg)
+
+    def _variant_context_url(self, variant_id: str, suffix: str) -> str:
+        return f"{self.base_url}/api/variants/{quote(variant_id, safe='')}/context/{suffix}"
+
+    def get_context_draft(self, variant_id: str) -> Optional[dict]:
+        """GET the variant's pending AI draft; None when there is none."""
+        response = self._send("GET", self._variant_context_url(variant_id, "draft"), missing_ok=True)
+        return None if response is None else response.json()
+
+    def put_context_draft(self, variant_id: str, body: dict) -> dict:
+        """PUT an AI draft for review; raises VulnScoutConflict when the saved context moved."""
+        response = self._send("PUT", self._variant_context_url(variant_id, "draft"), json=body)
+        assert response is not None
+        return response.json()
+
+    def get_import_source(self, variant_id: str, params: dict) -> dict:
+        """List, read or search the document uploaded for an AI draft."""
+        response = self._send("GET", self._variant_context_url(variant_id, "import-source/source"), params=params)
+        assert response is not None
         return response.json()
 
     def update_project_context(self, project_id: str, description: str | None) -> dict:
@@ -552,6 +594,18 @@ class ScopedVulnScoutClient(VulnScoutClient):
     def get_codebase_source(self, variant_id: str, file_id: str, params: dict) -> dict:
         self._variant(variant_id)
         return super().get_codebase_source(variant_id, file_id, params)
+
+    def get_context_draft(self, variant_id: str) -> Optional[dict]:
+        self._variant(variant_id)
+        return super().get_context_draft(variant_id)
+
+    def put_context_draft(self, variant_id: str, body: dict) -> dict:
+        self._variant(variant_id)
+        return super().put_context_draft(variant_id, body)
+
+    def get_import_source(self, variant_id: str, params: dict) -> dict:
+        self._variant(variant_id)
+        return super().get_import_source(variant_id, params)
 
     def get_dependency_graph(self, variant_id: str) -> dict:
         self._variant(variant_id)
