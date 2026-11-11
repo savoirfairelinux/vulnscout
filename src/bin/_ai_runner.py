@@ -12,10 +12,13 @@ import threading
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 import click
-from flask import Response, current_app
+from flask import current_app
+
+if TYPE_CHECKING:
+    from ..controllers.guarded_api import GuardedApi
 
 # Set by entrypoint.sh (ai-assess and ai-review) so the host wrapper can forward Ctrl-C to this process.
 PID_FILE_ENV = "VULNSCOUT_AI_ASSESS_PID_FILE"
@@ -26,9 +29,6 @@ NO_AI_CONFIG = ("No AI provider configured. Connect an AI provider in the web UI
                 "or set AI_* with `vulnscout config`.")
 GITHUB_SIGNED_OUT = ("GitHub Copilot rejected the configured token (expired or invalid). Reconnect in the "
                      "web UI Agent panel or update AI_AUTH_CREDENTIALS with `vulnscout config`.")
-
-Guard = Callable[[], "Response | None"]  # runs before a mutating request; a Response rejects it
-Recorder = Callable[["Response"], None]  # runs after every response
 
 
 def empty_usage() -> dict[str, Any]:
@@ -121,32 +121,18 @@ def release_pid_file() -> None:
             Path(path).unlink()
 
 
-class _CallableGuard:
-    """Adapt a (guard, recorder) pair to ``guarded_api.TurnGuard``."""
-
-    def __init__(self, guard: Guard, recorder: Recorder) -> None:
-        self._guard, self._recorder = guard, recorder
-
-    def allow(self) -> Response | None:
-        return self._guard()
-
-    def record(self, response: Response) -> None:
-        self._recorder(response)
-
-
 @contextmanager
-def private_api(guard: Guard, recorder: Recorder) -> Iterator[str]:
-    """Serve the app on 127.0.0.1:<free port> for one run; yield its base URL.
+def guarded_api() -> Iterator[GuardedApi]:
+    """Serve the app on 127.0.0.1:<free port> for one run (see ``GuardedApi``), started and disarmed.
 
-    ``guard`` is called before every mutating request to that port and may return a Response to
-    reject it; ``recorder`` sees every finished response from that port, including guard rejections.
-    Requests that do not come through this port are not guarded.
+    Each turn arms it with its own guard (``ai_actions.run_turn``); requests that do not come through
+    this port are not guarded.
     """
     from ..controllers.guarded_api import GuardedApi
 
     api = GuardedApi(current_app._get_current_object())  # type: ignore[attr-defined]
-    api.arm(_CallableGuard(guard, recorder))
+    api.start()
     try:
-        yield api.start()
+        yield api
     finally:
         api.stop()
