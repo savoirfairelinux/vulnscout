@@ -748,13 +748,8 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     />
                     </div>
                 ),
-                footer: ({ table }: { table: Table<Vulnerability> }) => (
-                    <div className="flex items-center justify-center h-full">
-                    {table.getSelectedRowModel().rows.length || ''}
-                    </div>
-                ),
                 minSize: 10,
-                size: 10,
+                size: 40,
                 maxSize: 40
             },
             columnHelper.accessor('id', {
@@ -777,7 +772,6 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     </div>
                 ),
                 sortDescFirst: true,
-                footer: (info) => <div className="flex items-center justify-center">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 170
             }),
             columnHelper.accessor(row => showCustomSeverityFilter ? row.severity.max_score : row.severity.severity, {
@@ -1227,8 +1221,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                     </div>
                 ),
                 enableSorting: false,
-                minSize: 20,
-                size: 20
+                size: 90
             })
         ]
     }, [handleEditClick, searchFilteredData, showCustomSeverityFilter, severityRange, nvdProgress, epssProgress, euvdProgress]);
