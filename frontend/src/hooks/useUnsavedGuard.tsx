@@ -2,8 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from "react";
 import UnsavedChangesDialog from "../components/UnsavedChangesDialog";
 
-/** What a page with unsaved edits registers: a name for the prompt and how to save. */
-export type UnsavedGuard = { label: string; save: () => Promise<boolean> };
+/** What a page with unsaved edits registers: a name for the prompt, how to save, and what discarding also drops. */
+export type UnsavedGuard = { label: string; save: () => Promise<boolean>; discard?: () => void };
 
 type UnsavedGuardApi = {
     registerGuard: (guard: UnsavedGuard | null) => void;
@@ -53,6 +53,7 @@ export function UnsavedGuardProvider({ children }: Readonly<{ children: ReactNod
         showPrompt(null);
         const guard = guardRef.current;
         if (choice !== 'save' || !guard) {
+            if (choice === 'discard') guard?.discard?.();
             current.resolve(choice !== 'cancel');
             return;
         }
