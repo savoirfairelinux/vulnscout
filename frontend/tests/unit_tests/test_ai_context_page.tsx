@@ -11,6 +11,7 @@ import AIContext from '../../src/pages/AIContext';
 import type { AiContextScope } from '../../src/pages/AIContext';
 import { UnsavedGuardProvider, useUnsavedGuard } from '../../src/hooks/useUnsavedGuard';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
+import * as agentStore from '../../src/handlers/agentQueue';
 import type { AgentViewContext } from '../../src/types/agent';
 import { emptyStrideModel } from '../../src/helpers/strideModel';
 
@@ -40,6 +41,7 @@ type Backend = {
     failUrls?: string[];
     /** Requests (URL fragment + method) answered only once `until` settles. */
     holds?: { fragment: string; method: string; until: Promise<unknown> }[];
+    drafts?: Record<string, unknown>;
 };
 
 function deferred() {
@@ -104,6 +106,20 @@ function mockBackend(overrides: Partial<Backend> = {}): Backend {
         if (backend.failUrls?.some(fragment => request.url.includes(fragment))) {
             return { status: 500, body: JSON.stringify({ error: 'Server unavailable' }) };
         }
+        const draftRoute = /\/api\/variants\/([^/]+)\/context\/(draft|import-source)$/.exec(new URL(request.url).pathname);
+        if (draftRoute) {
+            const [, variantId, kind] = draftRoute;
+            const drafts = backend.drafts ?? (backend.drafts = {});
+            if (kind === 'import-source') {
+                delete drafts[variantId];
+                return { status: 201, body: JSON.stringify({ name: 'report.pdf', size: 4 }) };
+            }
+            if (request.method === 'DELETE') {
+                delete drafts[variantId];
+                return { status: 204, body: '' };
+            }
+            return drafts[variantId] ? JSON.stringify(drafts[variantId]) : { status: 404, body: JSON.stringify({ error: 'No draft.' }) };
+        }
         return JSON.stringify(respond(backend, request.url, request.method, body));
     });
     return backend;
@@ -139,6 +155,23 @@ const variantTab = (name: string) => screen.getByRole('tab', { name });
 const agentWrite = (tool: string) => act(() => {
     window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool } }));
 });
+
+const NO_SYSTEM = { scope: null, actors: null, entry_points: null, trust_boundaries: null };
+function aiDraftReply(values: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
+    return {
+        source: 'report.pdf', status: 'current', conflicts: [], renumbered: {},
+        base_updated_at: null, saved_updated_at: null, created_at: '2026-11-11T00:00:00Z', updated_at: '2026-11-11T00:00:00Z',
+        values: {
+            variant_description: null, environment: null, other_info: null,
+            system: { ...NO_SYSTEM, scope: 'Gateway' },
+            stride: { ...emptyStrideModel(), components: [{ id: 'C1', name: 'Web UI', description: '', trust_zone: '' }] },
+            ...values,
+        },
+        ...extra,
+    };
+}
+const LOADED_TEXT = /Unsaved AI draft from report\.pdf: \+1 component \(changes to System scope\)/;
+const FILL = 'Fill from document with AI…';
 
 beforeEach(() => fetchMock.resetMocks());
 
@@ -324,8 +357,10 @@ describe('AIContext page', () => {
 
         agentWrite('update_variant_context');
         await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
-        agentWrite('update_variant_threat_model');
-        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(3));
+        const draftLoads = requestsTo(backend, '/context/draft').length;
+        agentWrite('propose_variant_threat_model');
+        await waitFor(() => expect(requestsTo(backend, '/context/draft').length).toBeGreaterThan(draftLoads));
+        expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2);
 
         await openProjectDescription();
         expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -1505,5 +1540,166 @@ describe('useUnsavedGuard', () => {
         expect(unload()).toBe(true);
         fireEvent.click(screen.getByRole('button', { name: 'unregister' }));
         expect(unload()).toBe(false);
+    });
+});
+
+describe('AI threat-model drafts', () => {
+    beforeEach(() => agentStore.resetAgentQueue());
+
+    test('a stored draft loads as unsaved changes and Save accepts it', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply() }, echoPut: true });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
+        expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: FILL })).toBeDisabled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+        const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+        expect(body.system.scope).toBe('Gateway');
+        expect(body.stride.components[0].id).toBe('C1');
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        await waitFor(() => expect(screen.queryByText(LOADED_TEXT)).not.toBeInTheDocument());
+    });
+
+    test('Discard AI draft deletes it and restores the saved values', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply() } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard AI draft' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        await waitFor(() => expect(screen.queryByText(LOADED_TEXT)).not.toBeInTheDocument());
+        expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+    });
+
+    test('a draft equal to the saved model is deleted silently', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply({ system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() }) } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        expect(screen.queryByText(/Unsaved AI draft/)).not.toBeInTheDocument();
+        expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    });
+
+    test('a draft fetched for a variant the user left is ignored', async () => {
+        const gate = deferred();
+        const backend = mockBackend({
+            drafts: { v1: aiDraftReply() },
+            holds: [{ fragment: '/api/variants/v1/context/draft', method: 'GET', until: gate.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        fireEvent.click(await screen.findByRole('button', { name: 'Variant 1' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft').length).toBeGreaterThan(0));
+        fireEvent.click(sidebarItem('Variant 2'));
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
+        await waitFor(() => expect(screen.getByLabelText('Variant description')).toBeInTheDocument());
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v2/context/draft').length).toBeGreaterThan(0));
+        expect(screen.queryByText(/Unsaved AI draft/)).not.toBeInTheDocument();
+        expect(screen.queryByText('Unsaved changes in Variant 2')).not.toBeInTheDocument();
+    });
+
+    test('a cleared Environment shows as a change', async () => {
+        mockBackend({
+            contexts: { v1: { ...variantContext('v1', 'TM'), environment: 'Lab' } },
+            drafts: { v1: aiDraftReply({ environment: '', system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() }) },
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        expect(await screen.findByText(/Unsaved AI draft from report\.pdf: changes to Environment\./)).toBeInTheDocument();
+        expect(screen.getByLabelText('Environment')).toHaveValue('');
+    });
+
+    test('Fill is disabled while the variant has unsaved edits', async () => {
+        mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        expect(screen.getByRole('button', { name: FILL })).toBeEnabled();
+        fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Mine' } });
+        const fill = screen.getByRole('button', { name: FILL });
+        expect(fill).toBeDisabled();
+        expect(fill).toHaveAttribute('title', 'Save or discard your changes before filling from a document.');
+    });
+
+    test('Fill uploads the document, queues the action and locks the editor until it is cancelled', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        const file = new File(['%PDF'], 'report.pdf', { type: 'application/pdf' });
+        fireEvent.change(screen.getByLabelText('Threat model document'), { target: { files: [file] } });
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/import-source', 'POST')).toHaveLength(1));
+        await waitFor(() => expect(agentStore.getAgentQueue()).toHaveLength(1));
+        const task = agentStore.getAgentQueue()[0];
+        expect(task).toMatchObject({ kind: 'context-import', key: 'context-import:v1', title: 'Variant 1 from report.pdf', source: 'AI Context Variant 1' });
+        expect(task.context).toMatchObject({ page: 'ai', projectId: 'p1', variantId: 'v1' });
+        expect(task.text).toContain('propose_variant_threat_model');
+
+        expect(await screen.findByText('AI is drafting from report.pdf… Editing is paused until the draft is ready.')).toBeInTheDocument();
+        expect(screen.getByLabelText('Variant description')).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(agentStore.getAgentQueue()).toHaveLength(0));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        expect(screen.getByLabelText('Variant description')).toBeEnabled();
+    });
+
+    test('a failed upload shows the error and queues nothing', async () => {
+        mockBackend({ failUrls: ['/context/import-source'] });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.change(screen.getByLabelText('Threat model document'), { target: { files: [new File(['x'], 'a.pdf')] } });
+        expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
+        expect(agentStore.getAgentQueue()).toHaveLength(0);
+    });
+
+    test('the propose write event loads the draft into a clean editor', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        backend.drafts = { v1: aiDraftReply() };
+        agentWrite('propose_variant_threat_model');
+        expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
+    });
+
+    test('a draft arriving over unsaved edits waits until they are saved', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Mine' } });
+        backend.drafts = { v1: aiDraftReply() };
+        agentWrite('propose_variant_threat_model');
+        expect(await screen.findByText('The agent prepared a draft from report.pdf. Save or discard your edits to review it.')).toBeInTheDocument();
+        expect(screen.getByLabelText('Variant description')).toHaveValue('Mine');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
+    });
+
+    test('a conflicting draft is not loaded, lists its conflicts and blocks Fill', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply({}, {
+            status: 'conflict', values: null, conflicts: [{ path: 'components.C1', reason: 'changed in both' }],
+        }) } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        expect(await screen.findByText(/conflicts with changes saved since it was made/)).toBeInTheDocument();
+        expect(screen.getByText('components.C1: changed in both')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: FILL })).toBeDisabled();
+        expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Discard AI draft' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        await waitFor(() => expect(screen.getByRole('button', { name: FILL })).toBeEnabled());
+    });
+
+    test('leaving a loaded draft with Discard deletes it', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply() } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText(LOADED_TEXT);
+        fireEvent.click(sidebarItem('Variant 2'));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft', 'DELETE')).toHaveLength(1));
     });
 });

@@ -2,6 +2,9 @@ import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
 import Context from '../../src/handlers/context';
+import { applyAiDraft, contextImportKey, contextImportMessage, draftChangeSummary } from '../../src/helpers/aiContextImport';
+import { emptyDraft, emptyStrideModel } from '../../src/helpers/strideModel';
+import type { AiContextDraftValues } from '../../src/handlers/context';
 
 beforeEach(() => fetchMock.resetMocks());
 
@@ -40,5 +43,46 @@ describe('AI draft handlers', () => {
         await expect(Context.uploadImportSource('v1', file)).rejects.toThrow('HTTP 413');
         fetchMock.mockResponseOnce(JSON.stringify({ error: 'Unsupported file.' }), { status: 400 });
         await expect(Context.uploadImportSource('v1', file)).rejects.toThrow('Unsupported file.');
+    });
+});
+
+const NO_SYSTEM = { scope: null, actors: null, entry_points: null, trust_boundaries: null };
+const values = (overrides: Partial<AiContextDraftValues> = {}): AiContextDraftValues => ({
+    variant_description: null, environment: null, other_info: null, system: NO_SYSTEM, stride: emptyStrideModel(), ...overrides,
+});
+const comp = (id: string, name: string) => ({ id, name, description: '', trust_zone: '' });
+
+describe('aiContextImport helpers', () => {
+    test('applyAiDraft keeps null texts, clears "" and never touches the codebase settings', () => {
+        const baseline = { ...emptyDraft(), variant_description: 'Gateway', environment: 'Lab', codebase_paths: ['/src'],
+            system: { scope: 'Old', actors: 'Admin', entry_points: '', trust_boundaries: '' } };
+        const applied = applyAiDraft(baseline, values({
+            environment: '', other_info: 'Notes', system: { ...NO_SYSTEM, scope: 'New' },
+            stride: { ...emptyStrideModel(), components: [comp('C1', 'UI')] },
+        }));
+        expect(applied.variant_description).toBe('Gateway');
+        expect(applied.environment).toBe('');
+        expect(applied.other_info).toBe('Notes');
+        expect(applied.system).toEqual({ scope: 'New', actors: '', entry_points: '', trust_boundaries: '' });
+        expect(applied.codebase_paths).toEqual(['/src']);
+        expect(applied.codebase_source).toBe(baseline.codebase_source);
+        expect(applied.stride.components).toEqual([comp('C1', 'UI')]);
+    });
+
+    test('draftChangeSummary counts rows by id and names changed fields', () => {
+        const baseline = { ...emptyDraft(), stride: { ...emptyStrideModel(), components: [comp('C1', 'UI'), comp('C2', 'DB')] } };
+        const draft = { ...baseline, environment: 'Prod', system: { ...baseline.system, actors: 'Ops' },
+            stride: { ...emptyStrideModel(), components: [comp('C1', 'Web UI'), comp('C3', 'API'), comp('C4', 'Queue')] } };
+        expect(draftChangeSummary(baseline, draft)).toBe('+2 components, ~1 component, -1 component (changes to Environment, System actors)');
+        expect(draftChangeSummary(baseline, { ...baseline, other_info: 'x' })).toBe('changes to Other information');
+        expect(draftChangeSummary(baseline, baseline)).toBe('no changes');
+    });
+
+    test('the queued message names the variant, the document and the embedded tools', () => {
+        expect(contextImportKey('v1')).toBe('context-import:v1');
+        const text = contextImportMessage({ projectId: 'p1', projectName: 'Project A', variantId: 'v1', variantName: 'Variant 1', fileName: 'report.pdf' });
+        for (const part of ['Variant 1', 'v1', 'Project A', 'p1', 'report.pdf', 'embedded mode', 'read_import_source', 'propose_variant_threat_model', 'Never save']) {
+            expect(text).toContain(part);
+        }
     });
 });
