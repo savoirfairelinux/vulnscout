@@ -4,7 +4,9 @@
 selected providers, timestamps, coverage and immutable field changes. It prints
 `Refresh run: <id>` before contacting providers. For unattended callers, supply
 your own **new** identity rather than parsing progress output (`latest` is
-reserved and rejected):
+reserved and rejected). Caller IDs must start with a letter or digit and contain
+at most 38 letters, digits, dots, underscores or hyphens, matching field-history
+storage:
 
 ```bash
 run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"

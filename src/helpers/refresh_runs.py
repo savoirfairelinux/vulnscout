@@ -194,8 +194,9 @@ def create_run(targets: dict[str, list[str]], *, run_id: str | None = None,
                scope: dict | None = None) -> str:
     from ..controllers.operation_registry import new_queue_id
     run_id = run_id or new_queue_id()
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id):
-        raise ValueError("Invalid run ID: use up to 128 letters, digits, dots, underscores or hyphens")
+    # Run identities also populate VulnerabilityHistory.queue_id (VARCHAR(38)).
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,37}", run_id):
+        raise ValueError("Invalid run ID: use up to 38 letters, digits, dots, underscores or hyphens")
     if run_id.lower() in RESERVED_RUN_IDS:
         raise ValueError(f"Invalid run ID: '{run_id}' is reserved")
     if db.session.get(RefreshRun, run_id) is not None:
