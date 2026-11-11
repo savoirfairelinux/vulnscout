@@ -52,6 +52,8 @@ _VULN_ID = {
     "description": "Vulnerability identifier (for example CVE, GHSA or an imported advisory ID); not a UUID.",
     "example": "CVE-2025-0001",
 }
+_AGENT_CONTEXT = {"type": "object", "additionalProperties": True,
+                  "description": "The browser page the request comes from (page, project and variant selection)."}
 _PACKAGES = _array(_PACKAGE_ID)
 _VULNS = _array(_VULN_ID)
 _OPENVEX_STATUSES = ["under_investigation", "not_affected", "affected", "fixed"]
@@ -579,6 +581,89 @@ SCHEMAS: dict[str, Any] = {
             _object({"authenticated": _BOOL, "cleanup_error": _TEXT}, ("authenticated", "cleanup_error")),
         ],
     },
+    "AgentQueueAction": {
+        "anyOf": [
+            _object({
+                "kind": {"type": "string", "enum": ["assess"]}, "vuln_id": {**_VULN_ID, "maxLength": 100},
+                "targets": _array(_object({
+                    "variant_id": _UUID, "package": {"type": "string", "minLength": 1, "maxLength": 300},
+                }, ("variant_id", "package")), minItems=1, maxItems=1000),
+                "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
+            }, ("kind", "vuln_id"),
+                description="Assess a vulnerability on the active targets in scope, or on the listed targets."),
+            _object({
+                "kind": {"type": "string", "enum": ["review"]}, "assessment_id": _UUID, "variant_id": _UUID,
+                "finding_ids": _array(_UUID, minItems=1, maxItems=1000),
+                "fingerprint": {"type": "string", "minLength": 1, "maxLength": 200, "description": (
+                    "Assessment content fingerprint pinned by the caller; an edit since then fails the review as "
+                    "changed. Pinned when the turn starts otherwise.")},
+                "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
+            }, ("kind", "assessment_id"), description="Review a custom assessment, optionally on one variant "
+                                                      "or some of its findings."),
+            _object({
+                "kind": {"type": "string", "enum": ["message"]},
+                "text": {"type": "string", "minLength": 1, "maxLength": 8000},
+                "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
+            }, ("kind", "text"), description="A chat message for the main or an existing conversation."),
+        ],
+    },
+    "AgentQueueSubmit": _object({
+        "conversation": {"type": "string", "description": "main, per-action, or an existing conversation ID."},
+        "source": {"type": "string", "minLength": 1, "maxLength": 100},
+        "model": {"type": "string", "maxLength": 100},
+        "timeout": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "context": _AGENT_CONTEXT, "require_ready": _BOOL,
+        "actions": _array(_ref("AgentQueueAction"), minItems=1, maxItems=500),
+    }, ("conversation", "source", "actions"), description=(
+        "Messages go to main or an existing conversation; assess and review actions to per-action."
+    )),
+    "AgentQueueSubmitted": _object({
+        "requests": _array(_object({"id": _STRING, "key": _STRING, "conversation_id": _STRING},
+                                   ("id", "key", "conversation_id"))),
+        "skipped": _array(_object({"key": _STRING, "request_id": _STRING, "request_ids": _array(_STRING)},
+                                  ("key", "request_id", "request_ids"))),
+    }, ("requests", "skipped")),
+    "AgentQueueRequest": _object({
+        "id": _STRING, "key": _STRING, "kind": {"type": "string", "enum": ["assess", "review", "message"]},
+        "lane": {"type": "string", "enum": ["action", "chat"]}, "conversation_id": _STRING, "source": _STRING,
+        "title": _STRING, "detail": _STRING, "model": _STRING,
+        "status": {"type": "string", "enum": ["queued", "running", "done", "failed", "cancelled"]},
+        "error": _TEXT, "error_code": _TEXT, "position": {**_INT, "nullable": True},
+        "created_at": {"type": "number"}, "started_at": _NUMBER, "finished_at": _NUMBER,
+        "context": {**_AGENT_CONTEXT, "nullable": True}, "text": _TEXT, "vuln_id": _TEXT, "assessment_id": _TEXT,
+        "timeout": _INT, "result": {"type": "object", "nullable": True, "additionalProperties": True,
+                                    "description": "Assess and review outcome, verified against the database."},
+    }, ("id", "key", "kind", "lane", "conversation_id", "source", "status", "error", "error_code", "position",
+        "result")),
+    "AgentQueueRequestStatus": _object({
+        "status": {"type": "string", "enum": ["removed", "stopping", "queued"]},
+    }, ("status",)),
+    "AgentQueueRemoved": _object({"removed": _COUNT}, ("removed",)),
+    "AgentConversationsDeleted": _object({"deleted": _COUNT}, ("deleted",)),
+    "AgentConversationSummary": _object({
+        "id": _STRING, "title": _STRING, "kind": {"type": "string", "enum": ["main", "action"]},
+        "profile": _TEXT, "archived": _BOOL, "created_at": {"type": "number"}, "last_used": {"type": "number"},
+        "message_count": _COUNT, "usage": _ref("AgentUsage"),
+        "live": _object({
+            "request_id": _STRING, "pending_message": _STRING, "live_reply": _STRING, "progress": _STRING,
+            "activity": _array(_object({"id": _TEXT, "name": _TEXT, "status": _STRING})),
+        }, nullable=True),
+    }, ("id", "title", "kind", "archived", "message_count", "usage", "live")),
+    "AgentConversation": {
+        "allOf": [
+            _ref("AgentConversationSummary"),
+            _object({"messages": _array(_object({
+                "role": {"type": "string", "enum": ["user", "assistant"]}, "content": _STRING,
+            }, ("role", "content")))}, ("messages",)),
+        ],
+    },
+    "AgentQueueSnapshot": _object({
+        "epoch": _STRING, "seq": _COUNT,
+        "paused": _object({"code": _STRING, "reason": _STRING}, ("code", "reason"), nullable=True),
+        "requests": _array(_ref("AgentQueueRequest")), "history": _array(_ref("AgentQueueRequest")),
+        "conversations": _array(_ref("AgentConversationSummary")),
+        "connection_revision": {**_COUNT, "description": "Changes when the agent connection or model changes."},
+    }, ("epoch", "seq", "paused", "requests", "history", "conversations", "connection_revision")),
     "SourceReferenceResult": {
         "anyOf": [
             _object({
