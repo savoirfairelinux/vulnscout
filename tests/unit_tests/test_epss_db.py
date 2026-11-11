@@ -4,6 +4,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import json
+import urllib.error
+from email.message import Message
 import pytest
 from unittest.mock import MagicMock
 
@@ -13,6 +15,7 @@ from src.controllers.epss_db import EPSS_DB
 class FakeResp:
     def __init__(self, status=200, data=None):
         self.status = status
+        self.headers = Message()
         self._data = data or {}
 
     def read(self):
@@ -164,18 +167,18 @@ def test_api_get_epss_batch_success(monkeypatch):
 
 
 def test_api_get_epss_batch_non_200(monkeypatch):
-    """Batch with non-200 response returns empty dict."""
+    """An unsuccessful response must not look like missing scores."""
     monkeypatch.setattr(
         "src.controllers.epss_db.urllib.request.urlopen",
         lambda req, timeout=30: FakeResp(500, {})
     )
     db = EPSS_DB()
-    result = db.api_get_epss_batch(["CVE-2021-44228"])
-    assert result == {}
+    with pytest.raises(urllib.error.HTTPError, match="500"):
+        db.api_get_epss_batch(["CVE-2021-44228"])
 
 
 def test_api_get_epss_batch_http_error(monkeypatch):
-    """Batch with HTTPError returns empty dict."""
+    """HTTP failures propagate so callers can record failed targets."""
     import urllib.error
 
     def raise_err(req, timeout=30):
@@ -186,19 +189,19 @@ def test_api_get_epss_batch_http_error(monkeypatch):
 
     monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", raise_err)
     db = EPSS_DB()
-    result = db.api_get_epss_batch(["CVE-2021-44228"])
-    assert result == {}
+    with pytest.raises(urllib.error.HTTPError, match="503"):
+        db.api_get_epss_batch(["CVE-2021-44228"])
 
 
 def test_api_get_epss_batch_network_error(monkeypatch):
-    """Batch with generic exception returns empty dict."""
+    """Transport failures propagate instead of returning missing scores."""
     def boom(req, timeout=30):
         raise OSError("connection refused")
 
     monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", boom)
     db = EPSS_DB()
-    result = db.api_get_epss_batch(["CVE-2021-44228"])
-    assert result == {}
+    with pytest.raises(OSError, match="connection refused"):
+        db.api_get_epss_batch(["CVE-2021-44228"])
 
 
 def test_api_get_epss_batch_partial_data(monkeypatch):

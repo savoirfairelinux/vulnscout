@@ -5,11 +5,14 @@
 import csv
 import io
 import json
+import urllib.error
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from flask import Flask
+from sqlalchemy import create_engine, text
 
 from src.bin.webapp import create_app
 from src.controllers.job_context import CancelledError, JobContext
@@ -18,7 +21,8 @@ from src.extensions import db
 from src.helpers.refresh_runs import capture_source, create_run, finish_source, target_result
 from src.models import Finding, Observation, Project, Scan, Variant, Vulnerability
 from src.models.metrics import Metrics
-from src.models.refresh_run import RefreshRun
+from src.models.refresh_run import RefreshChange, RefreshRun
+from src.models.vulnerability_history import VulnerabilityHistory
 from sqlalchemy.orm import Session
 from . import setup_demo_db
 
@@ -49,6 +53,48 @@ def _change(run_id, score, *, source="epss"):
         record.epss_score = score
         target_result(source, CVE)
         db.session.commit()
+
+
+@pytest.mark.parametrize("length", [39, 128])
+def test_caller_run_id_fits_history_and_preserves_changes_on_postgresql(postgres_uri, length):
+    engine = create_engine(postgres_uri)
+    schema = f"vulnscout_refresh_{uuid.uuid4().hex}"
+    with engine.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+    application = Flask(__name__)
+    application.config.update(
+        SQLALCHEMY_DATABASE_URI=postgres_uri,
+        SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"options": f"-csearch_path={schema}"}},
+    )
+    db.init_app(application)
+    try:
+        with application.app_context():
+            db.create_all()
+            Vulnerability.create_record(id=CVE, epss_score=0.1)
+            invalid_id = "x" * length
+            with pytest.raises(ValueError, match="up to 38"):
+                create_run({"epss": [CVE]}, run_id=invalid_id)
+            assert db.session.get(RefreshRun, invalid_id) is None
+
+            run = create_run({"epss": [CVE]}, run_id="caller-" + "x" * 31)
+            _change(run, 0.8)
+            finish_source(run, "epss")
+            db.session.expire_all()
+            assert float(db.session.get(Vulnerability, CVE).epss_score) == pytest.approx(0.8)
+            history = db.session.scalar(db.select(VulnerabilityHistory).where(
+                VulnerabilityHistory.queue_id == run, VulnerabilityHistory.field == "epss_score",
+            ))
+            assert history.old_value == pytest.approx(0.1)
+            change = db.session.scalar(db.select(RefreshChange).where(RefreshChange.run_id == run))
+            assert change.snapshot["before"] == pytest.approx(0.1)
+            assert change.snapshot["after"] == pytest.approx(0.8)
+    finally:
+        with application.app_context():
+            db.session.remove()
+            db.engine.dispose()
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        engine.dispose()
 
 
 @pytest.mark.parametrize("scope", [{}, {"project_id": PROJECT}, {"variant_id": VARIANT}])
@@ -187,8 +233,12 @@ def test_partial_provider_response_is_incomplete_not_removal(app, client):
     with app.app_context():
         Vulnerability.create_record(id=missing, epss_score=0.1)
         run = create_run({"epss": [CVE, missing]})
-        with patch("src.controllers.refresh_jobs.EPSS_DB") as api:
-            api.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}}
+        with patch("src.controllers.epss_db.urllib.request.urlopen") as request:
+            response = request.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = json.dumps({
+                "data": [{"cve": CVE, "epss": "0.8", "percentile": "0.9"}],
+            }).encode()
             run_epss_refresh(JobContext("test", {"ids": [CVE, missing]}, run))
     data = client.get(f"/api/refresh-runs/{run}").get_json()
     assert data["status"] == "incomplete"
@@ -225,7 +275,7 @@ def test_provider_completion_preserves_one_pending_batch_and_its_coverage_gaps(a
     assert listing["runs"][0]["run_id"] == run
 
 
-def test_cancelled_and_failed_targets_have_explicit_coverage(app, client):
+def test_cancelled_targets_have_explicit_coverage(app, client):
     with app.app_context():
         run = create_run({"epss": [CVE]})
         ctx = JobContext("test", {"ids": [CVE]}, run)
@@ -235,14 +285,37 @@ def test_cancelled_and_failed_targets_have_explicit_coverage(app, client):
     data = client.get(f"/api/refresh-runs/{run}").get_json()
     assert data["status"] == "incomplete"
     assert data["coverage"][0]["status"] == "cancelled"
+
+
+@pytest.mark.parametrize("error", [
+    urllib.error.HTTPError("https://api.first.org/data/v1/epss", 503, "Unavailable", None, None),
+    urllib.error.URLError("connection refused"),
+    TimeoutError("timed out"),
+])
+def test_failed_provider_is_incomplete_not_success(app, client, error):
     with app.app_context():
         run = create_run({"epss": [CVE]})
-        with patch("src.controllers.refresh_jobs.EPSS_DB") as api:
-            api.return_value.api_get_epss_batch.side_effect = RuntimeError("offline")
+        with patch("src.controllers.epss_db.urllib.request.urlopen", side_effect=error):
+            run_epss_refresh(JobContext("test", {"ids": [CVE]}, run))
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert data["coverage"][0]["status"] == "failed"
+    assert str(error) in data["coverage"][0]["error"]
+    assert data["status"] == "incomplete"
+    assert data["changes"] == []
+
+
+def test_invalid_epss_response_is_failed_not_missing(app, client):
+    with app.app_context():
+        run = create_run({"epss": [CVE]})
+        with patch("src.controllers.epss_db.urllib.request.urlopen") as request:
+            response = request.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b"not json"
             run_epss_refresh(JobContext("test", {"ids": [CVE]}, run))
     data = client.get(f"/api/refresh-runs/{run}").get_json()
     assert data["coverage"][0]["status"] == "failed"
     assert data["status"] == "incomplete"
+    assert data["changes"] == []
 
 
 def test_expired_exact_run_never_substitutes_latest_and_can_be_pruned(app, client):
