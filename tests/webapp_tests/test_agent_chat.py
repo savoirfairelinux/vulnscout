@@ -1265,12 +1265,14 @@ def test_ephemeral_assess_profile_turn_limits_tools_and_deletes_its_session(monk
     monkeypatch.delenv("VULNSCOUT_AGENT_WEB_ACCESS", raising=False)
     captured, deleted = _assess_sdk(monkeypatch)
     conversation = agent.Conversation(session_id="old", session_scope="{}")
-    reply, _ = asyncio.run(agent._reply(
+    conversation.usage["cost"] = 5
+    reply, usage = asyncio.run(agent._reply(
         conversation, "Assess", agent._mcp_path(), "model", "{}",
         profile=agent_skills.ASSESS, timeout=5, api_url="http://127.0.0.1:4321", ephemeral=True,
     ))
 
     assert reply == "Assessed" and "resumed" not in captured
+    assert usage == agent._session_usage([])  # the turn's own usage, not the conversation's total
     assert captured["send_timeout"] == 5
     tools = agent.READ_TOOLS + agent_skills.ASSESS.write_tools
     server = captured["mcp_servers"]["vulnscout"]

@@ -623,6 +623,7 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
 
     A *profile* runs the turn with its bundled skills; its write tools replace *tools*.
     *on_session* receives the SDK session ID as soon as the session is created or resumed.
+    Returns the reply and this turn's own usage (the caller adds it to the conversation's total).
     """
     from copilot.session import PermissionHandler
 
@@ -737,8 +738,7 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
             if not ephemeral:
                 conversation.session_id = session.session_id
                 conversation.session_scope = scope
-            usage = _add_usage(conversation.usage, _session_usage(live_events))
-            return event.data.content, usage
+            return event.data.content, _session_usage(live_events)
         finally:
             try:
                 await session.disconnect()
