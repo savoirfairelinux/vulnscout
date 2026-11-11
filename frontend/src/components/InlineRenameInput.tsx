@@ -31,7 +31,6 @@ export default function InlineRenameInput({
     const [busy, setBusy] = useState(false);
     const mountedRef = useRef(true);
     const inputRef = useRef<HTMLInputElement>(null);
-    const submitRef = useRef<HTMLButtonElement>(null);
     const errorId = useId();
 
     useEffect(() => {
@@ -64,25 +63,27 @@ export default function InlineRenameInput({
         }
     };
 
-    const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-        if (event.nativeEvent.isComposing) return;
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            void submit();
-        } else if (event.key === 'Escape') {
-            event.preventDefault();
-            event.stopPropagation();
-            onClose();
-        }
+    const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+        if (event.nativeEvent.isComposing || event.key !== 'Enter') return;
+        event.preventDefault();
+        void submit();
     };
 
-    const handleBlur = (event: FocusEvent<HTMLInputElement>) => {
-        if (busy || event.relatedTarget === submitRef.current) return;
+    const handleEditorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+        if (event.nativeEvent.isComposing || event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+    };
+
+    // Focus moving between the input and Save keeps the editor open.
+    const handleEditorBlur = (event: FocusEvent<HTMLDivElement>) => {
+        if (busy || event.currentTarget.contains(event.relatedTarget as Node | null)) return;
         onClose();
     };
 
     return (
-        <div className={className}>
+        <div className={className} onKeyDown={handleEditorKeyDown} onBlur={handleEditorBlur}>
             <div className="flex items-center gap-1">
                 <input
                     ref={inputRef}
@@ -98,11 +99,9 @@ export default function InlineRenameInput({
                         setName(event.target.value);
                         setError(null);
                     }}
-                    onKeyDown={handleKeyDown}
-                    onBlur={handleBlur}
+                    onKeyDown={handleInputKeyDown}
                 />
                 <button
-                    ref={submitRef}
                     type="button"
                     aria-label={submitAriaLabel}
                     className={submitClass}
