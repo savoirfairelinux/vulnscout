@@ -1,286 +1,374 @@
+/**
+ * The agent queue store mirrors the backend AI queue over its event stream.
+ *
+ * Frames are delivered through a stand-in EventSource; the queue routes are mocked on fetch.
+ */
 import {
-    MAIN_CONVERSATION, agentActionState, clearAgentChatFocus, clearAgentQueue, clearFinishedConversations, configureAgentQueue, conversationStatus, deleteAgentConversation,
-    enqueueAgentMessages, getActiveConversationId, getAgentChatRequest, getAgentConversation, getAgentConversations,
-    getAgentHistory, getAgentQueue, openAgentChat, removeAgentTask, resetAgentConversation, resetAgentQueue, retryAgentTask,
-    setActiveConversation,
+    MAIN_CONVERSATION, RECONNECT_DELAYS_MS, __resetAgentQueue, __setEventSourceFactory, agentActionState, boundedAgentContext,
+    clearAgentChatFocus, clearAgentQueue, clearFinishedConversations, conversationStatus,
+    deleteAgentConversation, enqueueAgentActions, findAgentTask, getActiveConversationId, getAgentChatRequest,
+    getAgentConnectionRevision, getAgentConversation, getAgentConversations, getAgentHistory, getAgentQueue, getAgentQueuePaused, openAgentChat,
+    removeAgentTask, resetAgentConversation, retryAgentTask, setActiveConversation, stopAgentTask, subscribeAgentChatRequest,
+    subscribeAgentQueue,
 } from '../../src/handlers/agentQueue';
-import type { AgentContext, QueuedAgentMessage } from '../../src/types/agent';
+import {
+    AGENT_WRITE_EVENT, type AgentConversationSummary, type AgentQueueState, type AgentRequestRecord,
+} from '../../src/types/agent';
+
+class FakeEventSource {
+    static instances: FakeEventSource[] = [];
+    readonly url: string;
+    closed = false;
+    onerror: (() => void) | null = null;
+    private readonly handlers = new Map<string, Array<(event: MessageEvent) => void>>();
+
+    constructor(url: string) {
+        this.url = url;
+        FakeEventSource.instances.push(this);
+    }
+
+    addEventListener(type: string, handler: (event: MessageEvent) => void) {
+        this.handlers.set(type, [...(this.handlers.get(type) ?? []), handler]);
+    }
+
+    close() {
+        this.closed = true;
+    }
+
+    send(type: string, data: unknown, id?: string) {
+        const event = { data: typeof data === 'string' ? data : JSON.stringify(data), lastEventId: id ?? '' } as MessageEvent;
+        (this.handlers.get(type) ?? []).forEach(handler => handler(event));
+    }
+
+    static latest() {
+        return FakeEventSource.instances[FakeEventSource.instances.length - 1];
+    }
+}
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
-const context: AgentContext = { page: 'vulnerabilities', projectId: 'project', variantId: 'variant' };
-const action = (id: string, extra: Partial<QueuedAgentMessage> = {}): QueuedAgentMessage =>
-    ({ id, key: id, kind: 'message', title: id, text: id, ...extra });
-const json = (data: unknown): Response => ({
-    ok: true, headers: { get: () => 'application/json' }, json: async () => data,
+const request = (id: string, extra: Partial<AgentRequestRecord> = {}): AgentRequestRecord => ({
+    id, key: `message:${id}`, kind: 'message', lane: 'chat', conversation_id: MAIN_CONVERSATION, source: 'Agent chat',
+    title: id, detail: '', model: 'auto', status: 'queued', error: null, error_code: null, position: 1, created_at: 1,
+    started_at: null, finished_at: null, context: null, text: id, vuln_id: null, assessment_id: null, timeout: 900,
+    result: null, ...extra,
+});
+const conversation = (id: string, extra: Partial<AgentConversationSummary> = {}): AgentConversationSummary => ({
+    id, title: id === MAIN_CONVERSATION ? 'Agent chat' : `Assess ${id}`, kind: id === MAIN_CONVERSATION ? 'main' : 'action',
+    profile: null, archived: false, created_at: 10, last_used: 20, message_count: 0, usage, live: null, ...extra,
+});
+const state = (extra: Partial<AgentQueueState> = {}): AgentQueueState & { epoch: string; seq: number } => ({
+    epoch: 'e', seq: 1, paused: null, requests: [], history: [], connection_revision: 0, conversations: [conversation(MAIN_CONVERSATION)], ...extra,
+});
+const json = (data: unknown, status = 200): Response => ({
+    ok: status < 400, status, headers: { get: () => 'application/json' }, json: async () => data,
 }) as unknown as Response;
-const finished = (reply: string) => json({ reply, model: 'auto', usage });
-const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
-const threadOf = (options?: RequestInit) => (options?.headers as Record<string, string> | undefined)?.['X-Agent-Thread'];
+const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
-beforeEach(() => resetAgentQueue());
+let restoreFactory: () => void;
+let fetchMock: jest.Mock;
+let unsubscribe: (() => void) | undefined;
 
-test('runs requests one at a time, keeps chat messages in the main conversation and each action in its own', async () => {
-    const sent: Array<{ message: string; context: AgentContext; thread?: string; action?: string }> = [];
-    let finish: (response: Response) => void = () => {};
-    global.fetch = jest.fn(async (input, options) => {
-        if (!String(input).endsWith('/messages')) return json({ messages: [], usage });
-        const body = JSON.parse(String(options?.body));
-        sent.push({ ...body, thread: threadOf(options) });
-        if (sent.length === 1) return new Promise<Response>(resolve => { finish = resolve; });
-        return finished(`Reply to ${body.message}`);
-    });
-    configureAgentQueue({ ready: true, model: 'auto' });
-    const scope = { ...context, view: { selectedVulnerabilityIds: ['CVE-1'] } };
-    enqueueAgentMessages([action('chat')], scope);
-    enqueueAgentMessages([
-        action('cve-1 batch 1', { kind: 'assess', key: 'assess:CVE-1', title: 'CVE-1 · 3 targets · batch 1 of 2' }),
-        action('cve-1 batch 2', { kind: 'assess', key: 'assess:CVE-1', title: 'CVE-1 · 3 targets · batch 2 of 2' }),
-        action('cve-2', { kind: 'assess', key: 'assess:CVE-2', title: 'CVE-2 · 1 target', context: { ...context, variantId: 'other' } }),
-    ], context, 'Vulnerability selection', 'per-action');
-    enqueueAgentMessages([action('review', { kind: 'review', key: 'review:a1', title: 'assessment a1', assessmentId: 'a1' })],
-        { page: 'review' }, 'Review', 'per-action');
-    scope.view.selectedVulnerabilityIds.push('CVE-2');
-    await settle();
+beforeEach(() => {
+    __resetAgentQueue();
+    FakeEventSource.instances = [];
+    restoreFactory = __setEventSourceFactory(url => new FakeEventSource(url) as unknown as EventSource);
+    fetchMock = jest.fn(async () => json({}));
+    global.fetch = fetchMock;
+});
 
-    expect(sent.map(item => item.message)).toEqual(['chat']);
-    expect(getAgentQueue().map(item => [item.source, item.status])).toEqual([
-        ['Agent chat', 'running'], ['Vulnerability selection', 'queued'], ['Vulnerability selection', 'queued'],
-        ['Vulnerability selection', 'queued'], ['Review', 'queued'],
+afterEach(() => {
+    unsubscribe?.();
+    unsubscribe = undefined;
+    restoreFactory();
+    jest.useRealTimers();
+});
+
+const connect = (snapshot = state()) => {
+    const listener = jest.fn();
+    unsubscribe = subscribeAgentQueue(listener);
+    FakeEventSource.latest().send('snapshot', snapshot, 'e:1');
+    return listener;
+};
+
+test('mirrors the snapshot and its deltas', () => {
+    expect(getAgentConversation().id).toBe(MAIN_CONVERSATION);
+    const listener = connect(state({
+        paused: { code: 'not_ready', reason: 'Sign in first.' },
+        requests: [
+            request('r1', { status: 'running', position: null, conversation_id: 'c1', kind: 'assess', key: 'assess:CVE-1:',
+                vuln_id: 'CVE-1', detail: 'pkg', error: null, context: { page: 'vulnerabilities', projectId: 'p' }, lane: 'action' }),
+            request('r2', { status: 'queued', position: 2 }),
+            request('r3', { status: 'failed', position: null, error: 'boom', error_code: 'agent_error' }),
+        ],
+        history: [request('old', { status: 'done', position: null })],
+        conversations: [conversation('c1', { created_at: 5 }), conversation(MAIN_CONVERSATION)],
+    }));
+    expect(FakeEventSource.latest().url).toBe('http://localhost/api/agent/queue/stream');
+    expect(listener).toHaveBeenCalled();
+    expect(getAgentQueuePaused()).toEqual({ code: 'not_ready', reason: 'Sign in first.' });
+    expect(getAgentQueue().map(task => [task.id, task.status, task.position])).toEqual([
+        ['r1', 'running', undefined], ['r2', 'queued', 2], ['r3', 'failed', undefined],
     ]);
-    const conversations = Object.values(getAgentConversations()).filter(item => item.id !== MAIN_CONVERSATION);
-    expect(conversations.map(item => item.title)).toEqual(['Assess CVE-1 · 3 targets', 'Assess CVE-2 · 1 target', 'Review assessment a1']);
-    expect(conversations.every(item => item.threadId === item.id)).toBe(true);
-    const [cve1, cve2] = conversations;
-    expect(getAgentQueue().filter(item => item.kind === 'assess').map(item => item.conversationId)).toEqual([cve1.id, cve1.id, cve2.id]);
-    expect(cve2.context?.variantId).toBe('other');
-    expect(() => resetAgentQueue()).toThrow(/running AI request/);
+    expect(getAgentQueue()[0]).toMatchObject({ vulnId: 'CVE-1', detail: 'pkg', conversationId: 'c1' });
+    expect(getAgentQueue()[2]).toMatchObject({ error: 'boom', errorCode: 'agent_error' });
+    expect(getAgentHistory().map(task => task.id)).toEqual(['old']);
+    expect(findAgentTask('old')?.status).toBe('done');
+    expect(Object.keys(getAgentConversations())).toEqual([MAIN_CONVERSATION, 'c1']);
+    expect(getAgentConversation('c1')).toMatchObject({ kind: 'action', context: { page: 'vulnerabilities', projectId: 'p' },
+        createdAt: 5000, lastUsed: 20000 });
+    expect(getAgentConversation('missing').id).toBe(MAIN_CONVERSATION);
 
-    finish(finished('Chat result'));
-    await settle();
-    expect(sent.map(item => item.message)).toEqual(['chat', 'cve-1 batch 1', 'cve-1 batch 2', 'cve-2']);
-    expect(sent.map(item => item.thread)).toEqual([undefined, cve1.id, cve1.id, cve2.id]);
-    expect(sent.map(item => item.action)).toEqual([undefined, 'assess', 'assess', 'assess']);
-    expect(sent[0].context.view?.selectedVulnerabilityIds).toEqual(['CVE-1']);
-    expect(getAgentConversation().messages.map(message => message.content)).toEqual(['chat', 'Chat result']);
-    expect(getAgentConversation(cve1.id).messages.map(message => message.content))
-        .toEqual(['cve-1 batch 1', 'Reply to cve-1 batch 1', 'cve-1 batch 2', 'Reply to cve-1 batch 2']);
-    expect(getAgentConversation(cve1.id).messages[0].taskId).toBe('cve-1 batch 1');
-    // The review fails verification here (no saved reviews were mocked) and pauses the queue.
-    expect(getAgentQueue().map(item => [item.id, item.status])).toEqual([['review', 'failed']]);
-    expect(getAgentHistory().map(item => [item.id, item.status])).toEqual([
-        ['chat', 'done'], ['cve-1 batch 1', 'done'], ['cve-1 batch 2', 'done'], ['cve-2', 'done'],
-    ]);
+    FakeEventSource.latest().send('queue', { ...state(), requests: [request('r2', { status: 'running', position: null })] }, 'e:2');
+    expect(getAgentQueue().map(task => task.id)).toEqual(['r2']);
+    expect(getAgentQueuePaused()).toBeNull();
+    expect(getAgentConversations().c1).toBeUndefined();
+
+    FakeEventSource.latest().send('queue', 'not json', 'e:3');
+    expect(getAgentQueue().map(task => task.id)).toEqual(['r2']);
 });
 
-test('follow-ups continue an action conversation on its thread and pause on failure until retried', async () => {
-    let attempts = 0;
-    const threads: Array<string | undefined> = [];
-    const actions: Array<string | undefined> = [];
-    global.fetch = jest.fn(async (input, options) => {
-        if (!String(input).endsWith('/messages')) return json({ messages: [], usage });
-        threads.push(threadOf(options));
-        actions.push(JSON.parse(String(options?.body)).action);
-        attempts++;
-        if (attempts === 1) throw new TypeError('offline');
-        return finished('Recovered');
-    });
-    configureAgentQueue({ ready: true, model: 'auto' });
-    enqueueAgentMessages([action('assess', { kind: 'assess', key: 'assess:1', title: 'CVE-1' })], context, 'Vulnerability CVE-1', 'per-action');
-    const conversationId = getAgentQueue()[0].conversationId;
-    enqueueAgentMessages([action('follow-up')], context, 'Assess CVE-1', conversationId);
-    await settle();
-    expect(attempts).toBe(1);
-    expect(getAgentQueue()[0]).toMatchObject({ id: 'assess', status: 'failed', error: expect.stringContaining('Connection lost') });
-    expect(agentActionState(getAgentQueue(), task => task.key === 'assess:1')).toEqual({ status: 'failed', taskId: 'assess' });
-    retryAgentTask('assess');
-    await settle();
-    expect(attempts).toBe(3);
-    expect(threads).toEqual([conversationId, conversationId, conversationId]);
-    // Failed assess, retried assess, then the follow-up chat message on the same thread.
-    expect(actions).toEqual(['assess', 'assess', undefined]);
-    expect(getAgentConversation(conversationId).messages.filter(message => message.role === 'user').map(message => message.content))
-        .toEqual(['assess', 'follow-up']);
-    expect(() => enqueueAgentMessages([action('missing')], context, 'x', 'unknown')).toThrow(/no longer available/);
-});
+test('shows a running turn as it progresses and loads the transcript once it is saved', async () => {
+    const messages = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
+    let resolveDetail: (response: Response) => void = () => {};
+    fetchMock.mockImplementation(() => new Promise<Response>(resolve => { resolveDetail = resolve; }));
+    connect();
+    const live = { request_id: 'r1', pending_message: 'hi', live_reply: 'hel', activity: [], progress: 'Thinking' };
+    FakeEventSource.latest().send('request_progress', { request_id: 'r1', conversation_id: MAIN_CONVERSATION, live });
+    expect(getAgentConversation()).toMatchObject({ pendingMessage: 'hi', pendingTaskId: 'r1', liveReply: 'hel', progress: 'Thinking' });
+    FakeEventSource.latest().send('request_progress', { request_id: 'r1', conversation_id: 'unknown', live });
 
-test('removing a failed action resumes the queue and drops conversations that never started', async () => {
-    let attempts = 0;
-    global.fetch = jest.fn(async input => {
-        if (!String(input).endsWith('/messages')) return json({ messages: [], usage });
-        attempts++;
-        if (attempts === 1) throw new TypeError('offline');
-        return finished('Next');
-    });
-    configureAgentQueue({ ready: true, model: 'auto' });
-    enqueueAgentMessages([action('first', { key: 'a' }), action('second', { key: 'b' }), action('third', { key: 'c' })],
-        context, 'Vulnerability selection', 'per-action');
-    await settle();
-    expect(Object.keys(getAgentConversations())).toHaveLength(4);
-    removeAgentTask('third');
-    expect(Object.keys(getAgentConversations())).toHaveLength(3);
-    removeAgentTask('first');
-    await settle();
-    expect(getAgentQueue()).toEqual([]);
-    expect(attempts).toBe(2);
-    expect(Object.values(getAgentConversations()).map(item => item.title)).toEqual(['Agent chat', 'Message second']);
-});
+    FakeEventSource.latest().send('conversation', conversation(MAIN_CONVERSATION, { message_count: 2 }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/agent/conversations/main');
+    // The finished turn stays visible until its transcript arrives.
+    expect(getAgentConversation()).toMatchObject({ pendingMessage: 'hi', messages: [] });
+    FakeEventSource.latest().send('conversation', conversation(MAIN_CONVERSATION, { message_count: 2 }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
-test('clear keeps running work; finished conversations can be deleted; the main conversation resets independently', async () => {
-    let finish: (response: Response) => void = () => {};
-    global.fetch = jest.fn(async input => !String(input).endsWith('/messages') ? json({ messages: [], usage })
-        : new Promise<Response>(resolve => { finish = resolve; }));
-    configureAgentQueue({ ready: true, model: 'auto' });
-    enqueueAgentMessages([action('running'), action('waiting')], context);
+    resolveDetail(json({ ...conversation(MAIN_CONVERSATION, { message_count: 2 }), messages }));
     await settle();
-    clearAgentQueue();
-    expect(getAgentQueue().map(item => item.id)).toEqual(['running']);
-    finish(finished('Still completed'));
-    await settle();
-    expect(getAgentConversation().messages[1].content).toBe('Still completed');
-    expect(getAgentHistory().map(item => item.id)).toEqual(['running']);
-    resetAgentConversation();
+    expect(getAgentConversation()).toMatchObject({ pendingMessage: '', liveReply: '', messageCount: 2 });
+    expect(getAgentConversation().messages.map(message => message.content)).toEqual(['hi', 'hello']);
+
+    // A reset main conversation (new created_at, no messages) clears the transcript without fetching.
+    FakeEventSource.latest().send('conversation', conversation(MAIN_CONVERSATION, { created_at: 30 }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(getAgentConversation().messages).toEqual([]);
-    expect(getAgentHistory()).toEqual([]);
-
-    const released: Array<string | undefined> = [];
-    global.fetch = jest.fn(async (input, options) => {
-        if (options?.method === 'DELETE') released.push(threadOf(options));
-        return String(input).endsWith('/messages') ? finished('ok') : json({ messages: [], usage });
-    });
-    enqueueAgentMessages([action('one', { key: 'k1' }), action('two', { key: 'k2' })], context, 'Bulk', 'per-action');
-    await settle();
-    const [one, two] = getAgentHistory().map(task => task.conversationId);
-    expect(conversationStatus(getAgentQueue(), one)).toBe('idle');
-    setActiveConversation(one);
-    deleteAgentConversation(one);
-    expect(getAgentConversations()[one]).toBeUndefined();
-    expect(getActiveConversationId()).toBe(MAIN_CONVERSATION);
-    deleteAgentConversation(MAIN_CONVERSATION);
-    expect(getAgentConversations()[MAIN_CONVERSATION]).toBeDefined();
-    clearFinishedConversations();
-    await settle();
-    expect(Object.keys(getAgentConversations())).toEqual([MAIN_CONVERSATION]);
-    expect(released).toEqual([one, two]);
+    FakeEventSource.latest().send('conversation', 'bad');
 });
 
-test('waits for a ready connection and loads the main conversation before its first request', async () => {
-    global.fetch = jest.fn(async input => String(input).endsWith('/messages') ? finished('Done') : json({ messages: [{ role: 'user', content: 'old' }], usage }));
-    enqueueAgentMessages([action('first')], context);
-    configureAgentQueue({ ready: false, model: 'auto' });
+test('fetches only the active conversation transcript and retries a failed fetch a few times', async () => {
+    jest.useFakeTimers();
+    fetchMock.mockResolvedValue(json({ error: 'nope' }, 404));
+    connect(state({ conversations: [conversation(MAIN_CONVERSATION), conversation('c1', { message_count: 2 })] }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    setActiveConversation('c1');
+    setActiveConversation('c1');
+    setActiveConversation('unknown');
+    expect(getActiveConversationId()).toBe('c1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/agent/conversations/c1');
     await settle();
-    expect(global.fetch).not.toHaveBeenCalled();
-    configureAgentQueue({ ready: true, model: 'auto' });
-    await settle();
-    expect(getAgentConversation().messages.map(message => message.content)).toEqual(['old', 'first', 'Done']);
-    resetAgentConversation();
-    enqueueAgentMessages([action('second')], context);
-    await settle();
-    expect(getAgentConversation().messages.map(message => message.content)).toEqual(['second', 'Done']);
-});
-
-test('stops draining when a configured connection becomes unavailable', async () => {
-    global.fetch = jest.fn(async input => String(input).endsWith('/messages') ? finished('Done') : json({ messages: [], usage }));
-    configureAgentQueue({ ready: true, model: 'auto' });
-    configureAgentQueue({ ready: false, model: 'auto' });
-    enqueueAgentMessages([action('waiting')], context);
-    await settle();
-    expect(global.fetch).not.toHaveBeenCalled();
-    expect(getAgentQueue()[0].status).toBe('queued');
-    configureAgentQueue({ ready: true, model: 'auto' });
-    await settle();
-    expect(getAgentHistory().map(task => task.id)).toEqual(['waiting']);
-});
-
-test('retains work arriving during a provider change but requires explicit retry for incompatible follow-ups', async () => {
-    global.fetch = jest.fn(async input => String(input).endsWith('/messages') ? finished('Done') : json({ messages: [], usage }));
-    configureAgentQueue({ ready: true, model: 'auto' });
-    enqueueAgentMessages([action('old')], context, 'Selection', 'per-action');
-    await settle();
-    const oldId = getAgentHistory()[0].conversationId;
-    configureAgentQueue({ ready: false, model: 'auto' });
-    enqueueAgentMessages([action('follow-up')], context, 'Selection', oldId);
-    enqueueAgentMessages([action('waiting')], context, 'Selection', 'per-action');
-    const waitingId = getAgentQueue()[1].conversationId;
-    resetAgentQueue(true);
-    expect(getAgentQueue()).toEqual([
-        expect.objectContaining({ id: 'follow-up', status: 'failed', error: expect.stringContaining('previous provider history') }),
-        expect.objectContaining({ id: 'waiting', status: 'queued', conversationId: waitingId }),
-    ]);
-    expect(getAgentConversation(oldId).messages).toEqual([]);
-    configureAgentQueue({ ready: true, model: 'new-model' });
-    await settle();
-    expect(getAgentHistory()).toEqual([]);
-    retryAgentTask('follow-up');
-    await settle();
-    expect(getAgentHistory().map(task => task.id)).toEqual(['follow-up', 'waiting']);
-    expect(getAgentConversation(oldId).messages.map(message => message.content)).toEqual(['follow-up', 'Done']);
-});
-
-test('reports action positions and opens the chat on the conversation of a started request', async () => {
-    let finish: (response: Response) => void = () => {};
-    global.fetch = jest.fn(async input => !String(input).endsWith('/messages') ? json({ messages: [], usage })
-        : new Promise<Response>(resolve => { finish = resolve; }));
-    configureAgentQueue({ ready: true, model: 'auto' });
-    enqueueAgentMessages([action('a', { key: 'k1' }), action('b', { key: 'k2' }), action('c', { key: 'k3' })], context, 'Bulk', 'per-action');
-    await settle();
-    const queue = getAgentQueue();
-    expect(agentActionState(queue, task => task.key === 'k1')).toEqual({ status: 'running', taskId: 'a' });
-    expect(agentActionState(queue, task => task.key === 'k3')).toEqual({ status: 'queued', taskId: 'c', position: 2 });
-    expect(agentActionState(queue, task => task.key === 'none')).toBeUndefined();
-
-    expect(conversationStatus(queue, queue[0].conversationId)).toBe('running');
-    expect(conversationStatus(queue, queue[2].conversationId)).toBe('queued');
-    // Even a waiting request opens its own conversation in the chat.
-    openAgentChat('c');
-    expect(getActiveConversationId()).toBe(queue[2].conversationId);
-    expect(getAgentChatRequest()).toMatchObject({ nonce: 1, taskId: 'c' });
-    openAgentChat('a');
-    expect(getActiveConversationId()).toBe(queue[0].conversationId);
-    clearAgentChatFocus();
-    expect(getAgentChatRequest()).toEqual({ nonce: 2, taskId: undefined, view: 'chat' });
-    openAgentChat();
-    expect(getAgentChatRequest()).toEqual({ nonce: 3, taskId: undefined, view: 'chat' });
-    setActiveConversation('missing');
-    expect(getActiveConversationId()).toBe(queue[0].conversationId);
-    clearAgentQueue();
-    finish(finished('done'));
-    await settle();
-});
-
-test('archives the oldest idle action conversations beyond the live limit, never the one on screen', async () => {
-    const released: Array<string | undefined> = [];
-    global.fetch = jest.fn(async (input, options) => {
-        if (options?.method === 'DELETE') { released.push(threadOf(options)); return json({ messages: [], usage }); }
-        return String(input).endsWith('/messages') ? finished('ok') : json({ messages: [], usage });
-    });
-    configureAgentQueue({ ready: true, model: 'auto' });
-    const actions = Array.from({ length: 14 }, (_, index) => action(`a${index}`, { key: `k${index}` }));
-    enqueueAgentMessages(actions.slice(0, 1), context, 'Bulk', 'per-action');
-    await settle();
-    const first = getAgentHistory()[0].conversationId;
-    setActiveConversation(first);
-    for (const item of actions.slice(1)) {
-        enqueueAgentMessages([item], context, 'Bulk', 'per-action');
+    FakeEventSource.latest().send('queue', state({ conversations: [conversation(MAIN_CONVERSATION), conversation('c1', { message_count: 2 })] }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);  // a snapshot does not bypass the retry delay
+    for (const delay of RECONNECT_DELAYS_MS) {
+        jest.advanceTimersByTime(delay);
         await settle();
-        await new Promise(resolve => setTimeout(resolve, 2));
     }
-    await settle();
-    const archived = Object.values(getAgentConversations()).filter(item => item.archived);
-    expect(archived.map(item => item.title)).toEqual(['Message a1']);
-    expect(released).toEqual([archived[0].threadId]);
-    expect(getAgentConversation(first).archived).toBe(false);
-    enqueueAgentMessages([action('late')], context, 'x', archived[0].id);
-    await settle();
-    expect(getAgentQueue()[0]).toMatchObject({ status: 'failed', error: expect.stringContaining('archived') });
+    expect(fetchMock).toHaveBeenCalledTimes(1 + RECONNECT_DELAYS_MS.length);
+    jest.advanceTimersByTime(60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1 + RECONNECT_DELAYS_MS.length);  // then it gives up
+    expect(getAgentConversation('c1').messages).toEqual([]);
+
+    // A deleted active conversation falls back to the main one.
+    FakeEventSource.latest().send('queue', state());
+    expect(getActiveConversationId()).toBe(MAIN_CONVERSATION);
 });
 
-test('deduplicates active work across sources without dropping sibling requests and rejects oversized input', () => {
-    const batch = [action('batch-1'), { ...action('batch-2'), key: 'batch-1' }];
-    enqueueAgentMessages(batch, context, 'Vulnerability selection', 'per-action');
-    enqueueAgentMessages(batch, context, 'Vulnerability selection', 'per-action');
-    enqueueAgentMessages([{ ...action('duplicate'), key: 'batch-1' }], context, 'Vulnerability CVE-1');
-    expect(getAgentQueue().map(item => item.id)).toEqual(['batch-1', 'batch-2']);
-    expect(new Set(getAgentQueue().map(item => item.conversationId)).size).toBe(1);
-    expect(() => enqueueAgentMessages([{ ...action('oversized'), text: 'a'.repeat(8001) }], context)).toThrow(/8000/);
-    expect(() => enqueueAgentMessages([{ ...action('empty'), text: ' ' }], context)).toThrow(/8000/);
+test('a failed transcript fetch recovers once the server answers', async () => {
+    jest.useFakeTimers();
+    const messages = [{ role: 'user', content: 'hi' }];
+    fetchMock.mockResolvedValueOnce(json({ error: 'busy' }, 503))
+        .mockResolvedValueOnce(json({ ...conversation(MAIN_CONVERSATION, { message_count: 1 }), messages }));
+    connect(state({ conversations: [conversation(MAIN_CONVERSATION, { message_count: 1 })] }));
+    await settle();
+    expect(getAgentConversation().messages).toEqual([]);
+    jest.advanceTimersByTime(RECONNECT_DELAYS_MS[0]);
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getAgentConversation().messages.map(message => message.content)).toEqual(['hi']);
+});
+
+test('a stale transcript response never overwrites a newer one', async () => {
+    const resolvers: Array<(response: Response) => void> = [];
+    fetchMock.mockImplementation(() => new Promise<Response>(resolve => { resolvers.push(resolve); }));
+    connect(state({ conversations: [conversation(MAIN_CONVERSATION, { message_count: 1 })] }));
+    FakeEventSource.latest().send('conversation', conversation(MAIN_CONVERSATION, { message_count: 2 }));
+    expect(resolvers).toHaveLength(2);
+    const two = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
+    resolvers[1](json({ ...conversation(MAIN_CONVERSATION, { message_count: 2 }), messages: two }));
+    await settle();
+    resolvers[0](json({ ...conversation(MAIN_CONVERSATION, { message_count: 1 }), messages: two.slice(0, 1) }));
+    await settle();
+    expect(getAgentConversation().messages.map(message => message.content)).toEqual(['hi', 'hello']);
+});
+
+test('follows the connection revision', () => {
+    expect(getAgentConnectionRevision()).toBeUndefined();
+    connect(state({ connection_revision: 3 }));
+    expect(getAgentConnectionRevision()).toBe(3);
+    FakeEventSource.latest().send('queue', state({ connection_revision: 4 }), 'e:2');
+    expect(getAgentConnectionRevision()).toBe(4);
+});
+
+test('relays agent writes to the window', () => {
+    const seen = jest.fn();
+    window.addEventListener(AGENT_WRITE_EVENT, seen);
+    connect();
+    FakeEventSource.latest().send('agent_write', { tool: 'write_assessment', request_id: 'r1', conversation_id: 'c1' });
+    window.removeEventListener(AGENT_WRITE_EVENT, seen);
+    expect((seen.mock.calls[0][0] as CustomEvent).detail).toEqual({ tool: 'write_assessment' });
+});
+
+test('reconnects with backoff from the last event and stops when nobody listens', () => {
+    jest.useFakeTimers();
+    connect();
+    const first = FakeEventSource.latest();
+    first.send('heartbeat', {}, 'e:4');
+    first.onerror?.();
+    expect(first.closed).toBe(true);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    jest.advanceTimersByTime(RECONNECT_DELAYS_MS[0]);
+    const second = FakeEventSource.latest();
+    expect(second.url).toBe('http://localhost/api/agent/queue/stream?last_event_id=e%3A4');
+
+    second.onerror?.();
+    jest.advanceTimersByTime(RECONNECT_DELAYS_MS[0]);
+    expect(FakeEventSource.instances).toHaveLength(2);
+    jest.advanceTimersByTime(RECONNECT_DELAYS_MS[1] - RECONNECT_DELAYS_MS[0]);
+    const third = FakeEventSource.latest();
+    expect(FakeEventSource.instances).toHaveLength(3);
+
+    third.send('bye', {});
+    expect(third.closed).toBe(true);
+    unsubscribe?.();
+    unsubscribe = undefined;
+    jest.advanceTimersByTime(RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1]);
+    expect(FakeEventSource.instances).toHaveLength(3);
+});
+
+test('does nothing without an EventSource', () => {
+    restoreFactory();
+    restoreFactory = __setEventSourceFactory(() => null);
+    const listener = jest.fn();
+    unsubscribe = subscribeAgentQueue(listener);
+    expect(getAgentQueue()).toEqual([]);
+    expect(getAgentConversation().title).toBe('Agent chat');
+});
+
+test('posts actions with the bounded context and no model', async () => {
+    fetchMock.mockResolvedValue(json({ requests: [{ id: 'r1', key: 'k', conversation_id: 'c1' }], skipped: [] }, 202));
+    const many = Array.from({ length: 101 }, (_, index) => `CVE-${index}`);
+    const context = { page: 'vulnerabilities', view: { visibleVulnerabilityIds: many, selectedVulnerabilityIds: ['CVE-1'] } };
+    const result = await enqueueAgentActions([
+        { kind: 'assess', vuln_id: 'CVE-1', context },
+        { kind: 'review', assessment_id: 'a1' },
+        { kind: 'message', text: 'hi' },
+    ], { conversation: 'per-action', source: 'Test', context, timeout: 60 });
+    expect(result.requests[0].id).toBe('r1');
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/agent/queue');
+    expect(options.method).toBe('POST');
+    const body = JSON.parse(options.body);
+    expect(body).toMatchObject({ conversation: 'per-action', source: 'Test', timeout: 60 });
+    expect(body.model).toBeUndefined();
+    expect(body.context.view).toMatchObject({ selectedVulnerabilityIds: ['CVE-1'], selectionCount: 1, visibleCount: 101 });
+    expect(body.context.view.visibleVulnerabilityIds).toBeUndefined();
+    expect(body.actions[0].context.view.visibleVulnerabilityIds).toBeUndefined();
+    expect(body.actions[1]).toEqual({ kind: 'review', assessment_id: 'a1' });
+
+    fetchMock.mockResolvedValue(json({ error: 'Unknown vulnerability.' }, 400));
+    await expect(enqueueAgentActions([{ kind: 'message', text: 'x' }], { conversation: MAIN_CONVERSATION, source: 'Chat' }))
+        .rejects.toThrow('Unknown vulnerability.');
+    const second = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(second).toEqual({ conversation: MAIN_CONVERSATION, source: 'Chat', actions: [{ kind: 'message', text: 'x' }] });
+});
+
+test('bounds only oversized view lists', () => {
+    expect(boundedAgentContext({ page: 'review' })).toEqual({ page: 'review' });
+    expect(boundedAgentContext({ page: 'packages', view: { visiblePackageIds: ['a'], search: 'x' } }).view)
+        .toEqual(expect.objectContaining({ visiblePackageIds: ['a'], visibleCount: 1, selectionCount: undefined, search: 'x' }));
+});
+
+test('changes the queue through its routes', async () => {
+    fetchMock.mockImplementation(async (url: string) => url.endsWith('/main/reset') ? json(conversation(MAIN_CONVERSATION)) : json({}));
+    connect(state({ conversations: [conversation(MAIN_CONVERSATION), conversation('c 1')] }));
+    setActiveConversation('c 1');
+    await removeAgentTask('r/1');
+    await stopAgentTask('r1');
+    await retryAgentTask('r1');
+    await clearAgentQueue();
+    await deleteAgentConversation('c 1');
+    await clearFinishedConversations();
+    await resetAgentConversation();
+    expect(fetchMock.mock.calls.map(([url, options]) => [options?.method, url])).toEqual([
+        ['DELETE', '/api/agent/queue/requests/r%2F1'],
+        ['POST', '/api/agent/queue/requests/r1/stop'],
+        ['POST', '/api/agent/queue/requests/r1/retry'],
+        ['DELETE', '/api/agent/queue'],
+        ['DELETE', '/api/agent/conversations/c%201'],
+        ['DELETE', '/api/agent/conversations'],
+        ['POST', '/api/agent/conversations/main/reset'],
+    ]);
+    expect(getActiveConversationId()).toBe(MAIN_CONVERSATION);
+
+    fetchMock.mockResolvedValue({ ok: false, status: 502, headers: { get: () => 'text/html' } } as unknown as Response);
+    await expect(stopAgentTask('r1')).rejects.toThrow(/Agent service unavailable/);
+    fetchMock.mockResolvedValue(json({}, 409));
+    await expect(retryAgentTask('r1')).rejects.toThrow('Agent request failed (409)');
+});
+
+test('opens the chat on a request once the stream reports it', () => {
+    const chat = jest.fn();
+    const stopChat = subscribeAgentChatRequest(chat);
+    connect(state({ conversations: [conversation(MAIN_CONVERSATION), conversation('c1')] }));
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    openAgentChat('r1');
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(getAgentChatRequest()).toEqual({ nonce: 1, taskId: 'r1', view: 'chat' });
+    expect(getActiveConversationId()).toBe(MAIN_CONVERSATION);
+    FakeEventSource.latest().send('queue', state({
+        requests: [request('r1', { conversation_id: 'c1' })],
+        conversations: [conversation(MAIN_CONVERSATION), conversation('c1')],
+    }));
+    expect(getActiveConversationId()).toBe('c1');
+
+    clearAgentChatFocus();
+    clearAgentChatFocus();
+    expect(getAgentChatRequest()).toEqual({ nonce: 1, taskId: undefined, view: 'chat' });
+    openAgentChat(undefined, 'conversations');
+    expect(getAgentChatRequest()).toEqual({ nonce: 2, taskId: undefined, view: 'conversations' });
+    expect(chat).toHaveBeenCalledTimes(3);
+    stopChat();
+});
+
+test('reports where actions and conversations stand', () => {
+    connect(state({
+        requests: [
+            request('run', { status: 'running', position: null, key: 'a', conversation_id: 'c1' }),
+            request('wait', { status: 'queued', position: 3, key: 'b', conversation_id: 'c2' }),
+            request('fail', { status: 'failed', position: null, key: 'c', conversation_id: 'c3' }),
+            request('nopos', { status: 'queued', position: null, key: 'd', conversation_id: 'c3' }),
+        ],
+        history: [request('done', { status: 'done', key: 'e' })],
+    }));
+    const queue = getAgentQueue();
+    expect(agentActionState(queue, task => task.key === 'a')).toEqual({ status: 'running', taskId: 'run' });
+    expect(agentActionState(queue, task => task.key === 'b')).toEqual({ status: 'queued', taskId: 'wait', position: 3 });
+    expect(agentActionState(queue, task => task.key === 'c')).toEqual({ status: 'failed', taskId: 'fail' });
+    expect(agentActionState(queue, task => task.key === 'd')).toEqual({ status: 'queued', taskId: 'nopos', position: 1 });
+    expect(agentActionState(getAgentHistory(), task => task.key === 'e')).toBeUndefined();
+    expect(agentActionState(queue, task => task.key === 'z')).toBeUndefined();
+    expect(['c1', 'c2', 'c3', 'c4'].map(id => conversationStatus(queue, id))).toEqual(['running', 'queued', 'failed', 'idle']);
 });
