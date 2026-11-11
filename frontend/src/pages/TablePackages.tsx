@@ -361,7 +361,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                         )}
                     </div>
                 ),
-                footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 300
             }),
             columnHelper.accessor(row => releaseVersion(row) ?? '', {
@@ -648,8 +647,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     </div>
                 ),
                 enableSorting: false,
-                minSize: 10,
-                size: 10
+                size: 200
             })
         ]
     }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError, compilerError, compilerDocuments]);

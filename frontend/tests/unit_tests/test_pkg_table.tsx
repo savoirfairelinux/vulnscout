@@ -154,7 +154,8 @@ describe('Packages Table', () => {
         const cell = await screen.findByRole('cell', { name: 'aaabbbccc Built component Workspace component' });
         expect(within(cell).getByText('Built component')).toBeTruthy();
         expect(within(cell).getByText('Workspace component')).toBeTruthy();
-        expect(screen.getByText('Total: 1')).toBeTruthy();
+        expect(screen.getAllByRole('row')).toHaveLength(2);
+        expect(screen.queryByText(/^Total:/)).toBeNull();
         expect(screen.queryByText('Original JSON-LD entries')).toBeNull();
     });
 
