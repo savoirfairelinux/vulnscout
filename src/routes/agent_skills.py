@@ -40,7 +40,10 @@ ASSESS = AgentProfile("assess", "cve-assessment", ("cve-assessment",),
 # assessment-review delegates CVE reasoning to cve-assessment but must never write assessments.
 REVIEW = AgentProfile("review", "assessment-review", ("assessment-review", "cve-assessment"),
                       ("write_assessment_review",))
-PROFILES = {profile.action: profile for profile in (ASSESS, REVIEW)}
+# ai-context-import may only store drafts; saving stays a human action on the AI Context page.
+CONTEXT_IMPORT = AgentProfile("context-import", "ai-context-import", ("ai-context-import",),
+                              ("propose_variant_threat_model",))
+PROFILES = {profile.action: profile for profile in (ASSESS, REVIEW, CONTEXT_IMPORT)}
 
 
 def skills_path() -> Path | None:
