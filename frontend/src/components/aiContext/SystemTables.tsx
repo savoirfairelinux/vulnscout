@@ -1,4 +1,4 @@
-import type { MutableRefObject, ReactNode } from "react";
+import { useEffect, useRef, type MutableRefObject, type ReactNode } from "react";
 import type { StrideComponent, StrideInteraction, VariantDraft } from "../../handlers/context";
 import { isReferenced, nextId } from "../../helpers/strideModel";
 import FieldErrorText from "./FieldErrorText";
@@ -15,8 +15,12 @@ type Props = {
 };
 
 export const TH = "px-2 py-1 text-left text-xs font-semibold text-zinc-300";
-export const CELL = "px-1 py-1 align-top";
-export const CELL_FIELD = `${FIELD} resize-y`;
+export const CELL = "px-1 py-1 align-middle";
+// Block display drops the inline baseline gap that would push the textarea above the row's centre.
+export const CELL_FIELD = `${FIELD} block resize-y`;
+// About ten rows (two-line text areas) before the table scrolls; the header stays visible.
+const TABLE_SCROLL = "overflow-auto max-h-[45rem] rounded border border-slate-700";
+const STICKY_HEAD = "sticky top-0 z-10 bg-slate-800";
 const BLOCKED_HINT = 'Remove its interactions, threat targets and risks first.';
 
 type Column<T> = {
@@ -128,12 +132,20 @@ export function RemoveButton({ noun, id, hintId, blocked, disabled, onClick, hin
 function EntityTable<T extends { id: string }>(props: Readonly<TableProps<T>>) {
     const { title, noun, prefix, rows, columns, disabled } = props;
     const headingId = `ai-variant-${prefix}-heading`;
+    const scrollerRef = useRef<HTMLDivElement>(null);
+    const added = useRef(false);
+    // A row added below the visible part of the capped table is scrolled into view.
+    useEffect(() => {
+        if (!added.current || !scrollerRef.current) return;
+        added.current = false;
+        scrollerRef.current.scrollTop = scrollerRef.current.scrollHeight;
+    }, [rows.length]);
     return (
         <div className="space-y-2">
             <h3 id={headingId} className="text-sm font-semibold text-zinc-200">{title}</h3>
-            <div className="overflow-x-auto">
+            <div ref={scrollerRef} className={TABLE_SCROLL}>
                 <table aria-labelledby={headingId} className="w-full min-w-[40rem] table-auto border-collapse">
-                    <thead>
+                    <thead className={STICKY_HEAD}>
                         <tr>
                             <th scope="col" className={TH}>ID</th>
                             {columns.map(col => (
@@ -155,7 +167,10 @@ function EntityTable<T extends { id: string }>(props: Readonly<TableProps<T>>) {
                 </table>
             </div>
             {rows.length === 0 && <p className={HELP}>{`No ${noun}s yet.`}</p>}
-            <button type="button" className={BUTTON_SECONDARY} disabled={disabled} onClick={props.onAdd}>
+            <button type="button" className={BUTTON_SECONDARY} disabled={disabled} onClick={() => {
+                added.current = true;
+                props.onAdd();
+            }}>
                 {props.addLabel}
             </button>
         </div>
