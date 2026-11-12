@@ -22,7 +22,7 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 VulnScout provides several filter categories, each accessible from a dedicated dropdown in the toolbar:
 
 - **Source**: restrict the table to vulnerabilities found by a specific scanner or import source (Yocto, Grype, CycloneDX, SPDX3, OpenVEX, or Local User Data).
-- **Severity**: select one or more severity levels (Critical, High, Medium, Low, None). You can also switch to a continuous **score-based** filter using a range slider, which filters by the underlying CVSS max score rather than the categorical label.
+- **Severity**: select one or more severity levels (Critical, High, Medium, Low, None). When CVSS scores are available, the severity label is derived from the highest score in the selected scope, consistently with reports. A stored label is used only when no CVSS score is available. You can also switch to a continuous **score-based** filter using a range slider, which filters by the underlying CVSS max score rather than the categorical label.
 - **Status**: filter by triage status: Pending Assessment, Exploitable, Not affected, or Fixed.
   The column lists all distinct current package statuses, comma-separated, using
   the newest assessment for each package/variant target in the selected scope.
