@@ -600,11 +600,11 @@ cmd_scan() {
                 _grype_gomemlimit=$(resolve_grype_memlimit)
                 if [[ -n "$_grype_gomemlimit" ]]; then
                     console_out info "Grype memory limit (GOMEMLIMIT): $_grype_gomemlimit"
-                    GOMEMLIMIT="$_grype_gomemlimit" grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
+                    GOMEMLIMIT="$_grype_gomemlimit" grype "sbom:$exported_cdx" -o json > "$grype_out" || {
                         rm -rf "$grype_tmp"; return 1
                     }
                 else
-                    grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
+                    grype "sbom:$exported_cdx" -o json > "$grype_out" || {
                         rm -rf "$grype_tmp"; return 1
                     }
                 fi
