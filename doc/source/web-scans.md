@@ -97,6 +97,11 @@ Each tab header carries its own badge counts, and every table inside supports a 
 
 Clicking the **Scan Result** button on a scan entry opens a modal showing the complete state of the global result at that point in time — the union of SBOM packages and all tool-scan findings. The modal displays packages, findings, and vulnerabilities tabs, each with their total counts. This is useful for understanding the full picture at a given snapshot rather than just the delta.
 
+SBOM source labels identify the documents containing each finding's package,
+not every document imported in the scan. They identify package provenance, not
+proof that each document declared the CVE. Tool findings retain their scanner
+source, and vulnerability rows combine the sources of their findings.
+
 ## Scan Export
 
 VulnScout lets you export scan data as JSON files for archiving, reporting, or sharing with external tools.
