@@ -169,6 +169,24 @@ class CVSS:
         else:
             return "Critical"
 
+    @staticmethod
+    def summarize(cvss_list: list[dict], fallback_label: str = "unknown") -> dict:
+        """Summarize exactly the selected CVSS entries, using their highest score."""
+        scores = [
+            float(cvss["base_score"])
+            for cvss in cvss_list
+            if isinstance(cvss.get("base_score"), (int, float))
+        ]
+        return {
+            "severity": (
+                CVSS("", "", "unknown", max(scores), 0.0, 0.0).severity().lower()
+                if scores else fallback_label
+            ),
+            "min_score": min(scores) if scores else None,
+            "max_score": max(scores) if scores else None,
+            "cvss": cvss_list,
+        }
+
     def to_dict(self) -> dict:
         """Export the CVSS score as a dictionary."""
         return {

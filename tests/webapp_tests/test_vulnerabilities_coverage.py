@@ -1082,7 +1082,53 @@ def test_apply_variant_scoped_overrides_skips_missing_vuln():
     _apply_variant_scoped_overrides_to_vuln_dicts(vulns, {"keep": override})
 
     assert vulns["keep"]["effort"]["likely"] == "PT2H"
+    assert vulns["keep"]["severity"]["severity"] == "high"
+    assert vulns["keep"]["severity"]["min_score"] == 7.0
+    assert vulns["keep"]["severity"]["max_score"] == 7.0
     assert vulns["skip"]["effort"] is None
+
+
+@pytest.mark.parametrize("scope", ["variant_id", "project_id"])
+@pytest.mark.parametrize("detail", [False, True])
+def test_scoped_severity_uses_only_selected_metrics(app, client, scope, detail):
+    from src.extensions import db
+    from src.models.metrics import Metrics
+    from src.models.project import Project
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+    import uuid
+
+    with app.app_context():
+        vuln = db.session.get(Vulnerability, "CVE-2020-35492")
+        vuln.status = "medium"
+        for metric in list(vuln.metrics):
+            db.session.delete(metric)
+        other_project = Project.create("OtherMetricsProject")
+        other_variant = Variant.create("OtherMetricsVariant", other_project.id)
+        for score, variant_id in [
+            (5.5, None),
+            (7.8, uuid.UUID("22222222-2222-2222-2222-222222222222")),
+            (9.8, other_variant.id),
+        ]:
+            db.session.add(Metrics(
+                vulnerability_id=vuln.id, version="3.1", score=score,
+                variant_id=variant_id,
+            ))
+        db.session.commit()
+
+    scope_id = (
+        "22222222-2222-2222-2222-222222222222" if scope == "variant_id"
+        else "11111111-1111-1111-1111-111111111111"
+    )
+    path = "/api/vulnerabilities/CVE-2020-35492" if detail else "/api/vulnerabilities"
+    response = client.get(f"{path}?{scope}={scope_id}")
+    assert response.status_code == 200
+    result = response.get_json()
+    vuln = result if detail else next(v for v in result if v["id"] == "CVE-2020-35492")
+    assert vuln["severity"]["severity"] == "high"
+    assert vuln["severity"]["min_score"] == 5.5
+    assert vuln["severity"]["max_score"] == 7.8
+    assert sorted(m["base_score"] for m in vuln["severity"]["cvss"]) == [5.5, 7.8]
 
 
 def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
@@ -2032,4 +2078,3 @@ def test_compact_endpoint_serves_decodable_json_to_a_gzip_client(client):
     if response.headers.get("Content-Encoding") == "gzip":
         body = gzip.decompress(body)
     assert [v["id"] for v in json.loads(body)] == ["CVE-2020-35492"]
-
