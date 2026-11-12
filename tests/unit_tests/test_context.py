@@ -1184,10 +1184,17 @@ class TestImportSourceRoutes:
             for name in ("..", ".", "a\x01b.md", "x" * 256 + ".md"):
                 assert self._post(client, variant, b"text", name).status_code == 400, name
             assert self._post(client, variant, b"text", "draft.json").status_code == 201
-            assert self._post(client, variant, b"text", "..\\..\\evil.md").get_json()["name"] == "evil.md"
+            assert self._post(client, variant, b"text", "../../evil.md").get_json()["name"] == "evil.md"
             directory = context_draft.context_dir(str(tmp_path), VariantContext.get_by_variant(variant.id).id)
         assert sorted(os.listdir(directory)) == ["import"]
         assert os.listdir(os.path.join(directory, "import")) == ["evil.md"]
+
+    def test_windows_paths_keep_only_the_base_name(self):
+        # Werkzeug 3.1.9+ unescapes backslashes in multipart filenames, so this is tested off the route.
+        from src.routes.context import _import_name
+
+        assert _import_name("..\\..\\evil.md") == "evil.md"
+        assert _import_name("C:\\Users\\me\\model.pdf") == "model.pdf"
 
     def test_missing_file_and_unknown_variant(self, client, variant, tmp_path):
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
