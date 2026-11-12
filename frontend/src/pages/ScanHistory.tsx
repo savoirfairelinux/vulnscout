@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import ScansHandler from "../handlers/scans";
 import type { Scan, ScanDiff, FindingDiffEntry, FindingUpgradeEntry, PackageDiffEntry, PackageUpgradeEntry, AssessmentDiffEntry, GlobalResult } from "../handlers/scans";
 import Operations from "../handlers/operations";
-import { subscribe as operationSubscribe, getSnapshot as getOperations, waitForQueue } from "../handlers/operationStore";
+import { subscribe as operationSubscribe, getSnapshot as getOperations, hasActiveSource, waitForQueue } from "../handlers/operationStore";
 import type { ScanSource } from "../types/operation";
 import { isActive } from "../types/operation";
 import type { RefreshType } from "../helpers/refreshSources";
@@ -1635,6 +1635,8 @@ function ScanHistory({ variantId, projectId, variantIds, onScanComplete, onAgent
             ...refreshTypes.map(source => Operations.deferredRefreshJob(
                 source, targetVariantIds, [...existingVulnerabilityIds],
             )),
+            // An active maintenance refresh would reject the whole batch as a conflict.
+            ...(hasActiveSource('refresh', 'scorecard') ? [] : [Operations.scorecardRefreshJob(targetVariantIds)]),
         ];
         const result = await Operations.enqueue(jobs);
         if (!result.ok) throw new Error(result.error);

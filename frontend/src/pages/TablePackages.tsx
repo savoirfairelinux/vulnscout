@@ -21,16 +21,23 @@ import { filterCompilerDocuments, listCompilerMetadata, listDependencyCounts } f
 import type { CompilerDocument, DependencyCounts } from '../handlers/dependencies';
 import SourceRevision from '../components/SourceRevision';
 import { releaseVersion, versionEvidenceTitle } from '../helpers/packageVersions';
+import PackageHealthBadge from '../components/PackageHealthBadge';
+import type { PackageHealth, PackageHealthMap } from '../handlers/packageHealth';
+import { healthSortValue, listPackageHealth } from '../handlers/packageHealth';
+import Operations from '../handlers/operations';
+import Variants from '../handlers/variant';
 
 const DependencyModal = lazy(() => import('../components/DependencyModal'));
 const SourceFileModal = lazy(() => import('../components/SourceFileModal'));
 const CompilerMetadataModal = lazy(() => import('../components/CompilerMetadataModal'));
+const PackageHealthModal = lazy(() => import('../components/PackageHealthModal'));
 
 type PackageRow = Package & {
     versionMetadataSearch: string;
     dependencyCount?: { in: number; out: number };
     dependenciesUnrecorded?: boolean;
     hasCompilerMetadata?: boolean;
+    health?: PackageHealth;
 };
 
 type Props = {
@@ -105,6 +112,10 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const [compilerError, setCompilerError] = useState(false);
     const [compilerRetry, setCompilerRetry] = useState(0);
     const [selectedCompilerPackage, setSelectedCompilerPackage] = useState<string | null>(null);
+    const [packageHealth, setPackageHealth] = useState<PackageHealthMap | null>(null);
+    const [healthError, setHealthError] = useState(false);
+    const [selectedHealthPackage, setSelectedHealthPackage] = useState<string | null>(null);
+    const [healthRefreshBanner, setHealthRefreshBanner] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -169,7 +180,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
 
     const defaultVisibleColumns = useMemo(() => {
-        const cols = ['Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
+        const cols = ['Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities', 'Maintenance', 'Variants', 'Sources'];
         if (hasSupplierInfo) cols.splice(cols.indexOf('Vulnerabilities'), 0, 'Supplier');
         return cols;
     }, [hasSupplierInfo]);
@@ -202,6 +213,44 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         });
     }, [sourceFilesColumnDefaulted, setSourceFilesColumnDefaulted, setVisibleColumns]);
     const variantIdsKey = variantIds?.join(',');
+    const [maintenanceColumnDefaulted, setMaintenanceColumnDefaulted] = useLocalStorageState(`${preferenceKey}.maintenanceColumnDefaulted`, false);
+    useEffect(() => {
+        if (maintenanceColumnDefaulted) return;
+        setMaintenanceColumnDefaulted(true);
+        setVisibleColumns(columns => columns.includes('Maintenance') ? columns : [...columns, 'Maintenance']);
+    }, [maintenanceColumnDefaulted, setMaintenanceColumnDefaulted, setVisibleColumns]);
+    const showMaintenanceColumn = visibleColumns.includes('Maintenance');
+    useEffect(() => {
+        if (!showMaintenanceColumn) return;
+        setHealthError(false);
+        if (!variantId && !projectId && !variantIdsKey) {
+            setPackageHealth({ enabled: true, packages: {} });
+            return;
+        }
+        let cancelled = false;
+        setPackageHealth(null);
+        listPackageHealth({ variantId, projectId, variantIds: variantIdsKey?.split(','), compareVariantId })
+            .then(result => { if (!cancelled) setPackageHealth(result); })
+            .catch(() => { if (!cancelled) setHealthError(true); });
+        return () => { cancelled = true; };
+    }, [showMaintenanceColumn, variantId, projectId, variantIdsKey, compareVariantId, dataRevision]);
+    const refreshMaintenance = async () => {
+        setHealthRefreshBanner(null);
+        try {
+            let ids = variantIds?.length ? variantIds : [variantId, compareVariantId].filter((id): id is string => !!id);
+            if (!ids.length && projectId) ids = (await Variants.list(projectId)).map(variant => variant.id);
+            if (!ids.length) {
+                setHealthRefreshBanner({ type: 'error', message: 'Select a project or variant to refresh maintenance data' });
+                return;
+            }
+            const result = await Operations.enqueue([Operations.scorecardRefreshJob(ids)]);
+            setHealthRefreshBanner(result.ok
+                ? { type: 'success', message: 'Maintenance data refresh queued' }
+                : { type: 'error', message: result.error });
+        } catch {
+            setHealthRefreshBanner({ type: 'error', message: 'Unable to queue the maintenance data refresh' });
+        }
+    };
     const showDependencyColumn = visibleColumns.includes('Dependency');
     const showCompilerColumn = visibleColumns.includes('Compiler Flags');
     useEffect(() => {
@@ -334,6 +383,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         'purl': 'PURL',
         'supplier': 'Supplier',
         'vulnerabilities': 'Vulnerabilities',
+        'maintenance': 'Maintenance',
         'variants': 'Variants',
         'source': 'Sources',
         'actions': 'Actions',
@@ -562,6 +612,37 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 size: 50
             }
             ),
+            columnHelper.accessor(row => healthSortValue(row.health), {
+                id: 'maintenance',
+                header: () => <div className="flex items-center justify-center">Maintenance</div>,
+                HintText: <>
+                    <h3 className="font-bold text-white mb-2">Maintenance</h3>
+                    <div className="space-y-1 text-gray-100">
+                        <p>OpenSSF Scorecard score (0-10) of the package's upstream repository, with its recent activity.</p>
+                        <p>It describes the maintainers' practices to give context while assessing vulnerabilities; it is not a verdict.</p>
+                        <p>Use Refresh maintenance to look up repositories and fetch scores.</p>
+                    </div>
+                </>,
+                HintAriaLabel: 'Package Maintenance helper',
+                cell: info => {
+                    const pkg = info.row.original;
+                    if (healthError) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
+                        title="Unable to load maintenance data">Scores unavailable</div>;
+                    if (!packageHealth) return <div role="status" className="flex items-center justify-center h-full p-4 text-center">Loading scores…</div>;
+                    const badge = <PackageHealthBadge health={pkg.health} enabled={packageHealth.enabled} />;
+                    if (!pkg.health) return <div className="flex items-center justify-center h-full p-4 text-center">{badge}</div>;
+                    return <button type="button"
+                        className="flex items-center justify-center w-full h-full p-4 text-center hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 focus-visible:-outline-offset-2"
+                        // Keep virtualized row focus management from taking focus off this action.
+                        onFocus={event => event.stopPropagation()}
+                        onClick={() => setSelectedHealthPackage(pkg.id)}
+                        aria-label={`View maintenance details for ${pkg.name}`}>
+                        {badge}
+                    </button>;
+                },
+                sortDescFirst: true,
+                size: 150,
+            }),
             columnHelper.accessor('variants', {
                 id: 'variants',
                 header: () => <div className="flex items-center justify-center">Variants</div>,
@@ -652,7 +733,8 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 size: 10
             })
         ]
-    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError, compilerError, compilerDocuments]);
+    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError, compilerError, compilerDocuments,
+        healthError, packageHealth]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -694,14 +776,15 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const tableRows = useMemo<PackageRow[]>(() => {
         const unrecorded = new Set(dependencyCounts?.unrecorded);
         return filteredPackages.map(pkg => {
-            const row = { ...pkg, hasCompilerMetadata: !pkg.outdated && compilerPackages.has(pkg.id), versionMetadataSearch:
-                `${pkg.id} ${pkg.source_revision ?? ''} ${versionEvidenceTitle(pkg)}` };
+            const row: PackageRow = { ...pkg, hasCompilerMetadata: !pkg.outdated && compilerPackages.has(pkg.id), versionMetadataSearch:
+                `${pkg.id} ${pkg.source_revision ?? ''} ${versionEvidenceTitle(pkg)}`,
+                health: showMaintenanceColumn ? packageHealth?.packages[pkg.id] : undefined };
             if (!showDependencyColumn || !dependencyCounts || pkg.outdated) return row;
             const counts = dependencyCounts.counts[pkg.id];
             if (!counts && unrecorded.has(pkg.id)) return { ...row, dependenciesUnrecorded: true };
             return { ...row, dependencyCount: counts ?? { in: 0, out: 0 } };
         });
-    }, [filteredPackages, showDependencyColumn, dependencyCounts, compilerPackages]);
+    }, [filteredPackages, showDependencyColumn, dependencyCounts, compilerPackages, showMaintenanceColumn, packageHealth]);
 
     return (<>
         {selectedSourcePackage && <Suspense fallback={<div role="status">Loading recorded files...</div>}>
@@ -720,6 +803,19 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
                 packageId={selectedDependencyPackage} onClose={() => setSelectedDependencyPackage(null)} />
         </Suspense>}
+        {selectedHealthPackage && <Suspense fallback={<div role="status">Loading maintenance data…</div>}>
+            <PackageHealthModal variantId={variantId} projectId={projectId} variantIds={variantIds}
+                compareVariantId={compareVariantId} dataRevision={dataRevision}
+                packageId={selectedHealthPackage} onClose={() => setSelectedHealthPackage(null)} />
+        </Suspense>}
+        {healthRefreshBanner && (
+            <MessageBanner
+                type={healthRefreshBanner.type}
+                message={healthRefreshBanner.message}
+                isVisible={true}
+                onClose={() => setHealthRefreshBanner(null)}
+            />
+        )}
         {showOnlyOutdated && outdatedLoading && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40" role="status" aria-live="polite">
                 <div className="flex flex-col items-center gap-3 text-white">
@@ -841,6 +937,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     'PURL',
                     'Supplier',
                     'Vulnerabilities',
+                    'Maintenance',
                     'Variants',
                     'Sources',
                 ]}
@@ -915,6 +1012,16 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     </PopoverSurface>
                 )}
 
+                {showMaintenanceColumn && packageHealth?.enabled !== false && (
+                    <button
+                        type="button"
+                        onClick={() => void refreshMaintenance()}
+                        title="Look up upstream repositories and fetch OpenSSF Scorecard results"
+                        className="bg-sky-900 hover:bg-sky-950 px-3 py-1 rounded text-white border border-sky-700"
+                    >
+                        Refresh maintenance
+                    </button>
+                )}
                 <button
                     onClick={resetFilters}
                     className="bg-sky-900 hover:bg-sky-950 px-3 py-1 rounded text-white border border-sky-700"

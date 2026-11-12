@@ -14,11 +14,13 @@ from packageurl import PackageURL
 
 from ..extensions import db, Base
 from ..helpers.package_versions import PackageVersionInfo, git_revision_from_url, package_version_info
+from ..helpers.repository_urls import normalize_repository
 from .sbom_file import has_compilation_evidence
 
 
 if typing.TYPE_CHECKING:
     from ..models import SBOMObservation, SBOMPackage, Finding
+    from .package_health import PackageRepository
     from .sbom_package import PackageType
     from .sbom_file import SourceFileEvidence
 
@@ -97,6 +99,7 @@ class Package(Base):
         back_populates="package",
         cascade="all, delete-orphan",
     )
+    upstream_repository: Mapped["PackageRepository | None"] = relationship(cascade="all, delete-orphan")
 
     # ------------------------------------------------------------------
     # Constructor with support for legacy arg calls
@@ -199,6 +202,23 @@ class Package(Base):
     def source_urls(self, values: list[str]) -> None:
         self._source_urls = list(values)
 
+    def add_upstream_url(self, url: object) -> None:
+        """Retain a download, homepage or VCS URL only when it identifies an upstream repository."""
+        if normalize_repository(url) is None:
+            return
+        value = str(url).strip()
+        if value not in self.upstream_urls:
+            self.upstream_urls = [*self.upstream_urls, value]
+
+    @property
+    def upstream_urls(self) -> list[str]:
+        """Transient repository evidence read from the current SBOM document."""
+        return getattr(self, "_upstream_urls", [])
+
+    @upstream_urls.setter
+    def upstream_urls(self, values: list[str]) -> None:
+        self._upstream_urls = list(values)
+
     @property
     def component_types(self) -> list["PackageType"]:
         """Classifications from selected SBOM associations, never a global package attribute."""
@@ -275,6 +295,8 @@ class Package(Base):
                 self.add_purl(p)
             for url in other.source_urls or []:
                 self.add_source_url(url)
+            for url in other.upstream_urls:
+                self.add_upstream_url(url)
             self.source_revisions = sorted(set(self.source_revisions or []) | set(other.source_revisions or []))
             return True
         return False

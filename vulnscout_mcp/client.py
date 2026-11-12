@@ -221,6 +221,30 @@ class VulnScoutClient:
             raise VulnScoutError("Invalid recorded file evidence response for the requested variant/package.") from exc
         return package
 
+    def get_package_health(self, variant_id: str, package_id: str) -> dict:
+        """GET /api/packages/health for one exact package ID in one variant, including every Scorecard check."""
+        if not variant_id or not package_id:
+            raise VulnScoutError("A variant scope and exact package ID are required.")
+        try:
+            with httpx.Client(timeout=30) as http:
+                response = http.get(f"{self.base_url}/api/packages/health",
+                                    params={"variant_id": variant_id, "package_id": package_id})
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if not response.is_success:
+            try:
+                message = response.json().get("error", response.text)
+            except (ValueError, AttributeError):
+                message = response.text
+            raise VulnScoutError(message)
+        try:
+            data = response.json()
+            if not isinstance(data, dict) or not isinstance(data["packages"], dict):
+                raise ValueError
+        except (ValueError, KeyError) as exc:
+            raise VulnScoutError("Invalid package health response.") from exc
+        return data
+
     def get_project_context(self, project_id: str) -> dict:
         """GET /api/projects/<project_id>/context."""
         url = f"{self.base_url}/api/projects/{project_id}/context"
@@ -560,6 +584,10 @@ class ScopedVulnScoutClient(VulnScoutClient):
     def get_package_source_files(self, variant_id: str, package_id: str) -> dict:
         self._variant(variant_id)
         return super().get_package_source_files(variant_id, package_id)
+
+    def get_package_health(self, variant_id: str, package_id: str) -> dict:
+        self._variant(variant_id)
+        return super().get_package_health(variant_id, package_id)
 
     def update_project_context(self, project_id: str, description: str | None) -> dict:
         self._project(project_id)

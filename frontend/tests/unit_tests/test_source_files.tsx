@@ -297,6 +297,7 @@ test.each([true, false])('renaming saved columns preserves file column visibilit
     localStorage.setItem(`${key}.sourceFilesColumnDefaulted`, 'true');
     localStorage.setItem(`${key}.revisionColumnDefaulted`, 'true');
     localStorage.setItem(`${key}.dependencyColumnDefaulted`, 'true');
+    localStorage.setItem(`${key}.maintenanceColumnDefaulted`, 'true');
     jest.spyOn(global, 'fetch').mockResolvedValue(response({ counts: {}, unrecorded: [] }));
     render(<TablePackages packages={[]} preferenceScopeKey="recorded-migration" />);
     await waitFor(() => expect(JSON.parse(localStorage.getItem(`${key}.visibleColumns`)!)).toEqual(

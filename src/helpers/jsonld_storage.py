@@ -45,7 +45,7 @@ def _metadata(group: dict, packages: dict, links: list[SBOMPackage]) -> dict | N
         return None
     evidence = {
         field: sorted({value for link in links for value in getattr(link, field) or []})
-        for field in ("cpe", "purl", "source_urls", "source_revisions")
+        for field in ("cpe", "purl", "source_urls", "source_revisions", "upstream_urls")
     }
     infos = [package_version_info(packages[member].version, evidence["purl"], evidence["cpe"],
                                   evidence["source_urls"], evidence["source_revisions"])
@@ -312,7 +312,7 @@ def consolidate_jsonld_packages(session: Session) -> bool:
         canonical_ids.add(parent.id)
         previous = metadata_by_parent.get((scan_id, parent.id))
         if previous is not None:
-            for field in ("cpe", "purl", "source_urls", "source_revisions"):
+            for field in ("cpe", "purl", "source_urls", "source_revisions", "upstream_urls"):
                 metadata[field] = list(dict.fromkeys([*previous[field], *metadata[field]]))
         metadata["type"] = (
             "built" if group["built"] or (previous is not None and previous["type"] == "built")
@@ -350,7 +350,7 @@ def consolidate_jsonld_packages(session: Session) -> bool:
             associations[association_key] = target
             session.add(target)
         metadata = metadata_by_parent[scan_id, parent_id]
-        for field in ("cpe", "purl", "source_urls", "source_revisions"):
+        for field in ("cpe", "purl", "source_urls", "source_revisions", "upstream_urls"):
             setattr(target, field, list(dict.fromkeys([*metadata[field], *(getattr(target, field) or [])])))
     for link in associations.values():
         document = documents[link.sbom_document_id]

@@ -16,7 +16,7 @@ import re
 import time
 import urllib.error
 import uuid
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from ..extensions import db
 from ..helpers.refresh_runs import add_targets, target_result, tracked_refresh
@@ -29,6 +29,7 @@ from .nvd_apply import apply_cvss_update, apply_nvd_update
 from .nvd_db import NVD_DB
 from .nvd_extract import extract_cve_details
 from .operation_registry import STATUS_CANCELLED, STATUS_ERROR, registry
+from .package_health import run_scorecard_refresh
 from .scc_engine import get_cve_json, get_engine as _get_scc_engine
 from .vulnerabilities import VulnerabilitiesController
 
@@ -471,9 +472,10 @@ def run_euvd_refresh(ctx: JobContext) -> None:
     )
 
 
-REFRESH_JOBS = {
+REFRESH_JOBS: Dict[str, Callable[[JobContext], None]] = {
     "nvd": run_nvd_refresh,
     "epss": run_epss_refresh,
     "ghsa": run_ghsa_refresh,
     "euvd": run_euvd_refresh,
+    "scorecard": run_scorecard_refresh,
 }

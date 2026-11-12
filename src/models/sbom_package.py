@@ -50,6 +50,8 @@ class SBOMPackage(Base):
     cpe: Mapped[list | None] = mapped_column(JSON)
     purl: Mapped[list | None] = mapped_column(JSON)
     source_revisions: Mapped[list | None] = mapped_column(JSON)
+    # Raw download/homepage/VCS URLs, kept to resolve the upstream repository.
+    upstream_urls: Mapped[list | None] = mapped_column(JSON)
     type: Mapped[PackageType] = mapped_column(String(9), default="normal", server_default="normal")
     compiled_sources_complete: Mapped[bool | None]
     source_files: Mapped[list["PackageSourceFile"]] = relationship(

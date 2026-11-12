@@ -182,6 +182,8 @@ class SPDX:
             pkg = Package(package.name, package.version or "", [], [], "", supplier=supplier)
             if isinstance(package.download_location, str):
                 pkg.add_source_url(package.download_location)
+            pkg.add_upstream_url(package.download_location)
+            pkg.add_upstream_url(package.homepage)
             license_declared = package.license_declared
             if license_declared is not None:
                 license_str = str(license_declared)

@@ -556,6 +556,34 @@ or `package_id=name@version` to retrieve details for a particular package.
 An empty result is `{"documents": []}`. Source format and document names allow
 clients to apply the SBOM table's source filters consistently.
 
+### Package Maintenance (OpenSSF Scorecard)
+
+```
+GET /api/packages/health
+```
+
+Returns the cached upstream repository and OpenSSF Scorecard result of the
+active packages in scope. One of `variant_id` (optionally with
+`compare_variant_id`), `variant_ids` or `project_id` is required; scopes are
+unioned. `package_id=name@version` returns one package and adds every Scorecard
+check (`name`, `score`, `reason`, `description`, `url`; a score of `-1` is
+inconclusive).
+
+**Response:** `{"enabled": true, "packages": {"name@version": {...}}}`. Each
+entry has `repository` (`host/owner/repo` or `null`), `repository_source`
+(`sbom`, `deps_dev`, `osv` or `none`), `repository_evidence`, `deprecated`,
+`deprecated_reason`, `resolved_at` and `scorecard`. `scorecard` is `null` until
+fetched, or has `status` (`scored`, `not_found`, `unsupported` for hosts other
+than GitHub/GitLab, `error`), `repository` (the name Scorecard published, in its
+canonical case), `score`, `date`, `commit`, `fetched_at` and
+`maintained` (the Maintained check's `score` and `reason`). Packages never looked
+up are absent; `enabled` is `false` when `VULNSCOUT_SCORECARD_ENABLED=0`.
+
+Fill the cache with a refresh operation:
+`POST /api/operations` with `{"jobs": [{"kind": "refresh", "source": "scorecard",
+"variant_ids": [...], "options": {"force": false}}]}`. `force` ignores cached
+repositories and scores. The score is maintenance context, not an assessment.
+
 ---
 
 ## Vulnerabilities

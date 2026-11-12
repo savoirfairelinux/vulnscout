@@ -49,11 +49,12 @@ REFRESH_LABELS = {
     "epss": "EPSS",
     "ghsa": "GHSA",
     "euvd": "ENISA EUVD",
+    "scorecard": "OpenSSF Scorecard",
 }
 
 # The order the frontend used to enforce by awaiting each manager in turn.
 SCAN_ORDER = ["grype", "nvd", "osv", "scc"]
-REFRESH_ORDER = ["nvd", "epss", "ghsa", "euvd"]
+REFRESH_ORDER = ["nvd", "epss", "ghsa", "euvd", "scorecard"]
 
 VALID_MODES = ("local", "api")
 MAX_BATCH_OPERATIONS = 100
@@ -257,6 +258,19 @@ def _explicit_refresh_options(source: str, job: dict, mode: str) -> dict:
     return {"ids": ids, "mode": mode}
 
 
+def _scorecard_refresh_options(job: dict, options: dict) -> dict:
+    if job.get("ids") is not None:
+        raise _PlanError("scorecard refresh is scoped by variant_ids, not ids")
+    raw_variant_ids = job.get("variant_ids")
+    if not isinstance(raw_variant_ids, list) or not raw_variant_ids:
+        raise _PlanError("scorecard refresh requires variant_ids")
+    variant_ids = [_canonical_variant_id(raw_id) for raw_id in raw_variant_ids]
+    for variant_id in variant_ids:
+        if VariantController.get(uuid_module.UUID(variant_id)) is None:
+            raise _PlanError(f"Variant not found: {variant_id}", status=404)
+    return {"variant_ids": variant_ids, "force": _bool_option(options, "force", False)}
+
+
 def _plan_refresh_job(job: dict) -> List[dict]:
     source = job.get("source")
     if not isinstance(source, str) or source not in REFRESH_JOBS:
@@ -265,11 +279,13 @@ def _plan_refresh_job(job: dict) -> List[dict]:
     options = _job_options(job)
     mode = _mode_option(options)
     deferred = job.get("variant_ids") is not None
-    job_options = (
-        _deferred_refresh_options(source, job, mode)
-        if deferred
-        else _explicit_refresh_options(source, job, mode)
-    )
+    if source == "scorecard":
+        job_options = _scorecard_refresh_options(job, options)
+    elif deferred:
+        job_options = _deferred_refresh_options(source, job, mode)
+    else:
+        job_options = _explicit_refresh_options(source, job, mode)
+
     from ..extensions import db
     from ..models import Project, Variant
     scope = {key: options.get(key) for key in ("project_id", "variant_id")}
@@ -304,7 +320,6 @@ def _plan_refresh_job(job: dict) -> List[dict]:
         )
         if set(job_options["ids"]) - _scoped_vulnerability_ids(selected_ids):
             raise _PlanError("Refresh identifiers are outside the selected scope")
-
     return [{
         "op_id": refresh_op_id(source),
         "kind": KIND_REFRESH,
@@ -313,7 +328,7 @@ def _plan_refresh_job(job: dict) -> List[dict]:
         "lane": LANE_PIPELINE,
         "scope": scope,
         "options": job_options,
-        "runner": run_deferred_refresh if deferred else REFRESH_JOBS[source],
+        "runner": run_deferred_refresh if deferred and source != "scorecard" else REFRESH_JOBS[source],
     }]
 
 

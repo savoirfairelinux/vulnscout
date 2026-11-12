@@ -73,6 +73,8 @@ class PackagesController:
         self._pending_spdx_edges: list[tuple[uuid.UUID, SpdxKey, SpdxKey, str, str, uuid.UUID]] = []
         self._source_provenance = SPDXSources()
         self._document_evidence: dict[uuid.UUID, dict[str, PackageEvidence]] = {}
+        # document -> package string ID -> URLs naming its upstream repository
+        self._document_upstream: dict[uuid.UUID, dict[str, set[str]]] = {}
         self._export_document_ids: set[uuid.UUID] = set()
         self._document_packages: dict[tuple, list[Package]] = {}
         self._document_aliases: dict[str, str] = {}
@@ -373,7 +375,9 @@ class PackagesController:
         self._apply_source_provenance()
         for document_id, packages in self._document_evidence.items():
             aliases = self._document_evidence_aliases.get(document_id, {})
+            upstream = self._document_upstream.get(document_id, {})
             by_id: dict[uuid.UUID, PackageEvidence] = {}
+            upstream_by_id: dict[uuid.UUID, set[str]] = {}
             for package_id, evidence in packages.items():
                 canonical_id = aliases.get(package_id, package_id)
                 uid = self._db_id_cache.get(canonical_id)
@@ -386,12 +390,15 @@ class PackagesController:
                 combined["cpe"] = sorted(set(combined["cpe"]) | set(evidence["cpe"]))
                 combined["purl"] = sorted(set(combined["purl"]) | set(evidence["purl"]))
                 combined["source_urls"] = sorted(set(combined["source_urls"]) | set(evidence["source_urls"]))
+                upstream_by_id.setdefault(uid, set()).update(upstream.get(package_id, ()))
             for link in SBOMPackage.get_by_document(document_id):
                 evidence = by_id.get(link.package_id, {"cpe": [], "purl": [], "source_urls": []})
                 link.cpe = evidence["cpe"]
                 link.purl = evidence["purl"]
                 link.source_urls = evidence["source_urls"]
+                link.upstream_urls = sorted(upstream_by_id.get(link.package_id, ())) or None
         self._document_evidence = {}
+        self._document_upstream = {}
         self._document_evidence_aliases = {}
         self._source_provenance = SPDXSources()
 
@@ -473,6 +480,10 @@ class PackagesController:
             evidence["purl"] = sorted(set(evidence["purl"]) | set(package.purl or []))
             evidence["source_urls"] = sorted(set(evidence["source_urls"]) | set(package.source_urls))
             package.source_urls = []
+            if package.upstream_urls:
+                self._document_upstream.setdefault(self._current_sbom_document.id, {}).setdefault(
+                    package.string_id, set()).update(package.upstream_urls)
+                package.upstream_urls = []
         string_id = package.string_id  # "name@version"
         replaced = None
         if self._current_sbom_document is not None:

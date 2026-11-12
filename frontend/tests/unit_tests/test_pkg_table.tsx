@@ -680,7 +680,8 @@ describe('Packages Table', () => {
         dataRevision={dataRevision} />);
 
     const expectScopedDependencyRequests = (fetch: ReturnType<typeof mockDependencyFetch>) => {
-        const requests = fetch.mock.calls.map(([input]) => new URL(String(input)));
+        const requests = fetch.mock.calls.map(([input]) => new URL(String(input)))
+            .filter(url => url.pathname !== '/api/packages/health');
         expect(requests.some(url => url.searchParams.has('counts'))).toBe(true);
         expect(requests.some(url => !url.searchParams.has('counts'))).toBe(true);
         for (const url of requests) {
@@ -758,9 +759,10 @@ describe('Packages Table', () => {
     }, 15000);
 
     test('dependency loading and unavailable states are not actions or zero counts', async () => {
-        let fail!: (reason: Error) => void;
+        const failures: ((reason: Error) => void)[] = [];
         const fetch = jest.spyOn(global, 'fetch').mockImplementation(() =>
-            new Promise<Response>((_resolve, reject) => { fail = reject; }));
+            new Promise<Response>((_resolve, reject) => { failures.push(reject); }));
+        const fail = (reason: Error) => failures.forEach(reject => reject(reason));
         try {
             render(<TablePackages variantId="dependency-error" packages={packages} />);
             expect(screen.getAllByText('Loading…')).toHaveLength(packages.length);

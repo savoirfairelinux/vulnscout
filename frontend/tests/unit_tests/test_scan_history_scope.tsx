@@ -217,6 +217,7 @@ describe('ScanHistory selected variant scope', () => {
                 exclude_native: true, native_package_exceptions: ['gcc-native', 'g++-native', 'cmake-native'],
             }) }),
             expect.objectContaining({ kind: 'refresh', source: 'epss', variant_ids: ['v1'] }),
+            { kind: 'refresh', source: 'scorecard', variant_ids: ['v1'], options: { force: false } },
         ]));
         expect(listVulnerabilities).toHaveBeenCalled();
 
@@ -229,6 +230,27 @@ describe('ScanHistory selected variant scope', () => {
         expect(onScanComplete).not.toHaveBeenCalled();
         TestEventSource.current.send('operation', completed('refresh:epss', 'refresh'));
         await waitFor(() => expect(onScanComplete).toHaveBeenCalled());
+    });
+
+    test('does not queue a second maintenance refresh while one is active', async () => {
+        const configuration = jest.spyOn(Projects, 'scanConfiguration').mockResolvedValue({
+            exclude_native: true, native_package_exceptions: [], native_packages: [],
+        });
+        mockList.mockResolvedValue([]);
+        jest.spyOn(Vulnerabilities, 'list').mockResolvedValue([]);
+        const enqueue = jest.spyOn(Operations, 'enqueue').mockResolvedValue({
+            ok: true, queueId: 'q-2', operations: [{ op_id: 'scan:grype:v1' }] as Operation[],
+        });
+        render(<ScanHistory projectId="project" variantIds={['v1']} />);
+        TestEventSource.current.send('snapshot', { seq: 1, operations: [
+            { op_id: 'refresh:scorecard', kind: 'refresh', source: 'scorecard', status: 'running' },
+        ] });
+        fireEvent.click(await screen.findByRole('button', { name: 'Run Scans' }));
+        await screen.findByTestId('wizard-variants');
+        await waitFor(() => expect(configuration).toHaveBeenCalled());
+        fireEvent.click(screen.getByText('wizard-launch'));
+        await waitFor(() => expect(enqueue).toHaveBeenCalled());
+        expect(enqueue.mock.calls[0][0].some(job => job.source === 'scorecard')).toBe(false);
     });
 
     test.each([

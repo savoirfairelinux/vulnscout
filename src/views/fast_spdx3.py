@@ -40,6 +40,8 @@ class FastSPDX3:
         'security_CvssV4VulnAssessmentRelationship',
     }
 
+    _UPSTREAM_REF_TYPES = frozenset({'vcs', 'sourceArtifact', 'altDownloadLocation'})
+
     def __init__(self, controllers: ControllersCache):
         """
         Initialize the FastSPDX3 parser with controllers for packages, vulnerabilities, and assessments.
@@ -186,6 +188,13 @@ class FastSPDX3:
         download = pkg_element.get('software_downloadLocation')
         if isinstance(download, str):
             pkg.add_source_url(download)
+        pkg.add_upstream_url(download)
+        pkg.add_upstream_url(pkg_element.get('software_homePage'))
+        for reference in pkg_element.get('externalRef') or []:
+            if isinstance(reference, dict) and reference.get('externalRefType') in self._UPSTREAM_REF_TYPES:
+                locators = reference.get('locator')
+                for locator in locators if isinstance(locators, list) else [locators]:
+                    pkg.add_upstream_url(locator)
 
         cpes = self.extract_cpes(pkg_element)
         for cpe in cpes:
