@@ -8,6 +8,9 @@ reserved and rejected). Caller IDs must start with a letter or digit and contain
 at most 38 letters, digits, dots, underscores or hyphens, matching field-history
 storage:
 
+IDs are limited to **38 characters** to match field-history operation identities.
+Use letters, digits, dots, underscores or hyphens, starting with a letter or digit.
+
 ```bash
 run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 ./vulnscout refresh -p demo -v x86 --run-id "$run_id"
@@ -39,6 +42,12 @@ failed targets, skipped work and cancellation produce explicit coverage and an
 `incomplete` artifact; absence from a response is never itself a removal.
 Confirmed field clearing has `change_type: removal`. CVSS fields retain metric
 ID, version and author, and their before/after values include score and vector.
+NVD refresh updates only NVD-authored global CVSS metrics, preserving scores
+from scanners, vendors and custom assessments.
+
+Network-bound providers commit each completed request's data and coverage
+before the next external call, so cancelling a queued provider does not wait
+for an unrelated provider's network request.
 
 The explicit refresh command exits nonzero when any provider is incomplete.
 Its partial artifact remains exportable. Artifact exports exit nonzero on
@@ -84,7 +93,9 @@ flask --app src.bin.webapp export-refresh-changes --run-id "$run_id" --format js
 flask --app src.bin.webapp prune-refresh-runs
 ```
 
-Schedule `prune-refresh-runs` to physically delete expired rows and snapshots.
+Schedule `prune-refresh-runs` to physically delete expired runs, coverage targets
+and change snapshots in one transaction, including on SQLite without foreign-key
+enforcement.
 Expiry is enforced by read/export endpoints before physical deletion. Live
 vulnerability, package or field-history cleanup does not mutate retained
 refresh artifacts. Reads reconcile unfinished runs whose local owner process

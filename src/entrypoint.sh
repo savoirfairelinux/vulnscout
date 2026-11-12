@@ -657,6 +657,7 @@ cmd_scan() {
         local -a process_args=()
         local _process_exit=0
         [[ "${REFRESH_VULNERABILITY_DATA:-false}" == "true" ]] && process_args+=(--refresh-vulnerability-data)
+        [[ -n "${REFRESH_RUN_ID:-}" ]] && process_args+=(--refresh-run-id "$REFRESH_RUN_ID")
         if [[ -n "${MATCH_CONDITION:-}" ]]; then
             [[ "$PROJECT_SPECIFIED" == "true" ]] && process_args+=(--project "$PROJECT_NAME")
             [[ "$VARIANT_SPECIFIED" == "true" ]] && process_args+=(--variant "$VARIANT_NAME")

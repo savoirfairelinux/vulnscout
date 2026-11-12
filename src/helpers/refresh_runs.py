@@ -139,16 +139,16 @@ def visibility_for(vuln_ids: list[str]) -> dict[str, list[dict]]:
         package_ids = active_package_ids_for_scans(scans)
         for start in range(0, len(vuln_ids), 500):
             rows = db.session.execute(
-                db.select(Finding.vulnerability_id, Package)
+                db.select(Finding.vulnerability_id, Package.id, Package.name, Package.version, Package.supplier)
                 .select_from(Finding).join(Package).join(Observation).join(Scan)
                 .where(Finding.vulnerability_id.in_(vuln_ids[start:start + 500]), Observation.scan_id.in_(scans))
                 .where(db.or_(Scan.scan_type.is_(None), Scan.scan_type == "sbom", Finding.package_id.in_(package_ids)))
                 .distinct()
             ).all()
-            for vuln_id, package in rows:
+            for vuln_id, package_id, name, version, supplier in rows:
                 result[vuln_id].append({
-                    "package_id": str(package.id), "name": package.name, "version": package.version,
-                    "package": package.string_id,
+                    "package_id": str(package_id), "name": name, "version": version,
+                    "package": f"{name}@{version}" + (f"::{supplier}" if supplier else ""),
                     "variant_id": str(variant.id), "project_id": str(variant.project_id),
                 })
     return result
@@ -309,8 +309,9 @@ def tracked_refresh(source: str):
                 ctx.queue_id = run_id
             elif db.session.get(RefreshRun, run_id) is None:
                 create_run({source: list(ctx.options.get("ids", []))}, run_id=run_id)
-            add_targets(run_id, source, list(ctx.options.get("ids", [])))
             try:
+                add_targets(run_id, source, list(ctx.options.get("ids", [])))
+                db.session.commit()
                 with capture_source(run_id, source):
                     result = function(ctx)
                     db.session.commit()
