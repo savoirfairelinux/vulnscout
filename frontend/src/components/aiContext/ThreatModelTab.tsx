@@ -29,13 +29,16 @@ function TargetList({ draft, threat, index, errors, disabled, onChange }: Readon
             <fieldset {...describeField(path, errors)}>
                 <legend className="sr-only">{`Threat ${threat.id} targets`}</legend>
                 {options.length === 0 && <p className={HELP}>Add components or interactions first.</p>}
-                {options.map(option => (
-                    <label key={option.id} className="flex items-center gap-1.5 text-sm text-zinc-200">
-                        <input type="checkbox" checked={threat.target_ids.includes(option.id)} disabled={disabled}
-                            onChange={e => toggle(option.id, e.target.checked)} />
-                        {`${option.id} ${option.name}`.trim()}
-                    </label>
-                ))}
+                {/* About ten targets before the list scrolls. */}
+                <div className="max-h-[13rem] overflow-y-auto pr-1">
+                    {options.map(option => (
+                        <label key={option.id} className="flex items-center gap-1.5 text-sm text-zinc-200">
+                            <input type="checkbox" checked={threat.target_ids.includes(option.id)} disabled={disabled}
+                                onChange={e => toggle(option.id, e.target.checked)} />
+                            {`${option.id} ${option.name}`.trim()}
+                        </label>
+                    ))}
+                </div>
             </fieldset>
             <FieldErrorText path={path} errors={errors} />
         </td>

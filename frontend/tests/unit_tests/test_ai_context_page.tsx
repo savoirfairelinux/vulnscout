@@ -735,6 +735,15 @@ describe('AIContext page', () => {
             fireEvent.change(inputs[inputs.length - 1], { target: { value: name } });
         };
 
+        test('adding a row scrolls its height-capped table to the new row', async () => {
+            await openSystemTab();
+            const scroller = screen.getByRole('table', { name: 'Components' }).parentElement!;
+            Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 900 });
+            scroller.scrollTop = 0;
+            fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+            expect(scroller.scrollTop).toBe(900);
+        });
+
         test('STRIDE mode shows the four system fields and both tables with column headers', async () => {
             await openSystemTab();
 
