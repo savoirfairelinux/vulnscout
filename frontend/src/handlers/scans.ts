@@ -32,6 +32,8 @@ type Scan = {
     packages_added: number | null;
     packages_removed: number | null;
     packages_upgraded: number | null;
+    dependencies_added: number | null;
+    dependencies_removed: number | null;
     vulns_added: number | null;
     vulns_removed: number | null;
     vulns_unchanged: number | null;
@@ -111,6 +113,14 @@ type AssessmentDiffTarget = {
     package_supplier: string;
 };
 
+export type DependencyChanges = {
+    status: 'available' | 'no_previous_import' | 'incomparable_scope' | 'not_recorded' | 'not_applicable';
+    added_count: number | null;
+    removed_count: number | null;
+    added: { dependent: PackageDiffEntry; dependency: PackageDiffEntry }[] | null;
+    removed: { dependent: PackageDiffEntry; dependency: PackageDiffEntry }[] | null;
+};
+
 type ScanDiff = {
     scan_id: string;
     scan_type: string;
@@ -127,6 +137,7 @@ type ScanDiff = {
     packages_removed: PackageDiffEntry[];
     packages_upgraded: PackageUpgradeEntry[];
     packages_unchanged: PackageDiffEntry[];
+    dependency_changes?: DependencyChanges;
     vulns_added: string[];
     vulns_removed: string[];
     vulns_unchanged: string[];

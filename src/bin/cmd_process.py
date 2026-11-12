@@ -26,6 +26,7 @@ import click
 from ._console import Command, echo, print_message, verbose, warn
 import json
 import os
+import uuid
 from itertools import chain
 from typing import Callable, Iterable, TYPE_CHECKING
 from flask.cli import with_appcontext
@@ -228,6 +229,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
     jsonld_documents = []
     file_documents = []
+    parsed_documents: list[SBOMDocument] = []
     detached_cdx_documents: list[SBOMDocument] = []
     detached_cdx_refs: dict[SBOMDocument, dict[str, str]] = {}
 
@@ -329,6 +331,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 print_message(f"Warning: unknown format for {doc.path}, skipping", role="warning")
                 continue
             doc.dependencies_recorded = True
+            parsed_documents.append(doc)
         except FileNotFoundError:
             pass  # File was already merged into the DB and cleaned up — expected.
         except SQLAlchemyError as e:
@@ -387,6 +390,25 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 assessCtrl._by_vuln_pkg.setdefault((assessment.vuln_id, package_id), []).append(key)
     for current_scan_id in {document.scan_id for document, *_ in file_documents}:
         record_source_files([entry for entry in file_documents if entry[0].scan_id == current_scan_id])
+    # Snapshot only successfully parsed documents, after cross-document resolution
+    # and canonicalisation. Never recreate historical evidence from a live graph.
+    from ..models.package_dependency import PackageDependency
+
+    pending_snapshots = {
+        doc.id: doc for doc in parsed_documents
+        if doc.dependencies_recorded and doc.dependency_snapshot is None
+    }
+    snapshots: dict[uuid.UUID, set[tuple[str, str]]] = {doc_id: set() for doc_id in pending_snapshots}
+    if snapshots:
+        for doc_id, source, target in _db.session.execute(
+            _db.select(
+                PackageDependency.sbom_document_id, PackageDependency.package_id, PackageDependency.dependency_id,
+            )
+            .where(PackageDependency.sbom_document_id.in_(pending_snapshots))
+        ):
+            snapshots[doc_id].add((str(source), str(target)))
+        for doc_id, edges in snapshots.items():
+            pending_snapshots[doc_id].dependency_snapshot = [list(edge) for edge in sorted(edges)]
     _db.session.commit()
 
     _db.session.flush()

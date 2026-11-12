@@ -320,6 +320,7 @@ SCHEMAS: dict[str, Any] = {
             "finding_count", "package_count", "vuln_count", "assessment_count",
             "findings_added", "findings_removed", "findings_upgraded", "findings_unchanged",
             "packages_added", "packages_removed", "packages_upgraded", "packages_unchanged",
+            "dependencies_added", "dependencies_removed",
             "vulns_added", "vulns_removed", "vulns_unchanged",
             "assessments_added", "assessments_removed", "assessments_unchanged",
             "newly_detected_findings", "newly_detected_vulns",
@@ -348,6 +349,16 @@ SCHEMAS: dict[str, Any] = {
         **{key: _COUNT for key in ("package_count", "finding_count", "vuln_count", "assessment_count")},
     }, ("scan_id", "scan_type", "packages", "findings", "vulnerabilities", "assessments")),
     "ScanDiff": _object({
+        "dependency_changes": _object({
+            "status": {**_STRING, "enum": [
+                "available", "no_previous_import", "incomparable_scope", "not_recorded", "not_applicable",
+            ]},
+            "added_count": {**_COUNT, "nullable": True},
+            "removed_count": {**_COUNT, "nullable": True},
+            **{key: _array(_object({
+                "dependent": _ref("ScanPackage"), "dependency": _ref("ScanPackage"),
+            }), nullable=True) for key in ("added", "removed")},
+        }),
         "scan_id": _UUID, "scan_type": _STRING, "previous_scan_id": _NULL_UUID, "is_first": _BOOL,
         **{key: _COUNT for key in ("finding_count", "package_count", "vuln_count", "assessment_count")},
         **{f"findings_{key}": _array(_ref("ScanFinding")) for key in ("added", "removed", "unchanged")},
