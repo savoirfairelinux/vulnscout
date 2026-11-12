@@ -56,6 +56,11 @@ def env(app, monkeypatch):  # noqa: F811
 
     monkeypatch.setattr(agent, "_delete_session", delete)
     monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
+
+    async def logged_out(token):
+        return {"authenticated": False, "login": None}
+
+    monkeypatch.setattr(agent, "_auth_status", logged_out)
     monkeypatch.setattr(events_module, "HEARTBEAT_SECONDS", 0.05)
     runner = Runner()
     queue = aq.AgentQueue(app, runner=runner, events=EventBus(replay_size=64), autostart=False)

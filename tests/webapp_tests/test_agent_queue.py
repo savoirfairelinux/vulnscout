@@ -87,6 +87,11 @@ def env(app, monkeypatch):  # noqa: F811
 
     monkeypatch.setattr(agent, "_delete_session", delete)
     monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
+
+    async def logged_out(token):
+        return {"authenticated": False, "login": None}
+
+    monkeypatch.setattr(agent, "_auth_status", logged_out)
     fake, events = Fake(), Recorder()
     queue = aq.AgentQueue(app, runner=fake, events=events, autostart=False)
     yield SimpleNamespace(q=queue, fake=fake, events=events, deleted=deleted, ids=ids, app=app)
@@ -458,6 +463,44 @@ def test_the_queue_pauses_without_a_usable_connection_and_wakes(env, monkeypatch
     assert env.q.paused is None and env.q.run_once("chat") == request["id"]
     [created], _ = env.q.enqueue("main", "web", [_message()], require_ready=True)
     assert env.q.get_request(created["id"])["model"] == "test-model"
+
+
+def test_without_a_configuration_web_turns_run_as_the_logged_in_copilot_user(env, monkeypatch):
+    from src.routes import agent
+
+    checks = []
+
+    async def logged_in(token):
+        checks.append(token)
+        return {"authenticated": True, "login": "octo"}
+
+    _config("")
+    monkeypatch.setattr(agent, "_auth_status", logged_in)
+    [first], _ = env.q.enqueue("main", "web", [_message()], model="m")
+    [second], _ = env.q.enqueue("main", "web", [_message("again")], model="m")
+    assert env.q.run_once("chat") == first["id"] and env.q.run_once("chat") == second["id"]
+    assert checks == [None]  # checked once until the next wake
+    credentials = env.fake.calls[0].session.credentials
+    assert credentials.token is None and credentials.provider is None
+    # The CLI's readiness still requires a configuration; its rejection leaves the web queue running.
+    assert env.q.readiness()["code"] == "no_ai_config"
+    with pytest.raises(aq.NotReady):
+        env.q.enqueue("per-action", "CLI", [{"kind": "assess", "vuln_id": "CVE-2024-0001"}], require_ready=True)
+    assert env.q.paused is None and env.q.snapshot()["requests"] == []
+    [third], _ = env.q.enqueue("main", "web", [_message("third")], model="m")
+    assert env.q.run_once("chat") == third["id"]
+
+
+def test_a_failing_logged_in_user_check_pauses_the_queue(env, monkeypatch):
+    from src.routes import agent
+
+    async def unreachable(token):
+        raise OSError("offline")
+
+    _config("")
+    monkeypatch.setattr(agent, "_auth_status", unreachable)
+    env.q.enqueue("main", "web", [_message()], model="m")
+    assert env.q.run_once("chat") is None and env.q.paused["code"] == "no_ai_config"
 
 
 def test_an_inconclusive_sign_in_check_runs_the_turn(env, monkeypatch):

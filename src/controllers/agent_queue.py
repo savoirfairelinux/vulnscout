@@ -320,6 +320,7 @@ class AgentQueue:
         self._revision = 0  # bumped when the connection or model changed; tabs reload their setup on a change
         self._stopping = False
         self._verified_token: str | None = None
+        self._verified_logged_in = False
         self._threads: dict[str, threading.Thread] = {}
         self._guarded: GuardedApi | None = None
 
@@ -407,8 +408,12 @@ class AgentQueue:
 
     # ------------------------------------------------------------ readiness
 
-    def _load_credentials(self) -> tuple[AgentCredentials | None, dict[str, str] | None]:
-        """The configured credentials, or why there are none ({code, error}); a GitHub token is checked once."""
+    def _load_credentials(self, strict: bool = False) -> tuple[AgentCredentials | None, dict[str, str] | None]:
+        """The configured credentials, or why there are none ({code, error}); a GitHub token is checked once.
+
+        Without a configured provider or token, web turns run as the Copilot user logged in on this
+        machine, as the browser chat always did; ``strict`` (the CLI's readiness) requires a configuration.
+        """
         from ..bin._ai_runner import GITHUB_SIGNED_OUT, NO_AI_CONFIG
 
         agent = _agent()
@@ -418,7 +423,18 @@ class AgentQueue:
             return None, {"code": "invalid_config", "error": f"Invalid AI provider configuration: {error}"}
         credentials = root.credentials
         if not credentials.token and not credentials.provider:
-            return None, {"code": "no_ai_config", "error": NO_AI_CONFIG}
+            if strict:
+                return None, {"code": "no_ai_config", "error": NO_AI_CONFIG}
+            if not self._verified_logged_in:
+                try:
+                    auth = asyncio.run(agent._auth_status(None))
+                except Exception:
+                    _logger.warning("Could not check the logged-in Copilot user", exc_info=True)
+                    auth = {"authenticated": False}
+                if not auth["authenticated"]:
+                    return None, {"code": "no_ai_config", "error": NO_AI_CONFIG}
+                self._verified_logged_in = True
+            return credentials, None
         token = credentials.token
         if token and not credentials.provider and token != self._verified_token:
             try:
@@ -437,7 +453,7 @@ class AgentQueue:
 
         ``code`` is no_ai_config, invalid_config or github_signed_out.
         """
-        return self._load_credentials()[1]
+        return self._load_credentials(strict=True)[1]
 
     @staticmethod
     def _configured_model() -> tuple[str, bool]:
@@ -529,11 +545,13 @@ class AgentQueue:
             raise ValueError(f"Send between 1 and {MAX_ACTIONS} actions.")
         context = agent._validated_context(context)
         if require_ready:
-            self.wake()
+            with self._lock:
+                self._verified_token = None  # check the sign-in again for this caller
             if problem := self.readiness():
-                with self._cond:
-                    self._pause(problem["code"], problem["error"])
+                # Not a pause: the strict check is the caller's own (web turns may still run as the
+                # logged-in Copilot user); the workers pause on a problem they meet themselves.
                 raise NotReady(problem["code"], problem["error"])
+            self.wake()
         selected = model
         if selected is None:
             configured, connected = self._configured_model()
@@ -910,6 +928,7 @@ class AgentQueue:
         """Resume a paused queue (after sign-in, a provider or model change): requests are retried."""
         with self._cond:
             self._verified_token = None
+            self._verified_logged_in = False
             if self._paused is not None:
                 self._paused = None
                 self._publish_queue()

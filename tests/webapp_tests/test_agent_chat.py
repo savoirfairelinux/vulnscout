@@ -1233,7 +1233,11 @@ def test_device_sign_in_wakes_the_paused_queue(client, monkeypatch):
     async def signed_in(token):
         return {"authenticated": True, "login": "octocat"}
 
+    async def logged_out(token):
+        return {"authenticated": False, "login": None}
+
     monkeypatch.setenv("VULNSCOUT_MCP_SERVER_PATH", __file__)
+    monkeypatch.setattr(agent, "_auth_status", logged_out)  # no Copilot user logged in on this machine
     queue = _queue()
     [request], _ = queue.enqueue("main", "web", [{"kind": "message", "text": "Hello"}], model="gpt-4o")
     assert queue.run_once("chat") is None and queue.paused["code"] == "no_ai_config"
