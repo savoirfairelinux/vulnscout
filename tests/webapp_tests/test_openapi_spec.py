@@ -701,3 +701,21 @@ def test_vulnerability_refresh_response_envelope_matches_runtime(client, app, co
     schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     _assert_payload_matches(spec, schema, response.get_json())
     assert response.get_json()["vulnerabilities"][0]["id"] == vuln_id
+
+
+def test_individual_refresh_response_matches_openapi(client, app, contract_data, monkeypatch):
+    from src.models.vulnerability import Vulnerability
+    from src.routes import vulnerabilities
+
+    vuln_id = "GHSA-ABCD-EFGH-1234"
+    with app.app_context():
+        Vulnerability.create_record(id=vuln_id, description="Advisory", status="high")
+        db.session.commit()
+    monkeypatch.setattr(vulnerabilities.VulnerabilitiesController, "_fetch_ghsa_published",
+                        lambda ghsa_id: "2026-01-01T00:00:00Z")
+    response = client.post(f"/api/vulnerabilities/{vuln_id}/refresh", json={"mode": "api"})
+    assert response.status_code == 200
+    spec = client.get("/api/openapi").get_json()
+    operation = spec["paths"]["/api/vulnerabilities/{vuln_id}/refresh"]["post"]
+    _assert_payload_matches(spec, operation["responses"]["200"]["content"]["application/json"]["schema"],
+                            response.get_json())

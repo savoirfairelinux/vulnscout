@@ -30,6 +30,7 @@ from ..models.refresh_run import (
 from .history_source import refresh_history
 
 _capture: ContextVar[tuple[str, str] | None] = ContextVar("refresh_run_capture", default=None)
+_single_run: ContextVar[str | None] = ContextVar("single_refresh_run", default=None)
 
 # Identifiers that collide with fixed /api/refresh-runs/<name> routes.
 RESERVED_RUN_IDS = frozenset({"latest"})
@@ -204,7 +205,8 @@ def create_run(targets: dict[str, list[str]], *, run_id: str | None = None,
         raise ValueError("Refresh run identity already exists")
     targets = {source: list(dict.fromkeys(ids)) for source, ids in targets.items()}
     now = datetime.now(timezone.utc)
-    scope = scope or {"project_id": None, "variant_id": None}
+    scope = {**(scope or {"project_id": None, "variant_id": None})}
+    scope.setdefault("refresh_type", "full")
     db.session.add(RefreshRun(
         run_id=run_id, started_at=now, finished_at=None if targets else now, scope=scope,
         owner={"host": socket.gethostname(), "pid": os.getpid(), "process_start": _process_start(os.getpid())},
@@ -326,24 +328,31 @@ def tracked_refresh(source: str):
     return decorate
 
 
+def single_refresh_scope(identifier: str) -> dict:
+    """Validate the initiating scope before recording or executing a refresh."""
+    from flask import abort, request
+    scope = {key: request.args.get(key) for key in ("project_id", "variant_id")}
+    if any(scope.values()):
+        links = visibility_for([identifier])[identifier]
+        if not any(all(not scope[key] or entry[key] == scope[key] for key in scope) for entry in links):
+            abort(404, description="Vulnerability outside selected scope")
+    return scope
+
+
 def tracked_single_refresh(source: str):
     """Keep existing single-refresh responses while exposing exact artifact identity."""
     def decorate(function):
         @wraps(function)
         def execute(*args, **kwargs):
-            from flask import make_response, request
+            from flask import make_response
             from ..models.vulnerability import Vulnerability
             identifier = (args[0] if args else next(iter(kwargs.values()))).upper()
             if db.session.get(Vulnerability, identifier) is None:
                 return function(*args, **kwargs)
-            scope = {key: request.args.get(key) for key in ("project_id", "variant_id")}
-            if any(scope.values()):
-                from flask import abort
-                links = visibility_for([identifier])[identifier]
-                if not any(all(not scope[key] or entry[key] == scope[key]
-                               for key in ("project_id", "variant_id")) for entry in links):
-                    abort(404, description="Vulnerability outside selected scope")
-            run_id = create_run({source: [identifier]}, scope=scope)
+            run_id = _single_run.get()
+            if run_id is None:
+                scope = single_refresh_scope(identifier)
+                run_id = create_run({source: [identifier]}, scope={**scope, "refresh_type": "individual"})
             try:
                 with capture_source(run_id, source):
                     response = make_response(function(*args, **kwargs))
@@ -359,6 +368,15 @@ def tracked_single_refresh(source: str):
             return response
         return execute
     return decorate
+
+
+@contextmanager
+def single_refresh_run(run_id: str) -> Iterator[None]:
+    token = _single_run.set(run_id)
+    try:
+        yield
+    finally:
+        _single_run.reset(token)
 
 
 def capture_changes(session, rows: list[dict]) -> None:

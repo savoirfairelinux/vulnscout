@@ -22,12 +22,13 @@ export type RefreshChange = {
 export type RefreshRunMetadata = {
     run_id: string;
     scope: { project_id: string | null; variant_id: string | null };
+    refresh_type?: 'full' | 'individual' | 'unknown';
     sources: string[];
     source_status: Record<string, 'pending' | 'complete' | 'incomplete'>;
     started_at: string;
     finished_at: string | null;
     status: 'running' | 'complete' | 'incomplete';
-    summary: { total_changes: number; changed_vulnerabilities: number; first_enrichments: number };
+    summary: { refreshed_vulnerabilities?: number; total_changes: number; changed_vulnerabilities: number; first_enrichments: number };
 };
 export type RefreshRun = RefreshRunMetadata & {
     coverage: RefreshCoverage[];
@@ -51,6 +52,7 @@ export type RefreshFilters = RefreshScope & {
     change_type?: 'addition' | 'modification' | 'removal';
     limit?: number;
     offset?: number;
+    hide_individual?: boolean;
 };
 
 async function get<T>(path: string, filters: RefreshFilters, signal?: AbortSignal): Promise<T | null> {

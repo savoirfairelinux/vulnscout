@@ -1567,6 +1567,7 @@ def init_app(app: Flask) -> None:
         return jsonify({"vulnerabilities": [rec.to_dict()]}), 200
 
     @app.route('/api/vulnerabilities/<cve_id>/euvd-refresh', methods=['POST'])
+    @tracked_single_refresh("euvd")
     @refresh_history("euvd")
     def refresh_single_cve_euvd(cve_id: str) -> ResponseReturnValue:
         """Refresh ENISA EUVD and EU KEV data for a single CVE.
@@ -1668,3 +1669,37 @@ def init_app(app: Flask) -> None:
         data["texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[ghsa_id_upper]))
 
         return jsonify({"vulnerabilities": [data]}), 200
+
+    @app.route('/api/vulnerabilities/<vuln_id>/refresh', methods=['POST'])
+    def refresh_individual(vuln_id: str) -> ResponseReturnValue:
+        """Refresh all relevant providers as one individual refresh run.
+
+        OpenAPI:
+        body NvdRefreshRequest optional NVD mode; use api for the live provider.
+        response 200 IndividualRefreshResponse Per-provider outcomes and refresh run identity.
+        response 404 Error Vulnerability not found or outside the selected scope.
+        """
+        from flask import abort, current_app, make_response
+        from ..helpers.refresh_runs import create_run, single_refresh_run, single_refresh_scope
+
+        identifier = vuln_id.upper()
+        if db.session.get(Vulnerability, identifier) is None:
+            abort(404, description="Vulnerability not found")
+        scope = single_refresh_scope(identifier)
+        providers = ([("ghsa", refresh_single_ghsa)] if identifier.startswith("GHSA-") else
+                     [("nvd", refresh_single_cve), ("epss", refresh_single_cve_epss),
+                      ("euvd", refresh_single_cve_euvd)])
+        run_id = create_run({source: [identifier] for source, _ in providers},
+                            scope={**scope, "refresh_type": "individual"})
+        results = {}
+        with single_refresh_run(run_id):
+            for source, refresh in providers:
+                try:
+                    response = make_response(refresh(identifier))
+                    results[source] = {"status": response.status_code, "body": response.get_json()}
+                except Exception:
+                    current_app.logger.exception("Individual %s refresh failed for %s", source, identifier)
+                    results[source] = {"status": 500, "body": {"error": "Source refresh failed"}}
+        response = jsonify({"run_id": run_id, "results": results})
+        response.headers["X-Refresh-Run-ID"] = run_id
+        return response
