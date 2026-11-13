@@ -27,15 +27,22 @@ def record_cyclonedx_files(
     Only nesting, occurrences, and explicit local formulation references establish
     package ownership. Dependency edges and other documents are deliberately ignored.
     """
-    build_ids = db.select(SBOMBuild.id).where(SBOMBuild.sbom_document_id == document.id)
+    file_prefix = f"urn:vulnscout:cdx:{document.id}:"
+    build_ids = db.select(SBOMBuild.id).where(
+        SBOMBuild.sbom_document_id == document.id, SBOMBuild.spdx_id.startswith(file_prefix),
+    )
     db.session.execute(db.delete(SBOMFileBuild).where(db.or_(
-        SBOMFileBuild.file_document_id == document.id, SBOMFileBuild.build_id.in_(build_ids),
+        db.and_(SBOMFileBuild.file_document_id == document.id,
+                SBOMFileBuild.spdx_id.startswith(file_prefix)),
+        SBOMFileBuild.build_id.in_(build_ids),
     )))
-    db.session.execute(db.delete(PackageSourceFile).where(db.or_(
-        PackageSourceFile.sbom_document_id == document.id, PackageSourceFile.file_document_id == document.id,
-    )))
-    db.session.execute(db.delete(SBOMFile).where(SBOMFile.sbom_document_id == document.id))
-    db.session.execute(db.delete(SBOMBuild).where(SBOMBuild.sbom_document_id == document.id))
+    db.session.execute(db.delete(PackageSourceFile).where(PackageSourceFile.spdx_id.startswith(file_prefix)))
+    db.session.execute(db.delete(SBOMFile).where(
+        SBOMFile.sbom_document_id == document.id, SBOMFile.spdx_id.startswith(file_prefix),
+    ))
+    db.session.execute(db.delete(SBOMBuild).where(
+        SBOMBuild.sbom_document_id == document.id, SBOMBuild.spdx_id.startswith(file_prefix),
+    ))
     try:
         version = tuple(int(part) for part in data.get("specVersion", "").split("."))
     except ValueError:
