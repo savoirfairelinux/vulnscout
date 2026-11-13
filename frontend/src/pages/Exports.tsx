@@ -70,7 +70,7 @@ function Exports({ projectId, onAgentContextChange }: Readonly<Props>) {
         <div className="space-y-4">
             <div>
                 <h1 className="text-2xl font-bold text-white">Export</h1>
-                <p className="mt-1 text-sm text-neutral-400">Generate reports, SBOM files and vulnerability history exports for the selected project.</p>
+                <p className="mt-1 text-sm text-neutral-400">Generate reports and SBOM files for the selected project.</p>
             </div>
 
             <div className="flex items-center gap-3 rounded-lg border border-sky-800/70 bg-sky-950/30 px-4 py-3 text-sm text-sky-100">

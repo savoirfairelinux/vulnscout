@@ -18,6 +18,24 @@ This view does not run scanners or duplicate the
 vulnerability's
 [Data history](web-vulnerability-details.md#data-history).
 
+## Exporting Vulnerability History
+
+Use **Export history** in the **Refresh History** toolbar to download recorded
+vulnerability field changes for the selected project. All project variants are
+selected initially; adjust the variant selection before continuing. The export
+uses the selected variants' current active SBOM scope and downloads directly as
+JSON or CSV, without creating a queued operation.
+
+Choose a **Time window** or the **Latest refresh**. A time window requires an
+inclusive **Since** time and accepts an optional exclusive **Until** time,
+entered in the local timezone. Latest refresh groups changes by the most recent
+refresh that updated each vulnerability and only offers refresh providers as
+sources. Both modes can be filtered by source.
+
+An empty result is a valid download, not proof that a refresh completed
+successfully. Concurrent operations can contribute changes in the same time
+window. Refresh history can be exported; importing history is not supported.
+
 ## Scope and Run Selection
 
 The project and variant selector controls visibility. A shared CVE can appear
