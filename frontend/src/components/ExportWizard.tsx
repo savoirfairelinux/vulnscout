@@ -32,6 +32,10 @@ type Props = {
     onAgentContextChange?: (context: AgentViewContext) => void;
     isOpen: boolean;
     embedded?: boolean;
+    historyOnly?: boolean;
+    scopeLoading?: boolean;
+    scopeError?: string;
+    onRetryScopeLoad?: () => void;
     project?: Project;
     variants: Variant[];
     documents: ExportDocument[];
@@ -44,9 +48,10 @@ const reportCategories = [
     ["custom", "Custom reports"],
 ] as const;
 
-export default function ExportWizard({ isOpen, embedded = false, project, variants, documents, onClose, onAgentContextChange }: Readonly<Props>) {
+export default function ExportWizard({ isOpen, embedded = false, historyOnly = false, scopeLoading = false, scopeError,
+    onRetryScopeLoad, project, variants, documents, onClose, onAgentContextChange }: Readonly<Props>) {
     const [step, setStep] = useState<WizardStep>("scope");
-    const [exportType, setExportType] = useState<ExportType | null>(null);
+    const [exportType, setExportType] = useState<ExportType | null>(historyOnly ? "history" : null);
     const [mode, setMode] = useState<ExportMode>("consolidated");
     const [category, setCategory] = useState("all");
     const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -100,7 +105,9 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         groups.set(selection.name, group);
         return groups;
     }, new Map<string, Selection[]>()));
-    const activeSteps: WizardStep[] = ["scope", "type", exportType === "history" ? "history" : "documents"];
+    const activeSteps: WizardStep[] = historyOnly
+        ? ["scope", "history"]
+        : ["scope", "type", exportType === "history" ? "history" : "documents"];
     const stepLabels: Record<WizardStep, string> = {
         scope: "Scope",
         type: "Export type",
@@ -112,7 +119,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
     useEffect(() => {
         if (!isOpen) return;
         setStep("scope");
-        setExportType(null);
+        setExportType(historyOnly ? "history" : null);
         setMode("consolidated");
         setCategory("all");
         setSelected(new Set());
@@ -125,7 +132,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         setHistorySource("");
         setHistoryDownloaded(false);
         dialogRef.current?.focus();
-    }, [isOpen]);
+    }, [historyOnly, isOpen]);
 
     useEffect(() => {
         if (isOpen) setSelectedVariantIds(new Set(variants.map(variant => variant.id)));
@@ -244,7 +251,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         && (!historyUntil || (Number.isFinite(untilTime) && untilTime > sinceTime)));
 
     const launchHistoryExport = async () => {
-        if (!project || selectedVariantIds.size === 0 || !historyRangeValid) return;
+        if (scopeLoading || scopeError || !project || selectedVariantIds.size === 0 || !historyRangeValid) return;
         setExporting(true);
         setError(null);
         setHistoryDownloaded(false);
@@ -275,7 +282,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                     variant="primary"
                     onClick={step === "history" ? launchHistoryExport : launchExport}
                     disabled={exporting || (step === "history"
-                        ? !project || selectedVariantIds.size === 0 || !historyRangeValid
+                        ? scopeLoading || !!scopeError || !project || selectedVariantIds.size === 0 || !historyRangeValid
                         : selected.size === 0)}
                 >
                     <FontAwesomeIcon icon={faDownload} className="mr-2" aria-hidden="true" />
@@ -285,7 +292,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                 <ModalButton
                     variant="primary"
                     onClick={() => navigateToStep(activeSteps[stepIndex + 1])}
-                    disabled={(step === "scope" && (!project || selectedVariantIds.size === 0))
+                    disabled={(step === "scope" && (scopeLoading || !!scopeError || !project || selectedVariantIds.size === 0))
                         || (step === "type" && exportType === null)}
                 >Next</ModalButton>
             )}
@@ -297,7 +304,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
             isOpen={isOpen}
             embedded={embedded}
             compactEmbedded={embedded}
-            title="Generate export"
+            title={historyOnly ? "Export history" : "Generate export"}
             subtitle={`Step ${stepIndex + 1} of ${activeSteps.length}`}
             titleId="export-wizard-title"
             onClose={() => onClose?.()}
@@ -312,7 +319,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
             contentClassName={embedded ? "min-h-0 px-6 py-5 md:px-6 md:py-5" : "min-h-80 px-6 py-5 md:px-6 md:py-5"}
             footer={footer}
             headerContent={
-                <ol className={`${embedded ? "mt-3" : "mt-4"} grid grid-cols-3 gap-3 text-xs`}>
+                <ol className={`${embedded ? "mt-3" : "mt-4"} grid ${activeSteps.length === 2 ? "grid-cols-2" : "grid-cols-3"} gap-3 text-xs`}>
                     {activeSteps.map((currentStep, index) => (
                         <li key={currentStep} className={index <= stepIndex ? "text-cyan-300" : "text-neutral-500"}>
                             <span aria-hidden="true" className="mr-1 font-semibold">{index + 1}.</span>{stepLabels[currentStep]}
@@ -323,7 +330,12 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         >
             {step === "scope" && <>
                 <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Project scope</h3>
-                {project ? <>
+                {scopeLoading ? <p role="status" className="mt-4 text-sm text-neutral-300">Loading project and variant scope…</p>
+                    : scopeError ? <div role="alert" className="mt-4 space-y-3 rounded border border-red-700 bg-red-950/40 p-3 text-sm text-red-300">
+                        <p>{scopeError}</p>
+                        {onRetryScopeLoad && <ModalButton onClick={onRetryScopeLoad}>Retry loading scope</ModalButton>}
+                    </div>
+                        : project ? <>
                     <p className="mt-1 text-sm text-neutral-400">Choose the variants to export from <span className="font-semibold text-white">{project.name}</span>.</p>
                     <p className="mt-1 text-xs text-neutral-500">Use the project selector in the navigation bar to export another project.</p>
                     <div className="mt-4 rounded-lg border border-slate-600 bg-slate-900/40 p-4">
@@ -342,12 +354,12 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                         </div>
                         {variants.length === 0 && <p className="mt-3 text-sm italic text-neutral-500">This project has no variants.</p>}
                     </div>
-                </> : <p className="mt-4 rounded border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-200">Select a project from the navigation bar before creating an export.</p>}
+                </> : <p role="alert" className="mt-4 rounded border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-200">Select a project from the navigation bar before creating an export.</p>}
             </>}
 
             {step === "type" && <>
                 <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">What do you want to export?</h3>
-                <p className="mt-1 text-sm text-neutral-400">Choose one export family. You will select its individual files in the final step.</p>
+                <p className="mt-1 text-sm text-neutral-400">Choose one export family and configure its options in the final step.</p>
                 <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                     <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${exportType === "reports" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
                         <input type="radio" name="export-type" checked={exportType === "reports"} onChange={() => { setExportType("reports"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
@@ -358,11 +370,6 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                         <input type="radio" name="export-type" checked={exportType === "sbom"} onChange={() => { setExportType("sbom"); setMode("per_variant"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
                         <FontAwesomeIcon icon={faShieldHalved} className="mt-0.5 text-cyan-400" aria-hidden="true" />
                         <span><span className="block font-medium text-white">SBOM files</span><span className="mt-1 block text-xs text-gray-300">Generated per variant and downloaded together as a ZIP archive.</span></span>
-                    </label>
-                    <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${exportType === "history" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
-                        <input type="radio" name="export-type" checked={exportType === "history"} onChange={() => { setExportType("history"); setSelected(new Set()); setEnabledDocuments(new Set()); setError(null); setHistoryDownloaded(false); }} className="mt-1 accent-cyan-500" />
-                        <FontAwesomeIcon icon={faFileLines} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                        <span><span className="block font-medium text-white">Vulnerability history</span><span className="mt-1 block text-xs text-gray-300">Recorded field changes within a time window or from the latest refresh, downloaded directly as JSON or CSV.</span></span>
                     </label>
                 </div>
                 {exportType === "reports" && <section className="mt-4 border-t border-neutral-700 pt-4" aria-labelledby="output-layout-heading">

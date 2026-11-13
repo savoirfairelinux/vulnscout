@@ -10,6 +10,7 @@ import type { RefreshChange, RefreshCoverage, RefreshFilters, RefreshRun, Refres
 import { describeChange, fieldLabel, formatHistoryValue, sourceLabel } from '../handlers/vulnerabilityHistory';
 import { ROUTES } from '../routes';
 import RefreshControls from '../components/RefreshControls';
+import RefreshHistoryExport from '../components/RefreshHistoryExport';
 import ModalShell, { ModalActions, ModalButton } from '../components/ModalShell';
 import Vulnerabilities, { type Vulnerability } from '../handlers/vulnerabilities';
 
@@ -167,6 +168,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                 <FontAwesomeIcon icon={faArrowsRotate} />
                 Reload results
             </button>}
+            {!comparisonScope && <RefreshHistoryExport projectId={projectId} />}
         </>} />;
 
     if (comparisonScope) return <section className="w-full px-6 py-6 space-y-3 text-gray-800 dark:text-neutral-200" aria-label="Refresh changes">
