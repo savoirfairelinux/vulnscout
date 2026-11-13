@@ -23,7 +23,7 @@ jest.mock('../../src/handlers/operationStore', () => {
 });
 
 const run: RefreshRun = {
-    run_id: 'persisted-run', scope: { project_id: 'project-a', variant_id: null },
+    run_id: 'persisted-run', scope: { project_id: 'project-a', variant_id: null }, refresh_type: 'full',
     sources: ['nvd', 'epss'], started_at: '2026-10-30T12:00:00Z', finished_at: '2026-10-30T12:01:00Z',
     source_status: { nvd: 'complete', epss: 'complete' },
     status: 'complete',
@@ -32,7 +32,7 @@ const run: RefreshRun = {
         { vuln_id: 'CVE-1', source: 'epss', status: 'complete', error: null },
         { vuln_id: 'CVE-2', source: 'nvd', status: 'skipped', error: 'Not supported' },
     ],
-    summary: { total_changes: 2, changed_vulnerabilities: 1, first_enrichments: 0 },
+    summary: { refreshed_vulnerabilities: 2, total_changes: 2, changed_vulnerabilities: 1, first_enrichments: 0 },
     changes: [{
         vuln_id: 'CVE-1', source: 'nvd', field: 'description', before: 'Old description',
         after: 'New description', kind: 'changed', change_type: 'modification', changed_at: '2026-10-30T12:00:30Z',
@@ -89,6 +89,8 @@ describe('Refresh overview', () => {
         expect(entry).toHaveTextContent('NVD');
         expect(entry).toHaveTextContent('EPSS');
         expect(entry).toHaveTextContent('complete');
+        expect(entry).toHaveTextContent('Full refresh');
+        expect(entry).toHaveTextContent('2 vulnerabilities refreshed');
         expect(entry).toHaveTextContent('1 vulnerabilities changed');
         expect(entry.querySelector('time')).toHaveAttribute('dateTime', run.started_at);
         expect(latest).toHaveBeenCalledWith({ project_id: 'project-a', variant_id: 'variant-a' }, expect.any(AbortSignal));
@@ -114,6 +116,25 @@ describe('Refresh overview', () => {
         const coverage = screen.getByRole('table', { name: 'Vulnerability coverage' });
         expect(within(coverage).getByRole('row', { name: 'CVE-2 NVD skipped Not supported' })).toBeInTheDocument();
         expect(screen.getByRole('table', { name: 'Provider coverage' })).toHaveTextContent('NVD');
+    });
+
+    test('labels individual refreshes and filters them on the server', async () => {
+        list.mockResolvedValueOnce({ runs: [{ ...run, refresh_type: 'individual', sources: ['nvd', 'epss', 'euvd'],
+            summary: { refreshed_vulnerabilities: 1, changed_vulnerabilities: 0, total_changes: 0, first_enrichments: 0 } }],
+            total: 1, limit: 20, offset: 0 });
+        list.mockResolvedValueOnce({ runs: [], total: 0, limit: 20, offset: 0 });
+        show();
+        const entry = await screen.findByRole('article');
+        expect(entry).toHaveTextContent('Individual refresh');
+        expect(entry).toHaveTextContent('ENISA EUVD / EU KEV');
+        expect(entry).toHaveTextContent('1 vulnerabilities refreshed');
+        expect(entry).toHaveTextContent('0 vulnerabilities changed');
+        expect(entry).toHaveTextContent('0 field changes');
+        await userEvent.click(screen.getByRole('checkbox', { name: 'Hide individual refreshes' }));
+        await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({
+            hide_individual: true, offset: 0, project_id: 'project-a', variant_id: 'variant-a',
+        }), expect.any(AbortSignal)));
+        expect(screen.queryByRole('article')).not.toBeInTheDocument();
     });
 
     test('filters on the server before pagination and preserves scope on every request', async () => {
