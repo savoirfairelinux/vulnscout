@@ -35,11 +35,11 @@ READ_TOOLS = (
     "list_custom_assessments",
     "list_codebase_files", "read_codebase_file", "search_codebase",
     "list_dependency_documents", "list_dependency_packages", "get_package_dependencies", "get_package_source_files",
-    "get_ai_context_form_guide",
+    "get_ai_context_form_guide", "read_import_source",
 )
 WRITE_TOOLS = (
     "write_assessment", "update_ai_assessment", "update_project_context",
-    "update_variant_context", "update_variant_threat_model", "write_assessment_review",
+    "update_variant_context", "propose_variant_threat_model", "write_assessment_review",
 )
 COOKIE = "vulnscout_agent"
 MAX_SCOPE_VARIANTS = 1000
@@ -721,9 +721,10 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
                 "and follow it: read the variant's saved context and use uploads and SBOM packages as "
                 "evidence, focus on the tab in view.section, ask for missing facts one topic at a time, and "
                 "answer with copy-ready values per field label. You cannot see the user's unsaved edits. "
-                "Form help is guidance only: do not call update_project_context, update_variant_context or "
-                "update_variant_threat_model "
-                "unless the user explicitly asks to save. "
+                "Form help is guidance only: do not call update_project_context or update_variant_context "
+                "unless the user explicitly asks to save. To change the System, Threat model or Risks tabs, "
+                "call propose_variant_threat_model: it stores a draft that the user reviews as unsaved "
+                "changes on the AI Context page, then saves or discards. "
                 "Explain what you changed. If a tool returns an error, report it; do not invent results."
             )},
             "enable_config_discovery": False,

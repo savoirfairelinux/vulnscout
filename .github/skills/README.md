@@ -43,12 +43,18 @@ confirm to let the skill save them through the MCP tools. It never saves
 without that confirmation. The input is treated as untrusted data; the skill
 does not extract archives, so extract them first and give it the directory.
 
-It is for external clients only; the built-in Agent does not load it. Copy or
-symlink `ai-context-import/` into the agent skills folder described below, then
-ask, for example, “Fill the AI Context of project demo, variant default, from
-./threagile-output/”. With the VulnScout MCP server connected, it reads the
-saved context to continue row IDs after the existing ones. Reading PDFs needs
+External clients: copy or symlink `ai-context-import/` into the agent skills
+folder described below, then ask, for example, “Fill the AI Context of project
+demo, variant default, from ./threagile-output/”. With the VulnScout MCP
+server connected, it reads the saved context to continue row IDs after the
+existing ones, and can send the values as a draft
+(`propose_variant_threat_model`) instead of saving. Reading PDFs needs
 `pdftotext` (poppler-utils) or the `pypdf` Python package.
+
+The built-in Agent runs it in embedded mode from **Fill from document** on
+the AI Context page: the document is uploaded to VulnScout, read with
+`read_import_source`, and the result is stored as a draft that the user
+reviews as unsaved changes, then saves or discards. The agent never saves it.
 
 ## Vulnerability Assessment Skill
 

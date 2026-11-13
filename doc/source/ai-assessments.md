@@ -335,7 +335,32 @@ naming the exact option to pick (for example `C1: OTA updater`). Each code block
 has its own copy button. Unconfirmed values are marked `[confirm: ...]`. The
 Agent does not save the form unless you explicitly ask it to; otherwise paste
 the values and click **Save changes**. It only sees saved context, not unsaved
-edits, and the page reloads after the Agent saves.
+edits, and the page reloads after the Agent saves. The embedded Agent never
+saves the System, Threat model and Risks tabs directly: it proposes a draft
+with `propose_variant_threat_model`, which opens for review as described in
+[Fill the threat model from a document](#fill-the-threat-model-from-a-document).
+
+### Fill the threat model from a document
+
+On a variant of the **AI Context** page, **Fill from document with AI…** sends
+a local document (a Threagile `threagile.yaml`, `risks.json` or `report.pdf`,
+another threat-model export, an architecture PDF, Markdown, YAML or JSON) to
+the embedded agent. The agent follows the `ai-context-import` skill and
+prepares a **draft** of the System, Threat model and Risks tabs (and, when the
+document states them, the Context texts). It never saves.
+
+- The button is disabled while the variant has unsaved changes: save or
+  discard them first.
+- While the action is queued or running, the variant is read-only. A queued
+  action can be cancelled.
+- The draft opens in the editor as **unsaved changes**, with a summary such
+  as "+3 components, +5 threats". Review every tab, then **Save changes** to
+  accept it or **Discard AI draft** to reject it.
+- The document and the draft are kept in the cache only, never in the
+  database, and are deleted when the draft is saved or discarded.
+- If the context is saved after the draft was made, the draft is merged onto
+  the saved context when it is opened. When both changed the same item, the
+  draft is not loaded; the page lists the conflicts and offers to discard it.
 
 ## Codebase references on the AI Context page
 

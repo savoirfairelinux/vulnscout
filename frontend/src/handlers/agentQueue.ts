@@ -7,7 +7,9 @@ export const AGENT_CHAT_SOURCE = 'Agent chat';
 /** Finished action conversations kept live on the backend (which caps active threads at 20). */
 const LIVE_CONVERSATION_LIMIT = 12;
 const HISTORY_LIMIT = 50;
-export const agentActionLabels = { assess: 'Assess', review: 'Review', message: 'Message' } as const;
+export const agentActionLabels = {
+    assess: 'Assess', review: 'Review', message: 'Message', 'context-import': 'Fill',
+} as const;
 
 export type AgentTask = QueuedAgentMessage & {
     source: string;

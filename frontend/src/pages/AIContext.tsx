@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import type { ReactNode } from "react";
+import type { ChangeEvent, ReactNode } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBook } from "@fortawesome/free-solid-svg-icons";
+import { faBook, faFileImport } from "@fortawesome/free-solid-svg-icons";
 import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import Context, { ContextSaveError } from "../handlers/context";
 import Assessments from "../handlers/assessments";
-import type { ContextFile, ImportResult, VariantDraft } from "../handlers/context";
+import type { AiContextDraft, ContextFile, ImportResult, VariantDraft } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
@@ -19,8 +19,13 @@ import ProjectDescriptionPanel from "../components/aiContext/ProjectDescriptionP
 import ContextTransferControls, { ImportDetails } from "../components/aiContext/ContextTransferControls";
 import VariantEditor, { type VariantTab } from "../components/aiContext/VariantEditor";
 import CopyFromDialog, { type CopySourceProject } from "../components/aiContext/CopyFromDialog";
-import { ERROR } from "../components/aiContext/styles";
-import { AGENT_WRITE_EVENT, type AgentViewContext } from "../types/agent";
+import { BUTTON_SECONDARY, ERROR } from "../components/aiContext/styles";
+import { AGENT_WRITE_EVENT, type AgentViewContext, type QueuedAgentMessage } from "../types/agent";
+import { agentActionState, enqueueAgentMessages, openAgentChat, removeAgentTask } from "../handlers/agentQueue";
+import useAgentQueue from "../hooks/useAgentQueue";
+import AgentActionButton from "../components/AgentActionButton";
+import AiDraftNotice, { type AiDraftNoticeState } from "../components/aiContext/AiDraftNotice";
+import { applyAiDraft, contextImportKey, contextImportMessage, draftChangeSummary } from "../helpers/aiContextImport";
 
 // Throwing fetch helpers for selector loads (existing handlers swallow HTTP errors)
 async function fetchProjectList(): Promise<Project[]> {
@@ -68,6 +73,14 @@ type SaveTarget =
 const DIRTY_PROJECT_AGENT_TEXT = "The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.";
 const DIRTY_VARIANT_AGENT_TEXT = "The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.";
 const FIX_FIELDS_TEXT = "Fix the highlighted fields before saving.";
+const DIRTY_FILL_TEXT = "Save or discard your changes before filling from a document.";
+const CONFLICT_FILL_TEXT = "Discard the conflicting AI draft before filling from a document.";
+const FILL_TEXT = "Upload a document and let the AI agent draft the System, Threat model and Risks tabs for review.";
+
+/** The open variant's AI draft: loaded into the editor, waiting for the user's edits, or in conflict. */
+type AiDraftView =
+    | { kind: 'loaded'; key: string; variantId: string; draft: AiContextDraft; applied: VariantDraft }
+    | { kind: 'pending' | 'conflict'; key: string; variantId: string; draft: AiContextDraft };
 const EMPTY_VARIANT_DRAFT = emptyDraft();
 const NO_FILES: ContextFile[] = [];
 const sameText = (a: string, b: string) => a === b;
@@ -190,6 +203,84 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const openKey = projectKey ?? variantKey;
     const openKeyRef = useRef(openKey);
     openKeyRef.current = openKey;
+    // Tagged with the draft key: a view for another item is never shown.
+    const [aiDraftView, setAiDraft] = useState<AiDraftView | null>(null);
+    const aiDraft = aiDraftView?.key === variantKey ? aiDraftView : null;
+    const aiDraftRef = useRef(aiDraft);
+    aiDraftRef.current = aiDraft;
+    const variantDraftRef = useRef(variantDraft);
+    variantDraftRef.current = variantDraft;
+    const draftRequestRef = useRef(0);
+    // Bumped to reload the AI draft once a render has applied the latest editor state (e.g. after a save).
+    const [draftReloads, setDraftReloads] = useState(0);
+    const [uploading, setUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Loads the open variant's AI draft into a clean editor; edits made since are never replaced.
+    const loadAiDraftRef = useRef<() => Promise<void>>(async () => undefined);
+    loadAiDraftRef.current = async () => {
+        const key = variantKey;
+        const variantId = selected?.kind === 'variant' ? selected.id : null;
+        if (key === null || variantId === null || variantDraft.baseline === null) return;
+        const request = ++draftRequestRef.current;
+        let draft: AiContextDraft | null;
+        try {
+            draft = await Context.getAiDraft(variantId);
+        } catch (e: any) {
+            if (request === draftRequestRef.current && openKeyRef.current === key) showBanner(e?.message || "Failed to load the AI draft.", "error");
+            return;
+        }
+        if (unmountedRef.current || request !== draftRequestRef.current || openKeyRef.current !== key) return;
+        const current = variantDraftRef.current;
+        const previous = aiDraftRef.current;
+        if (current.baseline === null) return;
+        const untouched = !current.dirty || (previous?.kind === 'loaded' && draftsEqual(current.draft, previous.applied));
+        const conflict = draft?.status === 'conflict';
+        const applied = draft?.values && !conflict ? applyAiDraft(current.baseline, draft.values) : null;
+        const noChange = applied !== null && draftsEqual(applied, current.baseline);
+        // A reply with neither values nor a conflict is treated as no draft.
+        if (!draft || (!conflict && !applied) || noChange) {
+            if (previous?.kind === 'loaded' && untouched) current.reset();
+            setAiDraft(null);
+            // A draft that changes nothing is dropped without asking.
+            if (noChange) Context.deleteAiDraft(variantId).catch(() => undefined);
+            return;
+        }
+        if (!applied) setAiDraft({ kind: 'conflict', key, variantId, draft: { ...draft, conflicts: draft.conflicts ?? [] } });
+        else if (!untouched) setAiDraft({ kind: 'pending', key, variantId, draft });
+        else {
+            current.setDraft(applied);
+            setAiDraft({ kind: 'loaded', key, variantId, draft, applied });
+        }
+    };
+    useEffect(() => {
+        if (variantKey !== null) void loadAiDraftRef.current();
+    }, [variantKey, variantDraft.epoch, draftReloads]);
+
+    const agentQueue = useAgentQueue();
+    const openVariantId = selected?.kind === 'variant' ? selected.id : null;
+    const fillKey = openVariantId ? contextImportKey(openVariantId) : null;
+    const fillState = fillKey ? agentActionState(agentQueue, task => task.key === fillKey) : undefined;
+    const fillTask = fillState ? agentQueue.find(task => task.id === fillState.taskId) : undefined;
+    const drafting = fillState?.status === 'queued' || fillState?.status === 'running';
+    // The draft is (re)loaded when the action ends, whatever the write events said.
+    const lastFillRef = useRef<{ key: string | null; status?: string }>({ key: null });
+    useEffect(() => {
+        const last = lastFillRef.current;
+        lastFillRef.current = { key: fillKey, status: fillState?.status };
+        if (last.key === fillKey && last.status === 'running' && fillState?.status !== 'running') void loadAiDraftRef.current();
+    }, [fillKey, fillState?.status]);
+    // A running agent may write its draft in several calls; loading a partial one would make
+    // the editor dirty mid-run, so write events are held until the turn ends.
+    const agentRunning = agentQueue.some(task => task.status === 'running');
+    const agentRunningRef = useRef(agentRunning);
+    agentRunningRef.current = agentRunning;
+    const heldDraftLoadRef = useRef(false);
+    useEffect(() => {
+        if (agentRunning || !heldDraftLoadRef.current) return;
+        heldDraftLoadRef.current = false;
+        void loadAiDraftRef.current();
+    }, [agentRunning]);
     // Field errors and the active tab belong to the open item, however it changed.
     useEffect(() => {
         setFieldError('');
@@ -282,6 +373,16 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                     ? draftFromContext({ ...saved, project_id: target.projectId, description: null })
                     : target.draft;
                 if (openKeyRef.current === key) savedEverythingRef.current = variantDraft.commit(value, target.draft);
+                const pendingDraft = aiDraftRef.current;
+                if (pendingDraft?.kind === 'loaded') {
+                    // Saving accepts the draft; a leftover draft would rebase to "no changes" anyway.
+                    setAiDraft(null);
+                    Context.deleteAiDraft(target.variantId).catch(() => undefined);
+                } else if (pendingDraft?.kind === 'pending' && openKeyRef.current === key) {
+                    // Reloaded after the commit renders, so the editor reads as clean.
+                    setAiDraft(null);
+                    setDraftReloads(n => n + 1);
+                }
             }
             if (!unmountedRef.current) setAnnouncement("Saved.");
             return true;
@@ -328,6 +429,13 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             label: openLabel,
             // Leaving with newer edits still unsaved would discard them.
             save: async () => (await saveRef.current()) && savedEverythingRef.current,
+            // Leaving without saving rejects a loaded AI draft.
+            discard: () => {
+                const current = aiDraftRef.current;
+                if (current?.kind !== 'loaded') return;
+                setAiDraft(null);
+                Context.deleteAiDraft(current.variantId).catch(() => undefined);
+            },
         } : null);
     }, [dirty, openLabel, registerGuard]);
     useEffect(() => () => registerGuard(null), [registerGuard]);
@@ -340,9 +448,13 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 if (projectDraft.dirty) showBanner(DIRTY_PROJECT_AGENT_TEXT, "error");
                 else reloadProject();
             }
-            if ((tool === 'update_variant_context' || tool === 'update_variant_threat_model') && selected?.kind === 'variant') {
+            if (tool === 'update_variant_context' && selected?.kind === 'variant') {
                 if (variantDraft.dirty) showBanner(DIRTY_VARIANT_AGENT_TEXT, "error");
                 else reloadVariant();
+            }
+            if (tool === 'propose_variant_threat_model' && selected?.kind === 'variant') {
+                if (agentRunningRef.current) heldDraftLoadRef.current = true;
+                else void loadAiDraftRef.current();
             }
         };
     });
@@ -375,6 +487,80 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         setImportDetails(null);
         return true;
     };
+
+    // Filling needs a clean editor, so the draft can be loaded without replacing anyone's edits.
+    const handleFillFile = async (event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file || !projectId || !openVariant) return;
+        if (variantDraft.dirty) {
+            showBanner(DIRTY_FILL_TEXT, "error");
+            return;
+        }
+        setUploading(true);
+        hideErrorBanner();
+        try {
+            await Context.uploadImportSource(openVariant.id, file);
+            if (unmountedRef.current) return;
+            setAiDraft(null);
+            const message: QueuedAgentMessage = {
+                id: crypto.randomUUID(),
+                key: contextImportKey(openVariant.id),
+                kind: 'context-import',
+                title: `${openVariant.name} from ${file.name}`,
+                detail: file.name,
+                text: contextImportMessage({
+                    projectId, projectName, variantId: openVariant.id, variantName: openVariant.name, fileName: file.name,
+                }),
+            };
+            enqueueAgentMessages([message], {
+                page: 'ai', projectId, variantId: openVariant.id,
+                view: {
+                    selectedProjectId: projectId, selectedProjectName: projectName || undefined,
+                    selectedVariantId: openVariant.id, selectedVariantName: openVariant.name, section: variantTab,
+                },
+            }, `AI Context ${openVariant.name}`, 'per-action');
+            openAgentChat(message.id);
+        } catch (e: any) {
+            showBanner(e?.message || "Failed to upload the document.", "error");
+        } finally {
+            if (!unmountedRef.current) setUploading(false);
+        }
+    };
+
+    const cancelFill = () => {
+        if (fillState?.status !== 'queued' || !openVariantId) return;
+        removeAgentTask(fillState.taskId);
+        Context.deleteAiDraft(openVariantId).catch((e: any) => showBanner(e?.message || "Failed to delete the document.", "error"));
+    };
+
+    const discardAiDraft = async () => {
+        const current = aiDraftRef.current;
+        if (!current) return;
+        setBusy(true);
+        try {
+            await Context.deleteAiDraft(current.variantId);
+            if (unmountedRef.current || openKeyRef.current !== current.key) return;
+            setAiDraft(null);
+            if (current.kind === 'loaded') resetVariant();
+        } catch (e: any) {
+            showBanner(e?.message || "Failed to discard the AI draft.", "error");
+        } finally {
+            if (!unmountedRef.current) setBusy(false);
+        }
+    };
+
+    const aiNotice: AiDraftNoticeState | null = drafting
+        ? { kind: 'drafting', fileName: fillTask?.detail ?? 'the uploaded document', onCancel: fillState?.status === 'queued' ? cancelFill : undefined }
+        : aiDraft?.kind === 'loaded' && variantDraft.baseline !== null
+            ? {
+                kind: 'loaded', source: aiDraft.draft.source, summary: draftChangeSummary(variantDraft.baseline, aiDraft.applied),
+                rebased: aiDraft.draft.status === 'rebased', renumbered: aiDraft.draft.renumbered,
+            }
+            : aiDraft?.kind === 'conflict' ? { kind: 'conflict', source: aiDraft.draft.source, conflicts: aiDraft.draft.conflicts }
+            : aiDraft?.kind === 'pending' ? { kind: 'pending', source: aiDraft.draft.source }
+            : null;
+    const fillBlocked = variantDraft.dirty ? DIRTY_FILL_TEXT : aiDraft?.kind === 'conflict' ? CONFLICT_FILL_TEXT : null;
 
     const openCopyFrom = () => {
         const key = openKeyRef.current;
@@ -479,6 +665,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                         {selected?.kind === 'variant' && (
                             <>
                                 {fieldError && <p role="alert" className={`${ERROR} mb-2`}>{fieldError}</p>}
+                                {aiNotice && <div className="mb-2"><AiDraftNotice notice={aiNotice} onDiscard={() => { void discardAiDraft(); }} busy={busy} /></div>}
                                 {variantDraft.baseline === null ? (
                                     <p className="text-sm text-zinc-400">{variantDraft.loading ? 'Loading variant context…' : ''}</p>
                                 ) : (
@@ -497,6 +684,21 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                                         draftGeneration={variantDraft.generation}
                                         tab={variantTab}
                                         onTabChange={setVariantTab}
+                                        locked={drafting}
+                                        extraActions={<>
+                                            <AgentActionButton
+                                                state={fillState}
+                                                label="Fill from document with AI…"
+                                                icon={faFileImport}
+                                                onRun={() => fileInputRef.current?.click()}
+                                                disabled={fillBlocked !== null || busy}
+                                                title={fillBlocked ?? FILL_TEXT}
+                                                preparing={uploading ? 'Uploading…' : undefined}
+                                                className={BUTTON_SECONDARY}
+                                            />
+                                            <input ref={fileInputRef} type="file" hidden aria-label="Threat model document"
+                                                onChange={event => { void handleFillFile(event); }} />
+                                        </>}
                                     />
                                 )}
                             </>

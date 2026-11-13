@@ -101,9 +101,13 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     ))
     assert "get_ai_context_form_guide" in agent.READ_TOOLS
     assert "get_ai_context_form_guide" not in agent.WRITE_TOOLS
+    assert "read_import_source" in agent.READ_TOOLS
+    assert "propose_variant_threat_model" in agent.WRITE_TOOLS
+    assert "update_variant_threat_model" not in agent.READ_TOOLS + agent.WRITE_TOOLS
     assert "mcp:vulnscout-get_ai_context_form_guide" in captured["available_tools"]
     assert all(term in instructions for term in (
         "get_ai_context_form_guide", "copy-ready", "view.section", "unsaved", "explicitly asks to save",
+        "propose_variant_threat_model",
     ))
 
 
@@ -1463,6 +1467,16 @@ def test_action_binds_a_skill_profile_to_its_thread(client, monkeypatch):
                      {"profile": agent_skills.ASSESS, "timeout": agent_skills.ACTION_TIMEOUT}]
     switched = client.post("/api/agent/messages", json={"message": "Review", "action": "review"}, headers=thread)
     assert switched.status_code == 400 and "different action" in switched.get_json()["error"]
+
+
+def test_context_import_action_uses_its_profile(client, monkeypatch):
+    from src.routes import agent_skills
+
+    calls = _capture_reply(monkeypatch)
+    response = client.post("/api/agent/messages", json={"message": "Fill", "action": "context-import"},
+                           headers={"X-Agent-Thread": str(uuid4())})
+    assert response.status_code == 200
+    assert calls == [{"profile": agent_skills.CONTEXT_IMPORT, "timeout": agent_skills.ACTION_TIMEOUT}]
 
 
 @pytest.mark.parametrize("body, thread, error", [

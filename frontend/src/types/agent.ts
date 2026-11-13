@@ -18,7 +18,7 @@ export type QueuedAgentMessage = {
     id: string;
     text: string;
     key: string;
-    kind: 'assess' | 'review' | 'message';
+    kind: 'assess' | 'review' | 'message' | 'context-import';
     title: string;
     detail?: string;
     context?: AgentContext;

@@ -998,3 +998,30 @@ SCHEMAS.update({
     }, ("vulnerabilities",)),
     "ScanImportResult": SCHEMAS["ImportSummary"]["anyOf"][2],
 })
+SCHEMAS.update({
+    "ContextDraftValues": _object({
+        "variant_description": _TEXT, "environment": _TEXT, "other_info": _TEXT,
+        "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
+    }, ("system", "stride"), description=(
+        "Proposed model. A null text field keeps the saved value; an empty string clears it."
+    )),
+    "ContextDraft": _object({
+        "source": _STRING,
+        "status": {"type": "string", "enum": ["current", "rebased", "conflict"]},
+        "values": {**_ref("ContextDraftValues"), "nullable": True},
+        "conflicts": _array(_object({"path": _STRING, "reason": _STRING}, ("path", "reason"))),
+        "renumbered": _map(_STRING),
+        "base_updated_at": _DATE, "saved_updated_at": _DATE, "created_at": _DATE, "updated_at": _DATE,
+    }, ("source", "status", "values", "conflicts", "renumbered", "base_updated_at", "saved_updated_at")),
+    "ImportSource": _object({"name": _STRING, "size": _COUNT}, ("name", "size")),
+    "ImportSourceResult": {"anyOf": [
+        _object({"name": _STRING, **{key: value for key, value in variant["properties"].items()
+                                     if key not in ("file_id", "original_name")}},
+                ("name", *[key for key in variant["required"] if key not in ("file_id", "original_name")]))
+        for variant in SCHEMAS["SourceReferenceResult"]["anyOf"]
+    ]},
+    "ContextDraftUpdate": _object({
+        "source": {"type": "string", "minLength": 1, "maxLength": 255},
+        "base_updated_at": _DATE, "values": _ref("ContextDraftValues"),
+    }, ("source", "base_updated_at", "values")),
+})

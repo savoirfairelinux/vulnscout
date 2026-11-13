@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons";
 import type { ContextFile, VariantDraft } from "../../handlers/context";
@@ -28,6 +28,10 @@ type Props = {
     draftGeneration: number;
     tab: VariantTab;
     onTabChange: (tab: VariantTab) => void;
+    /** Read-only while the AI drafts this variant. */
+    locked?: boolean;
+    /** Extra header buttons, after Copy from…. */
+    extraActions?: ReactNode;
 };
 
 const TABS: { key: VariantTab; label: string }[] = [
@@ -53,7 +57,7 @@ function keyTarget(key: string, index: number): number | null {
 
 function VariantEditor({
     variantId, variantName, draft, onDraftChange, files, onSave, saving, dirty,
-    onCopyFrom, fieldErrors, notify, draftGeneration, tab, onTabChange,
+    onCopyFrom, fieldErrors, notify, draftGeneration, tab, onTabChange, locked = false, extraActions,
 }: Readonly<Props>) {
     const tabRefs = useRef<Partial<Record<VariantTab, HTMLButtonElement | null>>>({});
 
@@ -72,10 +76,11 @@ function VariantEditor({
             <div className="flex flex-wrap items-center gap-3">
                 <h2 id="ai-variant-heading" className="text-xl font-bold text-white">{variantName}</h2>
                 <span className={BADGE_VARIANT}>Variant</span>
-                <button type="button" onClick={onCopyFrom} disabled={!onCopyFrom || saving} className={BUTTON_SECONDARY}>
+                <button type="button" onClick={onCopyFrom} disabled={!onCopyFrom || saving || locked} className={BUTTON_SECONDARY}>
                     Copy from…
                 </button>
-                <button type="button" onClick={onSave} disabled={!dirty || saving} className={`${BUTTON_PRIMARY} ml-auto`}>
+                {extraActions}
+                <button type="button" onClick={onSave} disabled={!dirty || saving || locked} className={`${BUTTON_PRIMARY} ml-auto`}>
                     {saving && <FontAwesomeIcon icon={faSpinner} spin />}
                     Save changes
                 </button>
@@ -112,7 +117,8 @@ function VariantEditor({
                             files={files}
                             notify={notify}
                             fieldErrors={fieldErrors}
-                            disabled={saving}
+                            disabled={saving || locked}
+                            locked={locked}
                         />
                     )}
                     {key === 'system' && (
@@ -121,7 +127,7 @@ function VariantEditor({
                             draft={draft}
                             onDraftChange={onDraftChange}
                             fieldErrors={fieldErrors}
-                            disabled={saving}
+                            disabled={saving || locked}
                         />
                     )}
                     {key === 'threat_model' && (
@@ -130,7 +136,7 @@ function VariantEditor({
                             draft={draft}
                             onDraftChange={onDraftChange}
                             fieldErrors={fieldErrors}
-                            disabled={saving}
+                            disabled={saving || locked}
                         />
                     )}
                     {key === 'risks' && (
@@ -139,7 +145,7 @@ function VariantEditor({
                             draft={draft}
                             onDraftChange={onDraftChange}
                             fieldErrors={fieldErrors}
-                            disabled={saving}
+                            disabled={saving || locked}
                         />
                     )}
                 </div>
