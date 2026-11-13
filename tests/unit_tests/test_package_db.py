@@ -188,6 +188,24 @@ def test_same_sbom_epoch_and_bare_version_share_package(app, versions):
     assert ctrl.get_or_resolve_db_id("mesa@1.0.0") == linked[0].package_id
 
 
+def test_epoch_upgrade_keeps_declared_identifiers_only(app):
+    from src.controllers.packages import PackagesController
+    from src.models.sbom_document import SBOMDocument
+
+    project = Project.create("epoch-declared")
+    variant = Variant.create("default", project.id)
+    scan = Scan.create("SBOM", variant.id, scan_type="sbom")
+    document = SBOMDocument.create("epoch.cdx.json", "cdx", scan.id)
+    ctrl = PackagesController()
+    ctrl.current_sbom_document = document
+    ctrl.add(Package("lib", "1.0", purl=["pkg:deb/debian/lib@1.0"]))
+    package = ctrl.add(Package("lib", "1_1.0", purl=["pkg:deb/debian/lib@1_1.0"]))
+
+    assert package.version == "1_1.0"
+    assert not package.cpe
+    assert package.purl[0] == "pkg:deb/debian/lib@1_1.0"
+
+
 @pytest.mark.parametrize("versions", [("1.0", "1_1.0"), ("1_1.0", "1.0")])
 @pytest.mark.parametrize("ambiguous", [False, True])
 def test_epoch_document_evidence_survives_document_switch(app, versions, ambiguous):

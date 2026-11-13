@@ -194,8 +194,7 @@ class SPDX:
                 elif external_ref.reference_type in ("cpe23Type", "http://spdx.org/rdf/references/cpe23Type"):
                     pkg.add_cpe(external_ref.locator)
 
-            pkg.generate_generic_cpe()
-            pkg.generate_generic_purl()
+            pkg.add_fallback_identifiers()
 
             if package.spdx_id:
                 self.ref_dict[package.spdx_id] = pkg.string_id

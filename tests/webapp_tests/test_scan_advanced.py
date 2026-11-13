@@ -503,6 +503,11 @@ class TestGrypeScanJob:
             "current": 4, "total": 4, "message": "Scan complete",
         }
         assert any("\u2713" in line for line in operation["logs"])
+        grype_command = next(
+            call.args[0] for call in popen.call_args_list
+            if call.args[0][0] == "grype"
+        )
+        assert "--add-cpes-if-none" not in grype_command
 
     @patch("subprocess.Popen")
     @patch("shutil.which", return_value="/usr/bin/grype")

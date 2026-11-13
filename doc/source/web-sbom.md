@@ -21,6 +21,8 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
 - **Remaining Pending Vulnerabilities** — the count of vulnerabilities still awaiting triage for this package.
 
+CPEs and PURLs declared by the SBOM are kept as-is. Only components that declare neither receive a generic `cpe:2.3:a:*:<name>:<version>` CPE and `pkg:generic/<name>@<version>` PURL.
+
 **Release version** shows the release identified from the SBOM, PURL, or CPE.
 **Source revision** shows the Git commit, shortened to 12 characters. Hover either
 value to inspect its source information and the full revision. Missing values

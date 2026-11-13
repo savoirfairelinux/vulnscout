@@ -1380,12 +1380,10 @@ def test_cli_scanners_use_only_active_variant_identifiers(app, tmp_path, monkeyp
     global_purls, global_cpes = set(component.purl), set(component.cpe)
     revision = ('b' if selected == 'first' else 'c') * 40
     expected_purls = {
-        purls[selected], 'pkg:generic/mbedtls',
-        f'pkg:generic/mbedtls-deps@{revision}', f'pkg:generic/mbedtls-sources@{revision}',
+        purls[selected], 'pkg:generic/mbedtls', f'pkg:generic/mbedtls-sources@{revision}',
     }
     expected_cpes = {
         cpes[selected], 'cpe:2.3:a:*:mbedtls:*:*:*:*:*:*:*:*',
-        f'cpe:2.3:a:*:mbedtls-deps:{revision}:*:*:*:*:*:*:*',
         f'cpe:2.3:a:*:mbedtls-sources:{revision}:*:*:*:*:*:*:*',
     }
     queued, error = resolve_active_packages(variants[selected].id)

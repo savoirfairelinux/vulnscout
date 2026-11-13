@@ -337,7 +337,7 @@ def run_grype_scan(ctx: JobContext) -> None:
             ctx.log(f"[2/4] Grype memory limit (GOMEMLIMIT): {memlimit}")
         with open(grype_out, "w") as handle:
             _run(
-                ["grype", "--add-cpes-if-none", f"sbom:{exported_cdx}", "-o", "json"],
+                ["grype", f"sbom:{exported_cdx}", "-o", "json"],
                 GRYPE_SCAN_TIMEOUT, stdout=handle, env=grype_env,
             )
         ctx.report(2, 4, "2/4 Running Grype")
