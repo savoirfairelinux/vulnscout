@@ -29,9 +29,9 @@ const sourceStyles: Record<string, { marker: string; badge: string }> = {
     euvd: { marker: 'bg-sky-400', badge: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300' },
 };
 
-function RunStat({ count, label }: Readonly<{ count: number; label: string }>) {
+function RunStat({ count, label }: Readonly<{ count?: number; label: string }>) {
     return <div className="flex items-baseline gap-2">
-        <span className="text-2xl font-bold text-cyan-600 dark:text-cyan-400 tabular-nums">{count.toLocaleString()}</span>{' '}
+        <span className="text-2xl font-bold text-cyan-600 dark:text-cyan-400 tabular-nums">{count?.toLocaleString() ?? '—'}</span>{' '}
         <span className="text-sm font-medium text-neutral-500 dark:text-neutral-300">{label}</span>
     </div>;
 }
@@ -74,6 +74,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
     const [page, setPage] = useState<RefreshRun | null>(null);
     const [runList, setRunList] = useState<RefreshRunList | null>(null);
     const [listOffset, setListOffset] = useState(0);
+    const [hideIndividual, setHideIndividual] = useState(false);
     const [offset, setOffset] = useState(0);
     const [source, setSource] = useState('');
     const [changeType, setChangeType] = useState<'' | 'first_enrichment' | 'addition' | 'modification' | 'removal'>('');
@@ -114,11 +115,12 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
         const controller = new AbortController();
         setRunList(null);
         setListError('');
-        RefreshRuns.list({ project_id: projectId, variant_id: variantId, limit: RUN_PAGE_SIZE, offset: listOffset }, controller.signal)
+        RefreshRuns.list({ project_id: projectId, variant_id: variantId, limit: RUN_PAGE_SIZE, offset: listOffset,
+            hide_individual: hideIndividual || undefined }, controller.signal)
             .then(result => { if (!controller.signal.aborted) setRunList(result); })
             .catch(reason => { if (!controller.signal.aborted) setListError(String(reason)); });
         return () => controller.abort();
-    }, [projectId, variantId, listOffset, reload, dataRevision, comparisonScope]);
+    }, [projectId, variantId, listOffset, reload, dataRevision, comparisonScope, hideIndividual]);
 
     useEffect(() => {
         if (!run || run.run_id !== runId || comparisonScope) return;
@@ -178,6 +180,13 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
         {refreshControls}
         <div className="space-y-2">
             <h2 className="font-bold">Refresh runs</h2>
+            <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={hideIndividual} onChange={event => {
+                    setListOffset(0);
+                    setHideIndividual(event.target.checked);
+                }} />
+                Hide individual refreshes
+            </label>
             {listError && <p role="alert">{listError}</p>}
             {!runList && !listError && <p role="status">Loading refresh runs…</p>}
             {runList && <ul className="relative" aria-label="Refresh runs">
@@ -198,7 +207,8 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                                 <time dateTime={item.started_at} className="text-sm font-semibold text-gray-500 dark:text-neutral-400">{formatDate(item.started_at)}</time>
                                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300">
                                     <FontAwesomeIcon icon={faLayerGroup} className="mr-1" />
-                                    Refresh run · {item.sources.length} providers
+                                    {item.refresh_type === 'individual' ? 'Individual refresh' :
+                                        item.refresh_type === 'full' ? 'Full refresh' : 'Refresh type unknown'}
                                 </span>
                                 <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${item.status === 'incomplete' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300'}`}>{item.status}</span>
                                 {item.sources.map(name => <span key={name}
@@ -208,6 +218,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                                 <div className="min-w-0">
                                     <h3 className="text-sm font-bold text-neutral-700 dark:text-neutral-100 mb-1.5">Refresh result</h3>
                                     <div className="flex items-baseline gap-x-10 gap-y-1.5 flex-wrap">
+                                        <RunStat count={item.summary.refreshed_vulnerabilities} label="vulnerabilities refreshed" />
                                         <RunStat count={item.summary.changed_vulnerabilities} label="vulnerabilities changed" />
                                         <RunStat count={item.summary.total_changes} label="field changes" />
                                     </div>

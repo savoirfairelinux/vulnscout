@@ -27,10 +27,7 @@ import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import NvdRefreshHandler from "../handlers/nvdRefresh";
-import EpssRefreshHandler from "../handlers/epssRefresh";
-import EuvdRefreshHandler from "../handlers/euvdRefresh";
-import GhsaRefreshHandler from "../handlers/ghsaRefresh";
+import { refreshIndividual } from "../handlers/individualRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import type { QueuedAgentMessage } from '../types/agent';
 import { agentActionState as queueActionState, enqueueAgentMessages, openAgentChat } from '../handlers/agentQueue';
@@ -658,8 +655,9 @@ type VariantScopedSnapshot = {
         const latest = (...values: Array<string | undefined>) =>
             values.filter((value): value is string => Boolean(value)).sort().pop();
         try {
+            const results = await refreshIndividual(vuln.id, projectId, variantId);
             if (vuln.id.toUpperCase().startsWith('GHSA-')) {
-                const result = await GhsaRefreshHandler.triggerSingleRefresh(vuln.id);
+                const result = results.ghsa;
                 if (result) {
                     patchVuln(vuln.id, await reloadMetadata());
                     setRefreshedList(['GHSA']);
@@ -667,14 +665,8 @@ type VariantScopedSnapshot = {
                     setRefreshError("GitHub Advisory Database refresh failed. Please try again later.");
                 }
             } else {
-                const [nvdResult, epssResult, euvdResult] = await Promise.allSettled([
-                    NvdRefreshHandler.triggerSingleRefresh(vuln.id, "api"),
-                    EpssRefreshHandler.triggerSingleRefresh(vuln.id),
-                    EuvdRefreshHandler.triggerSingleRefresh(vuln.id),
-                ]);
-
                 const errors: string[] = [];
-                const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
+                const nvdValue = results.nvd;
                 const nvdUpdated = nvdValue?.kind === "success";
                 if (!nvdUpdated) {
                     if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
@@ -687,15 +679,15 @@ type VariantScopedSnapshot = {
                         errors.push("NVD API unavailable. Please try again later.");
                     }
                 }
-                if (epssResult.status === "rejected" || epssResult.value === null) {
+                if (!results.epss) {
                     errors.push("EPSS API unavailable");
                 }
-                const euvdValue = euvdResult.status === "fulfilled" ? euvdResult.value : null;
+                const euvdValue = results.euvd;
                 if (!euvdValue) {
                     errors.push("ENISA EUVD unavailable");
                 }
 
-                const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
+                const epssUpdated = results.epss !== null;
 
                 let merged = { ...vuln };
 
@@ -712,9 +704,9 @@ type VariantScopedSnapshot = {
                     if (epssUpdated) {
                         merged = {
                             ...merged,
-                            epss: epssResult.value!.epss,
-                            data_fetched_at: latest(merged.data_fetched_at, epssResult.value!.data_fetched_at),
-                            data_updated_at: latest(merged.data_updated_at, epssResult.value!.data_updated_at),
+                            epss: results.epss!.epss,
+                            data_fetched_at: latest(merged.data_fetched_at, results.epss!.data_fetched_at),
+                            data_updated_at: latest(merged.data_updated_at, results.epss!.data_updated_at),
                         };
                         setRefreshedList(prev => [...prev, "EPSS"]);
                     }

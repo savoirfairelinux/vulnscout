@@ -337,6 +337,7 @@ def test_shared_cve_visibility_is_captured_and_package_links_are_scope_filtered(
         db.session.delete(scan)
         db.session.commit()
     data = client.get(f"/api/refresh-runs/{run}", query_string={"project_id": other_id}).get_json()
+    assert data["summary"]["refreshed_vulnerabilities"] == 1
     assert data["changes"][0]["packages"][0]["project_id"] == other_id
     assert all(package["project_id"] == other_id for package in data["coverage"][0]["packages"])
     assert client.get(f"/api/refresh-runs/{run}", query_string={"project_id": str(uuid.uuid4())}).status_code == 404
@@ -360,6 +361,7 @@ def test_first_enrichment_cvss_identity_and_pagination_filters(app, client):
     data = client.get(f"/api/refresh-runs/{run}", query_string={"limit": 1}).get_json()
     assert data["total"] == 2 and len(data["changes"]) == 1
     assert data["summary"]["changed_vulnerabilities"] == 1
+    assert data["summary"]["refreshed_vulnerabilities"] == 1
     assert data["summary"]["first_enrichments"] == 2
     metric = client.get(f"/api/refresh-runs/{run}", query_string={"offset": 1}).get_json()["changes"][0]
     assert metric["field"].startswith("cvss:3.1:provider:")
@@ -539,6 +541,108 @@ def test_single_refresh_exposes_exact_identity_and_scope_rejects_outside(app, cl
     run = response.headers["X-Refresh-Run-ID"]
     assert client.get(f"/api/refresh-runs/{run}").get_json()["changes"][0]["after"] == 0.5
     assert client.post(f"/api/vulnerabilities/{CVE}/epss-refresh?project_id={uuid.uuid4()}").status_code == 404
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_individual_refresh_groups_sources_and_exports_history(app, client, changed):
+    with app.app_context():
+        record = db.session.get(Vulnerability, CVE)
+        record.epss_score = 0.1
+        db.session.commit()
+
+    def nvd_update(record, details, now):
+        if changed:
+            record.description = "Updated description"
+
+    def euvd_update(identifier, full, kev, now):
+        if changed:
+            db.session.get(Vulnerability, identifier).euvd_known_exploited = True
+
+    with patch("src.routes.vulnerabilities.NVD_DB") as nvd, \
+         patch("src.routes.vulnerabilities.EPSS_DB") as epss, \
+         patch("src.routes.vulnerabilities.EUVD_DB") as euvd, \
+         patch("src.routes.vulnerabilities.apply_nvd_update", side_effect=nvd_update), \
+         patch("src.routes.vulnerabilities._apply_euvd", side_effect=euvd_update):
+        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {}}]})
+        nvd.extract_cve_details.return_value = {}
+        epss.return_value.api_get_epss.return_value = {"score": 0.5 if changed else 0.1}
+        euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
+        euvd.return_value.get_mapping.return_value = {"dummy": {}}
+        response = client.post(f"/api/vulnerabilities/{CVE}/refresh", json={"mode": "api"})
+
+    assert response.status_code == 200
+    run_id = response.headers["X-Refresh-Run-ID"]
+    result = client.get(f"/api/refresh-runs/{run_id}").get_json()
+    assert result["refresh_type"] == "individual"
+    assert result["sources"] == ["nvd", "epss", "euvd"]
+    assert result["status"] == "complete"
+    assert result["summary"]["refreshed_vulnerabilities"] == 1
+    assert result["summary"]["changed_vulnerabilities"] == int(changed)
+    assert result["summary"]["total_changes"] == (3 if changed else 0)
+    assert len(client.get("/api/refresh-runs").get_json()["runs"]) == 1
+    assert client.get("/api/refresh-runs?hide_individual=true").get_json()["total"] == 0
+    exported = client.get(f"/api/refresh-runs/{run_id}/export?format=json").get_json()
+    csv_rows = list(csv.DictReader(io.StringIO(
+        client.get(f"/api/refresh-runs/{run_id}/export?format=csv").get_data(as_text=True))))
+    assert json.loads(csv_rows[0]["metadata"])["refresh_type"] == exported["refresh_type"]
+    assert json.loads(csv_rows[0]["metadata"])["summary"] == result["summary"]
+    if changed:
+        history = client.get("/api/vulnerabilities/history/export?last_refresh=true&format=json").get_json()
+        assert {entry["source"] for entry in history["history"] if entry["vuln_id"] == CVE} == {
+            "nvd", "epss", "euvd",
+        }
+
+
+def test_individual_refresh_records_provider_failure_and_rejects_outside_scope(app, client):
+    with patch("src.routes.vulnerabilities.NVD_DB") as nvd, \
+         patch("src.routes.vulnerabilities.EPSS_DB") as epss, \
+         patch("src.routes.vulnerabilities.EUVD_DB") as euvd:
+        nvd.return_value.api_get_cve.return_value = (429, {})
+        epss.return_value.api_get_epss.return_value = {"score": 0.5}
+        euvd.return_value.get_full_mapping.side_effect = RuntimeError("unavailable")
+        response = client.post(f"/api/vulnerabilities/{CVE}/refresh", json={"mode": "api"})
+    assert response.get_json()["results"]["nvd"]["body"]["error_code"] == "rate_limited"
+    result = client.get(f"/api/refresh-runs/{response.headers['X-Refresh-Run-ID']}").get_json()
+    assert result["status"] == "incomplete"
+    assert result["source_status"] == {"nvd": "incomplete", "epss": "complete", "euvd": "incomplete"}
+    assert result["summary"]["refreshed_vulnerabilities"] == 1
+    assert client.post(f"/api/vulnerabilities/{CVE}/refresh?project_id={uuid.uuid4()}").status_code == 404
+    assert client.get("/api/refresh-runs").get_json()["total"] == 1
+
+
+def test_legacy_refresh_type_remains_unknown_and_visible(app, client):
+    with app.app_context():
+        run_id = create_run({"epss": []})
+        record = db.session.get(RefreshRun, run_id)
+        record.scope = {"project_id": None, "variant_id": None}
+        db.session.commit()
+        finish_source(run_id, "epss")
+    result = client.get("/api/refresh-runs?hide_individual=true").get_json()
+    assert result["runs"][0]["refresh_type"] == "unknown"
+
+
+def test_individual_ghsa_and_standalone_euvd_are_tracked(app, client):
+    ghsa = "GHSA-abcd-1234-abcd"
+    with app.app_context():
+        Vulnerability.create_record(id=ghsa.upper())
+    with patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+               return_value="2025-01-01T00:00:00Z"):
+        response = client.post(f"/api/vulnerabilities/{ghsa}/refresh", json={"mode": "api"})
+    assert response.status_code == 200
+    result = client.get(f"/api/refresh-runs/{response.headers['X-Refresh-Run-ID']}").get_json()
+    assert result["sources"] == ["ghsa"]
+    assert result["refresh_type"] == "individual"
+    assert result["summary"]["refreshed_vulnerabilities"] == 1
+
+    with patch("src.routes.vulnerabilities.EUVD_DB") as euvd, \
+         patch("src.routes.vulnerabilities._apply_euvd"):
+        euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
+        euvd.return_value.get_mapping.return_value = {"dummy": {}}
+        response = client.post(f"/api/vulnerabilities/{CVE}/euvd-refresh")
+    assert response.status_code == 200
+    result = client.get(f"/api/refresh-runs/{response.headers['X-Refresh-Run-ID']}").get_json()
+    assert result["sources"] == ["euvd"]
+    assert result["refresh_type"] == "individual"
 
 
 def test_duplicate_identity_and_invalid_pagination_fail_explicitly(app, client):
@@ -798,7 +902,9 @@ def test_run_list_is_paginated_in_the_database_without_loading_change_bodies(app
     assert data["total"] == 4
     assert [item["run_id"] for item in data["runs"]] == ["listed-2", "listed-1"]
     assert all("coverage" not in item and "changes" not in item for item in data["runs"])
-    assert data["runs"][0]["summary"] == {"total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0}
+    assert data["runs"][0]["summary"] == {
+        "total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0, "refreshed_vulnerabilities": 1,
+    }
     assert data["runs"][0]["status"] == "complete"
     assert not [statement for statement in statements if "snapshot" in statement]
     assert not [statement for statement in statements if "refresh_run_target_links.name" in statement]
