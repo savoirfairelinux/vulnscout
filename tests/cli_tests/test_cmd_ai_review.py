@@ -558,6 +558,23 @@ def test_target_removed_during_the_turn_is_reported_as_changed(app, ids, monkeyp
     assert set(_outcomes(_report(result)).values()) == {"changed"}
 
 
+def test_assessment_no_longer_custom_when_reached_is_reported_as_changed_without_a_turn(app, ids, monkeypatch):
+    with app.app_context():
+        first, second = _custom(ids, ["x86"]), _custom(ids, ["x86"])
+
+    def behaviour(call):
+        _write_all(call)
+        other = second if first in call["message"] else first
+        _edit_assessment(app, other, lambda assessment: setattr(assessment, "origin", "ai"))
+
+    calls = _fake_reply(monkeypatch, behaviour)
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
+    assert result.exit_code == 1 and len(calls) == 1
+    report = _report(result)
+    assert sorted(entry["targets"][0]["outcome"] for entry in report["results"]) == ["changed", "reviewed"]
+    assert "[2/2] Reviewing" not in result.stderr
+
+
 def test_stale_targets_are_reprocessed_and_fresh_ones_skipped(app, ids, monkeypatch):
     from src.models.assessment import Assessment
     from src.models.assessment_review import AssessmentReview
@@ -664,13 +681,13 @@ def test_interrupt_signal_between_assessments_marks_the_rest_not_started(app, id
     with app.app_context():
         _custom(ids, ["x86"])
         _custom(ids, ["x86"])
-    original = cmd_ai_review._review
+    original = cmd_ai_review._fold
 
     def review_then_signal(*args, **kwargs):
         original(*args, **kwargs)
         _ai_runner.interrupted.set()
 
-    monkeypatch.setattr(cmd_ai_review, "_review", review_then_signal)
+    monkeypatch.setattr(cmd_ai_review, "_fold", review_then_signal)
     calls = _fake_reply(monkeypatch, _write_all)
     result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
     assert result.exit_code == 1 and len(calls) == 1
@@ -700,7 +717,7 @@ def test_interrupt_after_the_last_turn_saved_its_reviews_still_fails(app, ids, m
 
 
 def test_long_target_lists_are_split_into_labelled_batches(app, ids, monkeypatch):
-    from src.bin import cmd_ai_review
+    from src.controllers import ai_actions
     from src.models.assessment import Assessment
 
     with app.app_context():
@@ -709,7 +726,7 @@ def test_long_target_lists_are_split_into_labelled_batches(app, ids, monkeypatch
             (uuid.UUID(ids["x86"]), uuid.UUID(ids["findings"]["zlib"]))])
         _db.session.commit()
         aid = str(assessment.id)
-    monkeypatch.setattr(cmd_ai_review, "PROMPT_BUDGET", 650)
+    monkeypatch.setattr(ai_actions, "PROMPT_BUDGET", 650)
     calls = _fake_reply(monkeypatch, _write_all)
     result = _invoke(app, "--project", "demo", "--assessment-id", aid, "--json")
     assert result.exit_code == 0, result.stderr
@@ -783,3 +800,55 @@ def test_sdk_logging_is_quiet_unless_verbose(app, ids, monkeypatch):
     assert _invoke(app, "--project", "demo", "--assessment-id", aid, "--re-review").exit_code == 0
     assert logger.level == logging.ERROR
     logger.setLevel(logging.NOTSET)
+
+
+# ---------------------------------------------------------------- remote mode: through the web AI queue
+
+def test_remote_review_submits_one_action_per_variant_and_folds_results_by_target(app, ids, monkeypatch):
+    """The ``no_ai`` fixture proves nothing runs in this process: the web server's queue runs the turns."""
+    from .queue_fakes import FakeQueueServer, done, failed, review_result
+
+    with app.app_context():
+        aid = _custom(ids, ["x86", "arm"])
+
+    def finish(action, index):
+        if action["variant_id"] == ids["arm"]:
+            return failed("Not reviewable.", "prepare")
+        return done(review_result(action))
+
+    server = FakeQueueServer(finish).install(monkeypatch)
+    result = _invoke(app, "--project", "demo", "--assessment-id", aid, "--timeout", "30", "--json")
+    assert result.exit_code == 1, result.stderr
+    [body] = server.submitted
+    assert body["source"] == "CLI" and body["timeout"] == 30
+    assert sorted((a["kind"], a["assessment_id"], a["variant_id"], tuple(a["finding_ids"]), a["key"].rsplit(":", 1)[0])
+                  for a in body["actions"]) == sorted(
+        ("review", aid, ids[name], (ids["findings"]["openssl"],), f"review:{aid}:{ids[name]}")
+        for name in ("x86", "arm"))
+    # The content pinned at selection, so the server reports an edit made since then as "changed".
+    with app.app_context():
+        from src.models.assessment import Assessment
+        from src.models.assessment_review import fingerprint_assessment
+        pinned = fingerprint_assessment(_db.session.get(Assessment, uuid.UUID(aid)))
+    assert {action["fingerprint"] for action in body["actions"]} == {pinned}
+    report = _report(result)
+    assert _outcomes(report) == {"x86/openssl@3.0": "reviewed", "arm/openssl@3.0": "changed"}
+    assert report["model"] == "server-model" and report["results"][0]["usage"]["input_tokens"] == 10
+    assert "Reviewing" in result.stderr and "note: web server not running" not in result.stderr
+
+
+def test_remote_review_ctrl_c_reports_unfinished_targets(app, ids, monkeypatch):
+    from .queue_fakes import FakeQueueServer
+
+    with app.app_context():
+        _custom(ids, ["x86"])
+        _custom(ids, ["x86"])
+    server = FakeQueueServer().install(monkeypatch)
+    server.on_snapshot = lambda srv, count: _ai_runner.interrupted.set() if count == 2 else None
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
+    assert result.exit_code == 1
+    assert sorted(server.stopped) == ["req-1", "req-2"]
+    entries = _report(result)["results"]
+    assert [(e["targets"][0]["outcome"], e["targets"][0]["error"]) for e in entries] == [
+        ("interrupted", "Not started.")] * 2
+    assert _report(result)["interrupted"] is True

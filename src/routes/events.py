@@ -15,15 +15,17 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 from flask.typing import ResponseReturnValue
 
-from ..controllers.event_bus import operation_events
+from ..controllers.event_bus import EventBus, operation_events
 from ..controllers.operation_registry import registry
 
 STREAM_PATH = "/api/events/stream"
+
+Snapshot = Callable[[], tuple[dict, int]]
 
 # Long enough to stay cheap, short enough that proxies and load balancers do
 # not treat an idle stream as dead.
@@ -58,72 +60,101 @@ def _release_slot() -> None:
         _active_streams = max(0, _active_streams - 1)
 
 
-def _frame(event_type: str, data: dict, seq: Optional[int] = None) -> str:
+def _frame(bus: EventBus, event_type: str, data: dict, seq: Optional[int] = None) -> str:
     lines = []
     if seq is not None:
-        lines.append(f"id: {operation_events.epoch}:{seq}")
+        lines.append(f"id: {bus.epoch}:{seq}")
     lines.append(f"event: {event_type}")
     lines.append(f"data: {json.dumps(data, default=str)}")
     return "\n".join(lines) + "\n\n"
 
 
-def _snapshot_frame() -> tuple[str, int]:
+def _operations_snapshot() -> tuple[dict, int]:
     seq = operation_events.seq
-    return _frame("snapshot", {"seq": seq, "operations": registry.snapshot()}, seq), seq
+    return {"seq": seq, "operations": registry.snapshot()}, seq
 
 
-def _parse_last_event_id() -> Optional[int]:
+def _parse_last_event_id(bus: EventBus) -> Optional[int]:
     raw = request.headers.get("Last-Event-ID") or request.args.get("last_event_id")
     if not raw:
         return None
     try:
         epoch, seq = raw.split(":", 1)
-        return int(seq) if epoch == operation_events.epoch and int(seq) >= 0 else None
+        return int(seq) if epoch == bus.epoch and int(seq) >= 0 else None
     except ValueError:
         return None
 
 
-def _stream(last_event_id: Optional[int]) -> Iterator[str]:
+def stream_bus(bus: EventBus, snapshot: Snapshot, last_event_id: Optional[int]) -> Iterator[str]:
+    """SSE frames of ``bus``: a replay from ``last_event_id`` or a ``snapshot`` frame, then live events.
+
+    ``snapshot()`` returns the snapshot data and the last event sequence it includes. The generator
+    owns a stream slot (see ``stream_response``) and releases it when closed.
+    """
     # Subscribe before snapshotting so nothing published in between is lost;
     # overlapping events are filtered by sequence below.
-    subscription = operation_events.subscribe()
+    subscription = bus.subscribe()
+
+    def snapshot_frame() -> tuple[str, int]:
+        data, seq = snapshot()
+        return _frame(bus, "snapshot", data, seq), seq
+
     try:
         highest_sent = 0
         replay = (
-            operation_events.replay_since(last_event_id)
+            bus.replay_since(last_event_id)
             if last_event_id is not None else None
         )
         if replay is not None:
             highest_sent = last_event_id or 0
             for event in replay:
-                yield _frame(event["event"], event["data"], event["seq"])
+                yield _frame(bus, event["event"], event["data"], event["seq"])
                 highest_sent = max(highest_sent, event["seq"])
         else:
             # No usable history: the client rebuilds from a full snapshot.
-            frame, highest_sent = _snapshot_frame()
+            frame, highest_sent = snapshot_frame()
             yield frame
 
         while True:
             events = subscription.drain(HEARTBEAT_SECONDS)
             if subscription.closed:
-                yield _frame("bye", {"reason": "server shutdown"})
+                yield _frame(bus, "bye", {"reason": "server shutdown"})
                 return
             if subscription.overflowed:
                 subscription.overflowed = False
-                frame, highest_sent = _snapshot_frame()
+                frame, highest_sent = snapshot_frame()
                 yield frame
                 continue
             if not events:
-                yield _frame("heartbeat", {"seq": highest_sent})
+                yield _frame(bus, "heartbeat", {"seq": highest_sent})
                 continue
             for event in events:
                 if event["seq"] <= highest_sent:
                     continue
-                yield _frame(event["event"], event["data"], event["seq"])
+                yield _frame(bus, event["event"], event["data"], event["seq"])
                 highest_sent = event["seq"]
     finally:
         subscription.close()
         _release_slot()
+
+
+def stream_response(bus: EventBus, snapshot: Snapshot) -> ResponseReturnValue:
+    """An SSE response streaming ``bus``, or 503 when every stream slot is taken.
+
+    Every stream shares the ``VULNSCOUT_SSE_MAX_STREAMS`` cap, since each one holds a server thread.
+    """
+    if not _acquire_slot():
+        return jsonify({"error": "Too many concurrent event streams"}), 503
+
+    response = Response(
+        stream_with_context(stream_bus(bus, snapshot, _parse_last_event_id(bus))),
+        mimetype="text/event-stream",
+    )
+    response.headers["Cache-Control"] = "no-cache, no-transform"
+    response.headers["Connection"] = "keep-alive"
+    # Tells nginx and friends to forward frames instead of buffering them.
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
 
 def init_app(app: Flask) -> None:
@@ -142,15 +173,4 @@ def init_app(app: Flask) -> None:
         response 200 sse Server-sent event frames: snapshot, operation, operation_removed, heartbeat, and bye.
         response 503 Error Too many concurrent streams.
         """
-        if not _acquire_slot():
-            return jsonify({"error": "Too many concurrent event streams"}), 503
-
-        response = Response(
-            stream_with_context(_stream(_parse_last_event_id())),
-            mimetype="text/event-stream",
-        )
-        response.headers["Cache-Control"] = "no-cache, no-transform"
-        response.headers["Connection"] = "keep-alive"
-        # Tells nginx and friends to forward frames instead of buffering them.
-        response.headers["X-Accel-Buffering"] = "no"
-        return response
+        return stream_response(operation_events, _operations_snapshot)

@@ -11,9 +11,12 @@ from ..helpers.logging import configure_console_logging
 from ..extensions import db, migrate, setup_write_serialization
 from ..controllers.operation_queue import queue as operation_queue
 from ..controllers.event_bus import operation_events
+from ..controllers import guarded_api
 from ..routes import init_app
 from ..routes.documents import MAX_ASSET_UPLOAD_BYTES, MAX_TEMPLATE_UPLOAD_BYTES
 from ..routes.events import STREAM_PATH
+from ..routes.agent_queue import QUEUE_STREAM_PATH
+from ..controllers.agent_queue import agent_events
 from .. import models  # noqa: F401
 from .merger_ci import init_app as init_merger_cli
 import sys
@@ -204,6 +207,9 @@ def create_app():
                 return True
         return False
 
+    # Before any route hook, so a GuardedApi turn guard sees requests first and records them last.
+    guarded_api.init_app(app)
+
     @app.after_request
     def add_CORS_header(response):
         response.headers["Access-Control-Allow-Origin"] = "*"
@@ -256,11 +262,11 @@ def create_app():
 
     @app.middleware("/api")
     def fail_scan_not_finished(*args, **kw):
-        # The event stream is exempt like /api/scan/status: the UI opens it
-        # during boot import to render operation progress live.
+        # The event streams are exempt like /api/scan/status: the UI opens them
+        # during boot import to render operation progress and the AI queue live.
         if request.path in {
             "/api", "/api/openapi", "/api/openapi.json", "/api/openapi/ui",
-            STREAM_PATH,
+            STREAM_PATH, QUEUE_STREAM_PATH,
         }:
             return None
         if not is_scan_finished():
@@ -275,6 +281,7 @@ def create_app():
 def stop_handler(signal, frame):
     print("Stopping Flask server")
     operation_events.close_all()
+    agent_events.close_all()
     sys.exit(0)
 
 

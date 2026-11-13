@@ -17,7 +17,7 @@ multipart file controls, collection shapes, explicit success statuses, and
 stream/download media types. Bodyless responses have no content schema.
 Vulnerability, operation, and queue identifiers remain strings rather than being
 inferred as UUIDs from their names. Agent operations describe their localhost
-restrictions, session cookie, optional conversation header, and JSON/NDJSON replies.
+restrictions; they use no cookie or conversation header.
 Schemas remain extensible where responses carry computed enrichment or external
 SBOM/VEX fields. These are documentation contracts, not additional runtime validation.
 Swagger UI loads the canonical *spec URL*, not a separately curated specification;
@@ -49,7 +49,7 @@ GET /api/scan/status
 ```
 
 Returns the progress of the container entrypoint import script. Most API routes return `503` with `{"error":"Scan not finished"}` until import finishes.
-Exceptions are this endpoint, `/api/version`, the four OpenAPI URLs above, `/api/events/stream`, and the independently registered agent blueprint. Agent routes still apply their own access and availability checks.
+Exceptions are this endpoint, `/api/version`, the four OpenAPI URLs above, `/api/events/stream`, `/api/agent/queue/stream`, and the independently registered agent blueprint (`/api/agent`, provider, sign-in, and model routes). The AI queue and conversation routes are gated. Agent routes still apply their own access and availability checks.
 
 **Response:**
 ```json
@@ -2027,15 +2027,14 @@ Omitting `refresh_sources` defaults to EPSS; send `none` alone for no refresh. U
 
 ## Agent Chat
 
-Agent routes use the `vulnscout_agent` cookie to retain a browser conversation; preserve cookies between calls.
-An optional `X-Agent-Thread` UUID selects an independent thread sharing root credentials and the response lock
-(at most 20 child threads). Conversations expire after one hour of inactivity.
+The agent connection is process-wide: provider credentials, device sign-in state, and the selected model are
+shared by every local client. Agent routes set no cookie and need no conversation header.
 Responses use `Cache-Control: no-store`; credentials are never included in status responses.
 
 All agent operations require a localhost host name and a trusted local client connection;
-non-GET browser requests with an `Origin` must match the server origin (`403` otherwise).
-Malformed thread IDs return `400`. The bootstrap import gate does not apply, but individual operations can still
-fail when the provider, Copilot SDK, MCP server, or database scope is unavailable.
+browser requests with an `Origin`, reads included, must match the server origin (`403` otherwise).
+The bootstrap import gate does not apply to the routes of this section (it does to the AI queue routes below),
+but individual operations can still fail when the provider, Copilot SDK, MCP server, or database scope is unavailable.
 Agent POSTs return `200` on success, not `201`.
 
 ### Read Agent Status
@@ -2047,7 +2046,7 @@ GET /api/agent
 Returns `200` with `authenticated`, nullable `login`, `configured` (bundled MCP server file exists),
 `device_login`, `token_connected`, nullable `provider`, nullable `config_error`, `messages` (role/content objects),
 `model`, and `usage` (`cost`, `input_tokens`, `output_tokens`, each nullable).
-Provider authentication/configuration and conversation history are scoped to the cookie/root thread.
+`messages` and `usage` are those of the main conversation of the {ref}`AI queue <api-ai-queue>`.
 
 ### Connect or Disconnect a Provider
 
@@ -2075,9 +2074,12 @@ Hosted providers require a nonblank `api_key`; local providers do not.
 Hosted URLs require HTTPS; local URLs require HTTP and an allowed loopback/container host. URLs cannot include credentials, query strings, or fragments.
 
 POST uses the supplied model or discovers the provider's model list; supplying a model does not itself probe the provider.
-DELETE clears the provider. Both clear prior conversation threads and persist configuration to `config.env`.
+DELETE clears the provider. Both reset the AI conversations and persist configuration to `config.env`.
+A connection change is refused while an AI request runs; it fails the waiting requests of conversations that have
+history (`connection_changed`), and the other waiting requests run with the new connection.
 **Response:** `200` with `{"provider":"local","model":"my-local-model"}` (DELETE uses null provider and resets the model).
-Errors: `400` invalid configuration or model discovery failure, `409` agent already responding,
+Errors: `400` invalid configuration or model discovery failure, `409` another connection change in progress or
+an AI request still running (`"The agent is already responding."`),
 `500` persistence failure, `503` failure clearing the previous stored conversation.
 
 ### GitHub Device Sign-In and Sign-Out
@@ -2090,19 +2092,20 @@ DELETE /api/agent/auth
 
 No request bodies are needed. POST auth starts GitHub device sign-in and returns `200` with
 `user_code`, HTTPS `verification_uri`, and polling `interval` in seconds. Complete sign-in at that URI.
-POST poll uses the cookie's stored device code; wait at least the returned interval between calls.
+POST poll uses the device code stored by the server; wait at least the returned interval between calls.
 
 **Poll responses:** `200` with `{"status":"pending","interval":5}` while waiting (the interval can increase),
 or `{"status":"connected","authenticated":true,"login":"account-name"}` on verified Copilot access.
 `410` means the device code is missing/expired; start again.
 `401` means sign-in was denied/failed or the account has no Copilot access;
 `503` means GitHub/Copilot verification is unavailable; `500` means credentials could not be persisted.
-Starting sign-in can also return `503`.
+Starting sign-in can also return `503`. Poll returns `409` while an AI request runs (the device code is kept).
 
-DELETE signs out, clears provider/device credentials and all threads, and returns
+DELETE signs out, clears provider/device credentials and the stored agent session, and returns
 `200` with `{"authenticated":false,"cleanup_error":null}`.
 A remote-session cleanup error may be reported in `cleanup_error` despite successful local sign-out;
-persistence failure returns `500`. Successful sign-in persists credentials and resets prior threads.
+persistence failure returns `500`, and `409` means an AI request is still running.
+Successful sign-in persists credentials, resets the AI conversations, and resumes a paused AI queue.
 
 ### List or Select Models
 
@@ -2113,62 +2116,99 @@ POST /api/agent/model
 
 GET returns `200` with `{"models":[{"id":"model-id","name":"Model name"}]}` for the current provider/Copilot account.
 POST accepts `{"model":"model-id"}`; the string must be at most 100 characters, contain no control characters,
-and identify an available model. It persists `AI_MODEL` and returns `200` with `{"model":"model-id"}`.
+and identify an available model. It persists `AI_MODEL`, resumes a paused AI queue, and returns `200` with
+`{"model":"model-id"}`. The running AI request keeps its model; waiting requests keep the model they were queued with,
+except those queued before a provider or token was configured, which take the model selected when they start.
 Errors: `400` invalid configuration/model, `503` unavailable Copilot model lookup;
-POST additionally returns `409` while the agent is responding or `500` if persistence fails.
+POST additionally returns `500` if persistence fails.
 
-### Reset a Conversation
-
-```
-DELETE /api/agent/conversation
-```
-
-Deletes the selected thread's stored session, messages, and usage without signing out.
-With `X-Agent-Thread`, only that child thread is removed.
-Returns `200` with `{"messages":[],"usage":{"cost":null,"input_tokens":null,"output_tokens":null}}`,
-or `503` if deleting the stored session fails.
-
-### Send a Message
+(api-ai-queue)=
+### AI Queue
 
 ```
-POST /api/agent/messages
+GET /api/agent/queue
+GET /api/agent/queue/stream
+POST /api/agent/queue
+DELETE /api/agent/queue
+GET /api/agent/queue/requests/<request_id>
+DELETE /api/agent/queue/requests/<request_id>
+POST /api/agent/queue/requests/<request_id>/stop
+POST /api/agent/queue/requests/<request_id>/retry
+GET /api/agent/conversations/<conversation_id>
+DELETE /api/agent/conversations/<conversation_id>
+DELETE /api/agent/conversations
+POST /api/agent/conversations/main/reset
 ```
+
+The server runs AI requests (assess and review actions, chat messages) from one process-wide queue shared by
+every local client, the web UI and the CLI. Actions and messages run on two lanes, one request at a time per lane;
+the requests of one conversation run in order. These routes have the same localhost/origin checks and
+`Cache-Control: no-store` as the other agent routes, but return `503` until the import finishes, except the stream.
+The queue is process-local: a restart forgets it.
+
+POST queues actions:
 
 ```json
 {
-  "message": "Summarize the selected variant's pending assessments.",
-  "context": {
-    "page": "review",
-    "projectId": "11111111-1111-1111-1111-111111111111",
-    "variantId": "22222222-2222-2222-2222-222222222222"
-  }
+  "conversation": "per-action",
+  "source": "web",
+  "actions": [
+    { "kind": "assess", "vuln_id": "CVE-2024-1234", "key": "assess:CVE-2024-1234" },
+    { "kind": "review", "assessment_id": "<assessment-uuid>", "variant_id": "<variant-uuid>" }
+  ],
+  "model": "model-id",
+  "timeout": 900,
+  "context": { "page": "vulnerabilities" },
+  "require_ready": false
 }
 ```
 
-`message` is required, nonblank, and at most 8000 characters. Optional `model` defaults to the conversation model
-(nonempty string, at most 100 characters). Optional `context` describes browser selection, not trusted project facts.
-Its `page` must be `metrics`, `packages`, `vulnerabilities`, `scans`, `review`, `exports`, `settings`, `ai`, or `unknown`.
-Optional scope strings `projectId`, `variantId`, `baseVariantId`, `compareOperation`, `multiOperation` are at most 100 characters;
-`variantIds` permits at most 1000 strings of that length. Selected variant UUIDs must belong to the selected project.
-With no context/project on non-AI pages, the agent scope spans all projects.
-AI-page scope instead uses `view.selectedProjectId` and `view.selectedVariantId`, with no project selection yielding no project scope.
+Assess and review actions go to `per-action` (one new conversation per action key); a message
+(`{"kind":"message","text":"..."}`, at most 8000 characters) goes to `main` or to an existing conversation ID.
+`source` (at most 100 characters) names the client. `actions` lists 1 to 500 actions; each may set a `key`
+(at most 500 characters, derived from the action otherwise) and its own `context`. Assess actions take an optional
+`targets` list of `{variant_id, package}` pairs (the active targets in scope otherwise); `vuln_id` is uppercased.
+Review actions take optional `variant_id` and `finding_ids` restrictions, and an optional `fingerprint` of the
+assessment content (the CLI pins it at selection, so an assessment edited while the review waits fails as changed;
+the content is pinned when the turn starts otherwise). `model` pins the model; without it, a request takes the
+configured model, when queued if a provider or GitHub token is configured and when it starts otherwise (its
+`model` is `null` until then). Retrying it or changing the connection resolves it again. `timeout` (1 to 3600
+seconds) defaults to the action's default. The call is atomic: an invalid action queues nothing.
 
-Optional `context.view` accepts UI selection metadata:
+**Response:** `202` with `{"requests":[{"id":"...","key":"...","conversation_id":"..."}],"skipped":[{"key":"...","request_id":"...","request_ids":["..."]}]}`.
+Actions whose key is already queued, running, or failed are skipped, except a review whose key is held only by
+failed requests pinned to another `fingerprint`: those leave the queue (still found by ID) and the review is
+queued afresh. A skipped action reports the request holding its key and `request_ids`, every request of that
+action (its finished batches included) in batch order. Errors: `400` invalid body or action,
+`404` unknown conversation, `409` archived conversation, and with `require_ready`, `409` with
+`{"code":"no_ai_config"|"invalid_config"|"github_signed_out","error":"..."}` when no request could run now.
 
-- Strings up to 200 characters: `openVulnerabilityId`, `search`, `section`, `selectedProjectId`, `selectedProjectName`,
-  `selectedVariantId`, `selectedVariantName`, `openScanId`, `exportType`, `exportMode`, `exportCategory`, `refreshMode`.
-- Arrays of up to 100 strings (each up to 200 characters): `visibleVulnerabilityIds`, `selectedVulnerabilityIds`,
-  `visiblePackageIds`, `visibleScanIds`, `matchingVariantIds`, `selectedVariantIds`, `selectedExportKeys`,
-  `enabledExportDocuments`, `selectedScanTypes`, `selectedRefreshTypes`.
-- Integers from 0 to 1,000,000: `visibleCount`, `selectionCount`.
-- Booleans: `hideEmptyScans`, `excludeKernel`, `excludeNative`.
+`GET /api/agent/queue` returns `{epoch, seq, paused, requests, history, conversations, connection_revision}`. `requests` lists the
+waiting (`queued` with a `position`, or `failed`) and `running` requests; `history` the last 50 finished ones;
+`conversations` their summaries (`id`, `title`, `kind`, `profile`, `archived`, `created_at`, `last_used`,
+`message_count`, `usage`, `live`). `paused` is null or `{code, reason}` when requests wait for a working
+connection; signing in, changing the provider, or selecting a model resumes the queue. `connection_revision`
+changes whenever the agent connection or selected model changes, so clients reload their sign-in state and models.
+`GET /api/agent/queue/requests/<id>` returns one request with its full `result`, while it is active or among the
+last 1000 finished ones (`404` otherwise). Request statuses are `queued`, `running`, `failed`, `done`, and `cancelled`;
+`error_code` tells why one failed or was cancelled (for example `timeout`, `mcp`, `skills`, `unavailable_model`,
+`connection_changed`, `stopped`, or `removed`).
 
-**Default response:** `200` JSON with `reply`, `model`, and accumulated `usage`.
-Set the exact header `Accept: application/x-ndjson` for a `200` newline-delimited JSON stream instead.
-Stream event `type` values include `status`, `heartbeat`, `delta`, `tool_start`, `tool_end`, and terminal
-`done` (with `reply`, `model`, `usage`) or `error` (with `error` message).
-Once streaming starts, failures are events rather than changed HTTP statuses.
+`DELETE /api/agent/queue` removes the waiting requests and returns `{"removed": <count>}`. For one request, DELETE
+returns `{"status":"removed"}` (`409` while it runs); stop returns `{"status":"stopping"}` for a running request
+(it ends `cancelled`, keeping what it saved) or `{"status":"removed"}` for a waiting one; retry queues a failed
+request again and returns `{"status":"queued"}` (`409` otherwise). Unknown requests return `404`.
 
-Before streaming/JSON processing, invalid messages/configuration/context return `400`,
-concurrent responses return `409`, and a missing bundled MCP server returns `503`.
-For nonstreaming requests, unavailable model selection returns `400` and provider/agent execution failures return `503`.
+`GET /api/agent/conversations/<id>` returns a conversation summary with its `messages` (`main` is the chat
+conversation). DELETE deletes a finished action conversation and returns `{"deleted":1}` (`409` for `main` or while
+it has requests); `DELETE /api/agent/conversations` deletes every action conversation without requests and returns
+`{"deleted": <count>}`. `POST /api/agent/conversations/main/reset` starts the main conversation afresh, keeping its
+waiting messages, and returns it (`409` while one of its messages runs).
+
+`GET /api/agent/queue/stream` returns `text/event-stream`, like the operation event stream: a `snapshot` (the queue
+snapshot) first, then `queue` (`requests`, `history`, `conversations`, `paused`, `connection_revision`), `request_progress`
+(`request_id`, `conversation_id`, `live` with the partial reply, tool activity, and progress text, at most 10 per
+second), `conversation` (one conversation summary), `agent_write` (`tool`, `request_id`, `conversation_id` when a
+request saved an assessment or review), `heartbeat`, and `bye`. Reconnect with the `<epoch>:<seq>`
+`Last-Event-ID` to replay the last 64 events; otherwise a new snapshot is sent. Both streams share the
+`VULNSCOUT_SSE_MAX_STREAMS` limit (`503` above it). The stream is available before the import finishes.

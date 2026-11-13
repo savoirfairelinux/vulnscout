@@ -32,13 +32,12 @@ import EpssRefreshHandler from "../handlers/epssRefresh";
 import EuvdRefreshHandler from "../handlers/euvdRefresh";
 import GhsaRefreshHandler from "../handlers/ghsaRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
-import type { QueuedAgentMessage } from '../types/agent';
-import { agentActionState as queueActionState, enqueueAgentMessages, openAgentChat } from '../handlers/agentQueue';
+import { agentActionState as queueActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
 import AgentActionButton from './AgentActionButton';
 import useAgentQueue from '../hooks/useAgentQueue';
-import { AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
-import { assessmentKey, buildAiAssessmentMessages } from "../helpers/aiAssessment";
-import { assessmentReviewKey, buildAssessmentReviewAction } from "../helpers/aiAssessmentReview";
+import { AGENT_WRITE_EVENT, type AgentAction, type AgentActionState, type AgentContext } from "../types/agent";
+import { assessmentKey } from "../helpers/aiAssessment";
+import { assessmentReviewKey } from "../helpers/aiAssessmentReview";
 import VulnHistory from "./VulnHistory";
 
 type Props = {
@@ -192,33 +191,35 @@ type VariantScopedSnapshot = {
         queueActionState(agentMessageQueue, item => item.key === key);
 
     /** Queue an AI action in its own conversation of the agent chat, which opens beside this modal. */
-    const queueAgentActions = (actions: Omit<QueuedAgentMessage, 'id'>[]) => {
+    const queueAgentAction = async (action: AgentAction, key: string) => {
         setIsEditing(true);
-        const existing = actions.length ? agentActionState(actions[0].key) : undefined;
+        const existing = agentActionState(key);
         if (existing) {
             openAgentChat(existing.taskId);
             return;
         }
-        const queued = actions.map(action => ({
-            ...action, id: crypto.randomUUID(),
-            title: action.kind === 'assess' ? `${vuln.id} · ${action.title}` : action.title,
-        }));
-        enqueueAgentMessages(queued, assessmentAgentContext, `Vulnerability ${vuln.id}`, 'per-action');
-        openAgentChat(queued[0]?.id);
+        try {
+            const { requests, skipped } = await enqueueAgentActions([action], {
+                conversation: 'per-action', source: `Vulnerability ${vuln.id}`, context: assessmentAgentContext,
+            });
+            openAgentChat(requests[0]?.id ?? skipped[0]?.request_id);
+        } catch (error) {
+            showMessage(error instanceof Error ? error.message : 'Unable to queue the AI request.', 'error');
+        }
     };
 
     const assessWithAiState = (targets: AssessmentTargetPair[]) => agentActionState(assessmentKey(vuln.id, targets));
 
     const assessWithAi = (targets: AssessmentTargetPair[]) => {
-        try {
-            queueAgentActions(buildAiAssessmentMessages(vuln.id, targets, availableVariants));
-        } catch (error) {
-            showMessage(error instanceof Error ? error.message : 'Unable to prepare AI assessment.', 'error');
+        if (!targets.length) {
+            showMessage(`No active assessment targets for ${vuln.id}.`, 'error');
+            return;
         }
+        void queueAgentAction({ kind: 'assess', vuln_id: vuln.id, targets }, assessmentKey(vuln.id, targets));
     };
 
     const reviewWithAi = (assessment: Assessment) => {
-        queueAgentActions([buildAssessmentReviewAction(assessment)]);
+        void queueAgentAction({ kind: 'review', assessment_id: assessment.id }, assessmentReviewKey(assessment.id));
     };
 
     const assessmentAgentContext: AgentContext = {

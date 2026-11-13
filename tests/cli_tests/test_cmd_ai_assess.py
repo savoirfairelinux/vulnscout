@@ -445,9 +445,9 @@ def test_pid_file_is_removed_only_when_it_names_this_process(app, ids, monkeypat
 
 
 def test_dry_run_reports_model_and_unbatchable_variants(app, ids, monkeypatch):
-    from src.bin import cmd_ai_assess
+    from src.controllers import ai_actions
 
-    monkeypatch.setattr(cmd_ai_assess, "PROMPT_BUDGET", 10)
+    monkeypatch.setattr(ai_actions, "PROMPT_BUDGET", 10)
     result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--dry-run", "--model", "m1")
     assert result.exit_code == 1
     assert "failed" in result.stdout and "Too many packages for variant" in result.stdout
@@ -868,7 +868,7 @@ def test_sigint_is_reported_when_cancellation_cleanup_fails(app, ids, monkeypatc
 
 
 def test_sigint_after_a_turn_marks_its_cve_interrupted(app, ids, monkeypatch, production_signals):
-    from src.bin import cmd_ai_assess
+    from src.controllers import ai_actions
 
     snapshots = []
 
@@ -878,8 +878,8 @@ def test_sigint_after_a_turn_marks_its_cve_interrupted(app, ids, monkeypatch, pr
             _ctrl_c()
         return original(row_ids)
 
-    original = cmd_ai_assess._ai_targets
-    monkeypatch.setattr(cmd_ai_assess, "_ai_targets", interrupting)
+    original = ai_actions._ai_targets
+    monkeypatch.setattr(ai_actions, "_ai_targets", interrupting)
     calls = _fake_reply(monkeypatch, lambda call: None)
     result = _invoke(app, "--project", "demo", "--variant", "x86",
                      "--cve", "CVE-2024-0001", "--cve", "CVE-2024-0003", "--json")
@@ -990,15 +990,37 @@ def test_model_override_applies_to_a_configured_provider_model(app, ids, monkeyp
 
 
 def test_unbatchable_variant_fails_without_a_turn(app, ids, monkeypatch):
-    from src.bin import cmd_ai_assess
+    from src.controllers import ai_actions
 
-    monkeypatch.setattr(cmd_ai_assess, "PROMPT_BUDGET", 10)
+    monkeypatch.setattr(ai_actions, "PROMPT_BUDGET", 10)
     calls = _fake_reply(monkeypatch, lambda call: None)
     result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
     assert result.exit_code == 1
     [entry] = json.loads(result.stdout)["results"]
     assert entry["outcome"] == "failed" and "Too many packages for variant" in entry["error"]
     assert calls == []
+
+
+def test_batches_of_one_vulnerability_fold_into_one_result(app, ids, monkeypatch):
+    from src.controllers import ai_actions
+
+    monkeypatch.setattr(ai_actions, "PROMPT_BUDGET", 330)
+
+    def behaviour(call):
+        if len(calls) == 1:
+            _write_ai(call, ids["x86"], "openssl")
+            return None
+        raise RuntimeError("boom")
+
+    calls = _fake_reply(monkeypatch, behaviour)
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
+    assert result.exit_code == 1 and len(calls) == 2
+    [entry] = json.loads(result.stdout)["results"]
+    assert (entry["outcome"], entry["error"], entry["reply"]) == ("failed", "boom", "done")
+    assert entry["usage"] == {"cost": 1.0, "input_tokens": 10, "output_tokens": 5}
+    assert [(t["variant"], t["package"]) for t in entry["targets"] if t["written"]] == [("x86", "openssl@3.0")]
+    assert "(2 targets, batch 1 of 2)" in result.stderr and "(1 targets, batch 2 of 2)" in result.stderr
+    assert result.stderr.count("CVE-2024-0001: failed") == 1
 
 
 def test_variant_active_packages_filters_by_project(app, ids):
@@ -1011,3 +1033,169 @@ def test_variant_active_packages_filters_by_project(app, ids):
         other = variant_active_packages("CVE-2024-0001", project_uuid=uuid4())
     assert sorted(entry["variant_id"] for entry in demo) == sorted([ids["x86"], ids["arm"]])
     assert other == []
+
+
+# ---------------------------------------------------------------- remote mode: through the web AI queue
+
+def _web_queue(monkeypatch, *args, **kwargs):
+    from .queue_fakes import FakeQueueServer
+
+    return FakeQueueServer(*args, **kwargs).install(monkeypatch)
+
+
+def test_without_a_web_server_the_run_says_so_and_stays_in_process(app, ids, monkeypatch):
+    _fake_reply(monkeypatch, lambda call: _write_ai(call, ids["arm"], "openssl"))
+    result = _invoke(app, "--project", "demo", "--variant", "arm", "--cve", "CVE-2024-0001")
+    assert result.exit_code == 0, result.stderr
+    assert "note: web server not running; this run is not visible in the web AI queue" in result.stderr
+
+
+def test_dry_run_never_contacts_the_web_server(app, ids, monkeypatch):
+    from src.bin import _ai_runner
+
+    monkeypatch.setattr(_ai_runner, "queue_client", lambda: pytest.fail("dry runs must not probe"))
+    assert _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--dry-run").exit_code == 0
+
+
+def test_remote_run_submits_explicit_targets_and_reports_like_in_process(app, ids, monkeypatch):
+    from src.routes import agent
+    from .queue_fakes import assess_result, done, failed
+
+    monkeypatch.setattr(agent, "_reply", lambda *args, **kwargs: pytest.fail("the turn runs in the web server"))
+
+    def finish(action, index):
+        if action["vuln_id"] == "CVE-2024-0004":
+            return failed("No reply within 30 s.", "timeout", assess_result(action, [], "timeout", "No reply."))
+        return done(assess_result(action, written=[(ids["x86"], "openssl@3.0")]))
+
+    server = _web_queue(monkeypatch, finish)
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--cve", "CVE-2024-0004",
+                     "--timeout", "30", "--json")
+    assert result.exit_code == 1, result.stderr
+    [body] = server.submitted
+    assert {key: body[key] for key in ("conversation", "source", "require_ready", "timeout")} == {
+        "conversation": "per-action", "source": "CLI", "require_ready": True, "timeout": 30}
+    first, second = body["actions"]
+    assert first["kind"] == "assess" and first["vuln_id"] == "CVE-2024-0001"
+    assert "key" not in first  # the server derives it from the targets
+    assert sorted((t["variant_id"], t["package"]) for t in first["targets"]) == sorted([
+        (ids["x86"], "openssl@3.0"), (ids["arm"], "openssl@3.0"), (ids["x86"], "zlib@1.2")])
+    report = json.loads(result.stdout)
+    assert report["model"] == "server-model"
+    partial, timeout = report["results"]
+    assert partial["outcome"] == "partial" and partial["usage"]["input_tokens"] == 10
+    assert {(t["variant"], t["package"]): t["assessment_ids"] for t in partial["targets"]} == {
+        ("x86", "openssl@3.0"): [f"a-{ids['x86']}-openssl@3.0"], ("arm", "openssl@3.0"): [], ("x86", "zlib@1.2"): []}
+    assert timeout["outcome"] == "timeout" and timeout["error"] == "No reply."
+    assert "[1/2] Assessing CVE-2024-0001 (3 targets)..." in result.stderr
+    assert "[2/2] CVE-2024-0004: timeout" in result.stderr
+    assert "note: web server not running" not in result.stderr
+
+
+@pytest.mark.parametrize("code, message", [
+    ("no_ai_config", "No AI provider configured."),
+    ("github_signed_out", "GitHub Copilot rejected the configured token"),
+])
+def test_remote_run_fails_at_once_when_the_web_agent_is_not_ready(app, ids, monkeypatch, code, message):
+    server = _web_queue(monkeypatch, submit=(409, {"code": code, "error": "x"}))
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001")
+    assert result.exit_code == 1 and message in result.stderr
+    assert len(server.submitted) == 1 and "CVE-2024-0001" not in result.stdout
+
+
+def test_remote_unavailable_model_aborts(app, ids, monkeypatch):
+    from .queue_fakes import assess_result, failed
+
+    _web_queue(monkeypatch, lambda action, index: failed(
+        "Selected model is not available for this account.", "unavailable_model", assess_result(action, [], "failed")))
+    result = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--model", "nope")
+    assert result.exit_code == 1 and "not available" in result.stderr
+
+
+def test_remote_ctrl_c_stops_this_runs_requests_and_reports(app, ids, monkeypatch):
+    server = _web_queue(monkeypatch)
+    server.advance = False
+    foreign = server.add({"kind": "assess", "vuln_id": "CVE-2024-0009", "key": "assess:other", "targets": []})
+
+    def ctrl_c(srv, count):
+        if count == 2:
+            srv.records["req-2"].update(status="running", started_at=1.0)
+        if count == 3:
+            raise KeyboardInterrupt
+
+    server.on_snapshot = ctrl_c
+    result = _invoke(app, "--project", "demo", "--variant", "x86",
+                     "--cve", "CVE-2024-0001", "--cve", "CVE-2024-0003", "--json")
+    assert result.exit_code == 1
+    assert server.stopped == ["req-2", "req-3"] and foreign not in server.stopped
+    first, second = json.loads(result.stdout)["results"]
+    assert first["outcome"] == "interrupted" and first["error"] == "Interrupted."
+    assert second["outcome"] == "interrupted" and second["error"] == "Not started."
+    assert "Interrupted; reporting completed assessments." in result.stderr
+
+
+def test_remote_run_reports_unfinished_items_when_the_web_server_stops(app, ids, monkeypatch):
+    server = _web_queue(monkeypatch)
+    server.on_snapshot = lambda srv, count: setattr(srv, "down", count == 3)
+    result = _invoke(app, "--project", "demo", "--variant", "x86", "--cve", "CVE-2024-0001", "--json")
+    assert result.exit_code == 1
+    [entry] = json.loads(result.stdout)["results"]
+    assert entry["outcome"] == "failed" and entry["error"] == "web server stopped"
+    assert "The web server stopped" in result.stderr
+
+
+def test_remote_run_through_the_real_web_queue_matches_the_in_process_report(app, ids, monkeypatch):
+    """End to end: the CLI's HTTP calls reach the real AgentQueue, which runs the turn with the agent."""
+    from src.bin import _ai_queue_client
+    from src.controllers import agent_queue as aq
+    from src.controllers.event_bus import EventBus
+    from src.routes import agent
+
+    def write_all(call):
+        for variant_id in call["scope"]["variant_ids"]:
+            _write_ai(call, variant_id, "openssl")
+        if ids["x86"] in call["scope"]["variant_ids"]:
+            _write_ai(call, ids["x86"], "zlib")
+
+    async def delete(token, session_id):
+        pass
+
+    calls = _fake_reply(monkeypatch, write_all)
+    local = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
+    assert local.exit_code == 0, local.stderr
+
+    monkeypatch.setattr(agent, "_delete_session", delete)
+    monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
+    queue = aq.AgentQueue(app, events=EventBus(replay_size=64))
+    monkeypatch.setattr(aq, "agent_queue", queue)
+    web = app.test_client()
+
+    def transport(method, path, body, timeout):
+        response = web.open(path, method=method, json=body)
+        return response.status_code, response.get_json(silent=True)
+
+    monkeypatch.setattr(_ai_queue_client, "POLL_INTERVAL", 0.01)
+    from src.bin import _ai_runner
+
+    monkeypatch.setattr(_ai_runner, "queue_client", lambda: _ai_queue_client.QueueClient(transport))
+    try:
+        remote = _invoke(app, "--project", "demo", "--cve", "CVE-2024-0001", "--json")
+    finally:
+        queue.shutdown()
+    assert remote.exit_code == 0, remote.stderr
+    assert len(calls) == 2 and calls[1]["ephemeral"] is False  # the web queue's turn
+    assert "[1/1] Assessing CVE-2024-0001 (3 targets)..." in remote.stderr
+
+    def comparable(report):
+        for entry in report["results"]:
+            for target in entry["targets"]:
+                target["assessment_ids"] = len(target["assessment_ids"])
+        return report
+
+    assert comparable(json.loads(remote.stdout)) == comparable(json.loads(local.stdout))
+    from src.models.assessment import Assessment
+
+    with app.app_context():
+        saved = {str(row.id) for row in Assessment.get_by_vulnerability("CVE-2024-0001") if row.origin == "ai"}
+    report = json.loads(remote.stdout)
+    assert {i for t in report["results"][0]["targets"] for i in t["assessment_ids"]} <= saved

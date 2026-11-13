@@ -13,10 +13,18 @@ import threading
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
 
 import click
-from flask import Response, abort, current_app, request_finished, request_started
+from flask import current_app
+
+from ..helpers.env_vars import get_bool_env
+from ._console import echo
+
+if TYPE_CHECKING:
+    from ..controllers.ai_actions import TurnResult, TurnSpec
+    from ..controllers.guarded_api import GuardedApi
+    from ._ai_queue_client import QueueClient
 
 # Set by entrypoint.sh (ai-assess and ai-review) so the host wrapper can forward Ctrl-C to this process.
 PID_FILE_ENV = "VULNSCOUT_AI_ASSESS_PID_FILE"
@@ -27,9 +35,6 @@ NO_AI_CONFIG = ("No AI provider configured. Connect an AI provider in the web UI
                 "or set AI_* with `vulnscout config`.")
 GITHUB_SIGNED_OUT = ("GitHub Copilot rejected the configured token (expired or invalid). Reconnect in the "
                      "web UI Agent panel or update AI_AUTH_CREDENTIALS with `vulnscout config`.")
-
-Guard = Callable[[], "Response | None"]  # runs in request_started; may abort
-Recorder = Callable[["Response"], None]  # runs in request_finished
 
 
 def empty_usage() -> dict[str, Any]:
@@ -112,6 +117,33 @@ def interrupt_signals() -> Iterator[None]:
                 signal.signal(signum, handler)
 
 
+@contextmanager
+def deferred_interrupt() -> Iterator[None]:
+    """Hold a first Ctrl-C (SIGINT) until the block ends, then raise ``KeyboardInterrupt``.
+
+    For a call the server may accept even when the client gives up on it (submitting a batch to the web
+    AI queue): its answer names the requests to stop. A further SIGINT, or SIGTERM, still stops at once.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    held = threading.Event()
+
+    def hold(signum, frame) -> None:
+        interrupted.set()
+        if held.is_set():
+            signal.default_int_handler(signum, frame)
+        held.set()
+
+    previous = signal.signal(signal.SIGINT, hold)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous if previous is not None else signal.SIG_DFL)
+    if held.is_set():
+        raise KeyboardInterrupt
+
+
 def release_pid_file() -> None:
     """Remove the entrypoint's pidfile if it still names this process (it ``exec``s into flask)."""
     path = os.environ.get(PID_FILE_ENV)
@@ -123,37 +155,95 @@ def release_pid_file() -> None:
 
 
 @contextmanager
-def private_api(guard: Guard, recorder: Recorder) -> Iterator[str]:
-    """Serve the app on 127.0.0.1:<free port> for one run; yield its base URL.
+def guarded_api() -> Iterator[GuardedApi]:
+    """Serve the app on 127.0.0.1:<free port> for one run (see ``GuardedApi``), started and disarmed.
 
-    ``guard`` is called before every request and may return a Response to reject it;
-    ``recorder`` sees every finished response, including guard rejections.
+    Each turn arms it with its own guard (``ai_actions.run_turn``); requests that do not come through
+    this port are not guarded.
     """
-    from werkzeug.serving import make_server
+    from ..controllers.guarded_api import GuardedApi
 
-    app = current_app._get_current_object()  # type: ignore[attr-defined]
-    # This process never runs the boot scan that normally opens the /api gate.
-    setattr(app, "_INT_SCAN_FINISHED", True)
-    logging.getLogger("werkzeug").setLevel(logging.WARNING)
-
-    def on_started(sender, **extra) -> None:
-        rejection = guard()
-        if rejection is not None:
-            abort(rejection)
-
-    def on_finished(sender, response, **extra) -> None:
-        recorder(response)
-
-    request_started.connect(on_started, app, weak=False)
-    request_finished.connect(on_finished, app, weak=False)
-    server = make_server("127.0.0.1", 0, app, threaded=True)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    api = GuardedApi(current_app._get_current_object())  # type: ignore[attr-defined]
+    api.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}"
+        yield api
     finally:
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
-        request_finished.disconnect(on_finished, app)
-        request_started.disconnect(on_started, app)
+        api.stop()
+
+
+LOCAL_NOTE = "note: web server not running; this run is not visible in the web AI queue"
+
+
+def queue_client() -> QueueClient:
+    """The client of the web server's AI queue in this container (replaced in tests)."""
+    from ._ai_queue_client import QueueClient
+
+    return QueueClient()
+
+
+def execute(specs: Iterable[TurnSpec], model: str | None, on_start: Callable[[TurnSpec], None],
+            on_done: Callable[[TurnSpec, TurnResult], None]) -> tuple[str | None, bool]:
+    """Run each of *specs* as one agent turn; return the model used and whether the run was interrupted.
+
+    ``on_start(spec)`` runs before the turn and ``on_done(spec, result)`` after it with its ``TurnResult``;
+    a completed turn's result carries its ``usage``. An unavailable model or missing skills ends the run with
+    a ``ClickException``; Ctrl-C stops it after recording what the current turn wrote.
+
+    When ``vulnscout serve`` runs, the turns go through its AI queue (visible in the web UI, after the web's
+    queued actions); otherwise they run in this process, *specs* consumed lazily so a command can plan each
+    item when it is reached.
+    """
+    from ._ai_queue_client import run_remote
+
+    client = queue_client()
+    if client.probe() is not None:
+        return run_remote(client, specs, model, on_start, on_done)
+    echo(LOCAL_NOTE, err=True)
+    return _execute_local(specs, model, on_start, on_done)
+
+
+def _execute_local(specs: Iterable[TurnSpec], model: str | None, on_start: Callable[[TurnSpec], None],
+                   on_done: Callable[[TurnSpec, TurnResult], None]) -> tuple[str, bool]:
+    from ..controllers import ai_actions
+    from ..routes import agent, agent_skills
+
+    # This process never runs the boot scan that normally opens the /api gate.
+    setattr(current_app, "_INT_SCAN_FINISHED", True)
+    credentials, selected, path = load_agent(model)
+    if not get_bool_env("VERBOSE_MODE"):
+        # The SDK logs every failed request with a traceback; the summary already reports the error.
+        logging.getLogger("copilot").setLevel(logging.ERROR)
+    if credentials.token and not credentials.provider:
+        check_github_sign_in(credentials.token)
+    with guarded_api() as api:
+        try:
+            for spec in specs:
+                on_start(spec)
+                turn = ai_actions.prepare(spec)
+                reply: str | None = None
+                usage: dict | None = None
+                error: tuple[str, str] | None = None
+                stopped = False
+                try:
+                    reply, usage = asyncio.run(ai_actions.run_turn(
+                        turn, agent.Conversation(credentials=credentials), selected, path, api))
+                except (agent.UnavailableModelError, agent_skills.AgentSkillError):
+                    raise
+                except KeyboardInterrupt:
+                    # SIGINT forwarded by the host wrapper: asyncio.run cancels the turn (the SDK session is
+                    # disconnected and deleted in _reply's finally); still record what it already wrote.
+                    stopped = True
+                except asyncio.TimeoutError:
+                    error = ("timeout", f"No reply within {spec.timeout} s.")
+                except Exception as exc:
+                    error = ("failed", str(exc) or type(exc).__name__)
+                # A cleanup error raised while the turn was being cancelled replaces the KeyboardInterrupt.
+                stopped = stopped or interrupted.is_set()
+                on_done(spec, ai_actions.verify(turn, error, stopped, reply, usage))
+                if stopped or interrupted.is_set():
+                    raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            return selected, True
+        except (agent.UnavailableModelError, agent_skills.AgentSkillError) as exc:
+            raise click.ClickException(str(exc)) from exc
+    return selected, False
