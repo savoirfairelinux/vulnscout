@@ -32,6 +32,7 @@ type Props = {
     onAgentContextChange?: (context: AgentViewContext) => void;
     isOpen: boolean;
     embedded?: boolean;
+    historyOnly?: boolean;
     project?: Project;
     variants: Variant[];
     documents: ExportDocument[];
@@ -44,9 +45,9 @@ const reportCategories = [
     ["custom", "Custom reports"],
 ] as const;
 
-export default function ExportWizard({ isOpen, embedded = false, project, variants, documents, onClose, onAgentContextChange }: Readonly<Props>) {
+export default function ExportWizard({ isOpen, embedded = false, historyOnly = false, project, variants, documents, onClose, onAgentContextChange }: Readonly<Props>) {
     const [step, setStep] = useState<WizardStep>("scope");
-    const [exportType, setExportType] = useState<ExportType | null>(null);
+    const [exportType, setExportType] = useState<ExportType | null>(historyOnly ? "history" : null);
     const [mode, setMode] = useState<ExportMode>("consolidated");
     const [category, setCategory] = useState("all");
     const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -100,7 +101,9 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         groups.set(selection.name, group);
         return groups;
     }, new Map<string, Selection[]>()));
-    const activeSteps: WizardStep[] = ["scope", "type", exportType === "history" ? "history" : "documents"];
+    const activeSteps: WizardStep[] = historyOnly
+        ? ["scope", "history"]
+        : ["scope", "type", exportType === "history" ? "history" : "documents"];
     const stepLabels: Record<WizardStep, string> = {
         scope: "Scope",
         type: "Export type",
@@ -112,7 +115,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
     useEffect(() => {
         if (!isOpen) return;
         setStep("scope");
-        setExportType(null);
+        setExportType(historyOnly ? "history" : null);
         setMode("consolidated");
         setCategory("all");
         setSelected(new Set());
@@ -125,7 +128,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
         setHistorySource("");
         setHistoryDownloaded(false);
         dialogRef.current?.focus();
-    }, [isOpen]);
+    }, [historyOnly, isOpen]);
 
     useEffect(() => {
         if (isOpen) setSelectedVariantIds(new Set(variants.map(variant => variant.id)));
@@ -297,7 +300,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
             isOpen={isOpen}
             embedded={embedded}
             compactEmbedded={embedded}
-            title="Generate export"
+            title={historyOnly ? "Export history" : "Generate export"}
             subtitle={`Step ${stepIndex + 1} of ${activeSteps.length}`}
             titleId="export-wizard-title"
             onClose={() => onClose?.()}
@@ -312,7 +315,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
             contentClassName={embedded ? "min-h-0 px-6 py-5 md:px-6 md:py-5" : "min-h-80 px-6 py-5 md:px-6 md:py-5"}
             footer={footer}
             headerContent={
-                <ol className={`${embedded ? "mt-3" : "mt-4"} grid grid-cols-3 gap-3 text-xs`}>
+                <ol className={`${embedded ? "mt-3" : "mt-4"} grid ${activeSteps.length === 2 ? "grid-cols-2" : "grid-cols-3"} gap-3 text-xs`}>
                     {activeSteps.map((currentStep, index) => (
                         <li key={currentStep} className={index <= stepIndex ? "text-cyan-300" : "text-neutral-500"}>
                             <span aria-hidden="true" className="mr-1 font-semibold">{index + 1}.</span>{stepLabels[currentStep]}
@@ -347,7 +350,7 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
 
             {step === "type" && <>
                 <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">What do you want to export?</h3>
-                <p className="mt-1 text-sm text-neutral-400">Choose one export family. You will select its individual files in the final step.</p>
+                <p className="mt-1 text-sm text-neutral-400">Choose one export family and configure its options in the final step.</p>
                 <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                     <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${exportType === "reports" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
                         <input type="radio" name="export-type" checked={exportType === "reports"} onChange={() => { setExportType("reports"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
@@ -358,11 +361,6 @@ export default function ExportWizard({ isOpen, embedded = false, project, varian
                         <input type="radio" name="export-type" checked={exportType === "sbom"} onChange={() => { setExportType("sbom"); setMode("per_variant"); setSelected(new Set()); setEnabledDocuments(new Set()); }} className="mt-1 accent-cyan-500" />
                         <FontAwesomeIcon icon={faShieldHalved} className="mt-0.5 text-cyan-400" aria-hidden="true" />
                         <span><span className="block font-medium text-white">SBOM files</span><span className="mt-1 block text-xs text-gray-300">Generated per variant and downloaded together as a ZIP archive.</span></span>
-                    </label>
-                    <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${exportType === "history" ? "border-cyan-500 bg-cyan-950/40" : "border-slate-600 bg-slate-900/40 hover:border-slate-500"}`}>
-                        <input type="radio" name="export-type" checked={exportType === "history"} onChange={() => { setExportType("history"); setSelected(new Set()); setEnabledDocuments(new Set()); setError(null); setHistoryDownloaded(false); }} className="mt-1 accent-cyan-500" />
-                        <FontAwesomeIcon icon={faFileLines} className="mt-0.5 text-cyan-400" aria-hidden="true" />
-                        <span><span className="block font-medium text-white">Vulnerability history</span><span className="mt-1 block text-xs text-gray-300">Recorded field changes within a time window or from the latest refresh, downloaded directly as JSON or CSV.</span></span>
                     </label>
                 </div>
                 {exportType === "reports" && <section className="mt-4 border-t border-neutral-700 pt-4" aria-labelledby="output-layout-heading">

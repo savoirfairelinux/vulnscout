@@ -7,6 +7,8 @@ import { MemoryRouter } from 'react-router-dom';
 import RefreshOverview from '../../src/pages/RefreshOverview';
 import RefreshRuns from '../../src/handlers/refreshRuns';
 import type { RefreshRun } from '../../src/handlers/refreshRuns';
+import Projects from '../../src/handlers/project';
+import Variants from '../../src/handlers/variant';
 import Vulnerabilities, { type Vulnerability } from '../../src/handlers/vulnerabilities';
 import Operations from '../../src/handlers/operations';
 import { getSnapshot, refreshProgressOf, waitForQueue } from '../../src/handlers/operationStore';
@@ -82,6 +84,7 @@ describe('Refresh overview', () => {
         const toolbar = screen.getByRole('heading', { name: 'Refresh History' }).closest('header');
         expect(toolbar).toContainElement(screen.getByTestId('refresh-dropdown-toggle'));
         expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Reload results' }));
+        expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Export vulnerability history' }));
         const entries = screen.getByRole('list', { name: 'Refresh runs' });
         const entry = within(entries).getByRole('article');
         expect(within(entry).queryByText('Vulnerability Data Refresh')).not.toBeInTheDocument();
@@ -133,6 +136,28 @@ describe('Refresh overview', () => {
         await selectSection('Overview');
         expect(within(screen.getByRole('table', { name: 'Distinct vulnerability counts' }))
             .getByRole('row', { name: 'Changed 1' })).toBeInTheDocument();
+    });
+
+    test('opens the history export from Refresh and offers the current project variants', async () => {
+        jest.spyOn(Projects, 'list').mockResolvedValue([{ id: 'project-a', name: 'Project A' }]);
+        jest.spyOn(Variants, 'list').mockResolvedValue([
+            { id: 'variant-a', name: 'alpha', project_id: 'project-a' },
+            { id: 'variant-b', name: 'beta', project_id: 'project-a' },
+        ]);
+        show();
+
+        await userEvent.click(screen.getByRole('button', { name: 'Export vulnerability history' }));
+        expect(await screen.findByRole('heading', { name: 'Project scope' })).toBeInTheDocument();
+        await waitFor(() => expect(Projects.list).toHaveBeenCalledWith());
+        expect(await screen.findByText('Project A')).toBeInTheDocument();
+        expect(await screen.findByRole('checkbox', { name: 'alpha' })).toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'beta' })).toBeChecked();
+        expect(screen.queryByRole('heading', { name: 'Export vulnerability history' })).not.toBeInTheDocument();
+        const next = screen.getByRole('button', { name: 'Next' });
+        expect(next).toBeEnabled();
+        await userEvent.click(next);
+        expect(await screen.findByRole('heading', { name: 'Export vulnerability history' })).toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: /^Reports/i })).not.toBeInTheDocument();
     });
 
     test('distinguishes no refresh/no baseline from a successful zero-change run', async () => {
@@ -361,6 +386,7 @@ describe('Refresh overview', () => {
     test('never broadens unsupported comparison scopes into project requests', () => {
         render(<MemoryRouter><RefreshOverview projectId="project-a" comparisonScope /></MemoryRouter>);
         expect(screen.getByRole('alert')).toHaveTextContent('No broader scope has been loaded');
+        expect(screen.queryByRole('button', { name: 'Export vulnerability history' })).not.toBeInTheDocument();
         expect(latest).not.toHaveBeenCalled();
         expect(list).not.toHaveBeenCalled();
         expect(detail).not.toHaveBeenCalled();
