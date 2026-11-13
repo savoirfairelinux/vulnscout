@@ -26,7 +26,6 @@ from ._scan_queries import (
     _packages_by_scan_ids,
     _package_rows,
     _variant_info,
-    _load_scan_with_findings,
     _assessments_by_scan,
     _TOOL_SOURCE_LABELS,
     ObsDict,
@@ -577,20 +576,7 @@ def _global_result_full(
         key=lambda p: (p["package_name"], p["package_version"]),
     )
 
-    # --- Build scan_id -> source_label mapping ---
-    # For SBOM scan: use SBOM document names
-    sbom_loaded = _load_scan_with_findings(sbom_scan.id)
-    sbom_doc_names = []
-    if sbom_loaded and hasattr(sbom_loaded, 'sbom_documents'):
-        for doc in (sbom_loaded.sbom_documents or []):
-            label = (
-                f"{doc.source_name} ({doc.format})"
-                if doc.format else doc.source_name
-            )
-            sbom_doc_names.append(label)
-    sbom_source_label = ", ".join(dict.fromkeys(sbom_doc_names)) if sbom_doc_names else "SBOM Scan"
-
-    scan_source_labels: dict = {sbom_scan.id: sbom_source_label}
+    scan_source_labels: dict = {}
     for tool_scan in latest_tool.values():
         scan_source_labels[tool_scan.id] = _TOOL_SOURCE_LABELS.get(
             tool_scan.scan_source or "", "Vulnerability Scan"
@@ -613,7 +599,12 @@ def _global_result_full(
         # Skip tool-scan findings whose package is not in the SBOM
         if sid in tool_scan_ids and pkg_id not in sbom_pkg_ids:
             continue
-        source_label = scan_source_labels.get(sid, "Unknown")
+        # A scan can contain thousands of documents. Repeating every document
+        # on every finding makes the payload grow as findings * documents.
+        sources = (
+            pkg_map.get(pkg_id, {}).get("sources", ["SBOM Scan"])
+            if sid == sbom_scan.id else [scan_source_labels.get(sid, "Unknown")]
+        )
         if fid not in finding_map:
             finding_map[fid] = {
                 "finding_id": str(fid),
@@ -622,12 +613,13 @@ def _global_result_full(
                 "package_supplier": psupplier or "",
                 "package_id": str(pkg_id),
                 "vulnerability_id": vid,
-                "sources": [source_label],
+                "sources": list(sources),
             }
         else:
-            if source_label not in finding_map[fid]["sources"]:
-                finding_map[fid]["sources"].append(source_label)
-        vuln_set.setdefault(vid, set()).add(source_label)
+            for source_label in sources:
+                if source_label not in finding_map[fid]["sources"]:
+                    finding_map[fid]["sources"].append(source_label)
+        vuln_set.setdefault(vid, set()).update(sources)
 
     findings = sorted(
         finding_map.values(),

@@ -155,6 +155,66 @@ class TestGetScanGlobalResult:
 
         assert response.status_code == 200
 
+    def test_many_documents_keep_item_sources_and_response_compact(self, app, client, ids):
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.package import Package
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
+        from src.models.vulnerability import Vulnerability
+
+        with app.app_context():
+            scan_id = uuid.UUID(ids["sbom_scan_id"])
+            vuln = Vulnerability.create_record(id="CVE-MANY-DOCUMENTS")
+            for i in range(100):
+                pkg = Package.find_or_create(f"package-{i}", "1.0")
+                doc = SBOMDocument.create(
+                    f"/sbom/package-{i}.json", f"package-{i}.json",
+                    scan_id, format="spdx",
+                )
+                SBOMPackage.create(doc.id, pkg.id)
+                finding = Finding.get_or_create(pkg.id, vuln.id)
+                Observation.create(finding_id=finding.id, scan_id=scan_id)
+            _db.session.commit()
+
+        response = client.get(f"/api/scans/{ids['sbom_scan_id']}/global-result")
+
+        assert response.status_code == 200
+        assert len(response.data) < 150_000
+        data = response.get_json()
+        assert data["package_count"] == 101
+        assert data["finding_count"] == 101
+        assert data["vuln_count"] == 2
+        for finding in data["findings"]:
+            if finding["vulnerability_id"] == "CVE-MANY-DOCUMENTS":
+                assert finding["sources"] == [f"{finding['package_name']}.json (spdx)"]
+        sources = next(
+            v["sources"] for v in data["vulnerabilities"]
+            if v["vulnerability_id"] == "CVE-MANY-DOCUMENTS"
+        )
+        assert len(sources) == 100
+
+    def test_shared_finding_combines_package_and_tool_sources(self, app, client, ids):
+        from src.models.finding import Finding
+        from src.models.observation import Observation
+        from src.models.scan import Scan
+
+        with app.app_context():
+            scan = _db.session.get(Scan, uuid.UUID(ids["tool_scan_id"]))
+            scan.scan_source = "nvd"
+            finding = _db.session.execute(
+                _db.select(Finding).where(Finding.vulnerability_id == "CVE-2020-1111")
+            ).scalar_one()
+            Observation.create(finding_id=finding.id, scan_id=scan.id)
+            _db.session.commit()
+
+        response = client.get(f"/api/scans/{ids['tool_scan_id']}/global-result")
+        assert response.status_code == 200
+        data = response.get_json()
+        finding = next(f for f in data["findings"] if f["vulnerability_id"] == "CVE-2020-1111")
+        assert set(finding["sources"]) == {"spdx", "NVD CPE Scan"}
+        assert data["finding_count"] == 2
+
     def test_tool_diff_preserves_identical_assessments_for_distinct_package_targets(self, app, client, ids, monkeypatch):
         """Separate assessments for one CVE must survive identical content and show their targets."""
         from src.models.assessment import Assessment

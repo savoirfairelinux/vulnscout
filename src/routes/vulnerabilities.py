@@ -145,16 +145,9 @@ def _apply_scoped_cvss_to_vuln_dict(
     vuln: dict, metrics: typing.Sequence[Metrics], severity_label: str | None
 ) -> None:
     """Apply CVSS records and aggregate severity values from one metric scope."""
-    severity = vuln.setdefault("severity", {})
-    scores = [float(metric.score) for metric in metrics if metric.score is not None]
-    severity["cvss"] = [metric.to_dict() for metric in metrics]
-    severity["min_score"] = min(scores) if scores else None
-    severity["max_score"] = max(scores) if scores else None
-    if (severity_label or "unknown").lower() == "unknown":
-        severity["severity"] = (
-            CVSS("", "", "unknown", max(scores), 0.0, 0.0).severity().lower()
-            if scores else "unknown"
-        )
+    vuln["severity"] = CVSS.summarize(
+        [metric.to_dict() for metric in metrics], severity_label or "unknown"
+    )
 
 
 def _variant_scoped_metrics_and_effort_overrides(
