@@ -11,45 +11,60 @@ type Props = {
     projectId?: string;
 };
 
+type ScopeState =
+    | { status: "loading" }
+    | { status: "ready"; project: Project; variants: Variant[] }
+    | { status: "error"; message: string };
+
 export default function RefreshHistoryExport({ projectId }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
-    const [project, setProject] = useState<Project>();
-    const [variants, setVariants] = useState<Variant[]>([]);
+    const [scope, setScope] = useState<ScopeState>({ status: "loading" });
+    const [retry, setRetry] = useState(0);
     const loadGeneration = useRef(0);
 
     useEffect(() => {
         if (!isOpen) return;
         const generation = ++loadGeneration.current;
-        setProject(undefined);
-        setVariants([]);
-        if (!projectId) return;
+        setScope({ status: "loading" });
+        if (!projectId) {
+            setScope({ status: "error", message: "No project is selected. Select a project and retry." });
+            return;
+        }
 
-        Projects.list().then(projects => {
-            if (generation === loadGeneration.current) {
-                setProject(projects.find(candidate => candidate.id === projectId));
+        Promise.all([Projects.list(), Variants.list(projectId)]).then(([projects, variants]) => {
+            const project = projects.find(candidate => candidate.id === projectId);
+            if (!project) throw new Error("The selected project is no longer available. Reload the project list and retry.");
+            if (variants.some(variant => variant.project_id !== projectId)) {
+                throw new Error("The server returned variants outside the selected project. Retry before exporting.");
             }
-        }).catch(() => {
-            if (generation === loadGeneration.current) setProject(undefined);
-        });
-        Variants.list(projectId).then(result => {
-            if (generation === loadGeneration.current) setVariants(result);
-        }).catch(() => {
-            if (generation === loadGeneration.current) setVariants([]);
+            if (generation === loadGeneration.current) setScope({ status: "ready", project, variants });
+        }).catch(reason => {
+            if (generation !== loadGeneration.current) return;
+            setScope({
+                status: "error",
+                message: reason instanceof Error ? reason.message : "Unable to load the selected project and its variants.",
+            });
         });
         return () => { loadGeneration.current += 1; };
-    }, [isOpen, projectId]);
+    }, [isOpen, projectId, retry]);
 
     return <>
         <button type="button" className="py-1 px-2 rounded flex items-center gap-1 text-sm font-semibold bg-sky-900 hover:bg-sky-950 transition-colors"
-            onClick={() => setIsOpen(true)}>
+            onClick={() => {
+                setScope({ status: "loading" });
+                setIsOpen(true);
+            }}>
             <FontAwesomeIcon icon={faDownload} aria-hidden="true" />
             Export vulnerability history
         </button>
         <ExportWizard
             isOpen={isOpen}
             historyOnly
-            project={project}
-            variants={variants}
+            scopeLoading={scope.status === "loading"}
+            scopeError={scope.status === "error" ? scope.message : undefined}
+            onRetryScopeLoad={() => setRetry(value => value + 1)}
+            project={scope.status === "ready" ? scope.project : undefined}
+            variants={scope.status === "ready" ? scope.variants : []}
             documents={[]}
             onClose={() => setIsOpen(false)}
         />

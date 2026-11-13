@@ -33,6 +33,9 @@ type Props = {
     isOpen: boolean;
     embedded?: boolean;
     historyOnly?: boolean;
+    scopeLoading?: boolean;
+    scopeError?: string;
+    onRetryScopeLoad?: () => void;
     project?: Project;
     variants: Variant[];
     documents: ExportDocument[];
@@ -45,7 +48,8 @@ const reportCategories = [
     ["custom", "Custom reports"],
 ] as const;
 
-export default function ExportWizard({ isOpen, embedded = false, historyOnly = false, project, variants, documents, onClose, onAgentContextChange }: Readonly<Props>) {
+export default function ExportWizard({ isOpen, embedded = false, historyOnly = false, scopeLoading = false, scopeError,
+    onRetryScopeLoad, project, variants, documents, onClose, onAgentContextChange }: Readonly<Props>) {
     const [step, setStep] = useState<WizardStep>("scope");
     const [exportType, setExportType] = useState<ExportType | null>(historyOnly ? "history" : null);
     const [mode, setMode] = useState<ExportMode>("consolidated");
@@ -247,7 +251,7 @@ export default function ExportWizard({ isOpen, embedded = false, historyOnly = f
         && (!historyUntil || (Number.isFinite(untilTime) && untilTime > sinceTime)));
 
     const launchHistoryExport = async () => {
-        if (!project || selectedVariantIds.size === 0 || !historyRangeValid) return;
+        if (scopeLoading || scopeError || !project || selectedVariantIds.size === 0 || !historyRangeValid) return;
         setExporting(true);
         setError(null);
         setHistoryDownloaded(false);
@@ -278,7 +282,7 @@ export default function ExportWizard({ isOpen, embedded = false, historyOnly = f
                     variant="primary"
                     onClick={step === "history" ? launchHistoryExport : launchExport}
                     disabled={exporting || (step === "history"
-                        ? !project || selectedVariantIds.size === 0 || !historyRangeValid
+                        ? scopeLoading || !!scopeError || !project || selectedVariantIds.size === 0 || !historyRangeValid
                         : selected.size === 0)}
                 >
                     <FontAwesomeIcon icon={faDownload} className="mr-2" aria-hidden="true" />
@@ -288,7 +292,7 @@ export default function ExportWizard({ isOpen, embedded = false, historyOnly = f
                 <ModalButton
                     variant="primary"
                     onClick={() => navigateToStep(activeSteps[stepIndex + 1])}
-                    disabled={(step === "scope" && (!project || selectedVariantIds.size === 0))
+                    disabled={(step === "scope" && (scopeLoading || !!scopeError || !project || selectedVariantIds.size === 0))
                         || (step === "type" && exportType === null)}
                 >Next</ModalButton>
             )}
@@ -326,7 +330,12 @@ export default function ExportWizard({ isOpen, embedded = false, historyOnly = f
         >
             {step === "scope" && <>
                 <h3 ref={stepHeadingRef} tabIndex={-1} className="text-base font-semibold text-white">Project scope</h3>
-                {project ? <>
+                {scopeLoading ? <p role="status" className="mt-4 text-sm text-neutral-300">Loading project and variant scope…</p>
+                    : scopeError ? <div role="alert" className="mt-4 space-y-3 rounded border border-red-700 bg-red-950/40 p-3 text-sm text-red-300">
+                        <p>{scopeError}</p>
+                        {onRetryScopeLoad && <ModalButton onClick={onRetryScopeLoad}>Retry loading scope</ModalButton>}
+                    </div>
+                        : project ? <>
                     <p className="mt-1 text-sm text-neutral-400">Choose the variants to export from <span className="font-semibold text-white">{project.name}</span>.</p>
                     <p className="mt-1 text-xs text-neutral-500">Use the project selector in the navigation bar to export another project.</p>
                     <div className="mt-4 rounded-lg border border-slate-600 bg-slate-900/40 p-4">
@@ -345,7 +354,7 @@ export default function ExportWizard({ isOpen, embedded = false, historyOnly = f
                         </div>
                         {variants.length === 0 && <p className="mt-3 text-sm italic text-neutral-500">This project has no variants.</p>}
                     </div>
-                </> : <p className="mt-4 rounded border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-200">Select a project from the navigation bar before creating an export.</p>}
+                </> : <p role="alert" className="mt-4 rounded border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-200">Select a project from the navigation bar before creating an export.</p>}
             </>}
 
             {step === "type" && <>

@@ -9,6 +9,7 @@ import RefreshRuns from '../../src/handlers/refreshRuns';
 import type { RefreshRun } from '../../src/handlers/refreshRuns';
 import Projects from '../../src/handlers/project';
 import Variants from '../../src/handlers/variant';
+import * as vulnerabilityHistory from '../../src/handlers/vulnerabilityHistory';
 import Vulnerabilities, { type Vulnerability } from '../../src/handlers/vulnerabilities';
 import Operations from '../../src/handlers/operations';
 import { getSnapshot, refreshProgressOf, waitForQueue } from '../../src/handlers/operationStore';
@@ -138,7 +139,7 @@ describe('Refresh overview', () => {
             .getByRole('row', { name: 'Changed 1' })).toBeInTheDocument();
     });
 
-    test('opens the history export from Refresh and offers the current project variants', async () => {
+    test('loads the selected project scope before offering its deliberately all-variant export', async () => {
         jest.spyOn(Projects, 'list').mockResolvedValue([{ id: 'project-a', name: 'Project A' }]);
         jest.spyOn(Variants, 'list').mockResolvedValue([
             { id: 'variant-a', name: 'alpha', project_id: 'project-a' },
@@ -153,11 +154,55 @@ describe('Refresh overview', () => {
         expect(await screen.findByRole('checkbox', { name: 'alpha' })).toBeChecked();
         expect(screen.getByRole('checkbox', { name: 'beta' })).toBeChecked();
         expect(screen.queryByRole('heading', { name: 'Export vulnerability history' })).not.toBeInTheDocument();
+        expect(Variants.list).toHaveBeenCalledWith('project-a');
         const next = screen.getByRole('button', { name: 'Next' });
         expect(next).toBeEnabled();
         await userEvent.click(next);
         expect(await screen.findByRole('heading', { name: 'Export vulnerability history' })).toBeInTheDocument();
         expect(screen.queryByRole('radio', { name: /^Reports/i })).not.toBeInTheDocument();
+    });
+
+    test('keeps export disabled until the selected project and variants finish loading', async () => {
+        let resolveProjects: (projects: { id: string; name: string }[]) => void = () => undefined;
+        let resolveVariants: (variants: { id: string; name: string; project_id: string }[]) => void = () => undefined;
+        jest.spyOn(Projects, 'list').mockImplementation(() => new Promise(resolve => { resolveProjects = resolve; }));
+        jest.spyOn(Variants, 'list').mockImplementation(() => new Promise(resolve => { resolveVariants = resolve; }));
+        const download = jest.spyOn(vulnerabilityHistory, 'downloadVulnerabilityHistory').mockResolvedValue();
+        show();
+
+        await userEvent.click(screen.getByRole('button', { name: 'Export vulnerability history' }));
+        expect(await screen.findByText('Loading project and variant scope…')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+        expect(screen.queryByRole('button', { name: 'Download history' })).not.toBeInTheDocument();
+
+        resolveProjects([{ id: 'project-a', name: 'Project A' }]);
+        resolveVariants([{ id: 'variant-a', name: 'alpha', project_id: 'project-a' }]);
+        expect(await screen.findByRole('checkbox', { name: 'alpha' })).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
+        expect(download).not.toHaveBeenCalled();
+    });
+
+    test.each([
+        ['project', () => jest.spyOn(Projects, 'list').mockRejectedValueOnce(new Error('Project list unavailable'))],
+        ['variant', () => jest.spyOn(Variants, 'list').mockRejectedValueOnce(new Error('Variant list unavailable'))],
+    ])('fails closed and offers retry when the %s scope request fails', async (_label, failRequest) => {
+        jest.spyOn(Projects, 'list').mockResolvedValue([{ id: 'project-a', name: 'Project A' }]);
+        jest.spyOn(Variants, 'list').mockResolvedValue([
+            { id: 'variant-a', name: 'alpha', project_id: 'project-a' },
+        ]);
+        failRequest();
+        const download = jest.spyOn(vulnerabilityHistory, 'downloadVulnerabilityHistory').mockResolvedValue();
+        show();
+
+        await userEvent.click(screen.getByRole('button', { name: 'Export vulnerability history' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent(/unavailable/);
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+        expect(screen.queryByRole('button', { name: 'Download history' })).not.toBeInTheDocument();
+        expect(download).not.toHaveBeenCalled();
+
+        await userEvent.click(screen.getByRole('button', { name: 'Retry loading scope' }));
+        expect(await screen.findByRole('checkbox', { name: 'alpha' })).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
     });
 
     test('distinguishes no refresh/no baseline from a successful zero-change run', async () => {
