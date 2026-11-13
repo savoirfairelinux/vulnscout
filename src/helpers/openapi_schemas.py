@@ -694,6 +694,11 @@ SCHEMAS: dict[str, Any] = {
                 "documents": _array(_object({
                     "id": _UUID, "source_name": _STRING, "variant_id": _UUID, "variant_name": _STRING,
                     "dependencies_recorded": _BOOL,
+                    "dependent_counts": {
+                        **_map(_COUNT),
+                        "description": "Unique direct dependents across active SBOM sources in this variant, "
+                                       "before comparison filtering; includes self edges.",
+                    },
                     "build_targets": _array(_ref("BuildTarget")),
                     "packages": _array(_object({
                         "id": _PACKAGE_ID, "name": _STRING, "version": _STRING,

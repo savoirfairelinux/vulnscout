@@ -30,6 +30,47 @@ const documents: DependencyDocument[] = [
     },
 ];
 
+test('shows exclusive direct dependencies in the inspector and lets users explore them without replacing the graph', async () => {
+    render(<DependencyExplorer documents={documents} focusedPackageId="app" />);
+    const user = userEvent.setup();
+    const exclusive = within(screen.getByRole('region', { name: 'Exclusive direct dependencies' }));
+    expect(exclusive.getByRole('heading', { name: 'Exclusive direct dependencies (1)' })).toBeInTheDocument();
+    expect(exclusive.getByRole('button', { name: 'lib@1.0' })).toBeInTheDocument();
+    expect(exclusive.queryByRole('button', { name: 'util@1.0' })).not.toBeInTheDocument();
+    expect(exclusive.getByText(/not proof of actual build or runtime requirements/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Dependency diagram')).toBeInTheDocument();
+    await user.click(exclusive.getByRole('button', { name: 'lib@1.0' }));
+    expect(within(screen.getByRole('complementary')).getByRole('heading', { name: 'lib@1.0' })).toBeInTheDocument();
+    expect(exclusive.getByText('No exclusive direct dependencies recorded in this selection.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Dependency diagram')).toBeInTheDocument();
+});
+
+test('keeps variant exclusivity separate and uses unfiltered incoming counts', async () => {
+    const scoped = [{ ...documents[0], dependent_counts: { lib: 2, util: 2 } }, documents[1]];
+    render(<DependencyExplorer documents={scoped} focusedPackageId="app" />);
+    const exclusive = within(screen.getByRole('region', { name: 'Exclusive direct dependencies' }));
+    expect(exclusive.getByText('No exclusive direct dependencies recorded in this selection.')).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('checkbox', { name: /alpha/ }));
+    expect(exclusive.getByRole('button', { name: 'core@2.0' })).toBeInTheDocument();
+});
+
+test('a source filter cannot turn a shared dependency into an exclusive dependency', async () => {
+    const companion: DependencyDocument = {
+        id: 'companion', source_name: 'companion.json', variant_id: 'v1', variant_name: 'alpha',
+        dependencies_recorded: true,
+        packages: [{ id: 'other', name: 'other', version: '1' }, documents[0].packages[2]],
+        edges: [{ package_id: 'other', dependency_id: 'lib' }],
+    };
+    render(<DependencyExplorer documents={[documents[0], companion]} focusedPackageId="app" />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'SBOM source' }), 'doc-one');
+    await user.type(screen.getByRole('searchbox', { name: 'Find a package' }), 'app');
+    await user.click(within(screen.getByRole('list', { name: 'Package search results' })).getByRole('button'));
+    const exclusive = within(screen.getByRole('region', { name: 'Exclusive direct dependencies' }));
+    expect(exclusive.getByRole('heading', { name: 'Exclusive direct dependencies (0)' })).toBeInTheDocument();
+    expect(exclusive.queryByRole('button', { name: 'lib@1.0' })).not.toBeInTheDocument();
+});
+
 test('starts with a compact tree and progressively explores full transitive paths', async () => {
     render(<DependencyExplorer documents={documents} />);
     const user = userEvent.setup();

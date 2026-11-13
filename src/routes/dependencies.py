@@ -38,6 +38,9 @@ def init_app(app: Flask) -> None:
     def package_dependencies() -> ResponseReturnValue:
         """Return packages and directed edges per active SBOM document.
 
+        dependent_counts retain all incoming evidence in each variant, even when
+        comparison filters hide a dependent from the returned graph.
+
         OpenAPI:
         query variant_id uuid optional Scope to one variant.
         query project_id uuid optional Scope to one project.
@@ -227,13 +230,19 @@ def init_app(app: Flask) -> None:
                 .options(load_only(Package.name, Package.version, Package.supplier))
             )
         ]
+        all_members: dict[uuid.UUID, set[uuid.UUID]] = {document_id: set() for document_id in ids}
+        all_scan_members: dict[uuid.UUID, set[uuid.UUID]] = {}
+        scan_of = {document_id: scan_id for document_id, scan_id, *_ in documents}
+        variant_of = {document_id: variant_id for document_id, _, _, variant_id, *_ in documents}
+        for document_id, package, _ in rows:
+            all_members[document_id].add(package.id)
+            all_scan_members.setdefault(scan_of[document_id], set()).add(package.id)
         if allowed_ids is not None:
             rows = [(document_id, package, urls) for document_id, package, urls in rows if package.id in allowed_ids]
         public_ids = {package.id: package.string_id for _, package, _ in rows}
         members: dict[uuid.UUID, set[uuid.UUID]] = {document_id: set() for document_id in ids}
         for document_id, package, _ in rows:
             members[document_id].add(package.id)
-        scan_of = {document_id: scan_id for document_id, scan_id, *_ in documents}
         scan_packages: dict[uuid.UUID, set[uuid.UUID]] = {}
         for document_id, document_members in members.items():
             scan_packages.setdefault(scan_of[document_id], set()).update(document_members)
@@ -243,6 +252,12 @@ def init_app(app: Flask) -> None:
             .join(SBOMDocument, SBOMDocument.id == PackageDependency.sbom_document_id)
             .where(SBOMDocument.scan_id.in_(scan_ids))
         ).all()
+        dependents: dict[tuple[uuid.UUID, uuid.UUID], set[uuid.UUID]] = {}
+        for document_id, package_id, dependency_id, _ in edges:
+            document_id = document_ids[document_id]
+            if (package_id in all_members[document_id]
+                    and dependency_id in all_scan_members[scan_of[document_id]]):
+                dependents.setdefault((variant_of[document_id], dependency_id), set()).add(package_id)
         result = {
             document_id: {'id': str(document_id), 'source_name': source_name,
                           'variant_id': str(variant_id), 'variant_name': variant_name,
@@ -287,7 +302,15 @@ def init_app(app: Flask) -> None:
                         for declaration in declarations
                     ],
                 })
-        for document in result.values():
+        internal_ids = {public_id: package_id for package_id, public_id in public_ids.items()}
+        for document_id, document in result.items():
             document['packages'].sort(key=lambda package: (package['name'] or '', package['version'] or ''))
             document['edges'].sort(key=lambda edge: (edge['package_id'], edge['dependency_id']))
+            visible_ids = {package['id'] for package in document['packages']} | {
+                edge['dependency_id'] for edge in document['edges']
+            }
+            document['dependent_counts'] = {
+                package_id: len(dependents.get((variant_of[document_id], internal_ids[package_id]), ()))
+                for package_id in visible_ids
+            }
         return {'documents': list(result.values())}

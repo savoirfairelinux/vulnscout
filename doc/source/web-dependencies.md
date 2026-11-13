@@ -38,6 +38,17 @@ operation. Exploration stays in the popup; there is no separate Dependencies tab
   When refreshed SBOM data removes a package or relationship in the selected
   path, the inspector drops that stale path while keeping the selected package
   if it is still available.
+- **Exclusive direct dependencies** in the package inspector lists direct
+  dependencies whose only recorded incoming dependent is the selected package.
+  For example, if CURL depends on A, B, C and D, but other packages also depend
+  on A and D, only B and C are listed. Select a listed package to explore it.
+  Candidates follow the current source/comparison selection, but incoming
+  dependents are checked across **all active SBOM sources in that variant**,
+  even when a source or comparison filter hides them. Variants are evaluated
+  separately; duplicates do not create extra dependents.
+  Only direct links are considered, not transitive dependencies or removal
+  cascades. The selected package itself is excluded. Cycles are not traversed;
+  a dependency's self edge counts as another incoming dependent.
 - Arrow keys move between rows and expand/collapse branches; Enter or Space
   selects a package. Branches load 40 siblings at a time, and expanded trees
   initially render at most 500 rows. Explicit **Show more** controls expose all
@@ -45,7 +56,9 @@ operation. Exploration stays in the popup; there is no separate Dependencies tab
 
 Packages whose SBOMs lack dependency data are labeled **not recorded**, not
 assumed to have no dependencies. An unlinked package is not proof of unused
-code, and SBOM relationships alone do not prove runtime use.
+code. SBOM graphs may be incomplete: even exclusive recorded relationships are
+not proof of actual build or runtime requirements, or evidence that removing a
+package is safe.
 
 The explorer uses the searchable tree and dependency-path patterns documented
 by [Snyk](https://docs.snyk.io/scan-fix-and-prevent/scan-with-snyk/snyk-projects/view-project-issues-fixes-and-dependencies),
