@@ -182,6 +182,20 @@ describe('Refresh overview', () => {
         expect(download).not.toHaveBeenCalled();
     });
 
+    test('does not request a global history export when no project is selected', async () => {
+        const projects = jest.spyOn(Projects, 'list');
+        const variants = jest.spyOn(Variants, 'list');
+        const download = jest.spyOn(vulnerabilityHistory, 'downloadVulnerabilityHistory').mockResolvedValue();
+        show('/refresh', {});
+
+        await userEvent.click(screen.getByRole('button', { name: 'Export vulnerability history' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('No project is selected');
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+        expect(projects).not.toHaveBeenCalled();
+        expect(variants).not.toHaveBeenCalled();
+        expect(download).not.toHaveBeenCalled();
+    });
+
     test.each([
         ['project', () => jest.spyOn(Projects, 'list').mockRejectedValueOnce(new Error('Project list unavailable'))],
         ['variant', () => jest.spyOn(Variants, 'list').mockRejectedValueOnce(new Error('Variant list unavailable'))],
