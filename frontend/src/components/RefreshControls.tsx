@@ -13,6 +13,7 @@ type Props = {
     getRefreshVulnerabilities: () => Promise<Vulnerability[]>;
     onRefreshComplete?: () => void;
     toolbar?: ReactNode;
+    toolbarActions?: ReactNode;
 };
 
 export default function RefreshControls(props: Readonly<Props>) {
@@ -33,7 +34,10 @@ export default function RefreshControls(props: Readonly<Props>) {
             isVisible={banner !== null} onClose={clearBanners} />
         {props.toolbar ? <header className="rounded-md p-2 bg-sky-800 text-white w-full flex items-center gap-2 flex-wrap">
             {props.toolbar}
-            <div className="ml-auto min-w-0">{action}</div>
+            <div className="ml-auto flex items-center gap-2 flex-wrap min-w-0">
+                {props.toolbarActions}
+                <div className="min-w-0">{action}</div>
+            </div>
         </header> : action}
     </div>;
 }
