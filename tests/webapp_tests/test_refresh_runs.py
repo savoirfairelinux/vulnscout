@@ -21,9 +21,12 @@ from src.controllers.job_context import CancelledError, JobContext
 from src.controllers.refresh_jobs import run_epss_refresh
 from src.extensions import db
 from src.helpers.refresh_runs import capture_source, create_run, finish_source, source_statuses, target_result
-from src.models import Finding, Observation, Project, Scan, Variant, Vulnerability
+from src.models import (
+    Finding, Observation, Package, Project, Scan, SBOMDocument, SBOMObservation, SBOMPackage, Variant, Vulnerability,
+)
 from src.models.metrics import Metrics
 from src.models.refresh_run import RefreshChange, RefreshRun
+from src.models.time_estimate import TimeEstimate
 from src.models.vulnerability_history import VulnerabilityHistory
 from sqlalchemy.orm import Session
 from . import setup_demo_db
@@ -591,6 +594,81 @@ def test_individual_refresh_groups_sources_and_exports_history(app, client, chan
         assert {entry["source"] for entry in history["history"] if entry["vuln_id"] == CVE} == {
             "nvd", "epss", "euvd",
         }
+
+
+@pytest.mark.parametrize("identifier", [CVE, "GHSA-ABCD-1234-ABCD"])
+@pytest.mark.parametrize("scope_kind", ["project", "variant", "both"])
+def test_individual_refresh_payloads_exclude_other_scopes(app, client, identifier, scope_kind):
+    with app.app_context():
+        if identifier != CVE:
+            Vulnerability.create_record(id=identifier, description="Shared advisory", status="unknown")
+        else:
+            db.session.get(Vulnerability, identifier).status = "unknown"
+        base_variant = db.session.get(Variant, uuid.UUID(VARIANT))
+        other_project = Project(id=uuid.uuid4(), name="other-project")
+        sibling = Variant(id=uuid.uuid4(), name="sibling", project_id=base_variant.project_id)
+        other_variant = Variant(id=uuid.uuid4(), name="other", project_id=other_project.id)
+        db.session.add_all([other_project, sibling, other_variant])
+        db.session.flush()
+        Metrics.create(vulnerability_id=identifier, version="3.1", author="provider", score=4)
+        expected_packages, expected_texts, expected_authors = set(), set(), {"provider"}
+        for index, variant in enumerate([base_variant, sibling, other_variant], start=1):
+            package = Package.find_or_create(f"scope-{index}", "1")
+            finding = Finding.get_or_create(package.id, identifier)
+            scan = Scan(id=uuid.uuid4(), variant_id=variant.id, scan_type="sbom")
+            document = SBOMDocument(id=uuid.uuid4(), path=f"/scope-{index}.json",
+                                    source_name=f"scope-{index}.json", format="cdx", scan_id=scan.id)
+            db.session.add_all([scan, document])
+            db.session.flush()
+            db.session.add_all([
+                Observation(finding_id=finding.id, scan_id=scan.id),
+                SBOMPackage(sbom_document_id=document.id, package_id=package.id),
+                SBOMObservation(key="scope", description=f"scope-{index}-text",
+                                vulnerability_id=identifier, package_id=package.id, sbom_document_id=document.id),
+                Metrics(vulnerability_id=identifier, version="3.1", author=f"scope-{index}-author",
+                        origin="custom", score=4 + index, variant_id=variant.id),
+                TimeEstimate(finding_id=finding.id, variant_id=variant.id,
+                             optimistic=index, likely=index, pessimistic=index),
+            ])
+            if index == 1 or (index == 2 and scope_kind == "project"):
+                expected_packages.add(package.string_id)
+                expected_texts.add(f"scope-{index}-text")
+                expected_authors.add(f"scope-{index}-author")
+        db.session.commit()
+    scope = {}
+    if scope_kind in ("project", "both"):
+        scope["project_id"] = PROJECT
+    if scope_kind in ("variant", "both"):
+        scope["variant_id"] = VARIANT
+    with patch("src.routes.vulnerabilities.NVD_DB") as nvd, \
+         patch("src.routes.vulnerabilities.EPSS_DB") as epss, \
+         patch("src.routes.vulnerabilities.EUVD_DB") as euvd, \
+         patch("src.routes.vulnerabilities.apply_nvd_update"), \
+         patch("src.routes.vulnerabilities._apply_euvd"), \
+         patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
+               return_value="2025-01-01T00:00:00Z"):
+        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {}}]})
+        nvd.extract_cve_details.return_value = {}
+        epss.return_value.api_get_epss.return_value = {"score": 0.5, "percentile": 0.9}
+        euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
+        euvd.return_value.get_mapping.return_value = {"dummy": {}}
+        response = client.post(f"/api/vulnerabilities/{identifier}/refresh",
+                               query_string=scope, json={"mode": "api"})
+    assert response.status_code == 200
+    for source, result in response.get_json()["results"].items():
+        assert result["status"] == 200
+        payload = result["body"]["vulnerabilities"][0]
+        assert set(payload["packages"]) == expected_packages
+        assert {metric["author"] for metric in payload["severity"]["cvss"]} == expected_authors
+        assert payload["severity"]["min_score"] == 4
+        assert payload["severity"]["max_score"] == (6 if scope_kind == "project" else 5)
+        assert {text["content"] for text in payload["texts"] if text["title"] == "scope"} == expected_texts
+        expected_effort = {"PT1H", "PT2H"} if scope_kind == "project" else {"PT1H"}
+        assert set(payload["effort"].values()) <= expected_effort
+        if source in ("epss", "euvd"):
+            assert payload["epss"]["score"] == 0.5
+        if source == "epss":
+            assert payload["epss"]["percentile"] == 0.9
 
 
 def test_individual_refresh_records_provider_failure_and_rejects_outside_scope(app, client):

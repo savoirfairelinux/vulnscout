@@ -160,12 +160,14 @@ def _apply_scoped_cvss_to_vuln_dict(
 def _variant_scoped_metrics_and_effort_overrides(
     records: list[Vulnerability], variant_uuid: uuid.UUID
 ) -> dict[str, _ScopedOverrides]:
-    """Build response-level overrides for variant-scoped metrics/effort.
+    """Build response-level overrides for one variant's metrics/effort."""
+    return _scoped_metrics_and_effort_overrides(records, [variant_uuid])
 
-    Returns a mapping keyed by vulnerability id with:
-      - ``cvss``: selected metric dicts (scoped first, legacy fallback)
-      - ``effort``: selected effort dict (scoped first, legacy fallback)
-    """
+
+def _scoped_metrics_and_effort_overrides(
+    records: list[Vulnerability], variant_ids: list[uuid.UUID]
+) -> dict[str, _ScopedOverrides]:
+    """Select scope-owned metrics/effort, retaining global scanner fallbacks."""
     if not records:
         return {}
 
@@ -174,14 +176,14 @@ def _variant_scoped_metrics_and_effort_overrides(
     metric_rows = db.session.execute(
         db.select(Metrics).where(
             Metrics.vulnerability_id.in_(vuln_ids),
-            db.or_(Metrics.variant_id == variant_uuid, Metrics.variant_id.is_(None)),
+            db.or_(Metrics.variant_id.in_(variant_ids), Metrics.variant_id.is_(None)),
         )
     ).scalars().all()
 
     metrics_by_vuln: dict[str, dict[str, list]] = {}
     for m in metric_rows:
         bucket = metrics_by_vuln.setdefault(m.vulnerability_id, {"scoped": [], "fallback": []})
-        if m.variant_id == variant_uuid:
+        if m.variant_id is not None:
             bucket["scoped"].append(m)
         else:
             bucket["fallback"].append(m)
@@ -199,7 +201,7 @@ def _variant_scoped_metrics_and_effort_overrides(
         .join(Finding, TimeEstimate.finding_id == Finding.id)
         .where(
             Finding.vulnerability_id.in_(vuln_ids),
-            db.or_(TimeEstimate.variant_id == variant_uuid, TimeEstimate.variant_id.is_(None)),
+            db.or_(TimeEstimate.variant_id.in_(variant_ids), TimeEstimate.variant_id.is_(None)),
         )
     ).all()
 
@@ -207,7 +209,7 @@ def _variant_scoped_metrics_and_effort_overrides(
     fallback_effort_by_vuln: dict[str, Effort] = {}
     for vuln_id, te_variant_id, opti, like, pess in raw_te_rows:
         packed = Effort(opti, like, pess)
-        if te_variant_id == variant_uuid and vuln_id not in effort_by_vuln:
+        if te_variant_id is not None and vuln_id not in effort_by_vuln:
             effort_by_vuln[vuln_id] = packed
         elif te_variant_id is None and vuln_id not in fallback_effort_by_vuln:
             fallback_effort_by_vuln[vuln_id] = packed
@@ -362,6 +364,41 @@ def _compact_json_response(payload_obj: typing.Any) -> ResponseReturnValue:
         response.headers["Content-Encoding"] = "gzip"
         response.headers["Vary"] = "Accept-Encoding"
     return response
+
+
+def _apply_individual_refresh_scope(data: dict, record: Vulnerability, scope: dict) -> None:
+    """Remove out-of-scope inventory and overrides from a provider response."""
+    if scope["variant_id"]:
+        variant_ids = [uuid.UUID(scope["variant_id"])]
+        scan_ids = active_scan_ids_for_variant(variant_ids[0])
+    else:
+        project_id = uuid.UUID(scope["project_id"])
+        variant_ids = [variant.id for variant in Variant.get_by_project(project_id)]
+        scan_ids = active_scan_ids_for_project(project_id)
+    package_ids = active_package_ids_for_scans(scan_ids)
+    package_query = (
+        db.select(Package.name, Package.version, Package.supplier)
+        .join(Finding, Finding.package_id == Package.id)
+        .join(Observation, Observation.finding_id == Finding.id)
+        .join(Scan, Scan.id == Observation.scan_id)
+        .where(Finding.vulnerability_id == record.id, Observation.scan_id.in_(scan_ids))
+        .distinct()
+    )
+    package_filter = _sbom_pkg_filter(package_ids)
+    if package_filter is not None:
+        package_query = package_query.where(package_filter)
+    data["packages"] = sorted({
+        f"{name}@{version}::{supplier}" if supplier else f"{name}@{version}"
+        for name, version, supplier in db.session.execute(package_query)
+    })
+    overrides = _scoped_metrics_and_effort_overrides([record], variant_ids)
+    _apply_variant_scoped_overrides_to_vuln_dicts({record.id: data}, overrides)
+    texts = fetch_vulnerabilities_texts([record.id], scan_ids=scan_ids, include_packages=True)
+    data["texts"] = [text.to_dict() for text in texts[record.id]]
+    record.found_by = []
+    if scan_ids:
+        _populate_found_by([record], active_scan_ids=scan_ids)
+    data["found_by"] = list(record.found_by)
 
 
 def init_app(app: Flask) -> None:
@@ -1683,7 +1720,8 @@ def init_app(app: Flask) -> None:
         from ..helpers.refresh_runs import create_run, single_refresh_run, single_refresh_scope
 
         identifier = vuln_id.upper()
-        if db.session.get(Vulnerability, identifier) is None:
+        record = db.session.get(Vulnerability, identifier)
+        if record is None:
             abort(404, description="Vulnerability not found")
         scope = single_refresh_scope(identifier)
         providers = ([("ghsa", refresh_single_ghsa)] if identifier.startswith("GHSA-") else
@@ -1696,7 +1734,11 @@ def init_app(app: Flask) -> None:
             for source, refresh in providers:
                 try:
                     response = make_response(refresh(identifier))
-                    results[source] = {"status": response.status_code, "body": response.get_json()}
+                    body = response.get_json()
+                    if response.status_code == 200 and any(scope.values()):
+                        for data in body["vulnerabilities"]:
+                            _apply_individual_refresh_scope(data, record, scope)
+                    results[source] = {"status": response.status_code, "body": body}
                 except Exception:
                     current_app.logger.exception("Individual %s refresh failed for %s", source, identifier)
                     results[source] = {"status": 500, "body": {"error": "Source refresh failed"}}
