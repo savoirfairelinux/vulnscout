@@ -9,6 +9,7 @@ show in the web UI and wait behind the web's actions, instead of running them in
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import http.client
 import json
 import os
@@ -32,6 +33,7 @@ REQUEST_TIMEOUT = 10.0
 SUBMIT_TIMEOUT = 60.0  # the server plans the actions and checks the sign-in before answering
 # Module-level so tests can shrink them.
 SUBMIT_BATCH = 500  # actions per submission: the server's limit (agent_queue.MAX_ACTIONS)
+TARGET_BATCH = 1000  # targets per action: the server's limit (agent_queue.MAX_TARGETS)
 START_WAIT = 60.0  # how long the CLI waits for a starting web server
 START_RETRY = 2.0
 WAITING = "waiting for the web server to finish starting\u2026"
@@ -224,6 +226,55 @@ def _action(specs: list[TurnSpec]) -> dict[str, Any]:
     return action
 
 
+@dataclass
+class _Submission:
+    action: dict[str, Any]
+    specs: list[TurnSpec]
+    units: list[_Unit] | None = None  # split actions share the original specs' result units
+
+    @property
+    def key(self) -> str:
+        from ..controllers.ai_actions import assess_key
+
+        return self.action.get("key") or assess_key(
+            self.action["vuln_id"], ((t["variant_id"], t["package"]) for t in self.action["targets"]))
+
+
+def _submissions(specs: list[TurnSpec]) -> list[_Submission]:
+    """Bound each action's selection, retaining one result callback per original spec."""
+    action = _action(specs)
+    field = "targets" if specs[0].kind == "assess" else "finding_ids"
+    targets = action[field]
+    if len(targets) <= TARGET_BATCH:
+        return [_Submission(action, specs)]
+    submissions: list[_Submission] = []
+
+    def append(part: dict[str, Any], group: list[TurnSpec], units: list[_Unit] | None = None) -> None:
+        if field == "finding_ids":
+            selection = json.dumps([specs[0].key, sorted(part[field])], separators=(",", ":"))
+            part["key"] = f"review:{hashlib.sha256(selection.encode()).hexdigest()}"
+        submissions.append(_Submission(part, group, units))
+
+    pending: list[TurnSpec] = []
+    count = 0
+    for spec in specs:
+        size = len(spec.assess_targets if spec.kind == "assess" else spec.review_targets)
+        if pending and count + size > TARGET_BATCH:
+            append(_action(pending), pending)
+            pending, count = [], 0
+        if size > TARGET_BATCH:
+            action = _action([spec])
+            unit = _Unit([spec], [])
+            for start in range(0, len(action[field]), TARGET_BATCH):
+                append({**action, field: action[field][start:start + TARGET_BATCH]}, [spec], [unit])
+        else:
+            pending.append(spec)
+            count += size
+    if pending:
+        append(_action(pending), pending)
+    return submissions
+
+
 def _failure(record: dict | None) -> tuple[str, str]:
     """(outcome, error) of a request that ended without a turn result; None: the server forgot it."""
     if record is None:
@@ -344,13 +395,13 @@ class _Follower:
         groups: dict[str, list[TurnSpec]] = {}
         for spec in self.specs:
             groups.setdefault(spec.key, []).append(spec)
-        items = list(groups.items())
+        items = [submission for group in groups.values() for submission in _submissions(group)]
         try:
             for start in range(0, len(items), SUBMIT_BATCH):
-                batch = dict(items[start:start + SUBMIT_BATCH])
+                batch = items[start:start + SUBMIT_BATCH]
                 with deferred_interrupt():
                     try:
-                        response = self.client.submit([_action(group) for group in batch.values()], self.model,
+                        response = self.client.submit([submission.action for submission in batch], self.model,
                                                       self.specs[0].timeout)
                     except click.ClickException:
                         self._abandon()
@@ -368,16 +419,18 @@ class _Follower:
         if stopped:
             echo(f"Stopped the {len(stopped)} request(s) of this run already in the web AI queue.", err=True)
 
-    def _adopt(self, groups: dict[str, list[TurnSpec]], response: dict) -> None:
+    def _adopt(self, submissions: list[_Submission], response: dict) -> None:
         created: dict[str, list[str]] = {}
         for request in response.get("requests", []):
             created.setdefault(request["key"], []).append(request["id"])
             self.owned[request["id"]] = None
         skipped = {item["key"]: item for item in response.get("skipped", [])}
         active = {request["id"]: request for request in self.client.snapshot()["requests"]} if skipped else {}
-        for key, group in groups.items():
+        for submission in submissions:
+            key, group = submission.key, submission.specs
             request_ids = created.get(key, [])
-            if not request_ids and key in skipped:
+            followed = not request_ids and key in skipped
+            if followed:
                 # Already in the queue (another CLI or a tab): follow every request of its action, the
                 # finished batches included; run the failed ones again. Its submitter partitioned the
                 # targets, maybe otherwise: the whole action is one unit, its results matched by target.
@@ -386,12 +439,18 @@ class _Follower:
                 for request_id in request_ids:
                     if active.get(request_id, {}).get("status") == "failed":
                         self.client.retry(request_id)
+            if submission.units is not None:
+                for unit in submission.units:
+                    unit.request_ids.extend(request_ids)
+                    if not any(existing is unit for existing in self.units):
+                        self.units.append(unit)
+            elif followed:
                 self.units.append(_Unit(group, request_ids))
             elif len(request_ids) == len(group):
                 self.units += [_Unit([spec], [request_id]) for spec, request_id in zip(group, request_ids)]
             else:
                 self.units.append(_Unit(group, request_ids))
-        accepted = {id(spec) for group in groups.values() for spec in group}
+        accepted = {id(spec) for submission in submissions for spec in submission.specs}
         self.unsubmitted = [spec for spec in self.unsubmitted if id(spec) not in accepted]
 
     def _record(self, request_id: str, active: dict[str, dict]) -> dict:
