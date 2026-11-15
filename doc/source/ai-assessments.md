@@ -162,11 +162,13 @@ If targets cannot be resolved, VulnScout reports an error instead of queuing a
 partial selection. Large requests are split within the message limit while
 keeping each variant's packages together; each batch is a fresh agent session in
 the same conversation, and follow-up messages may save for any of its batches'
-targets.
+targets. These target restrictions are set when the action is queued and remain
+in place if its waiting requests are removed before a follow-up runs.
 
 Closing the panel or resetting the row selection preserves queued and running
-work. Additional selections queue only new vulnerabilities; a queued or running
-vulnerability cannot be queued twice. Remove requests in **Conversations** or
+work. The same vulnerability and target selection shares one action across the
+selection bar, vulnerability modal, chat and CLI; different targets may queue
+separate actions. Remove requests in **Conversations** or
 use **Clear waiting** to discard waiting and failed actions.
 Changing scope or leaving the Vulnerabilities tab does not cancel queued work.
 

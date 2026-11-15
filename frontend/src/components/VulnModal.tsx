@@ -215,7 +215,17 @@ type VariantScopedSnapshot = {
             showMessage(`No active assessment targets for ${vuln.id}.`, 'error');
             return;
         }
-        void queueAgentAction({ kind: 'assess', vuln_id: vuln.id, targets }, assessmentKey(vuln.id, targets));
+        const variantIds = new Set<string>();
+        for (const target of targets) {
+            if (!target.variant_id) {
+                showMessage(`No active variant for assessment target ${target.package}.`, 'error');
+                return;
+            }
+            variantIds.add(target.variant_id);
+        }
+        const context: AgentContext = { ...assessmentAgentContext, variantId: undefined,
+            variantIds: projectId ? [...variantIds] : undefined };
+        void queueAgentAction({ kind: 'assess', vuln_id: vuln.id, targets, context }, assessmentKey(vuln.id, targets));
     };
 
     const reviewWithAi = (assessment: Assessment) => {

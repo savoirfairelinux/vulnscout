@@ -6,23 +6,9 @@ import type { AgentContext } from '../types/agent';
 export const assessmentKey = (vulnerabilityId: string, targets: AssessmentTargetPair[]) =>
     `assess:${vulnerabilityId}:${targets.map(target => `${target.variant_id}|${target.package}`).sort().join(',')}`;
 
-/** Dedupe prefix for per-vulnerability assessments queued from a table scope. */
-/** A 53-bit string hash (cyrb53), so a scope of any size gives a short key. */
-function hashString(text: string) {
-    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
-    for (let i = 0; i < text.length; i++) {
-        const ch = text.charCodeAt(i);
-        h1 = Math.imul(h1 ^ ch, 2654435761);
-        h2 = Math.imul(h2 ^ ch, 1597334677);
-    }
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
-}
-
-/** The key prefix of a bulk assessment's actions; hashed, so it fits the AI queue's key limit for any selection. */
-export const bulkAssessmentKeyPrefix = ({ projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation }: AgentContext) =>
-    `assess:scope:${hashString(JSON.stringify([projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation]))}:`;
+/** Match table scope metadata independently of the backend's target-derived action key. */
+export const assessmentScopeIdentity = ({ projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation }: AgentContext) =>
+    JSON.stringify([projectId, variantId, baseVariantId, compareOperation, variantIds?.slice().sort(), multiOperation]);
 
 /** Resolve real variant/package pairs, never a Cartesian product of table packages and variants. */
 export async function loadAiAssessmentTargets(

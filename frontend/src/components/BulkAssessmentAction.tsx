@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Vulnerability } from '../handlers/vulnerabilities';
 import type { AgentAction, AgentContext } from '../types/agent';
-import { bulkAssessmentKeyPrefix, loadAiAssessmentTargets } from '../helpers/aiAssessment';
+import { assessmentScopeIdentity, loadAiAssessmentTargets } from '../helpers/aiAssessment';
 import { ACTIONS_PER_REQUEST, agentActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
 import useAgentQueue from '../hooks/useAgentQueue';
 import { agentErrorMessage } from '../handlers/agent';
@@ -22,14 +22,14 @@ type Props = {
 export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, context, disabled, onError, onPrepare }: Readonly<Props>) {
     const preparation = useRef<AbortController | null>(null);
     const [preparing, setPreparing] = useState(false);
-    // Scope the dedupe key so the same CVE can still be assessed from another table scope.
-    const keyPrefix = bulkAssessmentKeyPrefix(context);
+    const scopeIdentity = assessmentScopeIdentity(context);
     const agentQueue = useAgentQueue();
-    const queue = agentQueue.filter(item => item.key.startsWith(keyPrefix));
+    const queue = agentQueue.filter(item => item.kind === 'assess' && item.context &&
+        assessmentScopeIdentity(item.context) === scopeIdentity);
     const selectionKey = JSON.stringify([...selectedVulns].sort());
     const activeIds = new Set(queue.flatMap(item => item.context?.view?.selectedVulnerabilityIds ?? []));
     const selectionActive = selectedVulns.length > 0 && selectedVulns.every(id => activeIds.has(id));
-    const selectionState = selectionActive ? agentActionState(agentQueue, item => item.key.startsWith(keyPrefix) &&
+    const selectionState = selectionActive ? agentActionState(queue, item =>
         (item.context?.view?.selectedVulnerabilityIds?.some(id => selectedVulns.includes(id)) ?? false)) : undefined;
 
     useEffect(() => {
@@ -59,7 +59,7 @@ export default function BulkAssessmentAction({ vulnerabilities, selectedVulns, c
                     const vulnerability = selected[index];
                     const targets = await loadAiAssessmentTargets(vulnerability, context, controller.signal);
                     actions[index] = {
-                        kind: 'assess', vuln_id: vulnerability.id, targets, key: `${keyPrefix}${vulnerability.id}`,
+                        kind: 'assess', vuln_id: vulnerability.id, targets,
                         context: { ...context, view: { ...context.view, selectedVulnerabilityIds: [vulnerability.id], selectionCount: 1 } },
                     };
                 }

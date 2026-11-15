@@ -1,5 +1,5 @@
 import fetchMock from 'jest-fetch-mock';
-import { assessmentKey, bulkAssessmentKeyPrefix, loadAiAssessmentTargets } from '../../src/helpers/aiAssessment';
+import { assessmentKey, loadAiAssessmentTargets } from '../../src/helpers/aiAssessment';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 import type { AgentContext } from '../../src/types/agent';
 
@@ -132,15 +132,5 @@ describe('AI assessment keys', () => {
             { variant_id: 'v2', package: 'pkg@2' },
             { variant_id: 'v1', package: 'pkg@1::supplier' },
         ])).toBe('assess:CVE-2026-1234:v1|pkg@1::supplier,v2|pkg@2');
-    });
-
-    test('a bulk scope of any size gives a short prefix, distinct per scope', () => {
-        const variantIds = Array.from({ length: 200 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
-        const scope: AgentContext = { page: 'vulnerabilities', projectId: 'p', variantIds, multiOperation: 'union' };
-        const prefix = bulkAssessmentKeyPrefix(scope);
-        expect(prefix).toMatch(/^assess:scope:[0-9a-z]+:$/);
-        expect(prefix.length).toBeLessThan(40);
-        expect(bulkAssessmentKeyPrefix({ ...scope })).toBe(prefix);
-        expect(bulkAssessmentKeyPrefix({ ...scope, multiOperation: 'intersection' })).not.toBe(prefix);
     });
 });
