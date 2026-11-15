@@ -546,7 +546,10 @@ def init_app(app: Flask) -> None:
             opts = (
                 selectinload(Vulnerability.findings).selectinload(Finding.package),
                 selectinload(Vulnerability.findings).selectinload(Finding.time_estimates),
-                selectinload(Vulnerability.metrics),
+                selectinload(Vulnerability.metrics.and_(db.or_(
+                    Metrics.variant_id.is_(None),
+                    Metrics.variant_id.in_(parsed_uuids),
+                ))),
                 joinedload(Vulnerability.refresh),
             )
             per_variant_scan_ids = {u: active_scan_ids_for_variant(u) for u in parsed_uuids}

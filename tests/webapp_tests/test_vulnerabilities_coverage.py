@@ -1131,6 +1131,58 @@ def test_scoped_severity_uses_only_selected_metrics(app, client, scope, detail):
     assert sorted(m["base_score"] for m in vuln["severity"]["cvss"]) == [5.5, 7.8]
 
 
+@pytest.mark.parametrize("operation", ["union", "intersection"])
+@pytest.mark.parametrize("selected_score, expected_label, expected_scores", [
+    (7.8, "high", [5.5, 6.5, 7.8]),
+    (None, "medium", [5.5]),
+])
+def test_multi_variant_severity_excludes_unselected_metrics(
+    app, client, operation, selected_score, expected_label, expected_scores
+):
+    import uuid
+    from src.extensions import db
+    from src.models import Finding, Metrics, Observation, Project, Scan, Variant, Vulnerability
+
+    with app.app_context():
+        vuln = db.session.get(Vulnerability, "CVE-2020-35492")
+        vuln.status = "medium"
+        for metric in list(vuln.metrics):
+            db.session.delete(metric)
+        first_variant_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
+        second_variant = Variant.create(
+            "SecondMetricsVariant", uuid.UUID("11111111-1111-1111-1111-111111111111")
+        )
+        second_variant_id = second_variant.id
+        scan = Scan.create("Second variant scan", second_variant_id)
+        finding = db.session.execute(
+            db.select(Finding).where(Finding.vulnerability_id == vuln.id)
+        ).scalar_one()
+        Observation.create(finding_id=finding.id, scan_id=scan.id)
+        other_project = Project.create("UnselectedMetricsProject")
+        other_variant = Variant.create("UnselectedMetricsVariant", other_project.id)
+        scores = [(5.5, None), (9.8, other_variant.id)]
+        if selected_score is not None:
+            scores.extend([(selected_score, first_variant_id), (6.5, second_variant_id)])
+        for score, variant_id in scores:
+            db.session.add(Metrics(
+                vulnerability_id=vuln.id, version="3.1", score=score,
+                variant_id=variant_id,
+            ))
+        db.session.commit()
+
+    response = client.get(
+        f"/api/vulnerabilities?variant_ids={first_variant_id},{second_variant_id}&operation={operation}"
+    )
+    assert response.status_code == 200
+    result = response.get_json()
+    assert [v["id"] for v in result] == ["CVE-2020-35492"]
+    severity = result[0]["severity"]
+    assert severity["severity"] == expected_label
+    assert severity["min_score"] == min(expected_scores)
+    assert severity["max_score"] == max(expected_scores)
+    assert sorted(m["base_score"] for m in severity["cvss"]) == expected_scores
+
+
 def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
     """Fallback skips non-string document formats and maps scan sources."""
     from src.routes.vulnerabilities import _populate_found_by
