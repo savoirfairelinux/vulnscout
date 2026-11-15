@@ -6,6 +6,7 @@ import MultiEditBar from '../../src/components/MultiEditBar';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 import * as store from '../../src/handlers/agentQueue';
 import type { AgentAction, AgentRequestRecord } from '../../src/types/agent';
+import { assessmentKey } from '../../src/helpers/aiAssessment';
 
 fetchMock.enableMocks();
 
@@ -18,8 +19,9 @@ const frame = (requests: AgentRequestRecord[]) => act(() => {
 type Posted = { conversation: string; source: string; context: Record<string, unknown>; actions: Array<Extract<AgentAction, { kind: 'assess' }>> };
 let posted: Posted[] = [];
 let records: AgentRequestRecord[] = [];
+const serverKey = (action: Posted['actions'][number]) => action.key ?? assessmentKey(action.vuln_id, action.targets ?? []);
 const record = (action: Posted['actions'][number], body: Posted, index: number): AgentRequestRecord => ({
-    id: `r${records.length + index + 1}`, key: action.key ?? '', kind: 'assess', lane: 'action',
+    id: `r${records.length + index + 1}`, key: serverKey(action), kind: 'assess', lane: 'action',
     conversation_id: `c${records.length + index + 1}`, source: body.source, title: `${action.vuln_id} · 1 target`, detail: '',
     model: 'auto', status: 'queued', error: null, error_code: null, position: records.length + index + 1, created_at: 1,
     started_at: null, finished_at: null, context: (action.context ?? body.context) as AgentRequestRecord['context'],
@@ -27,14 +29,14 @@ const record = (action: Posted['actions'][number], body: Posted, index: number):
 });
 /** Queue the posted actions like the backend does (skipping keys still active) and publish the queue. */
 const accept = (body: Posted) => {
-    const fresh = body.actions.filter(action => !records.some(item => item.key === action.key));
+    const fresh = body.actions.filter(action => !records.some(item => item.key === serverKey(action)));
     const created = fresh.map((action, index) => record(action, body, index));
     records = [...records, ...created];
     frame(records);
     return {
         requests: created.map(item => ({ id: item.id, key: item.key, conversation_id: item.conversation_id })),
         skipped: body.actions.filter(action => !fresh.includes(action))
-            .map(action => ({ key: action.key, request_id: records.find(item => item.key === action.key)?.id })),
+            .map(action => ({ key: serverKey(action), request_id: records.find(item => item.key === serverKey(action))?.id })),
     };
 };
 const setStatus = (index: number, status: AgentRequestRecord['status']) => {
@@ -119,12 +121,14 @@ test('queues exactly the selected vulnerabilities, their own packages, and the c
     expect(posted[0].actions).toEqual([1, 2].map(index => ({
         kind: 'assess', vuln_id: `CVE-${index}`,
         targets: [{ variant_id: 'variant-1', package: `pkg@${index}` }],
-        key: expect.stringMatching(new RegExp(`^assess:.*:CVE-${index}$`)),
         context: expect.objectContaining({
             page: 'vulnerabilities', projectId: 'project-1', variantId: 'variant-1',
             view: { selectedVulnerabilityIds: [`CVE-${index}`], selectionCount: 1 },
         }),
     })));
+    expect(queue().map(item => item.key)).toEqual([
+        'assess:CVE-1:variant-1|pkg@1', 'assess:CVE-2:variant-1|pkg@2',
+    ]);
     await waitFor(() => expect(chatOpenings()).toBe(1));
     expect(store.getAgentChatRequest()).toMatchObject({ view: 'conversations', taskId: undefined });
     expect(baseProps.resetVulns).not.toHaveBeenCalled();
@@ -242,6 +246,17 @@ test('keeps the selected multi-variant scope in the agent context', async () => 
     expect(posted[0].actions[0]).toMatchObject({ targets: [
         { variant_id: 'variant-1', package: 'pkg@1' }, { variant_id: 'outside-scope', package: 'pkg@1' },
     ] });
+});
+
+test('large table scopes keep their metadata without sending an oversized action key', async () => {
+    const variantIds = ['variant-1', ...Array.from({ length: 199 }, (_, index) =>
+        `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`)];
+    render(bar({ selectedVulns: ['CVE-1'], variantId: undefined, variantIds, multiOperation: 'union' }));
+    fireEvent.click(assessButton());
+    await waitFor(() => expect(chatOpenings()).toBe(1));
+    expect(posted[0].actions[0]).not.toHaveProperty('key');
+    expect(posted[0].actions[0].context?.variantIds).toEqual(variantIds);
+    expect(queue()[0].key).toBe('assess:CVE-1:variant-1|pkg@1');
 });
 
 test('limits concurrent target resolution and keeps selection order', async () => {

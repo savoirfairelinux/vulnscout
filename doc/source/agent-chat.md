@@ -53,7 +53,8 @@ assessments on the current turn's targets (and revisions of the AI assessments
 that turn created while all their targets remain the turn's) or reviews of the
 current turn's review targets; every other write is rejected. The action's SDK
 session is kept for follow-up messages, which, like free chat, use the regular
-API.
+API. Their MCP scope stays restricted to the action's selected targets, including
+when a follow-up outlives an action removed before it started.
 
 `flask ai-assess` (`./vulnscout assess`) and `flask ai-review`
 (`./vulnscout review`) first probe the web server's queue

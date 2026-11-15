@@ -167,7 +167,7 @@ class AgentConversationState:
     id: str
     title: str
     kind: Literal["main", "action"]
-    scope: str | None = None  # action conversations: the last action turn's scope (follow-ups reuse it)
+    scope: str | None = None  # action conversations: all planned targets (follow-ups reuse it)
     profile: AgentProfile | None = None
     session: Conversation = field(default_factory=_new_session)
     messages: list[dict] = field(default_factory=list)
@@ -647,9 +647,12 @@ class AgentQueue:
                                  model=model, model_explicit=explicit, timeout=timeout or default_timeout,
                                  context=plan.context, text=text, scope=plan.scope)]
         first = plan.specs[0]
+        scope = None
+        for spec in plan.specs:
+            scope = ai_actions.merge_scopes(scope, ai_actions.scope_for_spec(spec))
         owner = AgentConversationState(id=str(uuid.uuid4()), kind="action",
                                        title=f"{LABELS[plan.kind]} {_BATCH_SUFFIX.sub('', first.title)}",
-                                       profile=agent_skills.PROFILES[plan.kind])
+                                       profile=agent_skills.PROFILES[plan.kind], scope=scope)
         self._conversations[owner.id] = owner
         return [AgentRequest(id=str(uuid.uuid4()), key=spec.key, kind=spec.kind, lane="action",
                              conversation_id=owner.id, source=source, title=spec.title, detail=spec.detail,
@@ -1074,6 +1077,8 @@ class AgentQueue:
         common: dict[str, Any] = {"request": request, "session": conversation.session, "model": request.model,
                                   "path": path, "publish": publish, "on_session": on_session}
         if request.spec is None:
+            if conversation.kind == "action" and conversation.scope is None:
+                raise _TurnFailure("scope", "This action conversation has no target scope. Queue the action again.")
             return TurnCall(**common, prompt=_agent().chat_prompt(request.text, request.context),
                             scope=conversation.scope or request.scope or "", profile=conversation.profile,
                             timeout=request.timeout)

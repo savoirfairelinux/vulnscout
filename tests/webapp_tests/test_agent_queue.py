@@ -251,6 +251,42 @@ def test_a_follow_up_after_batches_may_write_every_batch_target(env, monkeypatch
     assert env.deleted == [f"s-{first['id']}"] and chat.session.session_id == f"s-{second['id']}"
 
 
+@pytest.mark.parametrize("kind", ["assess", "review"])
+@pytest.mark.parametrize("browser_context", [False, True])
+def test_removing_an_unstarted_action_keeps_its_follow_up_restricted(env, kind, browser_context):
+    if kind == "assess":
+        action = _assess(targets=[{"variant_id": env.ids["arm"], "package": "openssl@3.0"}])
+        field = "write_targets"
+    else:
+        action = {"kind": "review", "assessment_id": _custom(env, [("arm", "openssl")])}
+        field = "review_targets"
+    [created], _ = env.q.enqueue("per-action", "web", [action], model="m")
+    context = {"page": "vulnerabilities", "projectId": env.ids["demo"]} if browser_context else None
+    [follow], _ = env.q.enqueue(created["conversation_id"], "web", [_message("why?")],
+                               model="m", context=context)
+    env.q.remove(created["id"])
+    assert env.q.run_once("chat") == follow["id"]
+    [call] = env.fake.calls
+    scope = json.loads(call.scope)
+    assert scope["project_ids"] == [env.ids["demo"]]
+    assert scope["variant_ids"] == [env.ids["arm"]]
+    assert len(scope[field]) == 1
+    assert scope[field][0]["variant_id"] == env.ids["arm"]
+    assert scope[field][0]["package"] == "openssl@3.0"
+    assert call.profile.action == kind
+
+
+def test_an_action_follow_up_never_falls_back_when_its_scope_is_missing(env):
+    [created], _ = env.q.enqueue("per-action", "web", [_assess()], model="m")
+    [follow], _ = env.q.enqueue(created["conversation_id"], "web", [_message()], model="m")
+    env.q.remove(created["id"])
+    env.q._conversations[created["conversation_id"]].scope = None
+    assert env.q.run_once("chat") == follow["id"]
+    assert _get(env.q, follow["id"])["error_code"] == "scope"
+    assert _status(env, follow["id"]) == "failed"
+    assert env.fake.calls == []
+
+
 def test_messages_carry_their_browser_context(env):
     context = {"page": "vulnerabilities", "projectId": env.ids["demo"], "variantId": env.ids["x86"]}
     [request], _ = env.q.enqueue("main", "web", [_message("look")], model="m", context=context)

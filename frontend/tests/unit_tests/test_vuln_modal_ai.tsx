@@ -195,10 +195,28 @@ describe('VulnModal AI actions', () => {
         expect(posted).toEqual([{
             conversation: 'per-action', source: `Vulnerability ${vulnerability.id}`,
             context: { page: 'vulnerabilities', view: { openVulnerabilityId: vulnerability.id, matchingVariantIds: ['v1', 'v2'], selectionCount: 2 } },
-            actions: [{ kind: 'assess', vuln_id: vulnerability.id, targets: defaultAiTargets }],
+            actions: [{ kind: 'assess', vuln_id: vulnerability.id, targets: defaultAiTargets,
+                context: { page: 'vulnerabilities',
+                    view: { openVulnerabilityId: vulnerability.id, matchingVariantIds: ['v1', 'v2'], selectionCount: 2 } } }],
         }]);
         expect(store.getAgentChatRequest().taskId).toBe(getAgentQueue()[0].id);
         expect(screen.getByTestId('assess-state')).toHaveTextContent('queued #1');
+    });
+
+    test('a modal opened on one variant scopes assessment to the selected other variant', async () => {
+        const user = userEvent.setup();
+        mockAiTargets = [{ variant_id: 'v2', package: 'pkg@1.0.0' }];
+        renderModal({ isEditing: true, projectId: 'p', variantId: 'v1' });
+        await user.click(screen.getByRole('button', { name: 'Assess with AI' }));
+        await waitFor(() => expect(posted).toHaveLength(1));
+        expect(posted[0].context).toMatchObject({ projectId: 'p', variantId: 'v1' });
+        expect(posted[0].actions[0]).toMatchObject({
+            kind: 'assess', targets: mockAiTargets, context: { projectId: 'p', variantIds: ['v2'] },
+        });
+        const action = posted[0].actions[0];
+        expect(action.kind).toBe('assess');
+        if (action.kind !== 'assess') throw new Error('Expected an assessment action.');
+        expect(action.context).not.toHaveProperty('variantId');
     });
 
     test('Assess with AI reports a request the backend rejects', async () => {

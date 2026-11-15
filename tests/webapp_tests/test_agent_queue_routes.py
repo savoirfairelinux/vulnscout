@@ -295,6 +295,50 @@ def test_oversized_cli_actions_deduplicate_and_cancel_only_owned_requests(env, k
     assert all(result["outcome"] == "interrupted" for result in results)
 
 
+def test_modal_assessment_scope_uses_selected_variants_not_the_explorer_variant(env):
+    action = {"kind": "assess", "vuln_id": "CVE-2024-0001",
+              "targets": [{"variant_id": env.ids["arm"], "package": "openssl@3.0"}]}
+    context = {"page": "vulnerabilities", "projectId": env.ids["demo"], "variantId": env.ids["x86"],
+               "view": {"openVulnerabilityId": action["vuln_id"],
+                        "matchingVariantIds": [env.ids["x86"], env.ids["arm"]]}}
+    rejected = _post(env, [action], context=context)
+    assert rejected.status_code == 400
+    assert rejected.get_json()["error"] == f"Variant {env.ids['arm']} is not in scope."
+    selected_context = {key: value for key, value in context.items() if key != "variantId"}
+    selected_context["variantIds"] = [env.ids["arm"]]
+    accepted = _post(env, [{**action, "context": selected_context}], context=context)
+    assert accepted.status_code == 202
+    [request] = env.q.snapshot()["requests"]
+    assert request["context"] == selected_context
+    scope = json.loads(env.q._conversations[request["conversation_id"]].scope)
+    assert scope["variant_ids"] == [env.ids["arm"]]
+
+
+@pytest.mark.usefixtures("cli_run")
+def test_bulk_web_and_cli_assessments_deduplicate_the_same_targets(env):
+    context = {"page": "vulnerabilities", "projectId": env.ids["demo"], "variantId": env.ids["x86"],
+               "view": {"selectedVulnerabilityIds": ["CVE-2024-0001"], "selectionCount": 1}}
+    action = {"kind": "assess", "vuln_id": "CVE-2024-0001", "context": context,
+              "targets": [{"variant_id": env.ids["x86"], "package": package}
+                          for package in ("zlib@1.2", "openssl@3.0")]}
+    [web] = _post(env, [action], context=context).get_json()["requests"]
+    with env.app.app_context():
+        targets = ai_actions.active_targets(action["vuln_id"], {uuid.UUID(env.ids["x86"])})
+        specs = ai_actions.plan_assess(action["vuln_id"], list(reversed(targets)))
+
+    def transport(method, path, body, timeout):
+        response = env.client.open(path, method=method, json=body)
+        return response.status_code, response.get_json()
+
+    follower = qc._Follower(qc.QueueClient(transport), specs, None, lambda spec: None, lambda spec, result: None)
+    follower.submit()
+    assert not follower.owned
+    assert [request_id for unit in follower.units for request_id in unit.request_ids] == [web["id"]]
+    assert len(env.q.snapshot()["requests"]) == 1
+    follower.interrupt()
+    assert env.q.get_request(web["id"])["status"] == "queued"
+
+
 @pytest.mark.parametrize("config, code", [
     ("", "no_ai_config"),
     ("AI_PROVIDER=bogus\n", "invalid_config"),

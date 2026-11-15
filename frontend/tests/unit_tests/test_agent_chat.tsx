@@ -4,7 +4,6 @@ import '@testing-library/jest-dom';
 import React from 'react';
 
 import AgentChat from '../../src/components/AgentChat';
-import { bulkAssessmentKeyPrefix } from '../../src/helpers/aiAssessment';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type {
     AgentAction, AgentContext, AgentConversationSummary, AgentLiveTurn, AgentMessage, AgentQueuePaused, AgentRequestRecord,
@@ -900,7 +899,7 @@ test.each(['Assess vulnerability', 'Assess this vulnerability'])('%s queues the 
     await waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({
         conversation: 'per-action', source: 'Vulnerability CVE-3',
-        actions: [{ kind: 'assess', vuln_id: 'CVE-3', key: `${bulkAssessmentKeyPrefix(openContext)}CVE-3` }],
+        actions: [{ kind: 'assess', vuln_id: 'CVE-3' }],
         context: { view: { selectedVulnerabilityIds: ['CVE-3'], selectionCount: 1 } },
     });
     // A waiting request opens its own conversation, showing the pending request and its place in line.

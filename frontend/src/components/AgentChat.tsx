@@ -11,7 +11,6 @@ import {
     getAgentChatRequest, getAgentConnectionRevision, getAgentConversation, getAgentQueue, getAgentQueuePaused, openAgentChat, removeAgentTask, resetAgentConversation,
     retryAgentTask, setActiveConversation, stopAgentTask, subscribeAgentQueue, type AgentTask,
 } from '../handlers/agentQueue';
-import { bulkAssessmentKeyPrefix } from '../helpers/aiAssessment';
 import AgentConversationList from './AgentConversationList';
 import AgentCodeBlock from './AgentCodeBlock';
 import { aiContextFormAction } from '../helpers/aiContextFormAction';
@@ -346,7 +345,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     async function assessInOwnConversation(id: string) {
         if (busy || modelBusy || !ready) return;
         try {
-            const { requests, skipped } = await enqueueAgentActions([{ kind: 'assess', vuln_id: id, key: `${bulkAssessmentKeyPrefix(context)}${id}` }], {
+            const { requests, skipped } = await enqueueAgentActions([{ kind: 'assess', vuln_id: id }], {
                 conversation: 'per-action', source: `Vulnerability ${id}`,
                 context: { ...context, view: { ...context.view, selectedVulnerabilityIds: [id], selectionCount: 1 } },
             });

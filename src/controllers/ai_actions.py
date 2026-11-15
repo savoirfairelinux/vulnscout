@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Iterable, Literal, Union
 from uuid import UUID
 
@@ -540,6 +540,21 @@ def merge_scopes(previous: str | None, scope: str) -> str:
     return json.dumps(merged, separators=(",", ":"))
 
 
+def scope_for_spec(spec: TurnSpec) -> str:
+    """The restricted agent scope of a planned turn, without preparing or reselecting its review."""
+    if spec.kind == "assess":
+        return json.dumps({"project_ids": sorted({target.project_id for target in spec.assess_targets}),
+                           "variant_ids": sorted({target.variant_id for target in spec.assess_targets}),
+                           "write_targets": [{"vuln_id": spec.vuln_id, "variant_id": target.variant_id,
+                                              "package": target.package} for target in spec.assess_targets]},
+                          separators=(",", ":"))
+    return json.dumps({"project_ids": sorted({str(t.project_id) for t in spec.review_targets}),
+                       "variant_ids": sorted({str(t.variant_id) for t in spec.review_targets}),
+                       "review_targets": [{"assessment_id": str(t.assessment_id), "variant_id": str(t.variant_id),
+                                           "package": t.package, "finding_id": str(t.finding_id)}
+                                          for t in spec.review_targets]}, separators=(",", ":"))
+
+
 def prepare(spec: TurnSpec) -> PreparedTurn:
     """The prompt, agent scope and guard of *spec*'s turn, right before it runs.
 
@@ -550,21 +565,12 @@ def prepare(spec: TurnSpec) -> PreparedTurn:
     from ..routes import agent_skills
 
     if spec.kind == "assess":
-        batch = list(spec.assess_targets)
-        scope = json.dumps({"project_ids": sorted({target.project_id for target in batch}),
-                            "variant_ids": sorted({target.variant_id for target in batch}),
-                            "write_targets": [{"vuln_id": spec.vuln_id, "variant_id": target.variant_id,
-                                               "package": target.package} for target in batch]},
-                           separators=(",", ":"))
-        return PreparedTurn(spec, spec.prompt, scope, agent_skills.ASSESS, AssessGuard(spec.vuln_id, batch), None)
+        return PreparedTurn(spec, spec.prompt, scope_for_spec(spec), agent_skills.ASSESS,
+                            AssessGuard(spec.vuln_id, spec.assess_targets), None)
     selection = _review_selection(spec)
     targets = selection.targets
     prompt = _review_prompt(selection, targets) + (f" (batch {spec.batch[0]} of {spec.batch[1]})" if spec.batch else "")
-    review_targets = [{"assessment_id": str(t.assessment_id), "variant_id": str(t.variant_id),
-                       "package": t.package, "finding_id": str(t.finding_id)} for t in targets]
-    scope = json.dumps({"project_ids": sorted({str(t.project_id) for t in targets}),
-                        "variant_ids": sorted({str(t.variant_id) for t in targets}),
-                        "review_targets": review_targets}, separators=(",", ":"))
+    scope = scope_for_spec(replace(spec, review_targets=tuple(targets)))
     return PreparedTurn(spec, prompt, scope, agent_skills.REVIEW, ReviewGuard(selection, targets),
                         selection.fingerprint)
 
