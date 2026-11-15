@@ -546,6 +546,46 @@ def test_requests_queued_before_setup_take_the_connected_models(env):
     assert _get(env.q, unset["id"])["model"] == "gpt-configured"
 
 
+@pytest.mark.parametrize("model,change_during", [(None, "model"), (None, "planning"), ("pinned", "planning")])
+def test_enqueue_during_a_provider_change_does_not_capture_the_old_implicit_model(
+        env, monkeypatch, model, change_during):
+    from src.routes import agent
+
+    _config("AI_PROVIDER=openai\nAI_AUTH_CREDENTIALS=key-a\nAI_MODEL=model-a\n")
+    configured_model, plan = env.q._configured_model, env.q._plan
+
+    def change_provider():
+        with env.q.connection_change():
+            _config("AI_PROVIDER=anthropic\nAI_AUTH_CREDENTIALS=key-b\nAI_MODEL=model-b\n")
+            monkeypatch.setattr(agent, "_agent_connection", agent.Conversation())
+
+    if change_during == "model":
+        def capture():
+            selected = configured_model()
+            change_provider()
+            return selected
+
+        monkeypatch.setattr(env.q, "_configured_model", capture)
+    else:
+        def interleaved(*args):
+            planned = plan(*args)
+            change_provider()
+            return planned
+
+        monkeypatch.setattr(env.q, "_plan", interleaved)
+
+    [request], _ = env.q.enqueue("per-action", "CLI", [_assess()], model=model)
+    assert _get(env.q, request["id"])["model"] == model
+    monkeypatch.setattr(env.q, "_configured_model", configured_model)
+    monkeypatch.setattr(env.q, "_plan", plan)
+    env.q.run_once("action")
+    [call] = env.fake.calls
+    assert call.model == (model or "model-b")
+    assert call.session.credentials.provider.kind == "anthropic"
+    assert call.session.credentials.provider.api_key == "key-b"
+    assert call.session.credentials.provider.model == call.model
+
+
 def test_a_retry_takes_the_selected_model_unless_one_was_chosen(env):
     from src.routes import agent
 

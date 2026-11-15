@@ -552,6 +552,8 @@ class AgentQueue:
                 # logged-in Copilot user); the workers pause on a problem they meet themselves.
                 raise NotReady(problem["code"], problem["error"])
             self.wake()
+        with self._lock:
+            generation = self._generation
         selected = model
         if selected is None:
             configured, connected = self._configured_model()
@@ -567,6 +569,8 @@ class AgentQueue:
         created: list[dict[str, str]] = []
         skipped: list[dict[str, Any]] = []
         with self._cond:
+            if model is None and (generation != self._generation or self._changing):
+                selected = None
             keys: dict[str, str] = {}
             for request in self._requests:
                 keys.setdefault(request.key, request.id)
