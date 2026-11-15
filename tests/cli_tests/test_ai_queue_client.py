@@ -269,6 +269,80 @@ def test_batches_follow_their_own_request_and_unmatched_counts_merge():
     assert recorder.turns()[0]["usage"]["input_tokens"] == 30
 
 
+@pytest.mark.parametrize("kind", ["assess", "review"])
+def test_oversized_selections_map_split_requests_back_to_original_specs(kind):
+    if kind == "assess":
+        key = "large-assessment"
+        specs = [_assess_spec("CVE-1", [f"p-{n}" for n in range(999)], (1, 2), key),
+                 _assess_spec("CVE-1", ["last-written", "not-written"], (2, 2), key)]
+    else:
+        original = _review_spec(uuid.uuid4(), [uuid.uuid4() for _ in range(1001)])
+        specs = [dataclasses.replace(original, review_targets=original.review_targets[:999], batch=(1, 2)),
+                 dataclasses.replace(original, review_targets=original.review_targets[999:], batch=(2, 2))]
+
+    def finish(action, index):
+        if kind == "assess":
+            return done(assess_result(action, written=[(VARIANT, target["package"]) for target in action["targets"]
+                                                       if target["package"] != "not-written"]))
+        result = review_result(action)
+        if str(specs[-1].review_targets[-1].finding_id) in action["finding_ids"]:
+            result["outcome"] = "failed"
+            result["targets"][-1].update(outcome="failed", review=None, error="second action failed")
+        return done(result)
+
+    recorder, _, stopped = _run(FakeQueueServer(finish), specs)
+    first, second = recorder.turns()
+    assert not stopped and len(recorder.turns()) == len(specs)
+    assert first["outcome"] == ("assessed" if kind == "assess" else "reviewed")
+    assert len(first["targets"]) == 999 and len(second["targets"]) == 2
+    if kind == "assess":
+        assert second["outcome"] == "partial"
+        assert [target["written"] for target in second["targets"]] == [True, False]
+    else:
+        assert second["outcome"] == "failed"
+        assert [target["outcome"] for target in second["targets"]] == ["reviewed", "failed"]
+        assert second["targets"][1]["error"] == "second action failed"
+
+
+def test_split_actions_preserve_each_assessment_batchs_failure_mapping(monkeypatch):
+    monkeypatch.setattr(qc, "TARGET_BATCH", 3)
+    specs = [_assess_spec("CVE-1", ["a", "b"], (1, 3), "large"),
+             _assess_spec("CVE-1", ["c"], (2, 3), "large"),
+             _assess_spec("CVE-1", ["d"], (3, 3), "large")]
+
+    def finish(action, index):
+        targets = action["targets"]
+        if len(targets) == 3:
+            targets = targets[:2] if index == 0 else targets[2:]
+        part = {**action, "targets": targets}
+        if index:
+            return failed("No reply.", "timeout", assess_result(part, [], "timeout", "No reply."))
+        return done(assess_result(part))
+
+    server = FakeQueueServer(finish, batches=lambda action: 2 if len(action["targets"]) == 3 else 1)
+    recorder, _, _ = _run(server, specs)
+    assert [result["outcome"] for result in recorder.turns()] == ["assessed", "timeout", "assessed"]
+    assert [len(result["targets"]) for result in recorder.turns()] == [2, 1, 1]
+
+
+def test_interrupt_while_submitting_an_oversized_selection_stops_accepted_chunks(monkeypatch):
+    monkeypatch.setattr(qc, "SUBMIT_BATCH", 1)
+    spec = _assess_spec("CVE-1", [f"p-{n}" for n in range(1001)])
+    server = FakeQueueServer()
+    send = server.__call__
+
+    def transport(method, path, body, timeout):
+        if method == "POST" and path == qc.QUEUE_PATH and server.submitted:
+            raise KeyboardInterrupt
+        return send(method, path, body, timeout)
+
+    recorder = Recorder()
+    _, stopped = qc.run_remote(qc.QueueClient(transport), [spec], None, recorder.start, recorder.done)
+    [result] = recorder.turns()
+    assert stopped and server.stopped == ["req-1"]
+    assert len(result["targets"]) == 1001 and result["outcome"] == "interrupted"
+
+
 @pytest.mark.parametrize("final, outcome, error", [
     (failed("MCP server failed.", "mcp"), "failed", "MCP server failed."),
     (failed("The assessment changed.", "prepare"), "failed", "The assessment changed."),

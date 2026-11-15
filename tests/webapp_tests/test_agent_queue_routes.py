@@ -3,16 +3,21 @@
 """The AI queue over HTTP and SSE: access checks, validation, request and conversation routes, the stream."""
 
 import asyncio
+import dataclasses
 import json
 import os
 import threading
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from src.controllers import agent_queue as aq
+from src.bin import _ai_queue_client as qc, _ai_runner
+from src.controllers import ai_actions
 from src.controllers.event_bus import EventBus
+from src.extensions import db as _db
 from src.routes import events as events_module
 from ..cli_tests.test_cmd_ai_assess import _seed, app  # noqa: F401
 
@@ -186,6 +191,108 @@ def test_submit_uppercases_vulnerabilities_and_reports_skipped_duplicates(env):
                         {"kind": "assess", "vuln_id": "CVE-2024-0004"}]).get_json()
     assert again["skipped"] == [{"key": "k", "request_id": created["id"], "request_ids": [created["id"]]}]
     assert len(again["requests"]) == 1
+
+
+@pytest.fixture()
+def cli_run(monkeypatch):
+    monkeypatch.setattr(_ai_runner, "interrupted", threading.Event())
+    monkeypatch.setattr(qc, "POLL_INTERVAL", 0)
+
+
+def _large_cli_selection(env, kind, count):
+    from src.models.assessment import Assessment
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_package import SBOMPackage
+    from src.models.scan import Scan
+
+    with env.app.app_context():
+        variant_id = uuid.UUID(env.ids["x86"])
+        scan = Scan.create("large-cli-selection", variant_id, scan_type="sbom")
+        document = SBOMDocument.create(path="/sbom/large.json", source_name="cdx", scan_id=scan.id)
+        findings = []
+        for index in range(count):
+            package = Package(id=uuid.uuid4(), name=f"{index:x}", version="1")
+            finding = Finding(id=uuid.uuid4(), package_id=package.id, vulnerability_id="CVE-2024-0001")
+            _db.session.add_all([
+                package, finding, Observation(finding_id=finding.id, scan_id=scan.id),
+                SBOMPackage(sbom_document_id=document.id, package_id=package.id)])
+            findings.append(finding)
+        _db.session.commit()
+        if kind == "assess":
+            targets = ai_actions.active_targets("CVE-2024-0001", {variant_id})
+            specs = ai_actions.plan_assess("CVE-2024-0001", targets)
+        else:
+            assessment = Assessment.create(status="not_affected", origin="custom",
+                                           targets=[(variant_id, finding.id) for finding in findings])
+            specs = ai_actions.plan_review(assessment.id, variant_id, per_variant=True)
+            specs = [dataclasses.replace(
+                spec, fingerprint=ai_actions._review_selection(spec).fingerprint) for spec in specs]
+    return specs
+
+
+@pytest.mark.parametrize("kind", ["assess", "review"])
+@pytest.mark.parametrize("count", [1000, 1001])
+@pytest.mark.usefixtures("cli_run")
+def test_cli_target_boundary_through_the_real_queue(env, kind, count):
+    specs = _large_cli_selection(env, kind, count)
+    submitted = []
+
+    def transport(method, path, body, timeout):
+        if method == "POST" and path == qc.QUEUE_PATH:
+            submitted.extend(body["actions"])
+        elif method == "GET" and path == qc.QUEUE_PATH:
+            env.q.run_once("action")
+        response = env.client.open(path, method=method, json=body)
+        return response.status_code, response.get_json()
+
+    results = []
+    model, stopped = qc.run_remote(qc.QueueClient(transport), specs, None, lambda spec: None,
+                                   lambda spec, result: results.append((spec, result)))
+    field = "targets" if kind == "assess" else "finding_ids"
+    assert len(submitted) == (1 if count == 1000 else 2)
+    assert sum(len(action[field]) for action in submitted) == count
+    assert all(len(action[field]) <= aq.MAX_TARGETS for action in submitted)
+    assert model == "test-model" and not stopped
+    assert len(results) == len(specs)
+    assert sum(len(result["targets"]) for spec, result in results) == count
+    for spec, result in results:
+        expected = ([(target.variant_id, target.package) for target in spec.assess_targets] if kind == "assess"
+                    else [(str(target.variant_id), str(target.finding_id)) for target in spec.review_targets])
+        actual = [(target["variant_id"], target["package" if kind == "assess" else "finding_id"])
+                  for target in result["targets"]]
+        assert actual == expected
+        assert result["outcome"] == "no_write"
+
+
+@pytest.mark.parametrize("kind", ["assess", "review"])
+@pytest.mark.usefixtures("cli_run")
+def test_oversized_cli_actions_deduplicate_and_cancel_only_owned_requests(env, kind):
+    specs = _large_cli_selection(env, kind, 1001)
+    [foreign], _ = env.q.enqueue("main", "web", [_message()], model="m")
+
+    def transport(method, path, body, timeout):
+        response = env.client.open(path, method=method, json=body)
+        return response.status_code, response.get_json()
+
+    results = []
+    follower = qc._Follower(qc.QueueClient(transport), specs, None, lambda spec: None,
+                            lambda spec, result: results.append(result))
+    follower.submit()
+    other = qc._Follower(qc.QueueClient(transport), specs, None, lambda spec: None, lambda spec, result: None)
+    other.submit()
+    assert not other.owned
+    assert {request_id for unit in other.units for request_id in unit.request_ids} == set(follower.owned)
+    assert len({env.q.get_request(request_id)["key"] for request_id in follower.owned}) == 2
+    other.interrupt()
+    assert all(env.q.get_request(request_id)["status"] == "queued" for request_id in follower.owned)
+    follower.interrupt()
+    assert all(env.q.get_request(request_id)["status"] == "cancelled" for request_id in follower.owned)
+    assert env.q.get_request(foreign["id"])["status"] == "queued"
+    assert len(results) == len(specs) and sum(len(result["targets"]) for result in results) == 1001
+    assert all(result["outcome"] == "interrupted" for result in results)
 
 
 @pytest.mark.parametrize("config, code", [
