@@ -119,12 +119,13 @@ describe('Refresh overview', () => {
     });
 
     test('labels individual refreshes and filters them on the server', async () => {
-        list.mockResolvedValueOnce({ runs: [{ ...run, refresh_type: 'individual', sources: ['nvd', 'epss', 'euvd'],
+        list.mockResolvedValueOnce({ runs: [run, { ...run, run_id: 'individual-run',
+            refresh_type: 'individual', sources: ['nvd', 'epss', 'euvd'],
             summary: { refreshed_vulnerabilities: 1, changed_vulnerabilities: 0, total_changes: 0, first_enrichments: 0 } }],
-            total: 1, limit: 20, offset: 0 });
-        list.mockResolvedValueOnce({ runs: [], total: 0, limit: 20, offset: 0 });
+            total: 2, limit: 20, offset: 0 });
+        list.mockResolvedValueOnce({ runs: [run], total: 1, limit: 20, offset: 0 });
         show();
-        const entry = await screen.findByRole('article');
+        const entry = (await screen.findByText('Individual refresh')).closest('article')!;
         expect(entry).toHaveTextContent('Individual refresh');
         expect(entry).toHaveTextContent('ENISA EUVD / EU KEV');
         expect(entry).toHaveTextContent('1 vulnerabilities refreshed');
@@ -134,7 +135,11 @@ describe('Refresh overview', () => {
         await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({
             hide_individual: true, offset: 0, project_id: 'project-a', variant_id: 'variant-a',
         }), expect.any(AbortSignal)));
-        expect(screen.queryByRole('article')).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.queryByText('Loading refresh runs…')).not.toBeInTheDocument());
+        const entries = within(screen.getByRole('list', { name: 'Refresh runs' })).getAllByRole('article');
+        expect(entries).toHaveLength(1);
+        expect(entries[0]).toHaveTextContent('Full refresh');
+        expect(screen.queryByText('Individual refresh')).not.toBeInTheDocument();
     });
 
     test('filters on the server before pagination and preserves scope on every request', async () => {
