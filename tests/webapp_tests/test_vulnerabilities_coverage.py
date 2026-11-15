@@ -1185,19 +1185,21 @@ def test_multi_variant_severity_excludes_unselected_metrics(
 
 @pytest.mark.parametrize("scope", ["variant_id", "project_id"])
 @pytest.mark.parametrize("detail", [False, True])
-@pytest.mark.parametrize("scores, expected_score", [
-    ([None], None),
-    ([None, 7.8], 7.8),
+@pytest.mark.parametrize("scores, stored_label, expected_label, expected_score", [
+    ([None], "high", "high", None),
+    ([None, 7.8], "high", "high", 7.8),
+    ([0.0], "none", "none", 0.0),
+    ([None, 0.0], "high", "none", 0.0),
 ])
 def test_scoped_severity_ignores_missing_scores(
-    app, client, scope, detail, scores, expected_score
+    app, client, scope, detail, scores, stored_label, expected_label, expected_score
 ):
     from src.extensions import db
     from src.models import Metrics, Vulnerability
 
     with app.app_context():
         vuln = db.session.get(Vulnerability, "CVE-2020-35492")
-        vuln.status = "high"
+        vuln.status = stored_label
         for metric in list(vuln.metrics):
             db.session.delete(metric)
         for score in scores:
@@ -1214,7 +1216,7 @@ def test_scoped_severity_ignores_missing_scores(
     result = response.get_json()
     vuln = result if detail else next(v for v in result if v["id"] == "CVE-2020-35492")
     severity = vuln["severity"]
-    assert severity["severity"] == "high"
+    assert severity["severity"] == expected_label
     assert severity["min_score"] == expected_score
     assert severity["max_score"] == expected_score
     assert [m["base_score"] for m in severity["cvss"]] == scores

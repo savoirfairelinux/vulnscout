@@ -162,6 +162,8 @@ class CVSS:
         """Return the severity of the CVSS score as text."""
         if self.base_score is None:
             return "Unknown"
+        if self.base_score == 0:
+            return "None"
         if self.base_score < 4:
             return "Low"
         elif self.base_score < 7:
