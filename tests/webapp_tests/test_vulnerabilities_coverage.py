@@ -1183,6 +1183,43 @@ def test_multi_variant_severity_excludes_unselected_metrics(
     assert sorted(m["base_score"] for m in severity["cvss"]) == expected_scores
 
 
+@pytest.mark.parametrize("scope", ["variant_id", "project_id"])
+@pytest.mark.parametrize("detail", [False, True])
+@pytest.mark.parametrize("scores, expected_score", [
+    ([None], None),
+    ([None, 7.8], 7.8),
+])
+def test_scoped_severity_ignores_missing_scores(
+    app, client, scope, detail, scores, expected_score
+):
+    from src.extensions import db
+    from src.models import Metrics, Vulnerability
+
+    with app.app_context():
+        vuln = db.session.get(Vulnerability, "CVE-2020-35492")
+        vuln.status = "high"
+        for metric in list(vuln.metrics):
+            db.session.delete(metric)
+        for score in scores:
+            db.session.add(Metrics(vulnerability_id=vuln.id, version="3.1", score=score))
+        db.session.commit()
+
+    scope_id = (
+        "22222222-2222-2222-2222-222222222222" if scope == "variant_id"
+        else "11111111-1111-1111-1111-111111111111"
+    )
+    path = "/api/vulnerabilities/CVE-2020-35492" if detail else "/api/vulnerabilities"
+    response = client.get(f"{path}?{scope}={scope_id}")
+    assert response.status_code == 200
+    result = response.get_json()
+    vuln = result if detail else next(v for v in result if v["id"] == "CVE-2020-35492")
+    severity = vuln["severity"]
+    assert severity["severity"] == "high"
+    assert severity["min_score"] == expected_score
+    assert severity["max_score"] == expected_score
+    assert [m["base_score"] for m in severity["cvss"]] == scores
+
+
 def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
     """Fallback skips non-string document formats and maps scan sources."""
     from src.routes.vulnerabilities import _populate_found_by

@@ -10,7 +10,7 @@ class CVSS:
     """
 
     def __init__(self, version: str, vector_string: str, author: str,
-                 base_score: float, exploitability_score: float, impact_score: float,
+                 base_score: float | None, exploitability_score: float, impact_score: float,
                  origin: str = "scanner"):
         """Create a new CVSS score with the given parameters."""
         self.version = version
@@ -160,6 +160,8 @@ class CVSS:
 
     def severity(self) -> str:
         """Return the severity of the CVSS score as text."""
+        if self.base_score is None:
+            return "Unknown"
         if self.base_score < 4:
             return "Low"
         elif self.base_score < 7:
