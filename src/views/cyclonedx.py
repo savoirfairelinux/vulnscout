@@ -55,6 +55,7 @@ class CycloneDx:
         "high": cyclonedx.model.vulnerability.VulnerabilitySeverity.HIGH,
         "critical": cyclonedx.model.vulnerability.VulnerabilitySeverity.CRITICAL,
         "info": cyclonedx.model.vulnerability.VulnerabilitySeverity.INFO,
+        "none": cyclonedx.model.vulnerability.VulnerabilitySeverity.NONE,
     }
 
     _VEX_STATUS_MAP = {
@@ -420,7 +421,7 @@ class CycloneDx:
                     cyclonedx.model.vulnerability.VulnerabilityRating(
                         method=CycloneDx.cvss_to_rating_method(cvss),
                         vector=cvss.vector_string,
-                        score=Decimal(str(cvss.base_score)),
+                        score=Decimal(str(cvss.base_score)) if cvss.base_score is not None else None,
                         source=cyclonedx.model.vulnerability.VulnerabilitySource(
                             name=cvss.author,
                         ),

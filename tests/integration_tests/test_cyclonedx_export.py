@@ -121,6 +121,20 @@ def test_export_component_without_declared_cpe(cdx_exporter):
     assert cairo["purl"] == "pkg:generic/cairo@1.16.0"
 
 
+@pytest.mark.parametrize("score, severity", [(None, "unknown"), (0.0, "none")])
+def test_export_preserves_missing_and_zero_cvss_scores(cdx_exporter, score, severity):
+    vuln = Vulnerability("CVE-2099-EXPORT")
+    vuln.register_cvss(CVSS("3.1", "", "test", score, 0.0, 0.0))
+    cdx_exporter.vulnerabilitiesCtrl.add(vuln)
+
+    output = json.loads(cdx_exporter.output_as_json())
+    rating, = output["vulnerabilities"][0]["ratings"]
+
+    assert rating.get("score") == score
+    assert rating["severity"] == severity
+    assert rating["method"] == "CVSSv31"
+
+
 def test_export_vulnerabilities_json(cdx_exporter):
     pkg_1 = Package("cairo", "1.16.0", [], [])
     cdx_exporter.packagesCtrl.add(pkg_1)
