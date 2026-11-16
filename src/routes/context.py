@@ -271,26 +271,40 @@ def init_app(app):
         response 200 ContextDraft Pending draft and its status against the saved model.
         response 400 Error Invalid variant identifier.
         response 404 Error Variant or draft not found.
+        response 500 Error Rebased draft could not be stored.
         """
         variant_uuid, err = _variant_uuid_or_error(variant_id)
         if err:
             return err
         vc = VariantContext.get_by_variant(variant_uuid)
-        draft = None
-        revision = None
-        if vc is not None:
+        if vc is None:
+            return jsonify({"error": "No draft.", "revision": None}), 404
+        try:
             with context_draft.lock_for(vc.id):
-                draft = context_draft.read_draft(_draft_dir(vc))
-                revision = context_draft.revision(_draft_dir(vc))
-        if draft is None:
-            return jsonify({"error": "No draft.", "revision": revision}), 404
-        saved_at = _revision(vc)
-        if draft.get("base_updated_at") == saved_at:
-            return jsonify(_draft_body(draft, "current", draft["values"], [], {}, saved_at, revision))
-        values, conflicts, renumbered = context_draft.rebase(
-            draft["base_values"], context_draft.saved_values(vc), draft["values"])
-        status = "conflict" if conflicts else "rebased"
-        return jsonify(_draft_body(draft, status, values, conflicts, renumbered, saved_at, revision))
+                directory = _draft_dir(vc)
+                draft = context_draft.read_draft(directory)
+                revision = context_draft.revision(directory)
+                if draft is None:
+                    return jsonify({"error": "No draft.", "revision": revision}), 404
+                db.session.refresh(vc)
+                saved_at = _revision(vc)
+                previous = draft.get("renumbered") or {}
+                if draft.get("base_updated_at") == saved_at:
+                    status = "rebased" if draft.get("rebased") else "current"
+                    return jsonify(_draft_body(draft, status, draft["values"], [], previous, saved_at, revision))
+                saved = context_draft.saved_values(vc)
+                values, conflicts, moved = context_draft.rebase(draft["base_values"], saved, draft["values"])
+                renumbered = {old: moved.get(current, current) for old, current in previous.items()}
+                renumbered.update({old: new for old, new in moved.items() if old not in previous.values()})
+                if not conflicts:
+                    draft = {**draft, "base_updated_at": saved_at, "base_values": saved, "values": values,
+                             "renumbered": renumbered, "rebased": True}
+                    context_draft.write_draft(directory, draft, revision=revision)
+                status = "conflict" if conflicts else "rebased"
+                return jsonify(_draft_body(draft, status, values, conflicts, renumbered, saved_at, revision))
+        except OSError:
+            logger.exception("Failed to store the rebased AI context draft")
+            return jsonify({"error": "Failed to store the rebased draft on server"}), 500
 
     @app.route('/api/variants/<variant_id>/context/draft', methods=['PUT'])
     def put_context_draft(variant_id):

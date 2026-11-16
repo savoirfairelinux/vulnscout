@@ -390,6 +390,8 @@ document states them, the Context texts). It never saves.
 - If the context is saved after the draft was made, the draft is merged onto
   the saved context when it is opened. When both changed the same item, the
   draft is not loaded; the page lists the conflicts and offers to discard it.
+  Successful rebases retain their row IDs in the cache, so reopening after
+  failed cleanup does not duplicate already accepted rows.
 - Saving or discarding only removes the draft revision you reviewed. If a
   newer draft replaced it, cleanup is refused; reload to review the new draft.
   Leaving with **Discard** waits for deletion and stays on the page if it fails.

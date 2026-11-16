@@ -67,9 +67,9 @@ def read_draft(directory: str) -> Optional[dict]:
     return None
 
 
-def write_draft(directory: str, draft: dict) -> None:
-    """Atomically replace the draft with a fresh revision, even if its values are unchanged."""
-    draft = {**draft, "revision": str(uuid.uuid4())}
+def write_draft(directory: str, draft: dict, *, revision: Optional[str] = None) -> None:
+    """Atomically replace a proposal; only rebasing retains its existing revision."""
+    draft = {**draft, "revision": revision if revision is not None else str(uuid.uuid4())}
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".draft-", suffix=".tmp")
     try:
