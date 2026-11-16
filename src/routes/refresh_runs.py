@@ -97,6 +97,10 @@ def metadata(run: RefreshRun, params: dict) -> dict:
                func.coalesce(func.sum(case((RefreshChange.kind == "first_enrichment", 1), else_=0)), 0))
         .where(*_change_filter(run.run_id, params))
     ).one()
+    refreshed = db.session.scalar(
+        select(func.count(RefreshTarget.vuln_id.distinct()))
+        .where(*_target_filter(run.run_id, params), RefreshTarget.status == "complete")
+    )
     if run.finished_at is None:
         status = "running"
     else:
@@ -107,11 +111,14 @@ def metadata(run: RefreshRun, params: dict) -> dict:
             value == "complete" for value in source_status.values()
         ) else "incomplete"
     return {
-        "run_id": run.run_id, "scope": run.scope, "sources": list(source_status),
+        "run_id": run.run_id, "scope": {key: value for key, value in run.scope.items() if key != "refresh_type"},
+        "refresh_type": run.scope.get("refresh_type", "unknown"),
+        "sources": list(source_status),
         "source_status": source_status,
         "started_at": ensure_utc_iso(run.started_at), "finished_at": ensure_utc_iso(run.finished_at),
         "status": status,
-        "summary": {"total_changes": total, "changed_vulnerabilities": changed, "first_enrichments": first},
+        "summary": {"refreshed_vulnerabilities": refreshed, "total_changes": total,
+                    "changed_vulnerabilities": changed, "first_enrichments": first},
     }
 
 
@@ -193,6 +200,8 @@ def init_app(app):
         except ValueError:
             abort(400, description="Invalid pagination")
         query = retained_runs().where(visible_run(params))
+        if params.get("hide_individual") == "true":
+            query = query.where(func.coalesce(RefreshRun.scope["refresh_type"].as_string(), "unknown") != "individual")
         total = db.session.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
         runs = [metadata(run, params) for run in db.session.scalars(query.limit(limit).offset(offset))]
         return jsonify({"runs": runs, "total": total, "limit": limit, "offset": offset})

@@ -33,6 +33,12 @@ comparison still targets only its vulnerabilities.
 
 Runs follow the Scan tab's timeline,
 with provider markers, dated cards, status badges and highlighted change counts.
+Cards distinguish **Full refresh** (including custom provider selections) from
+**Individual refresh** launched from a vulnerability's details. One individual
+CVE refresh records NVD, EPSS, and ENISA EUVD / EU KEV together; GHSA refreshes
+record GitHub Advisory Database. Use **Hide individual refreshes** to filter
+them out. Older runs without recorded origin are labelled **Refresh type unknown**
+and remain visible when this filter is enabled.
 Use **View Refresh Result** to open a fullscreen popup like the Scan result popup.
 Its **Changes**, **Coverage** and **Overview** sections present results in tables.
 The timeline stays visible when no result is open. Use **Previous runs** and
@@ -48,6 +54,14 @@ reload or server restart. It does not refresh provider data, acknowledge changes
 or clear another user's indicators.
 
 ## Counts and Coverage
+
+Each card shows distinct vulnerabilities refreshed (successfully checked by at
+least one provider), distinct vulnerabilities changed, and field changes, in
+that order. A successful check counts even when no field changed. Counts are
+restricted to the selected scope; partial provider failures are shown separately.
+Exact-run JSON and CSV exports include the origin and these same summary counts.
+Older runs retain their recorded coverage and have an unknown origin; historical
+field-history exports continue to group changes by the shared refresh run ID.
 
 **Targeted**, **Checked**, **Changed**, **Skipped**, **Failed**, **Cancelled**
 and **Pending** count distinct CVEs, not source/CVE pairs. One CVE checked by

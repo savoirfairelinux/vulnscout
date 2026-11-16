@@ -1067,6 +1067,13 @@ SCHEMAS.update({
     "VulnerabilityRefreshResponse": _object({
         "vulnerabilities": _array(_ref("Vulnerability")),
     }, ("vulnerabilities",)),
+    "IndividualRefreshResponse": _object({
+        "run_id": _STRING,
+        "results": _map(_object({
+            "status": {"type": "integer"},
+            "body": {"type": "object", "nullable": True},
+        }, ("status", "body"))),
+    }, ("run_id", "results")),
     "ScanImportResult": SCHEMAS["ImportSummary"]["anyOf"][2],
 })
 SCHEMAS.update({
