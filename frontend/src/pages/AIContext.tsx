@@ -127,7 +127,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     // Which scope the pending save outdates; null when no confirmation is open.
     const [confirmOutdate, setConfirmOutdate] = useState<SaveTarget['kind'] | null>(null);
     // The save a pending confirmation belongs to, and who waits for its outcome.
-    const pendingSaveRef = useRef<{ target: SaveTarget; resolve: (saved: boolean) => void } | null>(null);
+    const pendingSaveRef = useRef<{ target: SaveTarget; editor: string; resolve: (saved: boolean) => void } | null>(null);
     const [banner, setBanner] = useState<{ msg: ReactNode; type: BannerType } | null>(null);
     const [importDetails, setImportDetails] = useState<ImportResult | null>(null);
     // Copy dialog sources; null while the dialog is closed.
@@ -190,6 +190,9 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const openKey = projectKey ?? variantKey;
     const openKeyRef = useRef(openKey);
     openKeyRef.current = openKey;
+    const editorIdentity = JSON.stringify([openKey, projectDraft.epoch, variantDraft.epoch, scope.revision]);
+    const editorIdentityRef = useRef(editorIdentity);
+    editorIdentityRef.current = editorIdentity;
     // Field errors and the active tab belong to the open item, however it changed.
     useEffect(() => {
         setFieldError('');
@@ -268,32 +271,34 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
 
     // False when edits made while a save was in flight are still unsaved.
     const savedEverythingRef = useRef(true);
-    const performSave = async (target: SaveTarget, key: string | null): Promise<boolean> => {
+    const performSave = async (target: SaveTarget, editor: string): Promise<boolean> => {
         setBusy(true);
         hideErrorBanner();
         savedEverythingRef.current = true;
         try {
             if (target.kind === 'project') {
                 const saved = await Context.saveProject(target.projectId, target.description);
-                if (openKeyRef.current === key) savedEverythingRef.current = projectDraft.commit(saved.description ?? target.description, target.sent);
+                if (editorIdentityRef.current === editor) savedEverythingRef.current = projectDraft.commit(saved.description ?? target.description, target.sent);
             } else {
                 const saved = await Context.saveVariantEditor(target.variantId, target.draft);
                 const value = saved?.editor
                     ? draftFromContext({ ...saved, project_id: target.projectId, description: null })
                     : target.draft;
-                if (openKeyRef.current === key) savedEverythingRef.current = variantDraft.commit(value, target.draft);
+                if (editorIdentityRef.current === editor) savedEverythingRef.current = variantDraft.commit(value, target.draft);
             }
-            if (!unmountedRef.current) setAnnouncement("Saved.");
+            if (!unmountedRef.current && editorIdentityRef.current === editor) setAnnouncement("Saved.");
             return true;
         } catch (e: any) {
             const fields = e instanceof ContextSaveError ? e.fields : {};
             const first = Object.keys(fields)[0];
-            if (e instanceof ContextSaveError && !unmountedRef.current && openKeyRef.current === key) {
+            if (e instanceof ContextSaveError && !unmountedRef.current && editorIdentityRef.current === editor) {
                 setFieldErrors(fields);
                 if (first !== undefined) setVariantTab(tabForField(first));
             }
             // Field problems are shown inline; the raw server text joins their paths.
-            showBanner(first === undefined ? (e?.message || "Failed to save context.") : FIX_FIELDS_TEXT, "error");
+            if (!unmountedRef.current && editorIdentityRef.current === editor) {
+                showBanner(first === undefined ? (e?.message || "Failed to save context.") : FIX_FIELDS_TEXT, "error");
+            }
             return false;
         } finally {
             if (!unmountedRef.current) setBusy(false);
@@ -310,13 +315,13 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         setAnnouncement('');
         const target = buildSaveTarget();
         if (!target) return false;
-        const key = openKeyRef.current;
+        const editor = editorIdentityRef.current;
         const pending = await hasPendingAi(target);
         // The selection may have moved on while the check was in flight.
-        if (unmountedRef.current || key !== openKeyRef.current) return false;
-        if (!pending) return performSave(target, key);
+        if (unmountedRef.current || editor !== editorIdentityRef.current) return false;
+        if (!pending) return performSave(target, editor);
         return new Promise<boolean>(resolve => {
-            pendingSaveRef.current = { target, resolve };
+            pendingSaveRef.current = { target, editor, resolve };
             setConfirmOutdate(target.kind);
         });
     };
@@ -363,8 +368,8 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         pendingSaveRef.current = null;
         setConfirmOutdate(null);
         if (!pending) return;
-        if (!confirmed) pending.resolve(false);
-        else void performSave(pending.target, openKeyRef.current).then(pending.resolve);
+        if (!confirmed || pending.editor !== editorIdentityRef.current) pending.resolve(false);
+        else void performSave(pending.target, pending.editor).then(pending.resolve);
     };
 
     // Import overwrites stored context, so unsaved edits are confirmed first.

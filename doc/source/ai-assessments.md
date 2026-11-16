@@ -86,6 +86,11 @@ deployment, environment, and threat-model context. Save your context before
 requesting an assessment. Upload relevant source files using **Codebase
 References**, as described below.
 
+Context saves have a 30-second deadline. If a save times out, the editor keeps
+your draft and enables saving again, but the server may already have persisted
+the change. Keep a separate copy of your draft, then reload and check the saved
+context before retrying; reloading discards unsaved edits.
+
 The agent receives the active page and project/variant scope. Keep that scope
 aligned with the product and packages you want assessed; the same CVE can have
 different impacts on different variants.

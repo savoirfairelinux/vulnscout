@@ -192,6 +192,38 @@ async function jsonOrThrow<T>(res: Response, failure: string): Promise<T> {
     return await res.json() as T;
 }
 
+async function saveContext<T>(path: string, payload: unknown, failure: string): Promise<T> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+            reject(new Error('Saving context timed out. Your draft was kept. The server may have saved it; reload to check before retrying.'));
+            controller.abort();
+        }, 30_000);
+    });
+    try {
+        return await Promise.race([
+            (async () => {
+                const res = await fetch(`${import.meta.env.VITE_API_URL}${path}`, {
+                    mode: 'cors',
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal,
+                });
+                if (!res.ok) {
+                    const data = await errorReply(res);
+                    throw new ContextSaveError(data.error || `${failure} (${res.status})`, res.status, data.fields ?? {});
+                }
+                return await res.json() as T;
+            })(),
+            timeout,
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 class Context {
     static async uploadFile(variantId: string, file: File, description: string): Promise<ContextFile> {
         const body = new FormData();
@@ -232,16 +264,11 @@ class Context {
     }
 
     static async saveProject(projectId: string, description: string | null): Promise<ProjectContext> {
-        const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/context`,
-            {
-                mode: 'cors',
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description }),
-            }
+        return saveContext<ProjectContext>(
+            `/api/projects/${encodeURIComponent(projectId)}/context`,
+            { description },
+            'Failed to save project context',
         );
-        return jsonOrThrow<ProjectContext>(res, 'Failed to save project context');
     }
 
     static async saveVariantEditor(variantId: string, draft: VariantDraft): Promise<VariantContext> {
@@ -259,24 +286,11 @@ class Context {
             },
             stride: draft.stride,
         };
-        const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context`,
-            {
-                mode: 'cors',
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            }
+        return saveContext<VariantContext>(
+            `/api/variants/${encodeURIComponent(variantId)}/context`,
+            payload,
+            'Failed to save variant context',
         );
-        if (!res.ok) {
-            const data = await errorReply(res);
-            throw new ContextSaveError(
-                data.error || `Failed to save variant context (${res.status})`,
-                res.status,
-                data.fields ?? {},
-            );
-        }
-        return await res.json() as VariantContext;
     }
 
     static async exportAll(): Promise<ContextExport> {

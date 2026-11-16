@@ -215,6 +215,50 @@ describe('Context.saveVariantEditor', () => {
     });
 });
 
+describe.each([
+    ['project', () => Context.saveProject('p1', 'description')],
+    ['variant', () => Context.saveVariantEditor('v1', emptyDraft())],
+] as const)('Context %s save deadline', (_name, save) => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    test.each(['request', 'success body', 'error body'])('times out a stalled %s and aborts the request', async phase => {
+        if (phase === 'request') {
+            fetchMock.mockImplementationOnce(() => new Promise(() => {}));
+        } else {
+            const response = new Response('', { status: phase === 'success body' ? 200 : 400 });
+            jest.spyOn(response, 'json').mockImplementationOnce(() => new Promise(() => {}));
+            fetchMock.mockResolvedValueOnce(response);
+        }
+        const outcome = save().catch((error: unknown) => error);
+        const signal = fetchMock.mock.calls[0][1]?.signal;
+        await jest.advanceTimersByTimeAsync(29_999);
+        expect(signal?.aborted).toBe(false);
+        await jest.advanceTimersByTimeAsync(1);
+        expect(await outcome).toEqual(new Error('Saving context timed out. Your draft was kept. The server may have saved it; reload to check before retrying.'));
+        expect(signal?.aborted).toBe(true);
+        expect(jest.getTimerCount()).toBe(0);
+    });
+
+    test('clears the deadline after success without aborting', async () => {
+        const saved = ctxWithEditor();
+        fetchMock.mockResponseOnce(JSON.stringify(saved));
+        await expect(save()).resolves.toEqual(saved);
+        expect(jest.getTimerCount()).toBe(0);
+        await jest.advanceTimersByTimeAsync(30_000);
+        expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(false);
+    });
+
+    test('preserves validation errors and clears the deadline', async () => {
+        const fields = { environment: 'must be text' };
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'invalid', fields }), { status: 400 });
+        await expect(save()).rejects.toMatchObject({ name: 'ContextSaveError', message: 'invalid', status: 400, fields });
+        expect(jest.getTimerCount()).toBe(0);
+        await jest.advanceTimersByTimeAsync(30_000);
+        expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(false);
+    });
+});
+
 describe('Context error replies', () => {
     const file = new File(['x'], 'a.zip');
     test.each([

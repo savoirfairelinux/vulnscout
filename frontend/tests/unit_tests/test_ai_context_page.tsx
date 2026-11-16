@@ -86,7 +86,8 @@ function respond(backend: Backend, url: string, method: string, body: string | n
     if (variantPut) {
         const ctx = variantContext(variantPut[1], backend.threat, backend.files);
         // Echo the saved editor shape back, as the real server does.
-        return backend.echoPut ? { ...ctx, editor: { ...ctx.editor, ...JSON.parse(body ?? '{}') } } : ctx;
+        const payload = JSON.parse(body ?? '{}');
+        return backend.echoPut ? { ...ctx, ...payload, editor: { ...ctx.editor, ...payload } } : ctx;
     }
     return {};
 }
@@ -1263,6 +1264,10 @@ describe('AIContext page', () => {
             const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
             expect(body).toMatchObject({ other_info: 'Copied info', codebase_source: 'paths', system: { scope: 'Source TM' } });
             expect(body.codebase_path).not.toBe('/copied');
+            expect(await screen.findByText('Saved.')).toBeInTheDocument();
+            expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Copy from…' })).toBeEnabled();
+            expect(requestsTo(backend, '/api/variants/v3/context', 'PUT')).toHaveLength(0);
         });
 
         test('copy clears the field errors of the replaced draft', async () => {
@@ -1279,6 +1284,71 @@ describe('AIContext page', () => {
             await waitFor(() => expect(screen.getByLabelText('Environment')).toHaveValue('Plant'));
             expect(screen.getByLabelText('Environment')).not.toHaveAttribute('aria-invalid');
             expect(screen.queryByText('must be text')).not.toBeInTheDocument();
+        });
+
+        test('a stalled copied-context save times out, keeps the draft and allows retry', async () => {
+            const put = deferred();
+            const backend = twoProjects({
+                echoPut: true,
+                holds: [{ fragment: '/api/variants/v1/context', method: 'PUT', until: put.promise }],
+            });
+            const user = userEvent.setup();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await copyFrom(user, 'Variant 3');
+
+            jest.useFakeTimers();
+            try {
+                fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+                await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+                expect(screen.getByRole('button', { name: 'Copy from…' })).toBeDisabled();
+                await act(async () => { jest.advanceTimersByTime(30_000); });
+                expect(screen.getByText(/Saving context timed out/)).toBeInTheDocument();
+                expect(screen.getByLabelText('Environment')).toHaveValue('Plant');
+                expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+                expect(screen.getByRole('button', { name: 'Copy from…' })).toBeEnabled();
+
+                backend.holds = [];
+                fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Retried' } });
+                fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+                await waitFor(() => expect(screen.getByText('Saved.')).toBeInTheDocument());
+                expect(screen.queryByText(/Saving context timed out/)).not.toBeInTheDocument();
+                await act(async () => { put.resolve(); });
+                expect(screen.getByLabelText('Environment')).toHaveValue('Retried');
+                expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+                expect(requestsTo(backend, '/api/variants/v3/context', 'PUT')).toHaveLength(0);
+                expect(jest.getTimerCount()).toBe(0);
+            } finally {
+                put.resolve();
+                jest.useRealTimers();
+            }
+        });
+
+        test.each([false, true])('a late copied-context save cannot change a reopened editor (failure: %s)', async failure => {
+            const put = deferred();
+            twoProjects({
+                variantPutError: failure ? { error: 'Old save failed', fields: {} } : undefined,
+                holds: [{ fragment: '/api/variants/v1/context', method: 'PUT', until: put.promise }],
+            });
+            const user = userEvent.setup();
+            const { setScope } = renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await copyFrom(user, 'Variant 3');
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(screen.getByRole('button', { name: 'Copy from…' })).toBeDisabled());
+
+            setScope({ projectId: 'p1', variantIds: [], revision: 1 });
+            await screen.findByLabelText('Project description');
+            setScope({ projectId: 'p1', revision: 2 });
+            await openVariant1();
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'New draft' } });
+            await act(async () => { put.resolve(); });
+
+            expect(screen.getByLabelText('Environment')).toHaveValue('New draft');
+            expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
+            expect(screen.queryByText('Saved.')).not.toBeInTheDocument();
+            expect(screen.queryByText('Old save failed')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
         });
 
         test('copying a never-saved variant yields the empty STRIDE draft', async () => {
