@@ -365,8 +365,9 @@ unsaved changes, and the user saves or discards it there.
      (no `replace`). Each call is validated on its own.
    - If a call returns invalid fields, fix them and retry that call, at most
      3 times; then leave the rows out and list them under **Not imported**.
-   - If it says the context changed while drafting, re-read step 1 and start
-     again with `replace=true`, once.
+   - If it says the context changed while drafting or the pending draft
+     requires renumbering, re-read step 1 and start again with `replace=true`,
+     once. Rebuild all row IDs and references from the newly saved model.
 4. Reply with only:
    - **Summary**: the document, its type, counts per table, the rating
      mapping, and the `[confirm: ...]` items.
