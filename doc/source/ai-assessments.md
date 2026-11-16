@@ -379,6 +379,9 @@ document states them, the Context texts). It never saves.
   discard them first.
 - While the action is queued or running, the variant is read-only. A queued
   action can be cancelled.
+- Each import reads and drafts against its uploaded document revision. If
+  another upload replaces it, the old run is rejected; start a new import
+  rather than combining content from different documents.
 - The draft opens in the editor as **unsaved changes**, with a summary such
   as "+3 components, +5 threats". Review every tab, then **Save changes** to
   accept it or **Discard AI draft** to reject it.

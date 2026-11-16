@@ -11,7 +11,7 @@ export type AgentTarget = { variant_id: string | null; package: string };
 export type AgentAction =
     | { kind: 'assess'; vuln_id: string; targets?: AgentTarget[]; key?: string; context?: AgentContext }
     | { kind: 'review'; assessment_id: string; variant_id?: string; finding_ids?: string[]; key?: string; context?: AgentContext }
-    | { kind: 'context-import'; text: string; title: string; detail: string; import_revision?: string; key?: string; context?: AgentContext }
+    | { kind: 'context-import'; text: string; title: string; detail: string; import_revision: string; key?: string; context?: AgentContext }
     | { kind: 'message'; text: string; key?: string };
 export type AgentRequestStatus = 'queued' | 'running' | 'failed' | 'done' | 'cancelled';
 /** The running turn of a conversation, as the backend reports it. */

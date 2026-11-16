@@ -607,7 +607,7 @@ SCHEMAS: dict[str, Any] = {
                 "detail": {"type": "string", "minLength": 1, "maxLength": 512},
                 "import_revision": {"type": "string", "minLength": 1, "maxLength": 128},
                 "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
-            }, ("kind", "text", "title", "detail"),
+            }, ("kind", "text", "title", "detail", "import_revision"),
                 description="Draft a threat model from the uploaded document for one variant."),
             _object({
                 "kind": {"type": "string", "enum": ["message"]},
@@ -1090,13 +1090,17 @@ SCHEMAS.update({
     }, ("revision",)),
     "ImportSource": _object({"name": _STRING, "size": _COUNT, "revision": _STRING}, ("name", "size", "revision")),
     "ImportSourceResult": {"anyOf": [
-        _object({"name": _STRING, **{key: value for key, value in variant["properties"].items()
-                                     if key not in ("file_id", "original_name")}},
-                ("name", *[key for key in variant["required"] if key not in ("file_id", "original_name")]))
+        _object(
+            {"name": _STRING, "revision": _STRING, **{
+                key: value for key, value in variant["properties"].items()
+                if key not in ("file_id", "original_name")}},
+            ("name", "revision", *[key for key in variant["required"] if key not in ("file_id", "original_name")]),
+        )
         for variant in SCHEMAS["SourceReferenceResult"]["anyOf"]
     ]},
     "ContextDraftUpdate": _object({
         "source": {"type": "string", "minLength": 1, "maxLength": 255},
         "base_updated_at": _DATE, "values": _ref("ContextDraftValues"),
+        "import_revision": {"type": "string", "minLength": 1, "maxLength": 128},
     }, ("source", "base_updated_at", "values")),
 })

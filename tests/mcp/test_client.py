@@ -483,12 +483,36 @@ class TestContextDraftClient:
         with respx.mock:
             respx.get(f"{self.BASE}/api/variants/v1/context/import-source/source",
                       params={"operation": "read", "path": "a.md"}).mock(
-                return_value=httpx.Response(200, json={"name": "a.md", "content": "x"}))
+                return_value=httpx.Response(200, json={"name": "a.md", "content": "x", "revision": "source-a"}))
             result = VulnScoutClient(self.BASE).get_import_source("v1", {"operation": "read", "path": "a.md"})
             assert result["content"] == "x"
             respx.get(f"{self.BASE}/api/variants/v2/context/draft").mock(side_effect=httpx.ConnectError("down"))
             with pytest.raises(VulnScoutError, match="Could not connect"):
                 VulnScoutClient(self.BASE).get_context_draft("v2")
+
+    @pytest.mark.parametrize("queued", [False, True])
+    def test_import_run_pins_reads_and_proposals_to_its_source(self, queued):
+        from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutClient, VulnScoutConflict
+
+        client = (ScopedVulnScoutClient(self.BASE, {
+            "project_ids": ["p1"], "variant_ids": ["v1"], "import_revisions": {"v1": "source-a"},
+        }) if queued else VulnScoutClient(self.BASE))
+        with respx.mock:
+            reads = respx.get(f"{self.BASE}/api/variants/v1/context/import-source/source").mock(side_effect=[
+                httpx.Response(200, json={"name": "a.md", "revision": "source-a"}),
+                httpx.Response(409, json={"error": "The import source changed."}),
+            ])
+            writes = respx.put(f"{self.BASE}/api/variants/v1/context/draft").mock(
+                return_value=httpx.Response(409, json={"error": "The import source changed."}))
+            client.get_import_source("v1", {"operation": "list"})
+            if queued:
+                assert reads.calls[0].request.url.params["revision"] == "source-a"
+            with pytest.raises(VulnScoutConflict, match="source changed"):
+                client.get_import_source("v1", {"operation": "read", "revision": "source-b"})
+            assert reads.calls[1].request.url.params["revision"] == "source-a"
+            with pytest.raises(VulnScoutConflict, match="source changed"):
+                client.put_context_draft("v1", {"source": "a.md", "import_revision": "source-b"})
+            assert json.loads(writes.calls[0].request.content)["import_revision"] == "source-a"
 
     def test_scoped_client_refuses_other_variants(self):
         from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutError

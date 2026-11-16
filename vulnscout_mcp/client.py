@@ -16,6 +16,7 @@ class VulnScoutConflict(VulnScoutError):
 class VulnScoutClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
+        self.import_revisions: dict[str, str] = {}
 
     def write_assessment(self, vuln_id: str, payload: dict) -> dict:
         """POST /api/vulnerabilities/<vuln_id>/assessments.
@@ -286,15 +287,23 @@ class VulnScoutClient:
 
     def put_context_draft(self, variant_id: str, body: dict) -> dict:
         """PUT an AI draft for review; raises VulnScoutConflict when the saved context moved."""
+        if variant_id in self.import_revisions:
+            body = {**body, "import_revision": self.import_revisions[variant_id]}
         response = self._send("PUT", self._variant_context_url(variant_id, "draft"), json=body)
         assert response is not None
         return response.json()
 
     def get_import_source(self, variant_id: str, params: dict) -> dict:
         """List, read or search the document uploaded for an AI draft."""
+        if variant_id in self.import_revisions:
+            params = {**params, "revision": self.import_revisions[variant_id]}
         response = self._send("GET", self._variant_context_url(variant_id, "import-source/source"), params=params)
         assert response is not None
-        return response.json()
+        source = response.json()
+        revision = self.import_revisions.setdefault(variant_id, source["revision"])
+        if revision != source["revision"]:
+            raise VulnScoutConflict("The import source changed. Start a new import.")
+        return source
 
     def update_project_context(self, project_id: str, description: str | None) -> dict:
         """PUT /api/projects/<project_id>/context."""
@@ -529,6 +538,7 @@ class ScopedVulnScoutClient(VulnScoutClient):
         super().__init__(base_url)
         self.project_ids = frozenset(scope["project_ids"])
         self.variant_ids = frozenset(scope["variant_ids"])
+        self.import_revisions = dict(scope.get("import_revisions") or {})
         # CLI assessment turns may only write their selected (vulnerability, variant, package) targets.
         self.write_targets = frozenset(
             (target["vuln_id"], target["variant_id"], target["package"]) for target in scope["write_targets"]

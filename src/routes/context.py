@@ -302,6 +302,7 @@ def init_app(app):
         response 400 Error Invalid identifier or draft values.
         response 404 Error Variant not found.
         response 409 Error The saved context changed since base_updated_at.
+        response 409 Error The import source changed since import_revision.
         response 500 Error Draft could not be stored.
         """
         variant_uuid, err = _variant_uuid_or_error(variant_id)
@@ -316,6 +317,9 @@ def init_app(app):
         if not isinstance(source, str) or not source.strip() or len(source) > 255:
             return jsonify({"error": "source must contain 1-255 characters.",
                             "fields": {"source": "must contain 1-255 characters"}}), 400
+        if "import_revision" in body and (
+                not isinstance(body["import_revision"], str) or not 1 <= len(body["import_revision"]) <= 128):
+            return jsonify({"error": "import_revision must be the revision of the document read."}), 400
         try:
             values = context_draft.normalize_values(body.get("values"))
         except StrideValidationError as exc:
@@ -329,6 +333,9 @@ def init_app(app):
                 vc = VariantContext.upsert(variant_uuid)
             directory = _draft_dir(vc)
             with context_draft.lock_for(vc.id):
+                if ("import_revision" in body
+                        and body["import_revision"] != context_draft.import_revision(directory)):
+                    return jsonify({"error": "The import source changed. Start a new import."}), 409
                 previous = context_draft.read_draft(directory) or {}
                 now = ensure_utc_iso(datetime.now(timezone.utc))
                 draft = {
@@ -447,6 +454,7 @@ def init_app(app):
 
         OpenAPI:
         query operation string optional list (default), read, or search.
+        query revision string optional Import revision to read; rejects replacement documents.
         query path string optional Exact member path for read.
         query pattern string optional File-path glob for list or search (default *).
         query offset integer optional List offset (default 0).
@@ -458,20 +466,32 @@ def init_app(app):
         response 200 ImportSourceResult Files, line-numbered content (PDF pages marked), or search matches.
         response 400 Error Invalid parameters or unreadable document.
         response 404 Error Variant, import source, or member not found.
+        response 409 Error The import source changed since revision.
         response 500 Error Stored import source is unavailable.
         """
         variant_uuid, err = _variant_uuid_or_error(variant_id)
         if err:
             return err
         vc = VariantContext.get_by_variant(variant_uuid)
-        path = context_draft.import_source_path(_draft_dir(vc)) if vc is not None else None
-        if path is None:
+        if vc is None:
             return jsonify({"error": "No import source uploaded."}), 404
-        name = os.path.basename(path)
-        body, status = _browse_reference(path, name, "import source")
+        try:
+            with context_draft.lock_for(vc.id):
+                directory = _draft_dir(vc)
+                revision = context_draft.import_revision(directory)
+                if "revision" in request.args and request.args["revision"] != revision:
+                    return jsonify({"error": "The import source changed. Start a new import."}), 409
+                path = context_draft.import_source_path(directory)
+                if path is None:
+                    return jsonify({"error": "No import source uploaded."}), 404
+                name = os.path.basename(path)
+                body, status = _browse_reference(path, name, "import source")
+        except OSError:
+            logger.exception("Failed to read the import source")
+            return jsonify({"error": "Stored import source is unavailable."}), 500
         if status != 200:
             return jsonify(body), status
-        return jsonify({"name": name, **body})
+        return jsonify({"name": name, "revision": revision, **body})
 
     @app.route('/api/context/export', methods=['GET'])
     def export_context():

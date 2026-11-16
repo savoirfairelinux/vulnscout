@@ -171,6 +171,7 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
     call = env.fake.calls[-1]
     assert call.profile is agent_skills.CONTEXT_IMPORT and call.turn is None
     assert json.loads(call.scope)["variant_ids"] == [env.ids["x86"]]
+    assert json.loads(call.scope)["import_revisions"] == {env.ids["x86"]: "uploaded-revision"}
     assert call.prompt.startswith(action["text"])
     [follow], _ = env.q.enqueue(created["conversation_id"], "web", [_message("Why?")], model="m",
                                 context={"page": "vulnerabilities", "projectId": env.ids["demo"],
@@ -186,6 +187,7 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
     ({"title": ""}, "import title"),
     ({"detail": ""}, "import filename"),
     ({"import_revision": ""}, "import revision"),
+    ({"import_revision": None}, "import revision"),
     ({"import_revision": 5}, "import revision"),
     ({"import_revision": "x" * 129}, "import revision"),
 ])
@@ -196,6 +198,51 @@ def test_invalid_context_imports_are_not_queued(env, change, error):
     with pytest.raises(ValueError, match=error):
         env.q.enqueue("per-action", "web", [action], model="m")
     assert env.q.snapshot()["requests"] == []
+
+
+def test_overlapping_uploads_cannot_retarget_the_first_queued_import(env, monkeypatch, tmp_path):
+    from io import BytesIO
+    import httpx
+    from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutConflict
+
+    monkeypatch.setattr("src.routes.context._get_cache_dir", lambda: str(tmp_path))
+    client = env.app.test_client()
+    variant_id = env.ids["x86"]
+    url = f"/api/variants/{variant_id}/context/import-source"
+    first = client.post(url, data={"file": (BytesIO(b"first document\n"), "report.md")}).get_json()
+    second = client.post(url, data={"file": (BytesIO(b"replacement\n"), "report.md")}).get_json()
+    action = {
+        "kind": "context-import", "key": f"context-import:{variant_id}", "text": "Import report.md",
+        "title": "Fill x86", "detail": "report.md", "import_revision": first["revision"],
+        "context": {"page": "ai", "view": {"selectedProjectId": env.ids["demo"],
+                                          "selectedVariantId": variant_id}},
+    }
+    [created], _ = env.q.enqueue("per-action", "web", [action], model="m")
+    requests, skipped = env.q.enqueue("per-action", "web", [
+        {**action, "import_revision": second["revision"]},
+    ], model="m")
+    assert not requests and skipped
+    http_client = httpx.Client
+    monkeypatch.setattr("vulnscout_mcp.client.httpx.Client",
+                        lambda **kwargs: http_client(transport=httpx.WSGITransport(app=env.app), **kwargs))
+
+    async def stale_import(call):
+        mcp = ScopedVulnScoutClient("http://localhost", json.loads(call.scope))
+        with pytest.raises(VulnScoutConflict, match="source changed"):
+            mcp.get_import_source(variant_id, {"operation": "read", "path": "report.md"})
+        with pytest.raises(VulnScoutConflict, match="source changed"):
+            mcp.put_context_draft(variant_id, {
+                "source": "report.md", "base_updated_at": None,
+                "values": {"system": {"scope": "Original"}, "stride": {}},
+            })
+        return await ok(call)
+
+    env.fake.script["context-import"].append(stale_import)
+    assert env.q.run_once("action") == created["id"]
+    assert _status(env, created["id"]) == "done"
+    assert client.get(f"/api/variants/{variant_id}/context/draft").status_code == 404
+    response = client.get(f"{url}/source", query_string={"operation": "read", "path": "report.md"})
+    assert response.get_json()["content"] == "replacement\n"
 
 
 def test_lanes_run_fifo_with_positions_and_record_transcripts(env):

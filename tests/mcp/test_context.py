@@ -703,7 +703,7 @@ class TestProposeThreatModel:
         with respx.mock:
             respx.get(f"{BASE_URL}/api/variants/v1/context/import-source/source",
                       params={"operation": "search", "query": "CSRF"}).mock(
-                return_value=httpx.Response(200, json={"name": "r.pdf", "matches": []}))
+                return_value=httpx.Response(200, json={"name": "r.pdf", "matches": [], "revision": "source-a"}))
             respx.get(f"{BASE_URL}/api/variants/v2/context/import-source/source").mock(
                 return_value=httpx.Response(404, json={"error": "No import source uploaded."}))
             found = _import_source_impl(client, "v1", {"operation": "search", "query": "CSRF"})

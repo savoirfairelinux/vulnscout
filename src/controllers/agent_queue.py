@@ -496,16 +496,15 @@ class AgentQueue:
                 kind == "review" and action.get("fingerprint") is not None and key in failed_keys):
             return _Planned(kind, key, context, skipped=active_keys[key])
         if kind == "context-import":
-            scope = agent._scope_for_context(context)
-            if len(json.loads(scope)["variant_ids"]) != 1:
+            scope = json.loads(agent._scope_for_context(context))
+            if len(scope["variant_ids"]) != 1:
                 raise ValueError("Select one variant to fill its threat model.")
             text = _bounded_text(action.get("text"), MESSAGE_LIMIT, "Enter a document import prompt.")
             title = _bounded_text(action.get("title"), TITLE_LIMIT, "Invalid document import title.")
             detail = _bounded_text(action.get("detail"), 512, "Invalid document import filename.")
-            revision = action.get("import_revision")
-            if revision is not None:
-                revision = _bounded_text(revision, 128, "Invalid document import revision.")
-            return _Planned(kind, key, context, text=text, scope=scope, title=title, detail=detail,
+            revision = _bounded_text(action.get("import_revision"), 128, "Invalid document import revision.")
+            scope["import_revisions"] = {scope["variant_ids"][0]: revision}
+            return _Planned(kind, key, context, text=text, scope=json.dumps(scope), title=title, detail=detail,
                             import_revision=revision)
         if kind == "assess":
             vuln_id = action.get("vuln_id")
