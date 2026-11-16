@@ -15,13 +15,23 @@ from src.models.vulnerability import Vulnerability
 from src.controllers import ControllersCache
 from src.bin.cmd_process import read_inputs
 from src.extensions import db
-from src.helpers.export_scope import ExportScope
+from src.helpers.export_scope import compute_export_scope
 from src.models.assessment import Assessment
 from src.models.finding import Finding
 from src.models.project import Project
 from src.models.sbom_document import SBOMDocument
+from src.models.sbom_package import SBOMPackage
 from src.models.scan import Scan
 from src.models.variant import Variant
+
+
+def _record_sbom(variant, packages, *, day=12):
+    scan = Scan.create("inventory", variant.id, scan_type="sbom")
+    scan.timestamp = datetime(2026, 11, day, tzinfo=timezone.utc)
+    document = SBOMDocument.create("/dev/null", "inventory.spdx.json", scan.id, format="spdx")
+    for package in packages:
+        SBOMPackage.create(document.id, package.id)
+    return document
 
 
 @pytest.fixture
@@ -91,6 +101,7 @@ def test_assessments_roundtrip_to_another_variant(tmp_path, input_status, status
     source = Variant.create("source", project.id)
     destination = Variant.create("destination", project.id)
     packages = [Package.create(name, "1.0") for name in ("first", "second")]
+    _record_sbom(source, packages)
     Vulnerability.get_or_create("CVE-2026-1234")
     timestamp = datetime(2026, 11, 12, 12, 0, 0, tzinfo=timezone.utc)
     for package in packages:
@@ -110,7 +121,7 @@ def test_assessments_roundtrip_to_another_variant(tmp_path, input_status, status
             targets=[(source.id, finding.id)], origin="ai", status="not_affected",
             timestamp=datetime(2026, 11, 13, tzinfo=timezone.utc),
         )
-    scope = ExportScope(package_ids={p.id for p in packages}, variant_ids={source.id})
+    scope = compute_export_scope(variant_id=source.id)
     export_controllers = ControllersCache(scope=scope)
     export_controllers.packages._preload_cache()
     document = json.loads(SPDX3(export_controllers).output_as_json())
@@ -157,6 +168,8 @@ def test_assessment_export_filters_exact_variant_package_targets():
     source = Variant.create("source", project.id)
     outside = Variant.create("outside", project.id)
     packages = [Package.create(name, "1.0") for name in ("first", "second", "third")]
+    _record_sbom(source, packages)
+    _record_sbom(outside, packages[1:])
     Vulnerability.get_or_create("CVE-2026-1234")
     findings = [Finding.get_or_create(p.id, "CVE-2026-1234") for p in packages]
     Assessment.create(
@@ -165,7 +178,7 @@ def test_assessment_export_filters_exact_variant_package_targets():
     )
     Assessment.create(targets=[(source.id, findings[1].id)], origin="custom", status="affected")
     Assessment.create(targets=[(outside.id, findings[2].id)], origin="custom", status="fixed")
-    scope = ExportScope(package_ids={p.id for p in packages}, variant_ids={source.id})
+    scope = compute_export_scope(variant_id=source.id)
     export_controllers = ControllersCache(scope=scope)
     export_controllers.packages._preload_cache()
     document = json.loads(SPDX3(export_controllers).output_as_json())
@@ -194,6 +207,8 @@ def test_consolidated_export_uses_current_variant_verdicts_conservatively(
     second = Variant.create("second", project.id)
     destination = Variant.create("destination", project.id)
     package = Package.create("shared", "1.0")
+    _record_sbom(first, [package])
+    _record_sbom(second, [package])
     Vulnerability.get_or_create("CVE-2026-1234")
     finding = Finding.get_or_create(package.id, "CVE-2026-1234")
     Assessment.create(
@@ -209,7 +224,7 @@ def test_consolidated_export_uses_current_variant_verdicts_conservatively(
             timestamp=datetime(2026, 11, day, tzinfo=timezone.utc),
         )
     original_statuses = {str(assessment.id): assessment.status for assessment in Assessment.get_all()}
-    scope = ExportScope(package_ids={package.id}, variant_ids={first.id, second.id}) if scoped else None
+    scope = compute_export_scope(project_id=project.id) if scoped else None
     controllers = ControllersCache(scope=scope)
     controllers.packages._preload_cache()
     document = json.loads(SPDX3(controllers).output_as_json())
@@ -238,7 +253,7 @@ def test_consolidated_export_uses_current_variant_verdicts_conservatively(
     restored, = Assessment.get_by_finding_and_variant(finding.id, destination.id)
     assert restored.status == expected_status
     for variant, status in ((first, first_status), (second, second_status)):
-        controllers = ControllersCache(scope=ExportScope(package_ids={package.id}, variant_ids={variant.id}))
+        controllers = ControllersCache(scope=compute_export_scope(variant_id=variant.id))
         controllers.packages._preload_cache()
         document = json.loads(SPDX3(controllers).output_as_json())
         relationship, = [item for item in document["@graph"] if item.get("type", "").startswith("security_Vex")]
@@ -248,10 +263,61 @@ def test_consolidated_export_uses_current_variant_verdicts_conservatively(
         assert parser._parse_vex_relationship(relationship).status == status
 
 
+@pytest.mark.parametrize("scoped", [True, False], ids=["project", "global"])
+@pytest.mark.parametrize("upgraded", [False, True], ids=["removed", "upgraded"])
+def test_consolidation_excludes_targets_absent_from_the_variants_active_sbom(tmp_path, scoped, upgraded):
+    project = Project.create("active-inventory")
+    removed = Variant.create("removed", project.id)
+    current = Variant.create("current", project.id)
+    destination = Variant.create("destination", project.id)
+    package = Package.create("shared", "1.0")
+    _record_sbom(removed, [package], day=10)
+    _record_sbom(removed, [Package.create("shared", "2.0")] if upgraded else [], day=11)
+    active_document = _record_sbom(current, [], day=12)
+    second_document = SBOMDocument.create("/dev/null", "second.spdx.json", active_document.scan_id, format="spdx")
+    SBOMPackage.create(second_document.id, package.id)
+    tool_scan = Scan.create("enrichment", removed.id, scan_type="tool", scan_source="grype")
+    tool_document = SBOMDocument.create("/dev/null", "tool.json", tool_scan.id)
+    SBOMPackage.create(tool_document.id, package.id)
+    Vulnerability.get_or_create("CVE-2026-1234")
+    finding = Finding.get_or_create(package.id, "CVE-2026-1234")
+    historical = Assessment.create(
+        targets=[(removed.id, finding.id)], origin="custom", status="affected",
+        timestamp=datetime(2026, 11, 10, tzinfo=timezone.utc),
+    )
+    Assessment.create(
+        targets=[(current.id, finding.id)], origin="custom", status="fixed", status_notes="Patched downstream",
+        timestamp=datetime(2026, 11, 12, tzinfo=timezone.utc),
+    )
+    controllers = ControllersCache(scope=compute_export_scope(project_id=project.id) if scoped else None)
+    controllers.packages._preload_cache()
+    document = json.loads(SPDX3(controllers).output_as_json())
+    schema_path = Path(__file__).parents[1] / "schemas/spdx/spdx-json-schema-3.0.1.json"
+    Draft202012Validator(json.loads(schema_path.read_text()), format_checker=FormatChecker()).validate(document)
+    relationship, = [item for item in document["@graph"] if item.get("type", "").startswith("security_Vex")]
+    assert relationship["relationshipType"] == "fixedIn"
+    assert relationship["security_statusNotes"] == "Patched downstream"
+    assert historical.status == "affected"
+    assert historical.targets == [(removed.id, finding.id)]
+
+    sbom_path = tmp_path / "export.spdx.json"
+    sbom_path.write_text(json.dumps(document))
+    scan = Scan.create("reimport", destination.id, scan_type="sbom")
+    SBOMDocument.create(str(sbom_path), sbom_path.name, scan.id, format="spdx")
+    controllers = ControllersCache()
+    controllers.assessments.current_variant_id = destination.id
+    read_inputs(controllers, scan_id=scan.id)
+    db.session.expire_all()
+    restored, = Assessment.get_by_finding_and_variant(finding.id, destination.id)
+    assert restored.status == "fixed"
+    assert restored.status_notes == "Patched downstream"
+
+
 def test_ingestion_export_replaces_the_current_variants_old_verdict():
     project = Project.create("ingestion")
     variant = Variant.create("current", project.id)
     package = Package.create("shared", "1.0")
+    _record_sbom(variant, [package])
     Vulnerability.get_or_create("CVE-2026-1234")
     finding = Finding.get_or_create(package.id, "CVE-2026-1234")
     Assessment.create(
@@ -277,13 +343,14 @@ def test_description_and_reasoning_roundtrip_to_a_fresh_database(tmp_path):
     project = Project.create("source")
     source = Variant.create("source", project.id)
     package = Package.create("parser", "1.0")
+    _record_sbom(source, [package])
     Vulnerability.create_record("CVE-2026-1234", description=description)
     finding = Finding.get_or_create(package.id, "CVE-2026-1234")
     Assessment.create(
         targets=[(source.id, finding.id)], origin="custom", status="not_affected",
         justification="vulnerable_code_not_present", impact_statement=reasoning, status_notes=notes,
     )
-    scope = ExportScope(package_ids={package.id}, variant_ids={source.id})
+    scope = compute_export_scope(variant_id=source.id)
     controllers = ControllersCache(scope=scope)
     controllers.packages._preload_cache()
     sbom_path = tmp_path / "export.spdx.json"

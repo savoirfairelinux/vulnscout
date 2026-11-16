@@ -28,6 +28,8 @@ another variant restores `not_affected`, `affected`, `fixed`, and
 `under_investigation` statuses, status notes, assessment dates, not-affected
 justifications and impact statements, and affected action statements.
 Pending AI suggestions and out-of-scope assessment targets are excluded.
+Targets for packages absent from their variant's active SBOM are also excluded,
+even when another variant still ships the same package version.
 This is a current-status export, not an assessment-history backup.
 
 Project and global exports consolidate shared packages across variants. If

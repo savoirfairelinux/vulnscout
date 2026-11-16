@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 import uuid
 
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
+from ..helpers.active_scans import active_package_ids_for_scans, active_sbom_scan_ids_for_variant
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from ..helpers.export_files import file_metadata, INVENTORY_UNKNOWN_COMMENT
 from ..helpers.export_evidence import dependency_relationships, export_evidence, EVIDENCE_PREFIX
@@ -29,6 +30,7 @@ class SPDX3:
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.pkg_to_ref: Dict[str, str] = {}
         self.vuln_to_ref: Dict[str, str] = {}
+        self._active_package_ids_by_variant: Dict[str, set[uuid.UUID]] = {}
         self.namespace = generate_spdx_namespace()
         self._creation_info_ref: Optional[str] = None
         self._id_counter = 0  # sequential counter for gnrtdX IDs
@@ -180,6 +182,16 @@ class SPDX3:
                     continue
                 if package_id not in self.pkg_to_ref:
                     continue
+                if variant_id is not None:
+                    active_package_ids = self._active_package_ids_by_variant.get(variant_id)
+                    if active_package_ids is None:
+                        active_package_ids = active_package_ids_for_scans(
+                            active_sbom_scan_ids_for_variant(uuid.UUID(variant_id)),
+                            restrict_to_package_ids=scope.package_ids if scope is not None else None,
+                        )
+                        self._active_package_ids_by_variant[variant_id] = active_package_ids
+                    if self.packagesCtrl.get_or_resolve_db_id(package_id) not in active_package_ids:
+                        continue
                 target_key = (variant_id, package_id)
                 previous = latest.get(target_key)
                 if previous is None or (
@@ -250,6 +262,7 @@ class SPDX3:
         return relationships
 
     def output_as_json(self, author: str = "Savoir-faire Linux") -> str:
+        self._active_package_ids_by_variant.clear()
         spdx_doc = self.create_document_structure(author)
         graph = spdx_doc["@graph"]
 
