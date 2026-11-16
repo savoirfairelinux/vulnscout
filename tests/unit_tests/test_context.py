@@ -1030,6 +1030,25 @@ class TestContextDraftRoutes:
             "source": "report.pdf", "base_updated_at": base, "values": _draft_values(), **body,
         })
 
+    @pytest.mark.parametrize("with_context", [False, True])
+    def test_absent_draft_is_no_content_without_creating_or_modifying_context(
+        self, client, variant, tmp_path, with_context,
+    ):
+        from src.models.variant_context import VariantContext
+
+        if with_context:
+            VariantContext.get_or_create(variant.id)
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            for _ in range(2):
+                response = client.get(self._url(variant))
+                assert response.status_code == 204 and response.data == b""
+        context = VariantContext.get_by_variant(variant.id)
+        if with_context:
+            assert context is not None and context.updated_at is None
+        else:
+            assert context is None
+        assert list(tmp_path.iterdir()) == []
+
     @pytest.mark.parametrize("upload", [False, True])
     @pytest.mark.parametrize("missing_lookup", [1, 2])
     def test_creation_never_replaces_a_concurrently_saved_context(
@@ -1063,13 +1082,13 @@ class TestContextDraftRoutes:
                 response = self._put(client, variant)
             assert response.status_code == (201 if upload else 409)
             assert get_by_variant(variant.id).to_dict() == saved
-            assert client.get(self._url(variant)).status_code == 404
+            assert client.get(self._url(variant)).status_code == 204
 
     def test_put_creates_the_context_and_get_returns_a_current_draft(self, client, variant, tmp_path):
         from src.models.variant_context import VariantContext
 
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
-            assert client.get(self._url(variant)).status_code == 404
+            assert client.get(self._url(variant)).status_code == 204
             put = self._put(client, variant)
             got = client.get(self._url(variant))
         assert put.status_code == 200 and put.get_json()["status"] == "current"
@@ -1130,7 +1149,7 @@ class TestContextDraftRoutes:
         assert conflict["status"] == "conflict" and conflict["values"] is None
         assert conflict["conflicts"] == [{"path": "components[C1]", "reason": "changed in both"}]
 
-    def test_corrupt_draft_is_a_404(self, client, variant, tmp_path):
+    def test_corrupt_draft_is_removed_and_returns_no_content(self, client, variant, tmp_path):
         from src.helpers import context_draft
         from src.models.variant_context import VariantContext
 
@@ -1140,7 +1159,7 @@ class TestContextDraftRoutes:
             with open(os.path.join(directory, context_draft.DRAFT_NAME), "w") as handle:
                 handle.write("{broken")
             resp = client.get(self._url(variant))
-        assert resp.status_code == 404
+        assert resp.status_code == 204
         assert not os.path.exists(os.path.join(directory, context_draft.DRAFT_NAME))
 
     @pytest.mark.parametrize("second_collision", [False, True])
@@ -1190,7 +1209,7 @@ class TestContextDraftRoutes:
             draft = self._put(client, variant).get_json()
             assert client.delete(self._url(variant), json={"revision": draft["revision"]}).status_code == 204
             assert client.delete(self._url(variant), json={"revision": draft["revision"]}).status_code == 204
-            assert client.get(self._url(variant)).status_code == 404
+            assert client.get(self._url(variant)).status_code == 204
 
     def test_stale_cleanup_keeps_a_new_draft_and_its_source(self, client, variant, tmp_path):
         from io import BytesIO
@@ -1286,7 +1305,7 @@ class TestImportSourceRoutes:
             listed = self._source(client, variant).get_json()
             draft = client.get(f"/api/variants/{variant.id}/context/draft")
         assert [f["path"] for f in listed["files"]] == ["b.md"]
-        assert draft.status_code == 404
+        assert draft.status_code == 204
 
     def test_import_reads_and_proposals_reject_replacement_sources(self, client, variant, tmp_path):
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
@@ -1306,7 +1325,7 @@ class TestImportSourceRoutes:
                                 revision=first)
             assert read.status_code == 409 and "source changed" in read.get_json()["error"]
             assert client.put(draft_url, json=body).status_code == 409
-            assert client.get(draft_url).status_code == 404
+            assert client.get(draft_url).status_code == 204
             assert self._source(client, variant, revision=second).get_json()["revision"] == second
             assert client.put(draft_url, json={**body, "import_revision": second}).status_code == 200
             draft = client.get(draft_url).get_json()

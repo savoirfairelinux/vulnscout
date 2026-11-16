@@ -136,7 +136,7 @@ function mockBackend(overrides: Partial<Backend> = {}): Backend {
                 delete backend.importRevisions?.[variantId];
                 return { status: 204, body: '' };
             }
-            return drafts[variantId] ? JSON.stringify(drafts[variantId]) : { status: 404, body: JSON.stringify({ error: 'No draft.' }) };
+            return drafts[variantId] ? JSON.stringify(drafts[variantId]) : { status: 204, body: '' };
         }
         return { body: JSON.stringify(respond(backend, request.url, request.method, body)),
             headers: { 'Content-Type': 'application/json' } };

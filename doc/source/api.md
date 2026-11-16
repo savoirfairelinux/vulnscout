@@ -377,6 +377,18 @@ system and STRIDE data; on a variant whose codebase source is references, a null
 paths. The threat model and risks are read-only here: a non-null `threat_model` or `risks` returns `400` with a
 `fields` entry for each.
 
+### Read an AI Context Draft
+
+```
+GET /api/variants/<variant_id>/context/draft
+```
+
+Returns `200` with the pending AI threat-model draft and its status against the saved context.
+A valid variant without a pending draft returns `204 No Content`, whether or not its context
+has been saved before. This is a normal empty state, unrelated to codebase directory availability.
+Invalid IDs return `400`; unknown variants return `404`; storage failures return `500`.
+Frontend and MCP clients treat only `204` as no draft and surface real errors.
+
 ### Import or Export Context
 
 ```

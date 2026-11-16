@@ -259,7 +259,7 @@ class VulnScoutClient:
             raise VulnScoutError(error_msg)
         return response.json()
 
-    def _send(self, method: str, url: str, *, missing_ok: bool = False, **kwargs) -> Optional[httpx.Response]:
+    def _send(self, method: str, url: str, **kwargs) -> httpx.Response:
         try:
             with httpx.Client(timeout=30) as http:
                 response = http.request(method, url, **kwargs)
@@ -267,8 +267,6 @@ class VulnScoutClient:
             raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
         if response.is_success:
             return response
-        if missing_ok and response.status_code == 404:
-            return None
         try:
             error_msg = response.json().get("error", response.text)
         except ValueError:
@@ -282,15 +280,14 @@ class VulnScoutClient:
 
     def get_context_draft(self, variant_id: str) -> Optional[dict]:
         """GET the variant's pending AI draft; None when there is none."""
-        response = self._send("GET", self._variant_context_url(variant_id, "draft"), missing_ok=True)
-        return None if response is None else response.json()
+        response = self._send("GET", self._variant_context_url(variant_id, "draft"))
+        return None if response.status_code == 204 else response.json()
 
     def put_context_draft(self, variant_id: str, body: dict) -> dict:
         """PUT an AI draft for review; raises VulnScoutConflict when the saved context moved."""
         if variant_id in self.import_revisions:
             body = {**body, "import_revision": self.import_revisions[variant_id]}
         response = self._send("PUT", self._variant_context_url(variant_id, "draft"), json=body)
-        assert response is not None
         return response.json()
 
     def get_import_source(self, variant_id: str, params: dict, *, new_import: bool = False) -> dict:
@@ -298,7 +295,6 @@ class VulnScoutClient:
         if not new_import and variant_id in self.import_revisions:
             params = {**params, "revision": self.import_revisions[variant_id]}
         response = self._send("GET", self._variant_context_url(variant_id, "import-source/source"), params=params)
-        assert response is not None
         source = response.json()
         if new_import:
             self.import_revisions[variant_id] = source["revision"]

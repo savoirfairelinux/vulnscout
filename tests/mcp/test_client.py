@@ -455,8 +455,16 @@ class TestContextDraftClient:
 
         with respx.mock:
             respx.get(f"{self.BASE}/api/variants/v1/context/draft").mock(
-                return_value=httpx.Response(404, json={"error": "No draft."}))
+                return_value=httpx.Response(204))
             assert VulnScoutClient(self.BASE).get_context_draft("v1") is None
+
+    @pytest.mark.parametrize("status,message", [(404, "Variant not found"), (500, "Storage failure")])
+    def test_get_draft_does_not_hide_real_errors(self, status, message):
+        with respx.mock:
+            respx.get(f"{self.BASE}/api/variants/v1/context/draft").mock(
+                return_value=httpx.Response(status, json={"error": message}))
+            with pytest.raises(VulnScoutError, match=message):
+                VulnScoutClient(self.BASE).get_context_draft("v1")
 
     def test_put_draft_sends_the_body_and_maps_409(self):
         import json as _json

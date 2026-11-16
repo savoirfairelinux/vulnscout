@@ -252,7 +252,7 @@ class Context {
             `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/draft`,
             { mode: 'cors' }
         );
-        if (res.status === 404) return null;
+        if (res.status === 204) return null;
         return jsonOrThrow<AiContextDraft>(res, 'Failed to load the AI draft');
     }
 

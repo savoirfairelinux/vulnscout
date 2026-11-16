@@ -9,13 +9,16 @@ import type { AiContextDraftValues } from '../../src/handlers/context';
 beforeEach(() => fetchMock.resetMocks());
 
 describe('AI draft handlers', () => {
-    test('getAiDraft returns null on 404 and throws the server error otherwise', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify({ error: 'No draft.' }), { status: 404 });
+    test('getAiDraft returns null on 204 and throws real server errors', async () => {
+        fetchMock.mockResponseOnce('', { status: 204 });
         await expect(Context.getAiDraft('v1')).resolves.toBeNull();
         expect(fetchMock.mock.calls[0][0]).toContain('/api/variants/v1/context/draft');
 
         fetchMock.mockResponseOnce(JSON.stringify({ source: 'a.pdf', status: 'current' }));
         await expect(Context.getAiDraft('v1')).resolves.toMatchObject({ source: 'a.pdf' });
+
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'Variant not found' }), { status: 404 });
+        await expect(Context.getAiDraft('v1')).rejects.toThrow('Variant not found');
 
         fetchMock.mockResponseOnce(JSON.stringify({ error: 'Boom' }), { status: 500 });
         await expect(Context.getAiDraft('v1')).rejects.toThrow('Boom');
