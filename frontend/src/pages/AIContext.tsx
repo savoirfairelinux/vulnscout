@@ -244,9 +244,8 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         try {
             for (let attempt = 0; attempt < 3; attempt++) {
                 draft = await Context.getAiDraft(variantId);
-                if (!draft) break;
                 const saved = await Context.get(projectId ?? '', variantId);
-                if (saved.editor.updated_at === draft.saved_updated_at) {
+                if (!draft || saved.editor.updated_at === draft.saved_updated_at) {
                     baseline = draftFromContext(saved);
                     files = saved.editor.files;
                     break;
@@ -269,16 +268,15 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         const conflict = draft?.status === 'conflict';
         const applied = draft?.values && !conflict && baseline ? applyAiDraft(baseline, draft.values) : null;
         const noChange = applied !== null && baseline !== null && draftsEqual(applied, baseline);
-        if (baseline && untouched) {
-            if (!current.commit(baseline, current.draft)) {
-                if (draft) setAiDraft({ kind: 'pending', key, variantId, draft });
+        if (baseline && (untouched || !draft)) {
+            if (!current.commit(baseline, untouched ? current.draft : baseline) && draft) {
+                setAiDraft({ kind: 'pending', key, variantId, draft });
                 return;
             }
             setVariantFiles({ key, files });
         }
         // A reply with neither values nor a conflict is treated as no draft.
         if (!draft || (!conflict && !applied) || noChange) {
-            if (previous?.kind === 'loaded' && untouched && !baseline) current.reset();
             // A draft that changes nothing is dropped without asking.
             if (noChange && draft) {
                 try {
@@ -550,10 +548,11 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         }
         setUploading(true);
         hideErrorBanner();
+        const key = openKeyRef.current;
         try {
             const uploaded = await Context.uploadImportSource(openVariant.id, file);
             if (unmountedRef.current) return;
-            setAiDraft(null);
+            if (openKeyRef.current === key) setAiDraft(null);
             const message: AgentAction = {
                 key: contextImportKey(openVariant.id),
                 kind: 'context-import',
