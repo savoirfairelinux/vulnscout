@@ -177,6 +177,99 @@ def test_assessment_export_filters_exact_variant_package_targets():
     }
 
 
+@pytest.mark.parametrize("scoped", [True, False], ids=["project", "global"])
+@pytest.mark.parametrize("first_status,second_status,expected_status,expected_relationship", [
+    ("affected", "not_affected", "affected", "affects"),
+    ("under_investigation", "fixed", "under_investigation", "underInvestigationFor"),
+    ("fixed", "not_affected", "under_investigation", "underInvestigationFor"),
+    ("not_affected", "not_affected", "not_affected", "doesNotAffect"),
+])
+def test_consolidated_export_uses_current_variant_verdicts_conservatively(
+    scoped, first_status, second_status, expected_status, expected_relationship,
+):
+    from src.views.fast_spdx3 import FastSPDX3
+
+    project = Project.create("consolidated")
+    first = Variant.create("first", project.id)
+    second = Variant.create("second", project.id)
+    destination = Variant.create("destination", project.id)
+    package = Package.create("shared", "1.0")
+    Vulnerability.get_or_create("CVE-2026-1234")
+    finding = Finding.get_or_create(package.id, "CVE-2026-1234")
+    Assessment.create(
+        targets=[(first.id, finding.id), (second.id, finding.id)], origin="custom", status="affected",
+        timestamp=datetime(2026, 11, 10, tzinfo=timezone.utc),
+    )
+    for variant, status, day in ((first, first_status, 11), (second, second_status, 12)):
+        Assessment.create(
+            targets=[(variant.id, finding.id)], origin="custom", status=status,
+            justification="vulnerable_code_not_present" if status == "not_affected" else "",
+            status_notes=f"Reviewed {variant.name}", workaround="Apply the patch" if status == "affected" else "",
+            impact_statement=f"Reason from {variant.name}",
+            timestamp=datetime(2026, 11, day, tzinfo=timezone.utc),
+        )
+    original_statuses = {str(assessment.id): assessment.status for assessment in Assessment.get_all()}
+    scope = ExportScope(package_ids={package.id}, variant_ids={first.id, second.id}) if scoped else None
+    controllers = ControllersCache(scope=scope)
+    controllers.packages._preload_cache()
+    document = json.loads(SPDX3(controllers).output_as_json())
+    schema_path = Path(__file__).parents[1] / "schemas/spdx/spdx-json-schema-3.0.1.json"
+    Draft202012Validator(json.loads(schema_path.read_text()), format_checker=FormatChecker()).validate(document)
+    relationship, = [item for item in document["@graph"] if item.get("type", "").startswith("security_Vex")]
+    assert relationship["relationshipType"] == expected_relationship
+    if first_status != second_status:
+        assert "Consolidated" in relationship["security_statusNotes"]
+        assert first_status in relationship["security_statusNotes"]
+        assert second_status in relationship["security_statusNotes"]
+    if expected_status not in {first_status, second_status}:
+        assert "description" not in relationship
+        assert "security_impactStatement" not in relationship
+        assert "security_justificationType" not in relationship
+        assert "security_actionStatement" not in relationship
+    elif first_status != second_status:
+        assert relationship["description"] == "Reason from first"
+    assert {str(assessment.id): assessment.status for assessment in Assessment.get_all()} == original_statuses
+
+    controllers = ControllersCache()
+    controllers.assessments.current_variant_id = destination.id
+    FastSPDX3(controllers).parse_from_dict(document)
+    db.session.commit()
+    db.session.expire_all()
+    restored, = Assessment.get_by_finding_and_variant(finding.id, destination.id)
+    assert restored.status == expected_status
+    for variant, status in ((first, first_status), (second, second_status)):
+        controllers = ControllersCache(scope=ExportScope(package_ids={package.id}, variant_ids={variant.id}))
+        controllers.packages._preload_cache()
+        document = json.loads(SPDX3(controllers).output_as_json())
+        relationship, = [item for item in document["@graph"] if item.get("type", "").startswith("security_Vex")]
+        parser = FastSPDX3(ControllersCache())
+        parser.merge_components_into_controller(document)
+        parser.merge_vulnerabilities_into_controller(document)
+        assert parser._parse_vex_relationship(relationship).status == status
+
+
+def test_ingestion_export_replaces_the_current_variants_old_verdict():
+    project = Project.create("ingestion")
+    variant = Variant.create("current", project.id)
+    package = Package.create("shared", "1.0")
+    Vulnerability.get_or_create("CVE-2026-1234")
+    finding = Finding.get_or_create(package.id, "CVE-2026-1234")
+    Assessment.create(
+        targets=[(variant.id, finding.id)], origin="sbom", status="affected",
+        timestamp=datetime(2026, 11, 10, tzinfo=timezone.utc),
+    )
+    controllers = ControllersCache()
+    controllers.assessments.current_variant_id = variant.id
+    current = Assessment.new_dto("CVE-2026-1234", [package.string_id])
+    current.set_status("fixed")
+    current.timestamp = datetime(2026, 11, 12, tzinfo=timezone.utc)
+    controllers.assessments.add(current)
+
+    document = json.loads(SPDX3(controllers).output_as_json())
+    relationship, = [item for item in document["@graph"] if item.get("type", "").startswith("security_Vex")]
+    assert relationship["relationshipType"] == "fixedIn"
+
+
 def test_description_and_reasoning_roundtrip_to_a_fresh_database(tmp_path):
     description = "A bounds check is missing.\nUntrusted input can reach the vulnerable parser."
     notes = "Reviewed the shipped configuration.\nThe optional parser is disabled."
