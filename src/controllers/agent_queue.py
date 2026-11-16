@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from .guarded_api import GuardedApi
 
 Lane = Literal["action", "chat"]
-Kind = Literal["assess", "review", "message"]
+Kind = Literal["assess", "review", "message", "context-import"]
 Status = Literal["queued", "running", "failed", "done", "cancelled"]
 
 LANES: tuple[Lane, ...] = ("action", "chat")
@@ -78,7 +78,7 @@ MCP_MISSING = "Bundled MCP server not found. Check the installation or VULNSCOUT
 STOPPED = "Stopped."
 REMOVED = "Removed from the AI queue."
 WORKER_ERROR = "The AI queue could not start its next request; see the server logs."
-LABELS = {"assess": "Assess", "review": "Review", "message": "Message"}
+LABELS = {"assess": "Assess", "review": "Review", "message": "Message", "context-import": "Fill"}
 _BATCH_SUFFIX = re.compile(r" · batch \d+ of \d+$")
 
 _logger = logging.getLogger(__name__)
@@ -239,6 +239,8 @@ class _Planned:
     specs: list[ai_actions.TurnSpec] = field(default_factory=list)
     text: str | None = None
     scope: str | None = None
+    title: str = ""
+    detail: str = ""
     skipped: str | None = None  # the active request already holding the key, when planned
 
 
@@ -472,7 +474,7 @@ class AgentQueue:
             raise ValueError("Each action must be an object.")
         kind = action.get("kind")
         if kind not in LABELS:
-            raise ValueError("Invalid action kind; use assess, review or message.")
+            raise ValueError("Invalid action kind; use assess, review, context-import or message.")
         key = action.get("key")
         if key is not None:
             _bounded_text(key, 500, "Invalid action key (at most 500 characters).")
@@ -486,11 +488,19 @@ class AgentQueue:
                 raise ValueError(f"Enter a message of at most {MESSAGE_LIMIT} characters.")
             return _Planned("message", key, context, text=text.strip(), scope=agent._scope_for_context(context))
         if conversation != PER_ACTION:
-            raise ValueError("Assess and review actions run in their own conversations (per-action).")
+            raise ValueError("Assess, review and context-import actions run in their own conversations (per-action).")
         # A failed review pinned to other content is replaced, not followed: its retry could only fail as changed.
         if key is not None and key in active_keys and not (
                 kind == "review" and action.get("fingerprint") is not None and key in failed_keys):
             return _Planned(kind, key, context, skipped=active_keys[key])
+        if kind == "context-import":
+            scope = agent._scope_for_context(context)
+            if len(json.loads(scope)["variant_ids"]) != 1:
+                raise ValueError("Select one variant to fill its threat model.")
+            text = _bounded_text(action.get("text"), MESSAGE_LIMIT, "Enter a document import prompt.")
+            title = _bounded_text(action.get("title"), TITLE_LIMIT, "Invalid document import title.")
+            detail = _bounded_text(action.get("detail"), 512, "Invalid document import filename.")
+            return _Planned(kind, key, context, text=text, scope=scope, title=title, detail=detail)
         if kind == "assess":
             vuln_id = action.get("vuln_id")
             if not isinstance(vuln_id, str) or len(vuln_id) > 100 or not ai_actions.CVE_ID_PATTERN.fullmatch(vuln_id):
@@ -646,6 +656,16 @@ class AgentQueue:
                                  conversation_id=owner.id, source=source, title=text[:TITLE_LIMIT], detail="",
                                  model=model, model_explicit=explicit, timeout=timeout or default_timeout,
                                  context=plan.context, text=text, scope=plan.scope)]
+        if plan.kind == "context-import":
+            request_id = str(uuid.uuid4())
+            owner = AgentConversationState(id=str(uuid.uuid4()), kind="action", title=f"Fill {plan.title}",
+                                           profile=agent_skills.CONTEXT_IMPORT, scope=plan.scope)
+            self._conversations[owner.id] = owner
+            return [AgentRequest(id=request_id, key=plan.key or f"context-import:{request_id}",
+                                 kind=plan.kind, lane="action", conversation_id=owner.id, source=source,
+                                 title=plan.title, detail=plan.detail, model=model, model_explicit=explicit,
+                                 timeout=timeout or agent_skills.ACTION_TIMEOUT, context=plan.context,
+                                 text=plan.text, scope=plan.scope)]
         first = plan.specs[0]
         scope = None
         for spec in plan.specs:

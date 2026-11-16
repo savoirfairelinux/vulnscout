@@ -70,6 +70,10 @@ function respond(backend: Backend, url: string, method: string, body: string | n
     const projectVariants = /^\/api\/projects\/([^/]+)\/variants$/.exec(path);
     if (projectVariants) return backend.variants?.[projectVariants[1]] ?? (projectVariants[1] === 'p1' ? VARIANTS : []);
     if (path === '/api/reviews/assessments') return backend.aiRows;
+    if (path === '/api/agent/queue' && method === 'POST') {
+        const { actions } = JSON.parse(body ?? '{}');
+        return { requests: [{ id: 'import-request', key: actions[0].key, conversation_id: 'import-conversation' }], skipped: [] };
+    }
     if (path === '/api/projects/p1/context') {
         if (method === 'PUT') backend.description = JSON.parse(body ?? '{}').description;
         return { project_id: 'p1', description: backend.description };
@@ -104,9 +108,10 @@ function mockBackend(overrides: Partial<Backend> = {}): Backend {
             return { status: 400, body: JSON.stringify(backend.variantPutError) };
         }
         if (backend.failUrls?.some(fragment => request.url.includes(fragment))) {
-            return { status: 500, body: JSON.stringify({ error: 'Server unavailable' }) };
+            return { status: 500, body: JSON.stringify({ error: 'Server unavailable' }),
+                headers: { 'Content-Type': 'application/json' } };
         }
-        const draftRoute = /\/api\/variants\/([^/]+)\/context\/(draft|import-source)$/.exec(new URL(request.url).pathname);
+        const draftRoute = /\/api\/variants\/([^/]+)\/context\/(draft|import-source)$/.exec(new URL(request.url, 'http://localhost').pathname);
         if (draftRoute) {
             const [, variantId, kind] = draftRoute;
             const drafts = backend.drafts ?? (backend.drafts = {});
@@ -120,7 +125,8 @@ function mockBackend(overrides: Partial<Backend> = {}): Backend {
             }
             return drafts[variantId] ? JSON.stringify(drafts[variantId]) : { status: 404, body: JSON.stringify({ error: 'No draft.' }) };
         }
-        return JSON.stringify(respond(backend, request.url, request.method, body));
+        return { body: JSON.stringify(respond(backend, request.url, request.method, body)),
+            headers: { 'Content-Type': 'application/json' } };
     });
     return backend;
 }
@@ -1553,7 +1559,8 @@ describe('useUnsavedGuard', () => {
 });
 
 describe('AI threat-model drafts', () => {
-    beforeEach(() => agentStore.resetAgentQueue());
+    beforeEach(() => agentStore.__resetAgentQueue());
+    afterEach(() => jest.restoreAllMocks());
 
     test('a stored draft loads as unsaved changes and Save accepts it', async () => {
         const backend = mockBackend({ drafts: { v1: aiDraftReply() }, echoPut: true });
@@ -1633,26 +1640,67 @@ describe('AI threat-model drafts', () => {
     });
 
     test('Fill uploads the document, queues the action and locks the editor until it is cancelled', async () => {
+        let queue: agentStore.AgentTask[] = [];
+        jest.spyOn(agentStore, 'getAgentQueue').mockImplementation(() => queue);
         const backend = mockBackend();
         renderPage({ projectId: 'p1' });
         await openVariant1();
         const file = new File(['%PDF'], 'report.pdf', { type: 'application/pdf' });
         fireEvent.change(screen.getByLabelText('Threat model document'), { target: { files: [file] } });
         await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/import-source', 'POST')).toHaveLength(1));
-        await waitFor(() => expect(agentStore.getAgentQueue()).toHaveLength(1));
-        const task = agentStore.getAgentQueue()[0];
-        expect(task).toMatchObject({ kind: 'context-import', key: 'context-import:v1', title: 'Variant 1 from report.pdf', source: 'AI Context Variant 1' });
-        expect(task.context).toMatchObject({ page: 'ai', projectId: 'p1', variantId: 'v1' });
-        expect(task.text).toContain('propose_variant_threat_model');
+        await waitFor(() => expect(requestsTo(backend, '/api/agent/queue', 'POST')).toHaveLength(1));
+        const submitted = JSON.parse(requestsTo(backend, '/api/agent/queue', 'POST')[0].body ?? '{}');
+        expect(submitted).toMatchObject({ conversation: 'per-action', source: 'AI Context Variant 1' });
+        expect(submitted.actions[0]).toMatchObject({ kind: 'context-import', key: 'context-import:v1', title: 'Variant 1 from report.pdf' });
+        expect(submitted.context).toMatchObject({ page: 'ai', projectId: 'p1', variantId: 'v1' });
+        expect(submitted.actions[0].text).toContain('propose_variant_threat_model');
+        await waitFor(() => expect(agentStore.getAgentChatRequest().taskId).toBe('import-request'));
+        act(() => {
+            queue = [{
+                ...submitted.actions[0], id: 'import-request', source: submitted.source, context: submitted.context,
+                conversationId: 'import-conversation', status: 'queued', position: 1,
+            }];
+            agentStore.openAgentChat();
+        });
 
         expect(await screen.findByText('AI is drafting from report.pdf… Editing is paused until the draft is ready.')).toBeInTheDocument();
         expect(screen.getByLabelText('Variant description')).toBeDisabled();
         expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
 
         fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-        await waitFor(() => expect(agentStore.getAgentQueue()).toHaveLength(0));
+        await waitFor(() => expect(requestsTo(backend, '/api/agent/queue/requests/import-request', 'DELETE')).toHaveLength(1));
         await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        act(() => {
+            queue = [];
+            agentStore.openAgentChat();
+        });
         expect(screen.getByLabelText('Variant description')).toBeEnabled();
+    });
+
+    test('a failed queue submission shows the error instead of opening the chat', async () => {
+        mockBackend({ failUrls: ['/api/agent/queue'] });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.change(screen.getByLabelText('Threat model document'), { target: { files: [new File(['x'], 'a.pdf')] } });
+        expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
+        expect(agentStore.getAgentChatRequest().nonce).toBe(0);
+        expect(screen.getByLabelText('Variant description')).toBeEnabled();
+    });
+
+    test('failed cancellation keeps the import document and reports the error', async () => {
+        const queue: agentStore.AgentTask[] = [{
+            id: 'import-request', kind: 'context-import', key: 'context-import:v1', text: '', title: 'Variant 1',
+            detail: 'report.pdf', source: 'AI Context Variant 1', context: { page: 'ai' },
+            conversationId: 'import-conversation', status: 'queued', position: 1,
+        }];
+        jest.spyOn(agentStore, 'getAgentQueue').mockReturnValue(queue);
+        const backend = mockBackend({ failUrls: ['/api/agent/queue/requests/import-request'] });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+        expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
+        expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        expect(screen.getByLabelText('Variant description')).toBeDisabled();
     });
 
     test('a failed upload shows the error and queues nothing', async () => {
