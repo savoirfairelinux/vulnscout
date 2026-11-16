@@ -330,9 +330,13 @@ def init_app(app):
                             "updated_at": _revision(vc)}), 409
         try:
             if vc is None:
-                vc = VariantContext.upsert(variant_uuid)
+                vc = VariantContext.get_or_create(variant_uuid)
             directory = _draft_dir(vc)
             with context_draft.lock_for(vc.id):
+                db.session.refresh(vc)
+                if body.get("base_updated_at") != _revision(vc):
+                    return jsonify({"error": "The variant context changed since base_updated_at; read it again.",
+                                    "updated_at": _revision(vc)}), 409
                 if ("import_revision" in body
                         and body["import_revision"] != context_draft.import_revision(directory)):
                     return jsonify({"error": "The import source changed. Start a new import."}), 409
@@ -432,7 +436,7 @@ def init_app(app):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         try:
-            vc = VariantContext.get_by_variant(variant_uuid) or VariantContext.upsert(variant_uuid)
+            vc = VariantContext.get_by_variant(variant_uuid) or VariantContext.get_or_create(variant_uuid)
             directory = _draft_dir(vc)
             with context_draft.lock_for(vc.id):
                 context_draft.delete_draft(directory)

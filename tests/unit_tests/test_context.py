@@ -1030,6 +1030,41 @@ class TestContextDraftRoutes:
             "source": "report.pdf", "base_updated_at": base, "values": _draft_values(), **body,
         })
 
+    @pytest.mark.parametrize("upload", [False, True])
+    @pytest.mark.parametrize("missing_lookup", [1, 2])
+    def test_creation_never_replaces_a_concurrently_saved_context(
+            self, client, variant, tmp_path, upload, missing_lookup):
+        from io import BytesIO
+        from src.models.variant_context import VariantContext
+
+        get_by_variant = VariantContext.get_by_variant
+        saved = {}
+        lookups = 0
+
+        def save_after_missing_lookup(variant_id):
+            nonlocal lookups
+            lookups += 1
+            if lookups != missing_lookup:
+                return get_by_variant(variant_id)
+            assert get_by_variant(variant_id) is None
+            vc = VariantContext.save_editor(variant_id, {
+                **_draft_values(variant_description="Saved", environment="Production", other_info="Keep"),
+                "codebase_source": "paths", "codebase_path": "/saved/source",
+            })
+            saved.update(vc.to_dict())
+            return None
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
+                patch.object(VariantContext, "get_by_variant", side_effect=save_after_missing_lookup):
+            if upload:
+                response = client.post(f"/api/variants/{variant.id}/context/import-source",
+                                       data={"file": (BytesIO(b"document"), "model.md")})
+            else:
+                response = self._put(client, variant)
+            assert response.status_code == (201 if upload else 409)
+            assert get_by_variant(variant.id).to_dict() == saved
+            assert client.get(self._url(variant)).status_code == 404
+
     def test_put_creates_the_context_and_get_returns_a_current_draft(self, client, variant, tmp_path):
         from src.models.variant_context import VariantContext
 

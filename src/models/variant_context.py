@@ -21,6 +21,7 @@ from ..helpers.stride_model import (
 )
 import sqlalchemy as sa
 from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, Text, event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
@@ -254,6 +255,24 @@ class VariantContext(Base):
         return db.session.execute(
             db.select(VariantContext).where(VariantContext.variant_id == variant_id)
         ).scalar_one_or_none()
+
+    @staticmethod
+    def get_or_create(variant_id: uuid.UUID) -> "VariantContext":
+        """Create an empty context without changing a row created by another request."""
+        existing = VariantContext.get_by_variant(variant_id)
+        if existing is not None:
+            return existing
+        try:
+            with db.session.begin_nested():
+                vc = VariantContext(variant_id=variant_id, codebase_source="references")
+                db.session.add(vc)
+                db.session.flush()
+            db.session.commit()
+            return vc
+        except IntegrityError:
+            return db.session.execute(
+                db.select(VariantContext).where(VariantContext.variant_id == variant_id)
+            ).scalar_one()
 
     @staticmethod
     def upsert(
