@@ -260,7 +260,9 @@ class TestCmdProcessCoverage:
         assert result.exit_code == 0
         with app.app_context():
             run = _db.session.get(RefreshRun, "global-empty")
-            assert run.scope == {"project_id": None, "variant_id": None}
+            assert run.scope == {
+                "project_id": None, "variant_id": None, "refresh_type": "full",
+            }
             targets = _db.select(RefreshTarget).where(RefreshTarget.run_id == "global-empty")
             assert _db.session.scalars(targets).all() == []
             assert set(source_statuses("global-empty").values()) == {"complete"}
@@ -276,6 +278,7 @@ class TestCmdProcessCoverage:
         with app.app_context():
             assert _db.session.get(RefreshRun, "project-empty").scope == {
                 "project_id": str(Project.get_by_name("ProcessProject").id), "variant_id": None,
+                "refresh_type": "full",
             }
 
     def test_standalone_refresh_scopes_to_variant(self, app):
