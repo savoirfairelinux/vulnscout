@@ -216,18 +216,49 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    const agentQueue = useAgentQueue();
+    const openVariantId = selected?.kind === 'variant' ? selected.id : null;
+    const fillKey = openVariantId ? contextImportKey(openVariantId) : null;
+    const fillState = fillKey ? agentActionState(agentQueue, task => task.key === fillKey) : undefined;
+    const fillTask = fillState ? agentQueue.find(task => task.id === fillState.taskId) : undefined;
+    const drafting = fillState?.status === 'queued' || fillState?.status === 'running';
+    const draftLoadBlocked = drafting || agentQueue.some(task => task.status === 'running');
+    const draftLoadBlockedRef = useRef(draftLoadBlocked);
+    draftLoadBlockedRef.current = draftLoadBlocked;
+    const heldDraftLoadRef = useRef(false);
+
     // Loads the open variant's AI draft into a clean editor; edits made since are never replaced.
     const loadAiDraftRef = useRef<() => Promise<void>>(async () => undefined);
     loadAiDraftRef.current = async () => {
         const key = variantKey;
         const variantId = selected?.kind === 'variant' ? selected.id : null;
         if (key === null || variantId === null || variantDraft.baseline === null) return;
+        if (draftLoadBlockedRef.current) {
+            heldDraftLoadRef.current = true;
+            return;
+        }
         const request = ++draftRequestRef.current;
-        let draft: AiContextDraft | null;
+        let draft: AiContextDraft | null = null;
+        let baseline: VariantDraft | null = null;
+        let files: ContextFile[] = [];
         try {
-            draft = await Context.getAiDraft(variantId);
+            for (let attempt = 0; attempt < 3; attempt++) {
+                draft = await Context.getAiDraft(variantId);
+                if (!draft) break;
+                const saved = await Context.get(projectId ?? '', variantId);
+                if (saved.editor.updated_at === draft.saved_updated_at) {
+                    baseline = draftFromContext(saved);
+                    files = saved.editor.files;
+                    break;
+                }
+                if (attempt === 2) throw new Error("The saved context keeps changing. Reload the variant to review the AI draft.");
+            }
         } catch (e: any) {
             if (request === draftRequestRef.current && openKeyRef.current === key) showBanner(e?.message || "Failed to load the AI draft.", "error");
+            return;
+        }
+        if (draftLoadBlockedRef.current) {
+            heldDraftLoadRef.current = true;
             return;
         }
         if (unmountedRef.current || request !== draftRequestRef.current || openKeyRef.current !== key) return;
@@ -236,14 +267,22 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         if (current.baseline === null) return;
         const untouched = !current.dirty || (previous?.kind === 'loaded' && draftsEqual(current.draft, previous.applied));
         const conflict = draft?.status === 'conflict';
-        const applied = draft?.values && !conflict ? applyAiDraft(current.baseline, draft.values) : null;
-        const noChange = applied !== null && draftsEqual(applied, current.baseline);
+        const applied = draft?.values && !conflict && baseline ? applyAiDraft(baseline, draft.values) : null;
+        const noChange = applied !== null && baseline !== null && draftsEqual(applied, baseline);
+        if (baseline && untouched) {
+            if (!current.commit(baseline, current.draft)) {
+                if (draft) setAiDraft({ kind: 'pending', key, variantId, draft });
+                return;
+            }
+            setVariantFiles({ key, files });
+        }
         // A reply with neither values nor a conflict is treated as no draft.
         if (!draft || (!conflict && !applied) || noChange) {
-            if (previous?.kind === 'loaded' && untouched) current.reset();
+            if (previous?.kind === 'loaded' && untouched && !baseline) current.reset();
             setAiDraft(null);
             // A draft that changes nothing is dropped without asking.
-            if (noChange) Context.deleteAiDraft(variantId).catch(() => undefined);
+            if (noChange) Context.deleteAiDraft(variantId).catch((e: unknown) =>
+                showBanner(e instanceof Error ? e.message : "Failed to discard the unchanged AI draft.", "error"));
             return;
         }
         if (!applied) setAiDraft({ kind: 'conflict', key, variantId, draft: { ...draft, conflicts: draft.conflicts ?? [] } });
@@ -257,30 +296,17 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         if (variantKey !== null) void loadAiDraftRef.current();
     }, [variantKey, variantDraft.epoch, draftReloads]);
 
-    const agentQueue = useAgentQueue();
-    const openVariantId = selected?.kind === 'variant' ? selected.id : null;
-    const fillKey = openVariantId ? contextImportKey(openVariantId) : null;
-    const fillState = fillKey ? agentActionState(agentQueue, task => task.key === fillKey) : undefined;
-    const fillTask = fillState ? agentQueue.find(task => task.id === fillState.taskId) : undefined;
-    const drafting = fillState?.status === 'queued' || fillState?.status === 'running';
-    // The draft is (re)loaded when the action ends, whatever the write events said.
-    const lastFillRef = useRef<{ key: string | null; status?: string }>({ key: null });
+    // Invalidate in-flight reads too: a turn may start and finish before their responses arrive.
     useEffect(() => {
-        const last = lastFillRef.current;
-        lastFillRef.current = { key: fillKey, status: fillState?.status };
-        if (last.key === fillKey && last.status === 'running' && fillState?.status !== 'running') void loadAiDraftRef.current();
-    }, [fillKey, fillState?.status]);
-    // A running agent may write its draft in several calls; loading a partial one would make
-    // the editor dirty mid-run, so write events are held until the turn ends.
-    const agentRunning = agentQueue.some(task => task.status === 'running');
-    const agentRunningRef = useRef(agentRunning);
-    agentRunningRef.current = agentRunning;
-    const heldDraftLoadRef = useRef(false);
-    useEffect(() => {
-        if (agentRunning || !heldDraftLoadRef.current) return;
+        if (draftLoadBlocked) {
+            draftRequestRef.current += 1;
+            heldDraftLoadRef.current = true;
+            return;
+        }
+        if (!heldDraftLoadRef.current) return;
         heldDraftLoadRef.current = false;
         void loadAiDraftRef.current();
-    }, [agentRunning]);
+    }, [draftLoadBlocked]);
     // Field errors and the active tab belong to the open item, however it changed.
     useEffect(() => {
         setFieldError('');
@@ -453,8 +479,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 else reloadVariant();
             }
             if (tool === 'propose_variant_threat_model' && selected?.kind === 'variant') {
-                if (agentRunningRef.current) heldDraftLoadRef.current = true;
-                else void loadAiDraftRef.current();
+                void loadAiDraftRef.current();
             }
         };
     });
