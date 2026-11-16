@@ -127,6 +127,25 @@ test('mirrors the snapshot and its deltas', () => {
     expect(getAgentQueue().map(task => task.id)).toEqual(['r2']);
 });
 
+test('a recovery snapshot invalidates views when an agent write was missed', () => {
+    jest.useFakeTimers();
+    const written = jest.fn();
+    window.addEventListener(AGENT_WRITE_EVENT, written);
+    try {
+        connect();
+        expect(written).not.toHaveBeenCalled();
+        FakeEventSource.latest().onerror?.();
+        jest.advanceTimersByTime(RECONNECT_DELAYS_MS[0]);
+        FakeEventSource.latest().send('snapshot', { ...state({
+            history: [request('finished', { kind: 'assess', status: 'done' })],
+        }), seq: 100 }, 'e:100');
+        expect(written).toHaveBeenCalledTimes(1);
+        expect(getAgentHistory()[0].id).toBe('finished');
+    } finally {
+        window.removeEventListener(AGENT_WRITE_EVENT, written);
+    }
+});
+
 test('shows a running turn as it progresses and loads the transcript once it is saved', async () => {
     const messages = [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }];
     let resolveDetail: (response: Response) => void = () => {};

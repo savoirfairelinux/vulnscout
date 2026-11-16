@@ -253,8 +253,12 @@ function openStream() {
         if (state) applyState(state);
     };
     stream.addEventListener('snapshot', event => {
+        const state = parse<AgentQueueState>(event);
+        if (!state) return;
         reconnectAttempt = 0;
-        onState(event);
+        const resynchronizing = summaries.size > 0;
+        applyState(state);
+        if (resynchronizing) window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT));
     });
     stream.addEventListener('queue', onState);
     stream.addEventListener('request_progress', event => {
