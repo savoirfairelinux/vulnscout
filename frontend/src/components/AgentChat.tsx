@@ -89,6 +89,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     const composer = useRef<HTMLTextAreaElement>(null);
     const followMessages = useRef(true);
     const sending = useRef(false);
+    const draftRevision = useRef(0);
     const failedTask = sharedQueue.find(item => item.status === 'failed');
     const failedHere = sharedQueue.filter(item => item.status === 'failed' && item.conversationId === conversation.id);
     const failedElsewhere = sharedQueue.find(item => item.status === 'failed' && item.conversationId !== conversation.id);
@@ -363,12 +364,16 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         if (!message || busy || modelBusy || !ready || conversation.archived || sending.current) return;
         sending.current = true;
         const sent = actionMessage === undefined ? draft : undefined;
+        const sentConversationId = conversation.id;
+        const sentDraftRevision = draftRevision.current;
         try {
             await enqueueAgentActions([{ kind: 'message', text: message }], {
                 conversation: conversation.id, source: inMain ? AGENT_CHAT_SOURCE : conversation.title, context: scope,
             });
             // Keep what was typed while the message was being queued (and the draft under an action's prompt).
-            setDraft(current => current === sent ? '' : current);
+            if (getActiveConversationId() === sentConversationId && draftRevision.current === sentDraftRevision) {
+                setDraft(current => current === sent ? '' : current);
+            }
             setError('');
             followMessages.current = true;
             setAwayFromBottom(false);
@@ -422,6 +427,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     }, [highlighted, activeId]);
 
     useEffect(() => {
+        draftRevision.current += 1;
         followMessages.current = true;
         setAwayFromBottom(false);
     }, [activeId]);
@@ -703,7 +709,10 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             </div>}
             <label htmlFor={composerId} className="sr-only">Message the agent</label>
             <div className="rounded-lg border border-neutral-300 bg-white p-3 transition-colors focus-within:border-cyan-600 focus-within:ring-1 focus-within:ring-cyan-600 dark:border-neutral-700 dark:bg-neutral-900">
-                <textarea ref={composer} id={composerId} rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || conversation.archived} placeholder={inMain ? 'Ask about this view...' : 'Follow up in this conversation...'} className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
+                <textarea ref={composer} id={composerId} rows={2} maxLength={AGENT_MESSAGE_MAX_LENGTH} value={draft} onChange={event => {
+                    draftRevision.current += 1;
+                    setDraft(event.target.value);
+                }} onKeyDown={onKeyDown} disabled={!ready || busy || modelBusy || conversation.archived} placeholder={inMain ? 'Ask about this view...' : 'Follow up in this conversation...'} className="block max-h-40 min-h-14 w-full resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-50" />
                 <div className="mt-2 flex min-w-0 items-center gap-2">
                     <button type="submit" title="Send message" aria-label="Send message" disabled={!draft.trim() || busy || modelBusy || !ready || conversation.archived} className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-cyan-700 text-white hover:bg-cyan-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:bg-neutral-100 disabled:text-neutral-400 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-600"><FontAwesomeIcon icon={pendingMessage ? faCircleNotch : faArrowUp} spin={Boolean(pendingMessage)} /></button>
                 </div>
