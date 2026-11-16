@@ -341,8 +341,10 @@ for. If you change anything else, show the change and ask again.
 7. **Send as a draft instead (no confirmation needed).** If the user prefers
    to review on the page, call `propose_variant_threat_model(project_id,
    variant_id, source=<document name>, replace=true, ...)` with the same row
-   shapes and keys as step 2, plus `variant_description`, `environment` and
-   `other_info` for the Context tab. Tell the user to open the variant on the
+   shapes and keys as step 2 and the `updated_at` from step 1 as
+   `expected_updated_at` (including explicit `null`), plus
+   `variant_description`, `environment` and `other_info` for the Context tab.
+   Tell the user to open the variant on the
    AI Context page, review the draft (shown as unsaved changes), then click
    **Save changes** or **Discard AI draft**.
 
@@ -358,6 +360,9 @@ unsaved changes, and the user saves or discards it there.
    every saved row unless the document contradicts it.
 2. Extract with sections 2-4, reading with `read_import_source` (section 1).
 3. Store the draft with `propose_variant_threat_model`:
+   - Every call: pass step 1's `updated_at` as `expected_updated_at`,
+     including explicit `null`. Never substitute a newer revision without
+     re-reading and rebuilding the proposed IDs and references.
    - First call: `replace=true`, `source` set to the document name, with
      `system`, the Context text fields the document supports, and
      `components`.
