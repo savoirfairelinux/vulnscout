@@ -8,12 +8,13 @@ from datetime import datetime, timezone
 
 from flask import jsonify, request
 from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
 from ..helpers import context_draft
 from ..helpers.datetime_utils import ensure_utc_iso
-from ..helpers.codebase_reference import ARCHIVE_SUFFIXES, CodebaseReference, validate_reference
+from ..helpers.codebase_reference import ARCHIVE_SUFFIXES, MAX_FILE_BYTES, CodebaseReference, validate_reference
 from ..helpers.context_io import (
     build_export_document,
     collect_entries,
@@ -373,18 +374,30 @@ def init_app(app):
         response 201 ImportSource Stored import source.
         response 400 Error Invalid identifier, missing or unsafe file name, or unreadable document.
         response 404 Error Variant not found.
+        response 413 Error Document or multipart request exceeds the upload size limit.
         response 500 Error File could not be stored.
         """
         variant_uuid, err = _variant_uuid_or_error(variant_id)
         if err:
             return err
-        file = request.files.get('file')
+        request_limit = MAX_FILE_BYTES + 64 * 1024
+        if request.max_content_length is None or request.max_content_length > request_limit:
+            request.max_content_length = request_limit
+        try:
+            file = request.files.get('file')
+        except RequestEntityTooLarge:
+            return jsonify({"error": "Document upload exceeds the request size limit."}), 413
         if file is None or not file.filename:
             return jsonify({"error": "No file provided"}), 400
         name = _import_name(file.filename)
         if name is None:
             return jsonify({"error": "Invalid file name."}), 400
         try:
+            file.stream.seek(0, os.SEEK_END)
+            size = file.stream.tell()
+            file.stream.seek(0)
+            if size > MAX_FILE_BYTES:
+                return jsonify({"error": "Document exceeds the source size limit of 10 MB."}), 413
             validate_reference(file.stream, name)
             if not name.lower().endswith(ARCHIVE_SUFFIXES):
                 with CodebaseReference(file.stream, name) as reference:

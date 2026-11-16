@@ -5,10 +5,14 @@
 
 import gzip
 import io
+import os
+import re
+import selectors
 import stat
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 import zlib
 from contextlib import ExitStack
@@ -23,6 +27,11 @@ MAX_RESPONSE_BYTES = 64 * 1024
 ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz")
 PDF_TEXT_LIMIT = 2 * 1024 * 1024
 PDF_TIMEOUT = 30
+PDF_SIZE_ERROR = "PDF text extraction exceeds its output size limit; provide a smaller document or a text export."
+
+
+class PdfExtractionLimitError(ValueError):
+    """The PDF exceeded an output or runtime budget."""
 
 
 def _safe_path(name: str) -> str:
@@ -34,32 +43,73 @@ def _safe_path(name: str) -> str:
     return str(path)
 
 
+def _pdf_output(path: str) -> tuple[bytearray, bytearray, int]:
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": PDF_TEXT_LIMIT, "stderr": MAX_RESPONSE_BYTES}
+    deadline = time.monotonic() + PDF_TIMEOUT
+    with subprocess.Popen(
+        ["pdftotext", "-layout", "-enc", "UTF-8", path, "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) as process:
+        assert process.stdout is not None and process.stderr is not None
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+                selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(process.args, PDF_TIMEOUT)
+                    ready = selector.select(remaining)
+                    if not ready:
+                        raise subprocess.TimeoutExpired(process.args, PDF_TIMEOUT)
+                    for key, _ in ready:
+                        buffer, limit = output[key.data], limits[key.data]
+                        chunk = os.read(key.fd, min(64 * 1024, limit - len(buffer) + 1))
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        buffer.extend(chunk)
+                        if len(buffer) > limit:
+                            raise PdfExtractionLimitError(PDF_SIZE_ERROR)
+            process.wait(timeout=max(0, deadline - time.monotonic()))
+            return output["stdout"], output["stderr"], process.returncode
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+
+
 def _pdf_text(content: bytes) -> str:
     """Text of a PDF via poppler's pdftotext, one '--- page N ---' header per page."""
     with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
         handle.write(content)
         handle.flush()
         try:
-            result = subprocess.run(
-                ["pdftotext", "-layout", "-enc", "UTF-8", handle.name, "-"],
-                capture_output=True, timeout=PDF_TIMEOUT, check=False,
-            )
+            stdout, stderr, returncode = _pdf_output(handle.name)
         except FileNotFoundError as exc:
             raise ValueError("PDF text extraction is unavailable on this server (pdftotext is missing).") from exc
         except subprocess.TimeoutExpired as exc:
-            raise ValueError(f"PDF text extraction timed out after {PDF_TIMEOUT} s.") from exc
-    if result.returncode != 0:
-        if b"password" in result.stderr.lower():
+            raise PdfExtractionLimitError(f"PDF text extraction timed out after {PDF_TIMEOUT} s.") from exc
+    if returncode != 0:
+        if b"password" in stderr.lower():
             raise ValueError("PDF is encrypted; provide an unencrypted copy or a text export.")
         raise ValueError("PDF could not be read.")
-    pages = result.stdout.decode("utf-8", errors="replace").split("\f")
-    if pages and not pages[-1].strip():
-        pages.pop()
-    if not any(page.strip() for page in pages):
+    decoded = stdout.decode("utf-8", errors="replace")
+    text = bytearray()
+    has_text = False
+    for number, match in enumerate(re.finditer(r"[^\f]*\f|[^\f]+$", decoded), 1):
+        page = match.group().removesuffix("\f")
+        if not match.group().endswith("\f") and not page.strip():
+            continue
+        has_text = has_text or bool(page.strip())
+        chunk = f"--- page {number} ---\n{page.rstrip()}\n".encode("utf-8")
+        if len(text) + len(chunk) > PDF_TEXT_LIMIT:
+            raise PdfExtractionLimitError(PDF_SIZE_ERROR)
+        text.extend(chunk)
+    if not has_text:
         raise ValueError("PDF has no extractable text (it may be a scan); provide a text export.")
-    text = "".join(f"--- page {number} ---\n{page.rstrip()}\n" for number, page in enumerate(pages, 1))
-    encoded = text.encode("utf-8")
-    return encoded[:PDF_TEXT_LIMIT].decode("utf-8", errors="ignore") if len(encoded) > PDF_TEXT_LIMIT else text
+    return text.decode("utf-8")
 
 
 class CodebaseReference:
@@ -253,6 +303,8 @@ class CodebaseReference:
                                     "searched_files": searched + 1, "skipped_binary_files": skipped}
                         matches.append({"path": path, "line": number, "text": line.rstrip("\r\n")[:500]})
                 searched += 1
+            except PdfExtractionLimitError:
+                raise
             except ValueError:
                 skipped += 1
                 continue
