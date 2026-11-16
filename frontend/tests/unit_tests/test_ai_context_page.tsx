@@ -1560,7 +1560,10 @@ describe('useUnsavedGuard', () => {
 
 describe('AI threat-model drafts', () => {
     beforeEach(() => agentStore.__resetAgentQueue());
-    afterEach(() => jest.restoreAllMocks());
+    afterEach(async () => {
+        await act(async () => { await Promise.resolve(); });
+        jest.restoreAllMocks();
+    });
 
     test('a stored draft loads as unsaved changes and Save accepts it', async () => {
         const backend = mockBackend({ drafts: { v1: aiDraftReply() }, echoPut: true });
@@ -1721,6 +1724,76 @@ describe('AI threat-model drafts', () => {
         expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
     });
 
+    test('a draft keeps concurrently saved Context texts and codebase settings', async () => {
+        const original = variantContext('v1', 'TM');
+        const backend = mockBackend({ contexts: { v1: {
+            ...original, environment: 'Lab',
+            editor: { ...original.editor, codebase_source: 'paths', codebase_path: '/old', updated_at: 'revision-1' },
+        } }, echoPut: true });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+        backend.contexts = { v1: {
+            ...original, environment: 'Production',
+            editor: { ...original.editor, codebase_source: 'paths', codebase_path: '/production', updated_at: 'revision-2' },
+        } };
+        backend.drafts = { v1: aiDraftReply({}, { status: 'rebased', saved_updated_at: 'revision-2' }) };
+        agentWrite('propose_variant_threat_model');
+        await screen.findByText(LOADED_TEXT);
+        expect(screen.getByLabelText('Environment')).toHaveValue('Production');
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+        const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+        expect(body).toMatchObject({ environment: 'Production', codebase_source: 'paths', codebase_path: '/production' });
+    });
+
+    test('a revision mismatch retries the draft against the refreshed context', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+        const gate = deferred();
+        backend.holds = [{ fragment: 'variant_id=v1', method: 'GET', until: gate.promise }];
+        backend.drafts = { v1: aiDraftReply({}, { saved_updated_at: 'revision-1' }) };
+        agentWrite('propose_variant_threat_model');
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+        const latest = variantContext('v1', 'TM');
+        backend.contexts = { v1: { ...latest, environment: 'Production', editor: { ...latest.editor, updated_at: 'revision-2' } } };
+        backend.drafts = { v1: aiDraftReply({ system: { ...NO_SYSTEM, scope: 'Latest' } }, { saved_updated_at: 'revision-2' }) };
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(screen.getByLabelText('System scope and assets')).toHaveValue('Latest'));
+        expect(screen.getByLabelText('Environment')).toHaveValue('Production');
+        expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(3);
+    });
+
+    test('edits made during a saved-context refresh are kept and the AI draft waits', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+        const gate = deferred();
+        backend.holds = [{ fragment: 'variant_id=v1', method: 'GET', until: gate.promise }];
+        backend.drafts = { v1: aiDraftReply() };
+        agentWrite('propose_variant_threat_model');
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+        fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Mine' } });
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await screen.findByText('The agent prepared a draft from report.pdf. Save or discard your edits to review it.');
+        expect(screen.getByLabelText('Variant description')).toHaveValue('Mine');
+        expect(screen.getByLabelText('System scope and assets')).toHaveValue('TM');
+    });
+
+    test('repeated revision mismatches report an error without applying the draft', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply({}, { saved_updated_at: 'different-revision' }) } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText('The saved context keeps changing. Reload the variant to review the AI draft.');
+        expect(screen.getByLabelText('System scope and assets')).toHaveValue('TM');
+        expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+        expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(3);
+    });
+
     describe('while an agent task is running', () => {
         let queue: agentStore.AgentTask[] = [];
         const setQueue = (next: agentStore.AgentTask[]) => act(() => {
@@ -1756,6 +1829,48 @@ describe('AI threat-model drafts', () => {
             setQueue([]);
             expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
             expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        });
+
+        test.each([false, true])('variant re-entry defers an unfinished draft (no changes: %s)', async noChanges => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+            setQueue([runningTask('context-import', 'context-import:v1')]);
+            backend.drafts = { v1: noChanges
+                ? aiDraftReply({ system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() })
+                : aiDraftReply() };
+            fireEvent.click(sidebarItem('Variant 2'));
+            await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
+            fireEvent.click(sidebarItem('Variant 1'));
+            await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+            await waitFor(() => expect(screen.getByLabelText('Variant description')).toBeDisabled());
+            expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+            expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+            expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1);
+            backend.drafts = { v1: aiDraftReply() };
+            setQueue([]);
+            await screen.findByText(LOADED_TEXT);
+            expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        });
+
+        test('a draft response arriving after an import starts is held until it finishes', async () => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+            const gate = deferred();
+            backend.holds = [{ fragment: '/api/variants/v1/context/draft', method: 'GET', until: gate.promise }];
+            backend.drafts = { v1: aiDraftReply({ system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() }) };
+            agentWrite('propose_variant_threat_model');
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(2));
+            setQueue([runningTask('context-import', 'context-import:v1')]);
+            await act(async () => { gate.resolve(); await gate.promise; });
+            expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+            expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+            backend.drafts = { v1: aiDraftReply() };
+            setQueue([]);
+            await screen.findByText(LOADED_TEXT);
         });
     });
 
