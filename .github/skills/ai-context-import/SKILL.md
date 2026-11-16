@@ -41,6 +41,13 @@ The server lists archive members for you, so do not ask the user to extract
 them. PDF text is split by `--- page N ---` lines; cite those page numbers.
 Then do step 4 and continue with section 7 instead of sections 5 and 6.
 
+**Successive external imports.** If an external MCP client reads the uploaded
+import source instead of a local file, use `read_import_source(...,
+new_import=true)` once when deliberately beginning a different import.
+Discard the prior import's evidence and re-read the saved model. Later reads
+must leave `new_import=false` to keep the document binding. Never use this
+option in embedded mode: queued imports cannot switch their assigned source.
+
 1. Get the input path(s) from the request. If none is given, ask for one (or for
    pasted text). The project and variant names are optional.
 2. Inventory the input. Never open, list or extract an archive (`.zip`,

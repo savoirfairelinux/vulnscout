@@ -293,13 +293,15 @@ class VulnScoutClient:
         assert response is not None
         return response.json()
 
-    def get_import_source(self, variant_id: str, params: dict) -> dict:
+    def get_import_source(self, variant_id: str, params: dict, *, new_import: bool = False) -> dict:
         """List, read or search the document uploaded for an AI draft."""
-        if variant_id in self.import_revisions:
+        if not new_import and variant_id in self.import_revisions:
             params = {**params, "revision": self.import_revisions[variant_id]}
         response = self._send("GET", self._variant_context_url(variant_id, "import-source/source"), params=params)
         assert response is not None
         source = response.json()
+        if new_import:
+            self.import_revisions[variant_id] = source["revision"]
         revision = self.import_revisions.setdefault(variant_id, source["revision"])
         if revision != source["revision"]:
             raise VulnScoutConflict("The import source changed. Start a new import.")
@@ -539,6 +541,7 @@ class ScopedVulnScoutClient(VulnScoutClient):
         self.project_ids = frozenset(scope["project_ids"])
         self.variant_ids = frozenset(scope["variant_ids"])
         self.import_revisions = dict(scope.get("import_revisions") or {})
+        self._fixed_import_variants = frozenset(self.import_revisions)
         # CLI assessment turns may only write their selected (vulnerability, variant, package) targets.
         self.write_targets = frozenset(
             (target["vuln_id"], target["variant_id"], target["package"]) for target in scope["write_targets"]
@@ -613,9 +616,11 @@ class ScopedVulnScoutClient(VulnScoutClient):
         self._variant(variant_id)
         return super().put_context_draft(variant_id, body)
 
-    def get_import_source(self, variant_id: str, params: dict) -> dict:
+    def get_import_source(self, variant_id: str, params: dict, *, new_import: bool = False) -> dict:
         self._variant(variant_id)
-        return super().get_import_source(variant_id, params)
+        if new_import and variant_id in self._fixed_import_variants:
+            raise VulnScoutError("A queued import cannot switch documents. Start a new import from the AI Context page.")
+        return super().get_import_source(variant_id, params, new_import=new_import)
 
     def get_dependency_graph(self, variant_id: str) -> dict:
         self._variant(variant_id)

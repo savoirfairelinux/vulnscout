@@ -492,7 +492,7 @@ class TestContextDraftClient:
 
     @pytest.mark.parametrize("queued", [False, True])
     def test_import_run_pins_reads_and_proposals_to_its_source(self, queued):
-        from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutClient, VulnScoutConflict
+        from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutClient, VulnScoutConflict, VulnScoutError
 
         client = (ScopedVulnScoutClient(self.BASE, {
             "project_ids": ["p1"], "variant_ids": ["v1"], "import_revisions": {"v1": "source-a"},
@@ -510,9 +510,47 @@ class TestContextDraftClient:
             with pytest.raises(VulnScoutConflict, match="source changed"):
                 client.get_import_source("v1", {"operation": "read", "revision": "source-b"})
             assert reads.calls[1].request.url.params["revision"] == "source-a"
+            if queued:
+                with pytest.raises(VulnScoutError, match="queued import cannot switch"):
+                    client.get_import_source("v1", {}, new_import=True)
+                assert reads.call_count == 2
             with pytest.raises(VulnScoutConflict, match="source changed"):
                 client.put_context_draft("v1", {"source": "a.md", "import_revision": "source-b"})
             assert json.loads(writes.calls[0].request.content)["import_revision"] == "source-a"
+
+    @pytest.mark.parametrize("scoped", [False, True])
+    def test_external_client_can_explicitly_begin_a_second_import(self, scoped):
+        from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutClient, VulnScoutConflict, VulnScoutError
+
+        client = (ScopedVulnScoutClient(self.BASE, {"project_ids": ["p1"], "variant_ids": ["v1"]})
+                  if scoped else VulnScoutClient(self.BASE))
+        with respx.mock:
+            reads = respx.get(f"{self.BASE}/api/variants/v1/context/import-source/source").mock(side_effect=[
+                httpx.Response(200, json={"name": "report.md", "revision": "source-a"}),
+                httpx.Response(409, json={"error": "The import source changed."}),
+                httpx.Response(500, json={"error": "Unavailable"}),
+                httpx.Response(409, json={"error": "The import source changed."}),
+                httpx.Response(200, json={"name": "report.md", "revision": "source-b"}),
+                httpx.Response(200, json={"name": "report.md", "revision": "source-b"}),
+            ])
+            writes = respx.put(f"{self.BASE}/api/variants/v1/context/draft").mock(
+                return_value=httpx.Response(200, json={"status": "current"}))
+            client.get_import_source("v1", {})
+            client.put_context_draft("v1", {"source": "report.md"})
+            assert json.loads(writes.calls[0].request.content)["import_revision"] == "source-a"
+            with pytest.raises(VulnScoutConflict):
+                client.get_import_source("v1", {})
+            with pytest.raises(VulnScoutError, match="Unavailable"):
+                client.get_import_source("v1", {}, new_import=True)
+            with pytest.raises(VulnScoutConflict):
+                client.get_import_source("v1", {})
+            assert reads.calls[3].request.url.params["revision"] == "source-a"
+            source = client.get_import_source("v1", {}, new_import=True)
+            assert source["revision"] == "source-b" and "revision" not in reads.calls[4].request.url.params
+            client.get_import_source("v1", {"operation": "read", "path": "report.md"})
+            assert reads.calls[5].request.url.params["revision"] == "source-b"
+            client.put_context_draft("v1", {"source": "report.md"})
+            assert json.loads(writes.calls[1].request.content)["import_revision"] == "source-b"
 
     def test_scoped_client_refuses_other_variants(self):
         from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutError
