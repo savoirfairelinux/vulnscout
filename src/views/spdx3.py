@@ -7,9 +7,14 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import uuid
 
-from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
+from ..helpers.assessment_io import scoped_packages
+from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from ..helpers.export_files import file_metadata, INVENTORY_UNKNOWN_COMMENT
 from ..helpers.export_evidence import dependency_relationships, export_evidence, EVIDENCE_PREFIX
+from ..helpers.verbose import warn
+from ..models.assessment import Assessment
+from .fast_spdx3 import FastSPDX3
 
 
 def generate_spdx_namespace() -> str:
@@ -22,6 +27,7 @@ class SPDX3:
     def __init__(self, controllers: ControllersCache):
         self.packagesCtrl: PackagesController = controllers.packages
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.pkg_to_ref: Dict[str, str] = {}
         self.vuln_to_ref: Dict[str, str] = {}
         self.namespace = generate_spdx_namespace()
@@ -137,6 +143,8 @@ class SPDX3:
             "externalIdentifier": external_identifiers,
             "creationInfo": "_:creationInfo_0"
         }
+        if vuln.description:
+            element["description"] = vuln.description
 
         return element
 
@@ -154,6 +162,62 @@ class SPDX3:
             "to": to_refs,
             "creationInfo": "_:creationInfo_0"
         }
+
+    def generate_assessment_relationships(self, vuln_id: str) -> List[Dict[str, Any]]:
+        """Export the latest approved assessment for each in-scope package."""
+        latest: Dict[str, Assessment] = {}
+        scope = self.assessmentsCtrl.scope
+        for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_id):
+            if assessment.origin == "ai":
+                continue
+            for package_id in scoped_packages(assessment, scope.variant_ids if scope is not None else None):
+                if package_id not in self.pkg_to_ref:
+                    continue
+                previous = latest.get(package_id)
+                if previous is None or (
+                    normalize_timestamp_for_sort(previous.timestamp)
+                    < normalize_timestamp_for_sort(assessment.timestamp)
+                ):
+                    latest[package_id] = assessment
+
+        status_map = {
+            "not_affected": ("NotAffected", "doesNotAffect"),
+            "affected": ("Affected", "affects"),
+            "fixed": ("Fixed", "fixedIn"),
+            "under_investigation": ("UnderInvestigation", "underInvestigationFor"),
+        }
+        justification_map = {value: key for key, value in FastSPDX3.JUSTIFICATION_MAP.items()}
+        relationships = []
+        for package_id, assessment in latest.items():
+            status = assessment.get_status_openvex()
+            if status not in status_map:
+                warn(f"[SPDX3 export {vuln_id!r}] unsupported assessment status {assessment.status!r}")
+                continue
+            vex_type, relationship_type = status_map[status]
+            relationship = self.generate_relationship(
+                self.vuln_to_ref[vuln_id], [self.pkg_to_ref[package_id]], relationship_type,
+            )
+            relationship["type"] = f"security_Vex{vex_type}VulnAssessmentRelationship"
+            relationship["security_vexVersion"] = "1.0.0"
+            if assessment.timestamp is not None:
+                relationship["security_publishedTime"] = (
+                    normalize_timestamp_for_sort(assessment.timestamp).astimezone(timezone.utc)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ")
+                )
+            if assessment.status_notes:
+                relationship["security_statusNotes"] = assessment.status_notes
+            if status == "not_affected":
+                justification = assessment.get_justification_openvex()
+                if justification in justification_map:
+                    relationship["security_justificationType"] = justification_map[justification]
+                if assessment.impact_statement:
+                    relationship["security_impactStatement"] = assessment.impact_statement
+            elif assessment.impact_statement:
+                relationship["description"] = assessment.impact_statement
+            if status == "affected":
+                relationship["security_actionStatement"] = assessment.workaround or ""
+            relationships.append(relationship)
+        return relationships
 
     def output_as_json(self, author: str = "Savoir-faire Linux") -> str:
         spdx_doc = self.create_document_structure(author)
@@ -236,13 +300,16 @@ class SPDX3:
             vuln_ref = self.vuln_to_ref.get(vuln_id)
             if not vuln_ref:
                 continue
+            assessment_relationships = self.generate_assessment_relationships(vuln_id)
+            assessed_refs = {ref for relationship in assessment_relationships for ref in relationship["to"]}
             if hasattr(vuln, "packages"):
                 for pkg_id in vuln.packages:
                     pkg_ref = self.pkg_to_ref.get(pkg_id)
-                    if pkg_ref:
+                    if pkg_ref and pkg_ref not in assessed_refs:
                         rel = self.generate_relationship(vuln_ref, [pkg_ref], "affects")
                         rel["creationInfo"] = self._creation_info_ref
                         relationships_to_add.append(rel)
+            relationships_to_add.extend(assessment_relationships)
 
         graph.extend(relationships_to_add)
         return json.dumps(spdx_doc, indent=2)

@@ -744,6 +744,7 @@ class Assessment(Base):
             impact_statement=assess.impact_statement,
             workaround=getattr(assess, "workaround", None),
             responses=list(assess.responses) if assess.responses else [],
+            timestamp=assess.timestamp,
             commit=False,
         )
         # Propagate transient fields so callers can call to_dict() immediately

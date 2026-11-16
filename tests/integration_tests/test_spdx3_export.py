@@ -5,6 +5,7 @@
 
 import pytest
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from jsonschema import Draft202012Validator, FormatChecker
@@ -12,6 +13,15 @@ from src.views.spdx3 import SPDX3
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
 from src.controllers import ControllersCache
+from src.bin.cmd_process import read_inputs
+from src.extensions import db
+from src.helpers.export_scope import ExportScope
+from src.models.assessment import Assessment
+from src.models.finding import Finding
+from src.models.project import Project
+from src.models.sbom_document import SBOMDocument
+from src.models.scan import Scan
+from src.models.variant import Variant
 
 
 @pytest.fixture
@@ -66,6 +76,150 @@ def test_spdx3_export_roundtrips_source_urls_without_importing_source_nodes(spdx
     restored = controllers.packages.get("libc6@2.41")
     assert sorted(restored.source_urls) == urls
     assert restored.version_info["revision_conflict"]
+
+
+@pytest.mark.parametrize("input_status,status,vex_type,relationship_type", [
+    ("not_affected", "not_affected", "NotAffected", "doesNotAffect"),
+    ("affected", "affected", "Affected", "affects"),
+    ("fixed", "fixed", "Fixed", "fixedIn"),
+    ("under_investigation", "under_investigation", "UnderInvestigation", "underInvestigationFor"),
+    ("exploitable", "affected", "Affected", "affects"),
+    ("false_positive", "not_affected", "NotAffected", "doesNotAffect"),
+])
+def test_assessments_roundtrip_to_another_variant(tmp_path, input_status, status, vex_type, relationship_type):
+    project = Project.create("roundtrip")
+    source = Variant.create("source", project.id)
+    destination = Variant.create("destination", project.id)
+    packages = [Package.create(name, "1.0") for name in ("first", "second")]
+    Vulnerability.get_or_create("CVE-2026-1234")
+    timestamp = datetime(2026, 11, 12, 12, 0, 0, tzinfo=timezone.utc)
+    for package in packages:
+        finding = Finding.get_or_create(package.id, "CVE-2026-1234")
+        Assessment.create(
+            targets=[(source.id, finding.id)], origin="custom", status="fixed",
+            timestamp=datetime(2026, 11, 11, tzinfo=timezone.utc),
+        )
+        Assessment.create(
+            targets=[(source.id, finding.id)], origin="custom", status=input_status,
+            justification="vulnerable_code_not_present" if status == "not_affected" else "",
+            impact_statement="Disabled in this build" if status == "not_affected" else "Impact reviewed",
+            workaround="Upgrade this package" if status == "affected" else "",
+            status_notes="Reviewed against the shipped configuration", timestamp=timestamp,
+        )
+        Assessment.create(
+            targets=[(source.id, finding.id)], origin="ai", status="not_affected",
+            timestamp=datetime(2026, 11, 13, tzinfo=timezone.utc),
+        )
+    scope = ExportScope(package_ids={p.id for p in packages}, variant_ids={source.id})
+    export_controllers = ControllersCache(scope=scope)
+    export_controllers.packages._preload_cache()
+    document = json.loads(SPDX3(export_controllers).output_as_json())
+    schema_path = Path(__file__).parents[1] / "schemas/spdx/spdx-json-schema-3.0.1.json"
+    Draft202012Validator(json.loads(schema_path.read_text()), format_checker=FormatChecker()).validate(document)
+    relationships = [item for item in document["@graph"] if item.get("type", "").startswith("security_Vex")]
+    assert len(relationships) == 2
+    assert {rel["type"] for rel in relationships} == {f"security_Vex{vex_type}VulnAssessmentRelationship"}
+    assert {rel["relationshipType"] for rel in relationships} == {relationship_type}
+    assert all("CVE-" not in rel["from"] for rel in relationships)
+    assert not any(item["type"] == "Relationship" and item["relationshipType"] == "affects"
+                   for item in document["@graph"])
+
+    sbom_path = tmp_path / "export.spdx.json"
+    sbom_path.write_text(json.dumps(document))
+    scan = Scan.create("reimport", destination.id, scan_type="sbom")
+    SBOMDocument.create(str(sbom_path), sbom_path.name, scan.id, format="spdx")
+    controllers = ControllersCache()
+    controllers.assessments.current_variant_id = destination.id
+    read_inputs(controllers, scan_id=scan.id)
+    read_inputs(controllers, scan_id=scan.id)
+    db.session.commit()
+    db.session.expire_all()
+    for package in packages:
+        finding = Finding.get_by_package_and_vulnerability(package.string_id, "CVE-2026-1234")
+        restored, = Assessment.get_by_finding_and_variant(finding.id, destination.id)
+        assert restored.status == status
+        assert restored.origin == "sbom"
+        assert restored.status_notes == "Reviewed against the shipped configuration"
+        assert restored.timestamp.replace(tzinfo=timezone.utc) == timestamp
+        assert restored.impact_statement == ("Disabled in this build" if status == "not_affected" else "Impact reviewed")
+        if status == "not_affected":
+            assert restored.justification == "vulnerable_code_not_present"
+            assert restored.impact_statement == "Disabled in this build"
+        elif status == "affected":
+            assert restored.workaround == "Upgrade this package"
+        assert len(Assessment.get_by_finding_and_variant(finding.id, source.id)) == 3
+    restored_vulnerability = controllers.vulnerabilities.get("CVE-2026-1234")
+    assert set(restored_vulnerability.packages) == {p.string_id for p in packages}
+
+
+def test_assessment_export_filters_exact_variant_package_targets():
+    project = Project.create("scope")
+    source = Variant.create("source", project.id)
+    outside = Variant.create("outside", project.id)
+    packages = [Package.create(name, "1.0") for name in ("first", "second", "third")]
+    Vulnerability.get_or_create("CVE-2026-1234")
+    findings = [Finding.get_or_create(p.id, "CVE-2026-1234") for p in packages]
+    Assessment.create(
+        targets=[(source.id, findings[0].id), (outside.id, findings[1].id)],
+        origin="custom", status="not_affected", justification="component_not_present",
+    )
+    Assessment.create(targets=[(source.id, findings[1].id)], origin="custom", status="affected")
+    Assessment.create(targets=[(outside.id, findings[2].id)], origin="custom", status="fixed")
+    scope = ExportScope(package_ids={p.id for p in packages}, variant_ids={source.id})
+    export_controllers = ControllersCache(scope=scope)
+    export_controllers.packages._preload_cache()
+    document = json.loads(SPDX3(export_controllers).output_as_json())
+    package_names = {item["spdxId"]: item["name"] for item in document["@graph"]
+                     if item["type"] == "software_Package"}
+    relationships = [item for item in document["@graph"] if item.get("type", "").startswith("security_Vex")]
+    assert {(package_names[rel["to"][0]], rel["relationshipType"]) for rel in relationships} == {
+        ("first", "doesNotAffect"), ("second", "affects"),
+    }
+
+
+def test_description_and_reasoning_roundtrip_to_a_fresh_database(tmp_path):
+    description = "A bounds check is missing.\nUntrusted input can reach the vulnerable parser."
+    notes = "Reviewed the shipped configuration.\nThe optional parser is disabled."
+    reasoning = "The vulnerable code is not compiled:\n- CONFIG_OPTIONAL_PARSER is unset."
+    project = Project.create("source")
+    source = Variant.create("source", project.id)
+    package = Package.create("parser", "1.0")
+    Vulnerability.create_record("CVE-2026-1234", description=description)
+    finding = Finding.get_or_create(package.id, "CVE-2026-1234")
+    Assessment.create(
+        targets=[(source.id, finding.id)], origin="custom", status="not_affected",
+        justification="vulnerable_code_not_present", impact_statement=reasoning, status_notes=notes,
+    )
+    scope = ExportScope(package_ids={package.id}, variant_ids={source.id})
+    controllers = ControllersCache(scope=scope)
+    controllers.packages._preload_cache()
+    sbom_path = tmp_path / "export.spdx.json"
+    sbom_path.write_text(SPDX3(controllers).output_as_json())
+    schema_path = Path(__file__).parents[1] / "schemas/spdx/spdx-json-schema-3.0.1.json"
+    Draft202012Validator(json.loads(schema_path.read_text()), format_checker=FormatChecker()).validate(
+        json.loads(sbom_path.read_text())
+    )
+
+    db.session.remove()
+    db.drop_all()
+    db.create_all()
+    project = Project.create("destination")
+    destination = Variant.create("destination", project.id)
+    scan = Scan.create("reimport", destination.id, scan_type="sbom")
+    SBOMDocument.create(str(sbom_path), sbom_path.name, scan.id, format="spdx")
+    controllers = ControllersCache()
+    controllers.assessments.current_variant_id = destination.id
+    read_inputs(controllers, scan_id=scan.id)
+    db.session.expire_all()
+
+    restored_vulnerability = Vulnerability.get_by_id("CVE-2026-1234")
+    assert restored_vulnerability.description == description
+    finding = Finding.get_by_package_and_vulnerability("parser@1.0", "CVE-2026-1234")
+    assessment, = Assessment.get_by_finding_and_variant(finding.id, destination.id)
+    assert assessment.status == "not_affected"
+    assert assessment.justification == "vulnerable_code_not_present"
+    assert assessment.status_notes == notes
+    assert assessment.impact_statement == reasoning
 
 
 class TestSPDX3JSONExport:
