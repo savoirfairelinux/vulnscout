@@ -373,6 +373,9 @@ unsaved changes, and the user saves or discards it there.
    - If it says the context changed while drafting or the pending draft
      requires renumbering, re-read step 1 and start again with `replace=true`,
      once. Rebuild all row IDs and references from the newly saved model.
+   - If the import source changed, stop and report that the document was
+     replaced. Do not retry reads or proposals against the replacement:
+     the user must start a new import.
 4. Reply with only:
    - **Summary**: the document, its type, counts per table, the rating
      mapping, and the `[confirm: ...]` items.

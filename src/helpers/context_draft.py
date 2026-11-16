@@ -102,6 +102,11 @@ def revision(directory: str) -> Optional[str]:
     draft = read_draft(directory)
     if draft is not None:
         return draft.get("revision") or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()
+    return import_revision(directory)
+
+
+def import_revision(directory: str) -> Optional[str]:
+    """Stable identity of the source across draft writes; call under lock_for."""
     if import_source_path(directory) is None:
         return None
     path = os.path.join(directory, IMPORT_REVISION)

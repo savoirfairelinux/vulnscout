@@ -1212,6 +1212,32 @@ class TestImportSourceRoutes:
         assert [f["path"] for f in listed["files"]] == ["b.md"]
         assert draft.status_code == 404
 
+    def test_import_reads_and_proposals_reject_replacement_sources(self, client, variant, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            first = self._post(client, variant, b"first page\nsecond page\n", "model.md").get_json()["revision"]
+            read = self._source(client, variant, operation="read", path="model.md", max_lines=1,
+                                revision=first)
+            assert read.status_code == 200 and read.get_json()["content"] == "first page\n"
+            draft_url = f"/api/variants/{variant.id}/context/draft"
+            body = {"source": "model.md", "base_updated_at": None, "values": _draft_values(),
+                    "import_revision": first}
+            for _ in range(2):
+                assert client.put(draft_url, json=body).status_code == 200
+                assert self._source(client, variant, revision=first).get_json()["revision"] == first
+            second = self._post(client, variant, b"replacement\n", "model.md").get_json()["revision"]
+            assert second != first
+            read = self._source(client, variant, operation="read", path="model.md", start_line=2,
+                                revision=first)
+            assert read.status_code == 409 and "source changed" in read.get_json()["error"]
+            assert client.put(draft_url, json=body).status_code == 409
+            assert client.get(draft_url).status_code == 404
+            assert self._source(client, variant, revision=second).get_json()["revision"] == second
+            assert client.put(draft_url, json={**body, "import_revision": second}).status_code == 200
+            draft = client.get(draft_url).get_json()
+            assert client.delete(draft_url, json={"revision": draft["revision"]}).status_code == 204
+            assert client.put(draft_url, json={**body, "import_revision": second}).status_code == 409
+            assert self._source(client, variant, revision=second).status_code == 409
+
     @pytest.mark.parametrize("content,name,error", [
         (b"\x00\x01binary", "blob.bin", "binary"),
         (b"\xff\xfe\xfa", "latin.txt", "UTF-8"),
