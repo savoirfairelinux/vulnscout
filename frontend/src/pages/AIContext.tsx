@@ -595,12 +595,13 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const discardAiDraft = async () => {
         const current = aiDraftRef.current;
         if (!current) return;
+        const sent = variantDraftRef.current.draft;
         setBusy(true);
         try {
             await Context.deleteAiDraft(current.variantId, current.draft.revision);
             if (unmountedRef.current || openKeyRef.current !== current.key || aiDraftRef.current !== current) return;
             setAiDraft(null);
-            if (current.kind === 'loaded') resetVariant();
+            if (current.kind === 'loaded' && draftsEqual(variantDraftRef.current.draft, sent)) resetVariant();
         } catch (e: any) {
             showBanner(e?.message || "Failed to discard the AI draft.", "error");
         } finally {

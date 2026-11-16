@@ -1619,6 +1619,30 @@ describe('AI threat-model drafts', () => {
         expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
     });
 
+    test('Discard AI draft preserves edits made while deletion is pending', async () => {
+        const deletion = deferred();
+        const backend = mockBackend({
+            drafts: { v1: aiDraftReply() }, echoPut: true,
+            holds: [{ fragment: '/context/draft', method: 'DELETE', until: deletion.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard AI draft' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'New local environment' } });
+        fireEvent.click(screen.getByRole('radio', { name: 'Codebase references' }));
+        await act(async () => { deletion.resolve(); await deletion.promise; });
+        await waitFor(() => expect(screen.queryByText(LOADED_TEXT)).not.toBeInTheDocument());
+        expect(screen.getByLabelText('Environment')).toHaveValue('New local environment');
+        expect(screen.getByRole('radio', { name: 'Codebase references' })).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        await screen.findByText('Saved.');
+        const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+        expect(body.environment).toBe('New local environment');
+        expect(body.codebase_source).toBe('references');
+    });
+
     test('a draft equal to the saved model is deleted silently', async () => {
         const backend = mockBackend({ drafts: { v1: aiDraftReply({ system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() }) } });
         renderPage({ projectId: 'p1' });
