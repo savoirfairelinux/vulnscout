@@ -164,9 +164,11 @@ host; a container does not automatically inherit the host's identity.
 
 The Vite dev proxy forwards `/api` to local Flask, with a separate `/api/agent`
 target controlled by `VULNSCOUT_AGENT_API_URL`. In production builds the browser
-uses the same origin as Flask. If the backend is on another port, set
-`VITE_API_URL` for regular endpoints and `VULNSCOUT_AGENT_API_URL` for the agent
-proxy and backend MCP connection.
+uses the same origin as Flask. Free chat's backend MCP connection defaults to
+`http://127.0.0.1:${FLASK_RUN_PORT:-7275}`; it does not use the browser's Host
+or Origin headers. A nonempty `VULNSCOUT_AGENT_API_URL` overrides that callback
+URL. If the development backend is on another port, set `VITE_API_URL` for
+regular endpoints and `VULNSCOUT_AGENT_API_URL` for the agent proxy.
 
 `VULNSCOUT_MCP_SERVER_PATH` optionally overrides the stdio entrypoint. Remove old
 overrides pointing at a separate MCP checkout to use the bundled implementation.

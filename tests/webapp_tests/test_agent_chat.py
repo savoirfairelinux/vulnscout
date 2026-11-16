@@ -3,6 +3,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -307,6 +308,74 @@ def test_status_uses_real_copilot_runtime(client):
     assert response.get_json()["token_connected"] is False
     assert response.get_json()["messages"] == []
     assert "Set-Cookie" not in response.headers
+
+
+@pytest.mark.parametrize("override", [None, ""])
+def test_chat_mcp_reaches_the_serving_port(client, monkeypatch, override):
+    import httpx
+    from mcp.client.session import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+    from werkzeug.serving import make_server
+    from src.routes import agent
+    from vulnscout_mcp.client import VulnScoutClient
+
+    if override is None:
+        monkeypatch.delenv("VULNSCOUT_AGENT_API_URL", raising=False)
+    else:
+        monkeypatch.setenv("VULNSCOUT_AGENT_API_URL", override)
+    server = make_server("127.0.0.1", 0, client.application, threaded=True)
+    worker = threading.Thread(target=server.serve_forever)
+    worker.start()
+    monkeypatch.setenv("FLASK_RUN_PORT", str(server.server_port))
+
+    async def read_variants():
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=[str(Path(__file__).resolve().parents[2] / "vulnscout_mcp" / "server.py")],
+            env={"VULNSCOUT_BASE_URL": agent._mcp_api_url(),
+                 "VULNSCOUT_AGENT_SCOPE": json.dumps({"project_ids": [], "variant_ids": []})},
+        )
+        async with stdio_client(parameters) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                await session.initialize()
+                result = await session.call_tool("list_variants", {})
+                assert not result.is_error
+                assert result.content[0].text == "(none)"
+
+    try:
+        base_url = agent._mcp_api_url()
+        assert VulnScoutClient(base_url).list_projects() == []
+        asyncio.run(asyncio.wait_for(read_variants(), timeout=20))
+        with httpx.Client(base_url=base_url) as browser:
+            response = browser.post("/api/agent/conversations/main/reset",
+                                    headers={"Origin": base_url})
+            assert response.status_code == 200
+            for origin in ("null", "https://example.org", "http://localhost:5173"):
+                response = browser.post("/api/agent/conversations/main/reset",
+                                        headers={"Origin": origin})
+                assert response.status_code == 403
+                assert response.json()["error"] == "Invalid request origin."
+            response = browser.get("/api/agent/queue", headers={"Host": "example.org"})
+            assert response.status_code == 403
+            assert response.json()["error"] == "Agent chat requires a localhost host."
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+
+
+@pytest.mark.parametrize("port", [None, "", "7275", "7276"])
+def test_chat_mcp_api_url_defaults_and_override(monkeypatch, port):
+    from src.routes import agent
+
+    if port is None:
+        monkeypatch.delenv("FLASK_RUN_PORT", raising=False)
+    else:
+        monkeypatch.setenv("FLASK_RUN_PORT", port)
+    monkeypatch.delenv("VULNSCOUT_AGENT_API_URL", raising=False)
+    assert agent._mcp_api_url() == f"http://127.0.0.1:{port or '7275'}"
+    monkeypatch.setenv("VULNSCOUT_AGENT_API_URL", "http://127.0.0.1:7277")
+    assert agent._mcp_api_url() == "http://127.0.0.1:7277"
 
 
 def test_connection_is_process_wide_without_cookies_or_threads(client):
