@@ -269,8 +269,9 @@ def init_app(app):
 
         OpenAPI:
         response 200 ContextDraft Pending draft and its status against the saved model.
+        response 204 empty No pending draft for this variant.
         response 400 Error Invalid variant identifier.
-        response 404 Error Variant or draft not found.
+        response 404 Error Variant not found.
         response 500 Error Rebased draft could not be stored.
         """
         variant_uuid, err = _variant_uuid_or_error(variant_id)
@@ -278,14 +279,14 @@ def init_app(app):
             return err
         vc = VariantContext.get_by_variant(variant_uuid)
         if vc is None:
-            return jsonify({"error": "No draft.", "revision": None}), 404
+            return "", 204
         try:
             with context_draft.lock_for(vc.id):
                 directory = _draft_dir(vc)
                 draft = context_draft.read_draft(directory)
                 revision = context_draft.revision(directory)
                 if draft is None:
-                    return jsonify({"error": "No draft.", "revision": revision}), 404
+                    return "", 204
                 db.session.refresh(vc)
                 saved_at = _revision(vc)
                 previous = draft.get("renumbered") or {}

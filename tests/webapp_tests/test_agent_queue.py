@@ -240,7 +240,7 @@ def test_overlapping_uploads_cannot_retarget_the_first_queued_import(env, monkey
     env.fake.script["context-import"].append(stale_import)
     assert env.q.run_once("action") == created["id"]
     assert _status(env, created["id"]) == "done"
-    assert client.get(f"/api/variants/{variant_id}/context/draft").status_code == 404
+    assert client.get(f"/api/variants/{variant_id}/context/draft").status_code == 204
     response = client.get(f"{url}/source", query_string={"operation": "read", "path": "report.md"})
     assert response.get_json()["content"] == "replacement\n"
 

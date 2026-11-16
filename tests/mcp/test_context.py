@@ -327,7 +327,7 @@ class TestVariantThreatModel:
             respx.get(f"{BASE_URL}/api/context").mock(
                 return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
             respx.get(f"{BASE_URL}/api/variants/v1/context/draft").mock(
-                return_value=httpx.Response(404, json={"error": "No draft."}))
+                return_value=httpx.Response(204))
             plain = _get_merged_context_impl(client, "p1", "v1")
             result = _get_merged_context_impl(client, "p1", "v1", include_model=True)
         assert "\nmodel=" not in plain
@@ -553,7 +553,7 @@ DRAFT_URL = f"{BASE_URL}/api/variants/v1/context/draft"
 def _mock_context(draft=None):
     respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
     respx.get(DRAFT_URL).mock(return_value=httpx.Response(200, json=draft) if draft is not None
-                              else httpx.Response(404, json={"error": "No draft."}))
+                              else httpx.Response(204))
 
 
 def _echo_put():
