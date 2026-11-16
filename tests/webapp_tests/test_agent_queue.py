@@ -39,7 +39,7 @@ class Fake:
 
     def __init__(self):
         self.calls = []
-        self.script: dict[str, list] = {"assess": [], "review": [], "message": []}
+        self.script: dict[str, list] = {"assess": [], "review": [], "message": [], "context-import": []}
 
     async def __call__(self, call):
         self.calls.append(call)
@@ -145,6 +145,52 @@ def _config(text):
 
 
 # ---------------------------------------------------------------- scheduling
+
+
+def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, monkeypatch):
+    from src.routes import agent_skills
+
+    monkeypatch.setattr(aq, "agent_queue", env.q)
+    client = env.app.test_client()
+    action = {"kind": "context-import", "key": "import:x86", "text": "Read the uploaded document.",
+              "title": "x86 from report.pdf", "detail": "report.pdf"}
+    context = {"page": "ai", "view": {"selectedProjectId": env.ids["demo"],
+                                     "selectedVariantId": env.ids["x86"]}}
+    body = {"conversation": "per-action", "source": "AI Context x86", "actions": [action], "context": context,
+            "model": "m"}
+    response = client.post("/api/agent/queue", json=body)
+    assert response.status_code == 202
+    [created] = response.get_json()["requests"]
+    request = env.q.get_request(created["id"])
+    assert request["lane"] == "action" and request["timeout"] == agent_skills.ACTION_TIMEOUT
+    assert request["title"] == action["title"] and request["detail"] == "report.pdf"
+    assert client.post("/api/agent/queue", json=body).get_json()["requests"] == []
+    assert env.q.run_once("action") == created["id"]
+    call = env.fake.calls[-1]
+    assert call.profile is agent_skills.CONTEXT_IMPORT and call.turn is None
+    assert json.loads(call.scope)["variant_ids"] == [env.ids["x86"]]
+    assert call.prompt.startswith(action["text"])
+    [follow], _ = env.q.enqueue(created["conversation_id"], "web", [_message("Why?")], model="m",
+                                context={"page": "vulnerabilities", "projectId": env.ids["demo"],
+                                         "variantId": env.ids["arm"]})
+    assert env.q.run_once("chat") == follow["id"]
+    assert env.fake.calls[-1].scope == call.scope
+    assert env.fake.calls[-1].profile is agent_skills.CONTEXT_IMPORT
+
+
+@pytest.mark.parametrize("change, error", [
+    ({"context": {"page": "ai"}}, "Select one variant"),
+    ({"text": ""}, "import prompt"),
+    ({"title": ""}, "import title"),
+    ({"detail": ""}, "import filename"),
+])
+def test_invalid_context_imports_are_not_queued(env, change, error):
+    action = {"kind": "context-import", "text": "Fill", "title": "x86", "detail": "report.pdf",
+              "context": {"page": "ai", "view": {"selectedProjectId": env.ids["demo"],
+                                                "selectedVariantId": env.ids["x86"]}}, **change}
+    with pytest.raises(ValueError, match=error):
+        env.q.enqueue("per-action", "web", [action], model="m")
+    assert env.q.snapshot()["requests"] == []
 
 
 def test_lanes_run_fifo_with_positions_and_record_transcripts(env):

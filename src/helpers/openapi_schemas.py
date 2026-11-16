@@ -601,6 +601,14 @@ SCHEMAS: dict[str, Any] = {
             }, ("kind", "assessment_id"), description="Review a custom assessment, optionally on one variant "
                                                       "or some of its findings."),
             _object({
+                "kind": {"type": "string", "enum": ["context-import"]},
+                "text": {"type": "string", "minLength": 1, "maxLength": 8000},
+                "title": {"type": "string", "minLength": 1, "maxLength": 120},
+                "detail": {"type": "string", "minLength": 1, "maxLength": 512},
+                "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
+            }, ("kind", "text", "title", "detail"),
+                description="Draft a threat model from the uploaded document for one variant."),
+            _object({
                 "kind": {"type": "string", "enum": ["message"]},
                 "text": {"type": "string", "minLength": 1, "maxLength": 8000},
                 "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
@@ -615,7 +623,7 @@ SCHEMAS: dict[str, Any] = {
         "context": _AGENT_CONTEXT, "require_ready": _BOOL,
         "actions": _array(_ref("AgentQueueAction"), minItems=1, maxItems=500),
     }, ("conversation", "source", "actions"), description=(
-        "Messages go to main or an existing conversation; assess and review actions to per-action."
+        "Messages go to main or an existing conversation; assess, review and context-import actions to per-action."
     )),
     "AgentQueueSubmitted": _object({
         "requests": _array(_object({"id": _STRING, "key": _STRING, "conversation_id": _STRING},
@@ -624,7 +632,8 @@ SCHEMAS: dict[str, Any] = {
                                   ("key", "request_id", "request_ids"))),
     }, ("requests", "skipped")),
     "AgentQueueRequest": _object({
-        "id": _STRING, "key": _STRING, "kind": {"type": "string", "enum": ["assess", "review", "message"]},
+        "id": _STRING, "key": _STRING,
+        "kind": {"type": "string", "enum": ["assess", "review", "message", "context-import"]},
         "lane": {"type": "string", "enum": ["action", "chat"]}, "conversation_id": _STRING, "source": _STRING,
         "title": _STRING, "detail": _STRING, "model": _STRING,
         "status": {"type": "string", "enum": ["queued", "running", "done", "failed", "cancelled"]},

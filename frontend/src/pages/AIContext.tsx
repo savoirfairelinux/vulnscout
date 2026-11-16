@@ -20,8 +20,8 @@ import ContextTransferControls, { ImportDetails } from "../components/aiContext/
 import VariantEditor, { type VariantTab } from "../components/aiContext/VariantEditor";
 import CopyFromDialog, { type CopySourceProject } from "../components/aiContext/CopyFromDialog";
 import { BUTTON_SECONDARY, ERROR } from "../components/aiContext/styles";
-import { AGENT_WRITE_EVENT, type AgentViewContext, type QueuedAgentMessage } from "../types/agent";
-import { agentActionState, enqueueAgentMessages, openAgentChat, removeAgentTask } from "../handlers/agentQueue";
+import { AGENT_WRITE_EVENT, type AgentViewContext, type AgentAction } from "../types/agent";
+import { agentActionState, enqueueAgentActions, openAgentChat, removeAgentTask } from "../handlers/agentQueue";
 import useAgentQueue from "../hooks/useAgentQueue";
 import AgentActionButton from "../components/AgentActionButton";
 import AiDraftNotice, { type AiDraftNoticeState } from "../components/aiContext/AiDraftNotice";
@@ -503,24 +503,27 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             await Context.uploadImportSource(openVariant.id, file);
             if (unmountedRef.current) return;
             setAiDraft(null);
-            const message: QueuedAgentMessage = {
-                id: crypto.randomUUID(),
+            const message: AgentAction = {
                 key: contextImportKey(openVariant.id),
                 kind: 'context-import',
-                title: `${openVariant.name} from ${file.name}`,
+                title: `${openVariant.name} from ${file.name}`.slice(0, 120),
                 detail: file.name,
                 text: contextImportMessage({
                     projectId, projectName, variantId: openVariant.id, variantName: openVariant.name, fileName: file.name,
                 }),
             };
-            enqueueAgentMessages([message], {
-                page: 'ai', projectId, variantId: openVariant.id,
-                view: {
-                    selectedProjectId: projectId, selectedProjectName: projectName || undefined,
-                    selectedVariantId: openVariant.id, selectedVariantName: openVariant.name, section: variantTab,
+            const submitted = await enqueueAgentActions([message], {
+                conversation: 'per-action', source: `AI Context ${openVariant.name}`.slice(0, 100),
+                context: {
+                    page: 'ai', projectId, variantId: openVariant.id,
+                    view: {
+                        selectedProjectId: projectId, selectedProjectName: projectName || undefined,
+                        selectedVariantId: openVariant.id, selectedVariantName: openVariant.name, section: variantTab,
+                    },
                 },
-            }, `AI Context ${openVariant.name}`, 'per-action');
-            openAgentChat(message.id);
+            });
+            if (unmountedRef.current) return;
+            openAgentChat(submitted.requests[0]?.id ?? submitted.skipped[0]?.request_id);
         } catch (e: any) {
             showBanner(e?.message || "Failed to upload the document.", "error");
         } finally {
@@ -528,10 +531,14 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         }
     };
 
-    const cancelFill = () => {
+    const cancelFill = async () => {
         if (fillState?.status !== 'queued' || !openVariantId) return;
-        removeAgentTask(fillState.taskId);
-        Context.deleteAiDraft(openVariantId).catch((e: any) => showBanner(e?.message || "Failed to delete the document.", "error"));
+        try {
+            await removeAgentTask(fillState.taskId);
+            await Context.deleteAiDraft(openVariantId);
+        } catch (e: any) {
+            showBanner(e?.message || "Failed to cancel the document import.", "error");
+        }
     };
 
     const discardAiDraft = async () => {

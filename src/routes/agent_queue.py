@@ -93,7 +93,7 @@ def queue_stream():
 def queue_submit():
     """Queue agent actions or a chat message.
 
-    Assess and review actions go to ``per-action`` (one new conversation per action key); a message goes
+    Assess, review and context-import actions go to ``per-action`` (one conversation per action key); a message goes
     to ``main`` or to an existing conversation. Actions whose key is already queued, running or failed are
     reported in ``skipped`` with the request holding that key. With ``require_ready``, the call fails with
     409 and a ``code`` (no_ai_config, invalid_config or github_signed_out) when no request could run now.
