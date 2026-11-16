@@ -1143,6 +1143,47 @@ class TestContextDraftRoutes:
         assert resp.status_code == 404
         assert not os.path.exists(os.path.join(directory, context_draft.DRAFT_NAME))
 
+    @pytest.mark.parametrize("second_collision", [False, True])
+    def test_accepted_renumbering_survives_failed_cleanup(self, client, variant, tmp_path, second_collision):
+        from src.models.variant_context import VariantContext
+
+        base = _draft_values()
+        common = base["stride"]["components"]
+        proposal = _draft_values(stride=_stride_model(components=[
+            *common, {"id": "C2", "name": "Updater", "description": "", "trust_zone": ""},
+        ]))
+        concurrent = _draft_values(stride=_stride_model(components=[
+            *common, {"id": "C2", "name": "Cloud", "description": "", "trust_zone": ""},
+        ]))
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            vc = VariantContext.save_editor(variant.id, {"codebase_source": "references", **base})
+            original = self._put(client, variant, base=vc.to_dict()["updated_at"], values=proposal).get_json()
+            VariantContext.save_editor(variant.id, {"codebase_source": "references", **concurrent})
+            with patch("src.helpers.context_draft.write_draft", side_effect=OSError("disk full")):
+                assert client.get(self._url(variant)).status_code == 500
+            first = client.get(self._url(variant)).get_json()
+            mapping = {"C2": "C3", "I1": "I2", "T1": "T2", "R1": "R2"}
+            assert first["renumbered"] == mapping
+            assert first["revision"] == original["revision"]
+            assert client.get(self._url(variant)).get_json()["renumbered"] == mapping
+            if second_collision:
+                concurrent["stride"]["components"].append(
+                    {"id": "C3", "name": "Another saved component", "description": "", "trust_zone": ""})
+                VariantContext.save_editor(variant.id, {"codebase_source": "references", **concurrent})
+                first = client.get(self._url(variant)).get_json()
+                mapping["C2"] = "C4"
+                assert first["renumbered"] == mapping
+            accepted = VariantContext.save_editor(
+                variant.id, {"codebase_source": "references", **first["values"]}).to_dict()
+            with patch("src.helpers.context_draft.delete_draft", side_effect=OSError("cleanup failed")):
+                assert client.delete(self._url(variant), json={"revision": first["revision"]}).status_code == 500
+            again = client.get(self._url(variant)).get_json()
+            assert again["values"]["stride"] == accepted["editor"]["stride"]
+            assert again["renumbered"] == mapping and again["revision"] == first["revision"]
+            restarted = self._put(client, variant, base=accepted["updated_at"], values=again["values"]).get_json()
+            assert restarted["revision"] != first["revision"]
+            assert client.get(self._url(variant)).get_json()["renumbered"] == {}
+
     def test_delete_is_idempotent(self, client, variant, tmp_path):
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             assert client.delete(self._url(variant), json={"revision": None}).status_code == 204
