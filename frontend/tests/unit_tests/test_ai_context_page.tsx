@@ -42,6 +42,7 @@ type Backend = {
     /** Requests (URL fragment + method) answered only once `until` settles. */
     holds?: { fragment: string; method: string; until: Promise<unknown> }[];
     drafts?: Record<string, unknown>;
+    importRevisions?: Record<string, string>;
 };
 
 function deferred() {
@@ -117,10 +118,18 @@ function mockBackend(overrides: Partial<Backend> = {}): Backend {
             const drafts = backend.drafts ?? (backend.drafts = {});
             if (kind === 'import-source') {
                 delete drafts[variantId];
-                return { status: 201, body: JSON.stringify({ name: 'report.pdf', size: 4 }) };
+                const revisions = backend.importRevisions ?? (backend.importRevisions = {});
+                revisions[variantId] = 'import-revision';
+                return { status: 201, body: JSON.stringify({ name: 'report.pdf', size: 4, revision: revisions[variantId] }) };
             }
             if (request.method === 'DELETE') {
+                const draft = drafts[variantId] as { revision: string } | undefined;
+                const revision = draft?.revision ?? backend.importRevisions?.[variantId];
+                if (revision && JSON.parse(body ?? '{}').revision !== revision) {
+                    return { status: 409, body: JSON.stringify({ error: 'The AI draft or import source changed. Reload it before discarding.' }) };
+                }
                 delete drafts[variantId];
+                delete backend.importRevisions?.[variantId];
                 return { status: 204, body: '' };
             }
             return drafts[variantId] ? JSON.stringify(drafts[variantId]) : { status: 404, body: JSON.stringify({ error: 'No draft.' }) };
@@ -165,6 +174,7 @@ const agentWrite = (tool: string) => act(() => {
 const NO_SYSTEM = { scope: null, actors: null, entry_points: null, trust_boundaries: null };
 function aiDraftReply(values: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
     return {
+        revision: 'draft-revision',
         source: 'report.pdf', status: 'current', conflicts: [], renumbered: {},
         base_updated_at: null, saved_updated_at: null, created_at: '2026-11-11T00:00:00Z', updated_at: '2026-11-11T00:00:00Z',
         values: {
@@ -1478,7 +1488,7 @@ describe('AIContext page', () => {
     });
 });
 
-function GuardHarness({ save, discard }: Readonly<{ save: () => Promise<boolean>; discard?: () => void }>) {
+function GuardHarness({ save, discard }: Readonly<{ save: () => Promise<boolean>; discard?: () => void | boolean | Promise<void | boolean> }>) {
     const { registerGuard, hasGuard, confirmLeave } = useUnsavedGuard();
     const [result, setResult] = useState('');
     return (
@@ -1555,6 +1565,19 @@ describe('useUnsavedGuard', () => {
         expect(unload()).toBe(true);
         fireEvent.click(screen.getByRole('button', { name: 'unregister' }));
         expect(unload()).toBe(false);
+    });
+
+    test.each([true, false])('Discard waits for its callback before returning %s', async proceed => {
+        const gate = deferred();
+        const discard = jest.fn(async () => { await gate.promise; return proceed; });
+        render(<UnsavedGuardProvider><GuardHarness save={jest.fn()} discard={discard} /></UnsavedGuardProvider>);
+        fireEvent.click(screen.getByRole('button', { name: 'register' }));
+        fireEvent.click(screen.getByRole('button', { name: 'leave' }));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(discard).toHaveBeenCalledTimes(1));
+        expect(screen.getByTestId('result')).toBeEmptyDOMElement();
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent(String(proceed)));
     });
 });
 
@@ -1661,7 +1684,7 @@ describe('AI threat-model drafts', () => {
         act(() => {
             queue = [{
                 ...submitted.actions[0], id: 'import-request', source: submitted.source, context: submitted.context,
-                conversationId: 'import-conversation', status: 'queued', position: 1,
+                conversationId: 'import-conversation', status: 'queued', position: 1, importRevision: submitted.actions[0].import_revision,
             }];
             agentStore.openAgentChat();
         });
@@ -1688,6 +1711,26 @@ describe('AI threat-model drafts', () => {
         expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
         expect(agentStore.getAgentChatRequest().nonce).toBe(0);
         expect(screen.getByLabelText('Variant description')).toBeEnabled();
+    });
+
+    test.each(['import-revision', 'newer-import'])('cancellation after reload only cleans its original import (%s)', async revision => {
+        const queue: agentStore.AgentTask[] = [{
+            id: 'import-request', kind: 'context-import', key: 'context-import:v1', text: '', title: 'Variant 1',
+            detail: 'report.pdf', importRevision: 'import-revision', source: 'AI Context Variant 1', context: { page: 'ai' },
+            conversationId: 'import-conversation', status: 'queued', position: 1,
+        }];
+        jest.spyOn(agentStore, 'getAgentQueue').mockReturnValue(queue);
+        const backend = mockBackend({ importRevisions: { v1: revision } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        if (revision === 'newer-import') {
+            expect(await screen.findByText(/The AI draft or import source changed/)).toBeInTheDocument();
+            expect(backend.importRevisions?.v1).toBe(revision);
+        } else {
+            await waitFor(() => expect(backend.importRevisions?.v1).toBeUndefined());
+        }
     });
 
     test('failed cancellation keeps the import document and reports the error', async () => {
@@ -1911,5 +1954,64 @@ describe('AI threat-model drafts', () => {
         fireEvent.click(sidebarItem('Variant 2'));
         fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
         await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft', 'DELETE')).toHaveLength(1));
+    });
+
+    test('navigation waits for deletion and a failed discard keeps the notice for retry', async () => {
+        const gate = deferred();
+        const backend = mockBackend({
+            drafts: { v1: aiDraftReply() },
+            holds: [{ fragment: '/context/draft', method: 'DELETE', until: gate.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText(LOADED_TEXT);
+        fireEvent.click(sidebarItem('Variant 2'));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(0);
+        backend.failUrls = ['/context/draft'];
+        await act(async () => { gate.resolve(); await gate.promise; });
+        expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
+        expect(screen.getByText(LOADED_TEXT)).toBeInTheDocument();
+        expect(sidebarItem('Variant 1')).toHaveAttribute('aria-current', 'true');
+        expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(0);
+        backend.failUrls = [];
+        fireEvent.click(sidebarItem('Variant 2'));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
+    });
+
+    test.each(['Save', 'Discard'])('edits made during navigation %s cleanup are kept', async choice => {
+        const gate = deferred();
+        const backend = mockBackend({
+            drafts: { v1: aiDraftReply() }, echoPut: true,
+            holds: [{ fragment: '/context/draft', method: 'DELETE', until: gate.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText(LOADED_TEXT);
+        fireEvent.click(sidebarItem('Variant 2'));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: choice }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Newer edits' } });
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(screen.queryByText(/Unsaved AI draft from report\.pdf:/)).not.toBeInTheDocument());
+        expect(sidebarItem('Variant 1')).toHaveAttribute('aria-current', 'true');
+        expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(0);
+        expect(screen.getByLabelText('Variant description')).toHaveValue('Newer edits');
+        expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
+    });
+
+    test.each(['Save changes', 'Discard AI draft'])('stale %s preserves a newer draft', async action => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply() }, echoPut: true });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText(LOADED_TEXT);
+        backend.drafts = { v1: aiDraftReply({}, { revision: 'newer-revision' }) };
+        fireEvent.click(screen.getByRole('button', { name: action }));
+        expect(await screen.findByText(/The AI draft or import source changed\. Reload it before discarding\./)).toBeInTheDocument();
+        expect(backend.drafts.v1).toMatchObject({ revision: 'newer-revision' });
+        expect(JSON.parse(requestsTo(backend, '/context/draft', 'DELETE')[0].body ?? '{}')).toEqual({ revision: 'draft-revision' });
+        expect(screen.getByText(/Unsaved AI draft from report\.pdf:/)).toBeInTheDocument();
     });
 });

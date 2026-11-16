@@ -23,12 +23,14 @@ describe('AI draft handlers', () => {
 
     test('deleteAiDraft ignores a missing draft and reports other failures', async () => {
         fetchMock.mockResponseOnce('', { status: 204 });
-        await expect(Context.deleteAiDraft('v1')).resolves.toBeUndefined();
-        expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'DELETE' });
+        await expect(Context.deleteAiDraft('v1', 'reviewed-revision')).resolves.toBeUndefined();
+        expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'DELETE', body: JSON.stringify({ revision: 'reviewed-revision' }) });
         fetchMock.mockResponseOnce('', { status: 404 });
-        await expect(Context.deleteAiDraft('v1')).resolves.toBeUndefined();
+        await expect(Context.deleteAiDraft('v1', null)).resolves.toBeUndefined();
         fetchMock.mockResponseOnce('', { status: 500 });
-        await expect(Context.deleteAiDraft('v1')).rejects.toThrow('Failed to discard the AI draft (500)');
+        await expect(Context.deleteAiDraft('v1', 'reviewed-revision')).rejects.toThrow('Failed to discard the AI draft (500)');
+        fetchMock.mockResponseOnce(JSON.stringify({ error: 'The AI draft changed.' }), { status: 409 });
+        await expect(Context.deleteAiDraft('v1', 'reviewed-revision')).rejects.toThrow('The AI draft changed.');
     });
 
     test('uploadImportSource posts the file and explains a 413', async () => {

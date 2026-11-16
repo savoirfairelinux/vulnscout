@@ -68,7 +68,7 @@ export type AiContextScope = { projectId?: string; variantIds?: string[]; revisi
 
 type SaveTarget =
     | { kind: 'project'; projectId: string; description: string; sent: string }
-    | { kind: 'variant'; projectId: string; variantId: string; draft: VariantDraft };
+    | { kind: 'variant'; projectId: string; variantId: string; draft: VariantDraft; draftRevision?: string };
 
 const DIRTY_PROJECT_AGENT_TEXT = "The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.";
 const DIRTY_VARIANT_AGENT_TEXT = "The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.";
@@ -279,10 +279,19 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         // A reply with neither values nor a conflict is treated as no draft.
         if (!draft || (!conflict && !applied) || noChange) {
             if (previous?.kind === 'loaded' && untouched && !baseline) current.reset();
-            setAiDraft(null);
             // A draft that changes nothing is dropped without asking.
-            if (noChange) Context.deleteAiDraft(variantId).catch((e: unknown) =>
-                showBanner(e instanceof Error ? e.message : "Failed to discard the unchanged AI draft.", "error"));
+            if (noChange && draft) {
+                try {
+                    await Context.deleteAiDraft(variantId, draft.revision);
+                } catch (e: unknown) {
+                    if (!unmountedRef.current && openKeyRef.current === key && request === draftRequestRef.current) {
+                        setAiDraft({ kind: 'pending', key, variantId, draft });
+                        showBanner(e instanceof Error ? e.message : "Failed to discard the unchanged AI draft.", "error");
+                    }
+                    return;
+                }
+            }
+            if (!unmountedRef.current && openKeyRef.current === key && request === draftRequestRef.current) setAiDraft(null);
             return;
         }
         if (!applied) setAiDraft({ kind: 'conflict', key, variantId, draft: { ...draft, conflicts: draft.conflicts ?? [] } });
@@ -380,7 +389,10 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             showBanner(FIX_FIELDS_TEXT, "error");
             return null;
         }
-        return { kind: 'variant', projectId, variantId: selected.id, draft: variantDraft.draft };
+        return {
+            kind: 'variant', projectId, variantId: selected.id, draft: variantDraft.draft,
+            draftRevision: aiDraft?.kind === 'loaded' ? aiDraft.draft.revision : undefined,
+        };
     };
 
     // False when edits made while a save was in flight are still unsaved.
@@ -398,16 +410,22 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 const value = saved?.editor
                     ? draftFromContext({ ...saved, project_id: target.projectId, description: null })
                     : target.draft;
-                if (openKeyRef.current === key) savedEverythingRef.current = variantDraft.commit(value, target.draft);
-                const pendingDraft = aiDraftRef.current;
-                if (pendingDraft?.kind === 'loaded') {
-                    // Saving accepts the draft; a leftover draft would rebase to "no changes" anyway.
-                    setAiDraft(null);
-                    Context.deleteAiDraft(target.variantId).catch(() => undefined);
-                } else if (pendingDraft?.kind === 'pending' && openKeyRef.current === key) {
-                    // Reloaded after the commit renders, so the editor reads as clean.
-                    setAiDraft(null);
-                    setDraftReloads(n => n + 1);
+                try {
+                    const pendingDraft = aiDraftRef.current;
+                    if (target.draftRevision !== undefined) {
+                        try {
+                            await Context.deleteAiDraft(target.variantId, target.draftRevision);
+                        } catch (e: unknown) {
+                            throw new Error(`Context saved, but AI draft cleanup failed: ${e instanceof Error ? e.message : "please retry."}`);
+                        }
+                        if (openKeyRef.current === key && aiDraftRef.current?.draft.revision === target.draftRevision) setAiDraft(null);
+                    } else if (pendingDraft?.kind === 'pending' && openKeyRef.current === key) {
+                        // Reloaded after the commit renders, so the editor reads as clean.
+                        setAiDraft(null);
+                        setDraftReloads(n => n + 1);
+                    }
+                } finally {
+                    if (openKeyRef.current === key) savedEverythingRef.current = variantDraft.commit(value, target.draft);
                 }
             }
             if (!unmountedRef.current) setAnnouncement("Saved.");
@@ -456,14 +474,22 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             // Leaving with newer edits still unsaved would discard them.
             save: async () => (await saveRef.current()) && savedEverythingRef.current,
             // Leaving without saving rejects a loaded AI draft.
-            discard: () => {
+            discard: async () => {
                 const current = aiDraftRef.current;
-                if (current?.kind !== 'loaded') return;
-                setAiDraft(null);
-                Context.deleteAiDraft(current.variantId).catch(() => undefined);
+                if (current?.kind !== 'loaded') return true;
+                const sent = variantDraftRef.current.draft;
+                try {
+                    await Context.deleteAiDraft(current.variantId, current.draft.revision);
+                    if (aiDraftRef.current !== current) return false;
+                    setAiDraft(null);
+                    return draftsEqual(variantDraftRef.current.draft, sent);
+                } catch (e: unknown) {
+                    showBanner(e instanceof Error ? e.message : "Failed to discard the AI draft.", "error");
+                    return false;
+                }
             },
         } : null);
-    }, [dirty, openLabel, registerGuard]);
+    }, [dirty, openLabel, registerGuard, showBanner]);
     useEffect(() => () => registerGuard(null), [registerGuard]);
 
     // Agent updates reload only a clean open item, so unsaved edits are never replaced.
@@ -525,7 +551,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         setUploading(true);
         hideErrorBanner();
         try {
-            await Context.uploadImportSource(openVariant.id, file);
+            const uploaded = await Context.uploadImportSource(openVariant.id, file);
             if (unmountedRef.current) return;
             setAiDraft(null);
             const message: AgentAction = {
@@ -533,6 +559,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 kind: 'context-import',
                 title: `${openVariant.name} from ${file.name}`.slice(0, 120),
                 detail: file.name,
+                import_revision: uploaded.revision,
                 text: contextImportMessage({
                     projectId, projectName, variantId: openVariant.id, variantName: openVariant.name, fileName: file.name,
                 }),
@@ -560,7 +587,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         if (fillState?.status !== 'queued' || !openVariantId) return;
         try {
             await removeAgentTask(fillState.taskId);
-            await Context.deleteAiDraft(openVariantId);
+            await Context.deleteAiDraft(openVariantId, fillTask?.importRevision ?? null);
         } catch (e: any) {
             showBanner(e?.message || "Failed to cancel the document import.", "error");
         }
@@ -571,8 +598,8 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         if (!current) return;
         setBusy(true);
         try {
-            await Context.deleteAiDraft(current.variantId);
-            if (unmountedRef.current || openKeyRef.current !== current.key) return;
+            await Context.deleteAiDraft(current.variantId, current.draft.revision);
+            if (unmountedRef.current || openKeyRef.current !== current.key || aiDraftRef.current !== current) return;
             setAiDraft(null);
             if (current.kind === 'loaded') resetVariant();
         } catch (e: any) {

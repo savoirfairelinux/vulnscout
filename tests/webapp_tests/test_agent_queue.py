@@ -153,7 +153,7 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
     monkeypatch.setattr(aq, "agent_queue", env.q)
     client = env.app.test_client()
     action = {"kind": "context-import", "key": "import:x86", "text": "Read the uploaded document.",
-              "title": "x86 from report.pdf", "detail": "report.pdf"}
+              "title": "x86 from report.pdf", "detail": "report.pdf", "import_revision": "uploaded-revision"}
     context = {"page": "ai", "view": {"selectedProjectId": env.ids["demo"],
                                      "selectedVariantId": env.ids["x86"]}}
     body = {"conversation": "per-action", "source": "AI Context x86", "actions": [action], "context": context,
@@ -164,6 +164,8 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
     request = env.q.get_request(created["id"])
     assert request["lane"] == "action" and request["timeout"] == agent_skills.ACTION_TIMEOUT
     assert request["title"] == action["title"] and request["detail"] == "report.pdf"
+    assert request["import_revision"] == "uploaded-revision"
+    assert env.q.snapshot()["requests"][0]["import_revision"] == "uploaded-revision"
     assert client.post("/api/agent/queue", json=body).get_json()["requests"] == []
     assert env.q.run_once("action") == created["id"]
     call = env.fake.calls[-1]
@@ -183,6 +185,9 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
     ({"text": ""}, "import prompt"),
     ({"title": ""}, "import title"),
     ({"detail": ""}, "import filename"),
+    ({"import_revision": ""}, "import revision"),
+    ({"import_revision": 5}, "import revision"),
+    ({"import_revision": "x" * 129}, "import revision"),
 ])
 def test_invalid_context_imports_are_not_queued(env, change, error):
     action = {"kind": "context-import", "text": "Fill", "title": "x86", "detail": "report.pdf",

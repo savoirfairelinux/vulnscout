@@ -29,6 +29,7 @@ export type AgentTask = {
     kind: AgentActionKind;
     title: string;
     detail?: string;
+    importRevision?: string;
     /** The message sent to the agent (for actions, the prompt the backend built). */
     text: string;
     source: string;
@@ -121,6 +122,7 @@ const emitChatRequest = () => {
 function toTask(record: AgentRequestRecord): AgentTask {
     return {
         id: record.id, key: record.key, kind: record.kind, title: record.title, detail: record.detail || undefined,
+        importRevision: record.import_revision ?? undefined,
         text: record.text ?? '', source: record.source, context: record.context ?? undefined,
         conversationId: record.conversation_id, status: record.status, error: record.error ?? undefined,
         errorCode: record.error_code ?? undefined, position: record.position ?? undefined,

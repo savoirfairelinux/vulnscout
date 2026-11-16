@@ -67,8 +67,9 @@ def _draft_dir(vc) -> str:
     return context_draft.context_dir(_get_cache_dir(), vc.id)
 
 
-def _draft_body(draft: dict, status: str, values, conflicts: list, renumbered: dict, saved_at) -> dict:
+def _draft_body(draft: dict, status: str, values, conflicts: list, renumbered: dict, saved_at, revision) -> dict:
     return {
+        "revision": revision,
         "source": draft.get("source"), "status": status, "values": values, "conflicts": conflicts,
         "renumbered": renumbered, "base_updated_at": draft.get("base_updated_at"),
         "saved_updated_at": saved_at, "created_at": draft.get("created_at"), "updated_at": draft.get("updated_at"),
@@ -275,16 +276,21 @@ def init_app(app):
         if err:
             return err
         vc = VariantContext.get_by_variant(variant_uuid)
-        draft = context_draft.read_draft(_draft_dir(vc)) if vc is not None else None
+        draft = None
+        revision = None
+        if vc is not None:
+            with context_draft.lock_for(vc.id):
+                draft = context_draft.read_draft(_draft_dir(vc))
+                revision = context_draft.revision(_draft_dir(vc))
         if draft is None:
-            return jsonify({"error": "No draft."}), 404
+            return jsonify({"error": "No draft.", "revision": revision}), 404
         saved_at = _revision(vc)
         if draft.get("base_updated_at") == saved_at:
-            return jsonify(_draft_body(draft, "current", draft["values"], [], {}, saved_at))
+            return jsonify(_draft_body(draft, "current", draft["values"], [], {}, saved_at, revision))
         values, conflicts, renumbered = context_draft.rebase(
             draft["base_values"], context_draft.saved_values(vc), draft["values"])
         status = "conflict" if conflicts else "rebased"
-        return jsonify(_draft_body(draft, status, values, conflicts, renumbered, saved_at))
+        return jsonify(_draft_body(draft, status, values, conflicts, renumbered, saved_at, revision))
 
     @app.route('/api/variants/<variant_id>/context/draft', methods=['PUT'])
     def put_context_draft(variant_id):
@@ -331,30 +337,43 @@ def init_app(app):
                     "values": values,
                 }
                 context_draft.write_draft(directory, draft)
+                revision = context_draft.revision(directory)
         except (OSError, SQLAlchemyError):
             db.session.rollback()
             logger.exception("Failed to store the AI context draft")
             return jsonify({"error": "Failed to store the draft on server"}), 500
-        return jsonify(_draft_body(draft, "current", values, [], {}, _revision(vc)))
+        return jsonify(_draft_body(draft, "current", values, [], {}, _revision(vc), revision))
 
     @app.route('/api/variants/<variant_id>/context/draft', methods=['DELETE'])
     def delete_context_draft(variant_id):
         """Discard the variant's AI draft and its import source.
 
         OpenAPI:
+        body ContextDraftDelete required Revision of the reviewed draft or uploaded import.
         response 204 empty Draft and import source deleted (or there were none).
         response 400 Error Invalid variant identifier.
         response 404 Error Variant not found.
+        response 409 Error A newer draft or import source replaced the reviewed version.
         response 500 Error Draft could not be deleted.
         """
         variant_uuid, err = _variant_uuid_or_error(variant_id)
         if err:
             return err
+        body = request.get_json(silent=True)
+        if (not isinstance(body, dict) or "revision" not in body
+                or (body["revision"] is not None and not isinstance(body["revision"], str))):
+            return jsonify({"error": "revision must be the reviewed revision, or null when none existed."}), 400
         vc = VariantContext.get_by_variant(variant_uuid)
         if vc is not None:
             try:
                 with context_draft.lock_for(vc.id):
-                    context_draft.delete_draft(_draft_dir(vc))
+                    directory = _draft_dir(vc)
+                    revision = context_draft.revision(directory)
+                    if revision is not None and body["revision"] != revision:
+                        return jsonify({
+                            "error": "The AI draft or import source changed. Reload it before discarding.",
+                        }), 409
+                    context_draft.delete_draft(directory)
             except OSError:
                 logger.exception("Failed to delete the AI context draft")
                 return jsonify({"error": "Failed to delete the draft on server"}), 500
@@ -415,11 +434,12 @@ def init_app(app):
                 path = os.path.join(folder, name)
                 file.save(path)
                 size = os.path.getsize(path)
+                revision = context_draft.revision(directory)
         except (OSError, SQLAlchemyError):
             db.session.rollback()
             logger.exception("Failed to store the import source")
             return jsonify({"error": "Failed to store file on server"}), 500
-        return jsonify({"name": name, "size": size}), 201
+        return jsonify({"name": name, "size": size, "revision": revision}), 201
 
     @app.route('/api/variants/<variant_id>/context/import-source/source', methods=['GET'])
     def get_import_source(variant_id):

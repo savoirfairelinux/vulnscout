@@ -137,6 +137,7 @@ class AgentRequest:
     vuln_id: str | None = None
     assessment_id: str | None = None
     result: dict | None = None  # actions: the turn's TurnResult
+    import_revision: str | None = None
 
     def to_dict(self, position: int | None = None, *, full: bool = True) -> dict[str, Any]:
         """JSON-able record; without *full* the result omits the agent's reply (already in the transcript)."""
@@ -149,7 +150,7 @@ class AgentRequest:
                 "error_code": self.error_code, "position": position, "created_at": self.created_at,
                 "started_at": self.started_at, "finished_at": self.finished_at, "context": self.context,
                 "text": self.text, "vuln_id": self.vuln_id, "assessment_id": self.assessment_id,
-                "timeout": self.timeout, "result": result}
+                "timeout": self.timeout, "result": result, "import_revision": self.import_revision}
 
 
 def _new_session() -> Conversation:
@@ -241,6 +242,7 @@ class _Planned:
     scope: str | None = None
     title: str = ""
     detail: str = ""
+    import_revision: str | None = None
     skipped: str | None = None  # the active request already holding the key, when planned
 
 
@@ -500,7 +502,11 @@ class AgentQueue:
             text = _bounded_text(action.get("text"), MESSAGE_LIMIT, "Enter a document import prompt.")
             title = _bounded_text(action.get("title"), TITLE_LIMIT, "Invalid document import title.")
             detail = _bounded_text(action.get("detail"), 512, "Invalid document import filename.")
-            return _Planned(kind, key, context, text=text, scope=scope, title=title, detail=detail)
+            revision = action.get("import_revision")
+            if revision is not None:
+                revision = _bounded_text(revision, 128, "Invalid document import revision.")
+            return _Planned(kind, key, context, text=text, scope=scope, title=title, detail=detail,
+                            import_revision=revision)
         if kind == "assess":
             vuln_id = action.get("vuln_id")
             if not isinstance(vuln_id, str) or len(vuln_id) > 100 or not ai_actions.CVE_ID_PATTERN.fullmatch(vuln_id):
@@ -665,7 +671,7 @@ class AgentQueue:
                                  kind=plan.kind, lane="action", conversation_id=owner.id, source=source,
                                  title=plan.title, detail=plan.detail, model=model, model_explicit=explicit,
                                  timeout=timeout or agent_skills.ACTION_TIMEOUT, context=plan.context,
-                                 text=plan.text, scope=plan.scope)]
+                                 text=plan.text, scope=plan.scope, import_revision=plan.import_revision)]
         first = plan.specs[0]
         scope = None
         for spec in plan.specs:
