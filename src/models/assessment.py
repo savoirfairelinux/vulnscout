@@ -9,6 +9,7 @@ from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
 
 from ..extensions import db, Base
+from ..helpers.assessment_io import parse_imported_timestamp
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
@@ -731,6 +732,17 @@ class Assessment(Base):
             db.session.flush()
             return existing
 
+        timestamp = assess.timestamp
+        if isinstance(timestamp, str):
+            parsed_timestamp = parse_imported_timestamp(timestamp, use_original_timestamps=True)
+            if parsed_timestamp is None:
+                raise ValueError(f"Invalid assessment timestamp: {timestamp!r}")
+            timestamp = parsed_timestamp
+        if timestamp is not None:
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            timestamp = timestamp.astimezone(timezone.utc)
+
         new_status = assess.status or "under_investigation"
         targets = [(variant_id, finding_id)] if finding_id is not None and variant_id is not None else None
         record = Assessment.create(
@@ -744,7 +756,7 @@ class Assessment(Base):
             impact_statement=assess.impact_statement,
             workaround=getattr(assess, "workaround", None),
             responses=list(assess.responses) if assess.responses else [],
-            timestamp=assess.timestamp,
+            timestamp=timestamp,
             commit=False,
         )
         # Propagate transient fields so callers can call to_dict() immediately
