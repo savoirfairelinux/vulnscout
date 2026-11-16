@@ -93,6 +93,7 @@ type AiDraftConflict = { path: string; reason: string };
 
 /** The variant's AI draft, rebased onto the saved context; `values` is null on a conflict. */
 type AiContextDraft = {
+    revision: string;
     source: string;
     status: 'current' | 'rebased' | 'conflict';
     values: AiContextDraftValues | null;
@@ -104,7 +105,7 @@ type AiContextDraft = {
     updated_at: string;
 };
 
-type ImportSource = { name: string; size: number };
+type ImportSource = { name: string; size: number; revision: string };
 
 type ContextFile = {
     id: string;
@@ -256,10 +257,10 @@ class Context {
     }
 
     /** Deletes the AI draft and its import source; a missing draft is not an error. */
-    static async deleteAiDraft(variantId: string): Promise<void> {
+    static async deleteAiDraft(variantId: string, revision: string | null): Promise<void> {
         const res = await fetch(
             `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/draft`,
-            { mode: 'cors', method: 'DELETE' }
+            { mode: 'cors', method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision }) }
         );
         if (!res.ok && res.status !== 404) {
             throw new Error((await errorReply(res)).error || `Failed to discard the AI draft (${res.status})`);

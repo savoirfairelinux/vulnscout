@@ -7,6 +7,7 @@ it onto a newer saved model so loading it never reverts someone else's save.
 """
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,7 @@ import shutil
 import tempfile
 import threading
 import typing
+import uuid
 from typing import Any, Optional
 
 from .stride_model import SYSTEM_KEYS, StrideValidationError, empty_stride_model
@@ -27,6 +29,7 @@ PREFIX = {"components": "C", "interactions": "I", "threats": "T", "risks": "R"}
 _REFS = {"interactions": ("source_id", "destination_id"), "threats": ("target_ids",), "risks": ("threat_ids",)}
 DRAFT_NAME = "draft.json"
 IMPORT_DIR = "import"
+IMPORT_REVISION = "import-revision"
 _ROW_PATH = re.compile(r"^(components|interactions|threats|risks)\[(\d+)\](.*)$")
 _ROW_ID = re.compile(r"^[CITR]([1-9]\d*)$")
 
@@ -65,7 +68,8 @@ def read_draft(directory: str) -> Optional[dict]:
 
 
 def write_draft(directory: str, draft: dict) -> None:
-    """Replace the draft atomically: readers see the old or the new file, never a partial one."""
+    """Atomically replace the draft with a fresh revision, even if its values are unchanged."""
+    draft = {**draft, "revision": str(uuid.uuid4())}
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".draft-", suffix=".tmp")
     try:
@@ -81,8 +85,34 @@ def write_draft(directory: str, draft: dict) -> None:
 def delete_draft(directory: str) -> None:
     """Remove the draft and the import source; missing files are fine."""
     with contextlib.suppress(FileNotFoundError):
+        shutil.rmtree(os.path.join(directory, IMPORT_DIR))
+    with contextlib.suppress(FileNotFoundError):
         os.remove(os.path.join(directory, DRAFT_NAME))
-    shutil.rmtree(os.path.join(directory, IMPORT_DIR), ignore_errors=True)
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(os.path.join(directory, IMPORT_REVISION))
+
+
+def revision(directory: str) -> Optional[str]:
+    """Identity of the current draft or source, including identical replacements.
+
+    Call under lock_for, together with the read or deletion it protects. Old
+    drafts use a content digest until replaced; source-only imports get a
+    persistent token on first access.
+    """
+    draft = read_draft(directory)
+    if draft is not None:
+        return draft.get("revision") or hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()
+    if import_source_path(directory) is None:
+        return None
+    path = os.path.join(directory, IMPORT_REVISION)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return str(uuid.UUID(handle.read()))
+    except FileNotFoundError:
+        token = str(uuid.uuid4())
+        with open(path, "x", encoding="utf-8") as handle:
+            handle.write(token)
+        return token
 
 
 def import_source_path(directory: str) -> Optional[str]:

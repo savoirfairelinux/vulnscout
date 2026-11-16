@@ -605,6 +605,7 @@ SCHEMAS: dict[str, Any] = {
                 "text": {"type": "string", "minLength": 1, "maxLength": 8000},
                 "title": {"type": "string", "minLength": 1, "maxLength": 120},
                 "detail": {"type": "string", "minLength": 1, "maxLength": 512},
+                "import_revision": {"type": "string", "minLength": 1, "maxLength": 128},
                 "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
             }, ("kind", "text", "title", "detail"),
                 description="Draft a threat model from the uploaded document for one variant."),
@@ -635,7 +636,7 @@ SCHEMAS: dict[str, Any] = {
         "id": _STRING, "key": _STRING,
         "kind": {"type": "string", "enum": ["assess", "review", "message", "context-import"]},
         "lane": {"type": "string", "enum": ["action", "chat"]}, "conversation_id": _STRING, "source": _STRING,
-        "title": _STRING, "detail": _STRING, "model": _STRING,
+        "title": _STRING, "detail": _STRING, "model": _STRING, "import_revision": _TEXT,
         "status": {"type": "string", "enum": ["queued", "running", "done", "failed", "cancelled"]},
         "error": _TEXT, "error_code": _TEXT, "position": {**_INT, "nullable": True},
         "created_at": {"type": "number"}, "started_at": _NUMBER, "finished_at": _NUMBER,
@@ -1076,14 +1077,18 @@ SCHEMAS.update({
         "Proposed model. A null text field keeps the saved value; an empty string clears it."
     )),
     "ContextDraft": _object({
+        "revision": _STRING,
         "source": _STRING,
         "status": {"type": "string", "enum": ["current", "rebased", "conflict"]},
         "values": {**_ref("ContextDraftValues"), "nullable": True},
         "conflicts": _array(_object({"path": _STRING, "reason": _STRING}, ("path", "reason"))),
         "renumbered": _map(_STRING),
         "base_updated_at": _DATE, "saved_updated_at": _DATE, "created_at": _DATE, "updated_at": _DATE,
-    }, ("source", "status", "values", "conflicts", "renumbered", "base_updated_at", "saved_updated_at")),
-    "ImportSource": _object({"name": _STRING, "size": _COUNT}, ("name", "size")),
+    }, ("revision", "source", "status", "values", "conflicts", "renumbered", "base_updated_at", "saved_updated_at")),
+    "ContextDraftDelete": _object({
+        "revision": {**_STRING, "nullable": True},
+    }, ("revision",)),
+    "ImportSource": _object({"name": _STRING, "size": _COUNT, "revision": _STRING}, ("name", "size", "revision")),
     "ImportSourceResult": {"anyOf": [
         _object({"name": _STRING, **{key: value for key, value in variant["properties"].items()
                                      if key not in ("file_id", "original_name")}},

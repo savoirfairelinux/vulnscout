@@ -1110,10 +1110,54 @@ class TestContextDraftRoutes:
 
     def test_delete_is_idempotent(self, client, variant, tmp_path):
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
-            assert client.delete(self._url(variant)).status_code == 204
-            self._put(client, variant)
-            assert client.delete(self._url(variant)).status_code == 204
+            assert client.delete(self._url(variant), json={"revision": None}).status_code == 204
+            draft = self._put(client, variant).get_json()
+            assert client.delete(self._url(variant), json={"revision": draft["revision"]}).status_code == 204
+            assert client.delete(self._url(variant), json={"revision": draft["revision"]}).status_code == 204
             assert client.get(self._url(variant)).status_code == 404
+
+    def test_stale_cleanup_keeps_a_new_draft_and_its_source(self, client, variant, tmp_path):
+        from io import BytesIO
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            client.post(f"/api/variants/{variant.id}/context/import-source",
+                        data={"file": (BytesIO(b"document"), "report.md")})
+            first = self._put(client, variant).get_json()
+            second = self._put(client, variant).get_json()
+            assert second["revision"] != first["revision"]
+            for body in ({}, {"revision": None}, {"revision": first["revision"]}):
+                result = client.delete(self._url(variant), json=body)
+                assert result.status_code == (400 if not body else 409)
+            assert client.get(self._url(variant)).get_json()["revision"] == second["revision"]
+            assert client.get(f"/api/variants/{variant.id}/context/import-source/source").status_code == 200
+            assert client.delete(self._url(variant), json={"revision": second["revision"]}).status_code == 204
+            assert client.get(f"/api/variants/{variant.id}/context/import-source/source").status_code == 404
+
+    def test_stale_cleanup_keeps_an_identical_reuploaded_source(self, client, variant, tmp_path):
+        from io import BytesIO
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            revisions = []
+            for _ in range(2):
+                upload = client.post(f"/api/variants/{variant.id}/context/import-source",
+                                     data={"file": (BytesIO(b"document"), "report.md")})
+                revisions.append(upload.get_json()["revision"])
+            assert revisions[0] != revisions[1]
+            assert client.delete(self._url(variant), json={"revision": revisions[0]}).status_code == 409
+            assert client.get(f"/api/variants/{variant.id}/context/import-source/source").status_code == 200
+            assert client.delete(self._url(variant), json={"revision": revisions[1]}).status_code == 204
+
+    def test_delete_failure_is_reported(self, client, variant, tmp_path):
+        from io import BytesIO
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
+            client.post(f"/api/variants/{variant.id}/context/import-source",
+                        data={"file": (BytesIO(b"document"), "report.md")})
+            revision = self._put(client, variant).get_json()["revision"]
+            with patch("src.helpers.context_draft.shutil.rmtree", side_effect=OSError("permission denied")):
+                assert client.delete(self._url(variant), json={"revision": revision}).status_code == 500
+            assert client.get(self._url(variant)).get_json()["revision"] == revision
+            assert client.delete(self._url(variant), json={"revision": revision}).status_code == 204
 
     def test_unknown_variant_and_bad_id(self, client, tmp_path):
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
@@ -1147,7 +1191,9 @@ class TestImportSourceRoutes:
             read = self._source(client, variant, operation="read", path="model.yaml", max_lines=1).get_json()
             found = self._source(client, variant, operation="search", query="needle").get_json()
             bad = self._source(client, variant, operation="nope")
-        assert resp.status_code == 201 and resp.get_json() == {"name": "model.yaml", "size": 20}
+        assert resp.status_code == 201
+        assert resp.get_json() == {"name": "model.yaml", "size": 20, "revision": resp.get_json()["revision"]}
+        assert resp.get_json()["revision"]
         assert listed["name"] == "model.yaml" and listed["files"] == [{"path": "model.yaml", "size": 20}]
         assert read["content"] == "line one\n" and read["next_line"] == 2
         assert found["matches"] == [{"path": "model.yaml", "line": 2, "text": "needle two"}]
@@ -1186,7 +1232,7 @@ class TestImportSourceRoutes:
             assert self._post(client, variant, b"text", "draft.json").status_code == 201
             assert self._post(client, variant, b"text", "../../evil.md").get_json()["name"] == "evil.md"
             directory = context_draft.context_dir(str(tmp_path), VariantContext.get_by_variant(variant.id).id)
-        assert sorted(os.listdir(directory)) == ["import"]
+        assert sorted(os.listdir(directory)) == ["import", "import-revision"]
         assert os.listdir(os.path.join(directory, "import")) == ["evil.md"]
 
     def test_windows_paths_keep_only_the_base_name(self):

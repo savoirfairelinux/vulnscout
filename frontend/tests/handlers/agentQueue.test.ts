@@ -97,7 +97,7 @@ test('mirrors the snapshot and its deltas', () => {
         requests: [
             request('r1', { status: 'running', position: null, conversation_id: 'c1', kind: 'assess', key: 'assess:CVE-1:',
                 vuln_id: 'CVE-1', detail: 'pkg', error: null, context: { page: 'vulnerabilities', projectId: 'p' }, lane: 'action' }),
-            request('r2', { status: 'queued', position: 2 }),
+            request('r2', { status: 'queued', position: 2, kind: 'context-import', import_revision: 'uploaded-revision' }),
             request('r3', { status: 'failed', position: null, error: 'boom', error_code: 'agent_error' }),
         ],
         history: [request('old', { status: 'done', position: null })],
@@ -110,6 +110,7 @@ test('mirrors the snapshot and its deltas', () => {
         ['r1', 'running', undefined], ['r2', 'queued', 2], ['r3', 'failed', undefined],
     ]);
     expect(getAgentQueue()[0]).toMatchObject({ vulnId: 'CVE-1', detail: 'pkg', conversationId: 'c1' });
+    expect(getAgentQueue()[1]).toMatchObject({ kind: 'context-import', importRevision: 'uploaded-revision' });
     expect(getAgentQueue()[2]).toMatchObject({ error: 'boom', errorCode: 'agent_error' });
     expect(getAgentHistory().map(task => task.id)).toEqual(['old']);
     expect(findAgentTask('old')?.status).toBe('done');
