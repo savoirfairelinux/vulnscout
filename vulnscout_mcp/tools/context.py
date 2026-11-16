@@ -324,6 +324,10 @@ def _propose_variant_threat_model_impl(
         if pending is not None and pending.get("status") == "conflict":
             raise VulnScoutError("The pending draft conflicts with changes saved since it was made; call again "
                                  "with replace=true to start a new draft from the saved model.")
+        if pending is not None and pending.get("renumbered"):
+            raise VulnScoutError("The pending draft requires renumbering after changes to the saved model; "
+                                 "re-read get_merged_context(include_model=true) and call again with "
+                                 "replace=true to start a new draft using the saved IDs.")
         base = (pending or {}).get("values") or saved
         stride = base.get("stride") or {}
         removed = set(remove_ids or [])
@@ -692,7 +696,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
         - source: the document name the values come from.
         - replace: true starts a new draft from the saved model. Use it for
           the first call of a new import, after an error about a conflicting
-          draft, or after the context changed while drafting.
+          draft, renumbering, or a context change while drafting. Re-read the
+          saved model and rebuild all row IDs and references before restarting.
 
         The whole draft is validated like a save; an invalid call returns the
         invalid fields and keeps the previous draft. For a large model, call

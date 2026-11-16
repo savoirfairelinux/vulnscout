@@ -605,6 +605,41 @@ class TestProposeThreatModel:
         assert replaced.startswith("Draft stored") and put.called
         assert calls == draft_reads + 2  # context read and PUT; the draft is not read
 
+    def test_continuation_rejects_ids_renumbered_after_a_concurrent_save(self, client):
+        from src.helpers.context_draft import rebase
+
+        with respx.mock:
+            _mock_context()
+            put = _echo_put()
+            first = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf",
+                rows={"components": [{"id": "C3", "name": "Updater", "description": "", "trust_zone": ""}]})
+            assert first.startswith("Draft stored")
+            proposal = json.loads(put.calls.last.request.content)["values"]
+            original = _saved_context(SAVED_STRIDE)
+            saved_values = {
+                **proposal, "system": original["editor"]["system"], "stride": SAVED_STRIDE,
+            }
+            concurrent = {
+                **saved_values, "stride": {
+                    **SAVED_STRIDE, "components": [
+                        *SAVED_STRIDE["components"],
+                        {"id": "C3", "name": "Cloud", "description": "", "trust_zone": ""},
+                    ],
+                },
+            }
+            values, conflicts, renumbered = rebase(saved_values, concurrent, proposal)
+            assert conflicts == [] and renumbered == {"C3": "C4"}
+            _mock_context({"status": "rebased", "values": values, "renumbered": renumbered})
+            refused = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf",
+                rows={"threats": [{"id": "T2", "category": "tampering", "target_ids": ["C3"]}]})
+            assert put.call_count == 1
+            restarted = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", replace=True)
+        assert "requires renumbering" in refused and "replace=true" in refused
+        assert restarted.startswith("Draft stored") and put.call_count == 2
+
     def test_conflict_on_put_and_invalid_input(self, client):
         with respx.mock:
             _mock_context()
