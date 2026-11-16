@@ -1915,6 +1915,40 @@ describe('AI threat-model drafts', () => {
             setQueue([]);
             await screen.findByText(LOADED_TEXT);
         });
+
+        test.each([false, true])('a deferred refresh during save cleanup keeps the accepted model (new edits: %s)', async edit => {
+            const cleanup = deferred();
+            const backend = mockBackend({
+                drafts: { v1: aiDraftReply() }, echoPut: true,
+                holds: [{ fragment: '/context/draft', method: 'DELETE', until: cleanup.promise }],
+            });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await screen.findByText(LOADED_TEXT);
+            const loads = requestsTo(backend, '/context/draft').length;
+            setQueue([runningTask('message', 'chat')]);
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+            // The server deleted the draft, but the cleanup response has not arrived.
+            delete backend.drafts?.v1;
+            setQueue([]);
+            await act(async () => { await Promise.resolve(); });
+            if (edit) fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Newer edits' } });
+            await act(async () => { cleanup.resolve(); await cleanup.promise; });
+
+            await screen.findByText('Saved.');
+            await waitFor(() => expect(requestsTo(backend, '/context/draft').length).toBeGreaterThan(loads));
+            expect(screen.getByLabelText('System scope and assets')).toHaveValue('Gateway');
+            expect(screen.getByLabelText('Variant description')).toHaveValue(edit ? 'Newer edits' : '');
+            if (edit) expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+            else expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+            if (!edit) fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Next edit' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(2));
+            const nextSave = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[1].body ?? '{}');
+            expect(nextSave.system.scope).toBe('Gateway');
+            expect(nextSave.stride.components).toMatchObject([{ id: 'C1', name: 'Web UI' }]);
+        });
     });
 
     test('a draft arriving over unsaved edits waits until they are saved', async () => {

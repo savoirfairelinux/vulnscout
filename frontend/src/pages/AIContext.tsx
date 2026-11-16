@@ -222,7 +222,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const fillState = fillKey ? agentActionState(agentQueue, task => task.key === fillKey) : undefined;
     const fillTask = fillState ? agentQueue.find(task => task.id === fillState.taskId) : undefined;
     const drafting = fillState?.status === 'queued' || fillState?.status === 'running';
-    const draftLoadBlocked = drafting || agentQueue.some(task => task.status === 'running');
+    const draftLoadBlocked = busy || drafting || agentQueue.some(task => task.status === 'running');
     const draftLoadBlockedRef = useRef(draftLoadBlocked);
     draftLoadBlockedRef.current = draftLoadBlocked;
     const heldDraftLoadRef = useRef(false);
@@ -305,7 +305,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         if (variantKey !== null) void loadAiDraftRef.current();
     }, [variantKey, variantDraft.epoch, draftReloads]);
 
-    // Invalidate in-flight reads too: a turn may start and finish before their responses arrive.
+    // Invalidate in-flight reads too: a turn or save may finish before their responses arrive.
     useEffect(() => {
         if (draftLoadBlocked) {
             draftRequestRef.current += 1;
