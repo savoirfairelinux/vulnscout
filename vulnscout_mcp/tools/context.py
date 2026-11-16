@@ -311,6 +311,8 @@ def _propose_variant_threat_model_impl(
     remove_ids: Optional[list[str]] = None,
     texts: Optional[dict[str, Optional[str]]] = None,
     replace: bool = False,
+    *,
+    expected_updated_at: Optional[str],
 ) -> str:
     rows = rows or {}
     try:
@@ -319,6 +321,9 @@ def _propose_variant_threat_model_impl(
         if texts is not None and (not isinstance(texts, dict) or set(texts) - set(_TEXT_KEYS)):
             raise VulnScoutError(f"Only these context fields can be drafted: {', '.join(_TEXT_KEYS)}.")
         ctx = client.get_merged_context(project_id, variant_id)
+        revision = (ctx.get("editor") or {}).get("updated_at")
+        if _instant(expected_updated_at) != _instant(revision):
+            raise VulnScoutConflict("The saved context changed since the model was read.")
         saved = _saved_values(ctx)
         pending = None if replace else client.get_context_draft(variant_id)
         if pending is not None and pending.get("status") == "conflict":
@@ -665,6 +670,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         project_id: str,
         variant_id: str,
         source: str,
+        expected_updated_at: Optional[str],
         system: Optional[dict[str, Optional[str]]] = None,
         components: Optional[list[dict]] = None,
         interactions: Optional[list[dict]] = None,
@@ -698,6 +704,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
           the first call of a new import, after an error about a conflicting
           draft, renumbering, or a context change while drafting. Re-read the
           saved model and rebuild all row IDs and references before restarting.
+        - expected_updated_at: required updated_at from the model originally
+          read with get_merged_context(include_model=true), including null.
+          A changed revision rejects the proposal; re-read and rebuild IDs
+          before restarting with replace=true.
 
         The whole draft is validated like a save; an invalid call returns the
         invalid fields and keeps the previous draft. For a large model, call
@@ -708,7 +718,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         return _propose_variant_threat_model_impl(
             client, project_id, variant_id, source, system,
             {"components": components, "interactions": interactions, "threats": threats, "risks": risks},
-            remove_ids, texts, replace,
+            remove_ids, texts, replace, expected_updated_at=expected_updated_at,
         )
 
     @server.tool()

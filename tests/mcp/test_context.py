@@ -481,6 +481,7 @@ class TestAiContextFormGuide:
         assert "include_model" in tools["get_merged_context"].input_schema["properties"]
         propose = tools["propose_variant_threat_model"].input_schema["properties"]
         assert {"source", "system", "components", "remove_ids", "environment", "replace"} <= set(propose)
+        assert "expected_updated_at" in tools["propose_variant_threat_model"].input_schema["required"]
         assert "pending review" in tools["propose_variant_threat_model"].description
         assert "read_import_source" in tools
 
@@ -561,12 +562,38 @@ def _echo_put():
 
 class TestProposeThreatModel:
 
+    @pytest.mark.parametrize("original_revision", [None, "2026-11-09T00:00:00Z"])
+    def test_first_proposal_rejects_a_collision_since_the_original_read(self, client, original_revision):
+        with respx.mock:
+            _mock_context()
+            put = _echo_put()
+            result = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", replace=True,
+                expected_updated_at=original_revision,
+                rows={"components": [{"id": "C2", "name": "Updater"}]})
+        assert "changed while drafting" in result and "replace=true" in result
+        assert not put.called
+
+    def test_first_proposal_accepts_an_explicit_null_revision(self, client):
+        ctx = _saved_context({section: [] for section in SAVED_STRIDE})
+        ctx["editor"]["updated_at"] = None
+        with respx.mock:
+            _mock_context()
+            respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(200, json=ctx))
+            put = _echo_put()
+            result = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", replace=True, expected_updated_at=None,
+                rows={"components": [{"id": "C1", "name": "Updater"}]})
+        assert result.startswith("Draft stored")
+        assert json.loads(put.calls.last.request.content)["base_updated_at"] is None
+
     def test_first_proposal_builds_on_the_saved_model(self, client):
         with respx.mock:
             _mock_context()
             put = _echo_put()
             result = _propose_variant_threat_model_impl(
-                client, "p1", "v1", "report.pdf", system={"actors": "Admins"},
+                client, "p1", "v1", "report.pdf", expected_updated_at="2026-11-10T00:00:00Z",
+                system={"actors": "Admins"},
                 rows={"components": [{"id": "C3", "name": "Updater"}]}, texts={"environment": ""})
         body = json.loads(put.calls.last.request.content)
         assert body["source"] == "report.pdf" and body["base_updated_at"] == "2026-11-10T00:00:00Z"
@@ -586,6 +613,7 @@ class TestProposeThreatModel:
             _mock_context(pending)
             put = _echo_put()
             _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf",
+                                               expected_updated_at="2026-11-10T00:00:00Z",
                                                rows={"threats": [{"id": "T2", "category": "tampering",
                                                                   "target_ids": ["C3"]}]})
         values = json.loads(put.calls.last.request.content)["values"]
@@ -596,10 +624,12 @@ class TestProposeThreatModel:
     def test_conflicting_draft_needs_replace(self, client):
         with respx.mock:
             _mock_context({"status": "conflict", "values": None, "conflicts": [{"path": "components[C1]"}]})
-            refused = _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf")
+            refused = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", expected_updated_at="2026-11-10T00:00:00Z")
             put = _echo_put()
             draft_reads = respx.calls.call_count
-            replaced = _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf", replace=True)
+            replaced = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", replace=True, expected_updated_at="2026-11-10T00:00:00Z")
             calls = respx.calls.call_count
         assert refused.startswith("Error:") and "replace=true" in refused
         assert replaced.startswith("Draft stored") and put.called
@@ -613,6 +643,7 @@ class TestProposeThreatModel:
             put = _echo_put()
             first = _propose_variant_threat_model_impl(
                 client, "p1", "v1", "report.pdf",
+                expected_updated_at="2026-11-10T00:00:00Z",
                 rows={"components": [{"id": "C3", "name": "Updater", "description": "", "trust_zone": ""}]})
             assert first.startswith("Draft stored")
             proposal = json.loads(put.calls.last.request.content)["values"]
@@ -633,10 +664,11 @@ class TestProposeThreatModel:
             _mock_context({"status": "rebased", "values": values, "renumbered": renumbered})
             refused = _propose_variant_threat_model_impl(
                 client, "p1", "v1", "report.pdf",
+                expected_updated_at="2026-11-10T00:00:00Z",
                 rows={"threats": [{"id": "T2", "category": "tampering", "target_ids": ["C3"]}]})
             assert put.call_count == 1
             restarted = _propose_variant_threat_model_impl(
-                client, "p1", "v1", "report.pdf", replace=True)
+                client, "p1", "v1", "report.pdf", replace=True, expected_updated_at="2026-11-10T00:00:00Z")
         assert "requires renumbering" in refused and "replace=true" in refused
         assert restarted.startswith("Draft stored") and put.call_count == 2
 
@@ -644,10 +676,14 @@ class TestProposeThreatModel:
         with respx.mock:
             _mock_context()
             respx.put(DRAFT_URL).mock(return_value=httpx.Response(409, json={"error": "changed", "updated_at": "y"}))
-            moved = _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf")
-            unknown = _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf", remove_ids=["C9"])
-            no_source = _propose_variant_threat_model_impl(client, "p1", "v1", " ")
-            bad_text = _propose_variant_threat_model_impl(client, "p1", "v1", "a", texts={"codebase_path": "/x"})
+            moved = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", expected_updated_at="2026-11-10T00:00:00Z")
+            unknown = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", remove_ids=["C9"], expected_updated_at="2026-11-10T00:00:00Z")
+            no_source = _propose_variant_threat_model_impl(
+                client, "p1", "v1", " ", expected_updated_at="2026-11-10T00:00:00Z")
+            bad_text = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "a", texts={"codebase_path": "/x"}, expected_updated_at="2026-11-10T00:00:00Z")
         assert "changed while drafting" in moved and "replace=true" in moved
         assert unknown == "Error: Cannot remove unknown ids: C9."
         assert no_source.startswith("Error:") and bad_text.startswith("Error:")
