@@ -484,6 +484,7 @@ class TestAiContextFormGuide:
         assert "expected_updated_at" in tools["propose_variant_threat_model"].input_schema["required"]
         assert "pending review" in tools["propose_variant_threat_model"].description
         assert "read_import_source" in tools
+        assert tools["read_import_source"].input_schema["properties"]["new_import"]["type"] == "boolean"
 
 
 class TestAiContextImportSkill:
@@ -707,6 +708,11 @@ class TestProposeThreatModel:
             respx.get(f"{BASE_URL}/api/variants/v2/context/import-source/source").mock(
                 return_value=httpx.Response(404, json={"error": "No import source uploaded."}))
             found = _import_source_impl(client, "v1", {"operation": "search", "query": "CSRF"})
+            restarted_route = respx.get(f"{BASE_URL}/api/variants/v1/context/import-source/source").mock(
+                return_value=httpx.Response(200, json={"name": "new.pdf", "matches": [], "revision": "source-b"}))
+            restarted = _import_source_impl(client, "v1", {}, new_import=True)
             missing = _import_source_impl(client, "v2", {})
         assert json.loads(found)["name"] == "r.pdf"
+        assert json.loads(restarted)["name"] == "new.pdf"
+        assert "revision" not in restarted_route.calls[0].request.url.params
         assert missing == "Error: No import source uploaded."
