@@ -8,7 +8,6 @@ from typing import Dict, Any, List, Optional
 import uuid
 
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
-from ..helpers.assessment_io import scoped_packages
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from ..helpers.export_files import file_metadata, INVENTORY_UNKNOWN_COMMENT
 from ..helpers.export_evidence import dependency_relationships, export_evidence, EVIDENCE_PREFIX
@@ -164,22 +163,34 @@ class SPDX3:
         }
 
     def generate_assessment_relationships(self, vuln_id: str) -> List[Dict[str, Any]]:
-        """Export the latest approved assessment for each in-scope package."""
-        latest: Dict[str, Assessment] = {}
+        """Consolidate current target verdicts without hiding affected variants."""
+        latest: Dict[tuple[Optional[str], str], Assessment] = {}
         scope = self.assessmentsCtrl.scope
+        allowed_variants = {str(variant_id) for variant_id in scope.variant_ids} if scope is not None else None
+        current_variant_id = self.assessmentsCtrl.current_variant_id
+        dto_variant_id = str(current_variant_id) if current_variant_id is not None else None
         for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_id):
             if assessment.origin == "ai":
                 continue
-            for package_id in scoped_packages(assessment, scope.variant_ids if scope is not None else None):
+            targets: List[tuple[Optional[str], str]] = [
+                (target["variant_id"], target["package"]) for target in assessment.target_pairs
+            ] or [(dto_variant_id, package_id) for package_id in assessment.packages]
+            for variant_id, package_id in targets:
+                if allowed_variants is not None and variant_id is not None and variant_id not in allowed_variants:
+                    continue
                 if package_id not in self.pkg_to_ref:
                     continue
-                previous = latest.get(package_id)
+                target_key = (variant_id, package_id)
+                previous = latest.get(target_key)
                 if previous is None or (
                     normalize_timestamp_for_sort(previous.timestamp)
                     < normalize_timestamp_for_sort(assessment.timestamp)
                 ):
-                    latest[package_id] = assessment
+                    latest[target_key] = assessment
 
+        by_package: Dict[str, List[Assessment]] = {}
+        for (_, package_id), assessment in latest.items():
+            by_package.setdefault(package_id, []).append(assessment)
         status_map = {
             "not_affected": ("NotAffected", "doesNotAffect"),
             "affected": ("Affected", "affects"),
@@ -188,11 +199,22 @@ class SPDX3:
         }
         justification_map = {value: key for key, value in FastSPDX3.JUSTIFICATION_MAP.items()}
         relationships = []
-        for package_id, assessment in latest.items():
-            status = assessment.get_status_openvex()
-            if status not in status_map:
-                warn(f"[SPDX3 export {vuln_id!r}] unsupported assessment status {assessment.status!r}")
+        for package_id, current_assessments in by_package.items():
+            statuses = {assessment.get_status_openvex() or "" for assessment in current_assessments}
+            if not statuses <= status_map.keys():
+                warn(f"[SPDX3 export {vuln_id!r}] unsupported assessment statuses {statuses!r}")
                 continue
+            conflicting = len(statuses) > 1
+            status = next(iter(statuses))
+            if conflicting:
+                status = "affected" if "affected" in statuses else "under_investigation"
+            matching_assessments = [
+                assessment for assessment in current_assessments if assessment.get_status_openvex() == status
+            ]
+            assessment = max(
+                matching_assessments or current_assessments,
+                key=lambda assessment: normalize_timestamp_for_sort(assessment.timestamp),
+            )
             vex_type, relationship_type = status_map[status]
             relationship = self.generate_relationship(
                 self.vuln_to_ref[vuln_id], [self.pkg_to_ref[package_id]], relationship_type,
@@ -204,18 +226,26 @@ class SPDX3:
                     normalize_timestamp_for_sort(assessment.timestamp).astimezone(timezone.utc)
                     .strftime("%Y-%m-%dT%H:%M:%SZ")
                 )
-            if assessment.status_notes:
-                relationship["security_statusNotes"] = assessment.status_notes
-            if status == "not_affected":
-                justification = assessment.get_justification_openvex()
-                if justification in justification_map:
-                    relationship["security_justificationType"] = justification_map[justification]
-                if assessment.impact_statement:
-                    relationship["security_impactStatement"] = assessment.impact_statement
-            elif assessment.impact_statement:
-                relationship["description"] = assessment.impact_statement
-            if status == "affected":
-                relationship["security_actionStatement"] = assessment.workaround or ""
+            notes = assessment.status_notes if matching_assessments else ""
+            if conflicting:
+                conflict_note = (
+                    f"Consolidated export: conflicting current variant statuses ({', '.join(sorted(statuses))}); "
+                    f"reported as {status}."
+                )
+                notes = f"{conflict_note}\n{notes}" if notes else conflict_note
+            if notes:
+                relationship["security_statusNotes"] = notes
+            if matching_assessments:
+                if status == "not_affected":
+                    justification = assessment.get_justification_openvex()
+                    if justification in justification_map:
+                        relationship["security_justificationType"] = justification_map[justification]
+                    if assessment.impact_statement:
+                        relationship["security_impactStatement"] = assessment.impact_statement
+                elif assessment.impact_statement:
+                    relationship["description"] = assessment.impact_statement
+                if status == "affected":
+                    relationship["security_actionStatement"] = assessment.workaround or ""
             relationships.append(relationship)
         return relationships
 

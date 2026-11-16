@@ -21,13 +21,20 @@ One `export` call can write several formats:
 
 ## Assessments in SPDX 3 exports
 
-SPDX 3 JSON-LD includes the latest approved assessment for each exported
-vulnerability/package pair as a native VEX relationship. Re-importing it into
+SPDX 3 JSON-LD selects the latest approved assessment for each exact
+variant/package target, then emits a native VEX relationship for each exported
+vulnerability/package pair. Re-importing a single-variant export into
 another variant restores `not_affected`, `affected`, `fixed`, and
 `under_investigation` statuses, status notes, assessment dates, not-affected
 justifications and impact statements, and affected action statements.
 Pending AI suggestions and out-of-scope assessment targets are excluded.
 This is a current-status export, not an assessment-history backup.
+
+Project and global exports consolidate shared packages across variants. If
+their current verdicts conflict, `affected` takes precedence; other conflicting
+verdicts become `under_investigation`. Status notes explain the conflict.
+An older verdict superseded on the same variant does not influence this
+consolidation. Export variants separately to preserve their individual verdicts.
 
 Free-text vulnerability descriptions use the vulnerability's `description`
 field. Assessment notes use `security_statusNotes`, and not-affected reasoning
