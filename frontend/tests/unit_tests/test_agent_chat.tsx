@@ -8,7 +8,7 @@ import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type {
     AgentAction, AgentContext, AgentConversationSummary, AgentLiveTurn, AgentMessage, AgentQueuePaused, AgentRequestRecord,
 } from '../../src/types/agent';
-import { __resetAgentQueue, __setEventSourceFactory, getAgentQueue, openAgentChat } from '../../src/handlers/agentQueue';
+import { __resetAgentQueue, __setEventSourceFactory, getAgentQueue, openAgentChat, setActiveConversation } from '../../src/handlers/agentQueue';
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
 const signedIn = { authenticated: true, login: 'tester', configured: true, device_login: true,
@@ -434,6 +434,29 @@ test('text typed while a message is being queued stays in the composer', async (
     await act(async () => release());
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Waiting in the AI queue · #1'));
     expect(composer).toHaveValue('Second, typed meanwhile');
+});
+
+test.each(['other', 'main'])('a pending send preserves a new identical draft after switching to %s', async activeId => {
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    serve(signedIn, (path, options) => {
+        if (path !== '/api/agent/queue' || options?.method !== 'POST') return undefined;
+        const body = JSON.parse(String(options.body)) as Posted;
+        posted.push(body);
+        return held.then(() => jsonResponse(accept(body), 202));
+    });
+    renderChat();
+    await screen.findByRole('button', { name: 'Summarize vulnerabilities' });
+    hold(record('action', { kind: 'assess', lane: 'action', conversation_id: 'other', title: 'CVE-1' }));
+    const composer = screen.getByRole('textbox', { name: 'Message the agent' });
+    fireEvent.change(composer, { target: { value: 'Why?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    act(() => setActiveConversation('other'));
+    if (activeId === 'main') act(() => setActiveConversation('main'));
+    fireEvent.change(composer, { target: { value: 'Why?' } });
+    await act(async () => release());
+    expect(composer).toHaveValue('Why?');
 });
 
 test('sends every selected variant so the backend enforces the displayed scope', async () => {
