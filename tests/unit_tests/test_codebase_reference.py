@@ -229,6 +229,7 @@ def test_read_response_byte_limit_and_long_lines(monkeypatch):
 
 import shutil
 import subprocess
+import sys
 import zipfile as _zipfile
 from io import BytesIO as _BytesIO
 from unittest.mock import patch as _patch
@@ -294,23 +295,74 @@ def test_pdf_without_text_and_garbage_pdf_are_errors():
         assert reference.search("x")["skipped_binary_files"] == 1
 
 
-@pytest.mark.parametrize("outcome,message", [
-    (subprocess.CompletedProcess([], 1, b"", b"Command Line Error: Incorrect password\n"), "encrypted"),
-    (subprocess.TimeoutExpired("pdftotext", 30), "timed out"),
-    (FileNotFoundError("pdftotext"), "unavailable"),
-])
-def test_pdf_failures_are_value_errors(outcome, message):
-    effect = {"side_effect": outcome} if isinstance(outcome, BaseException) else {"return_value": outcome}
-    with _patch("src.helpers.codebase_reference.subprocess.run", **effect):
+def _pdf_process(monkeypatch, script):
+    from src.helpers import codebase_reference
+
+    processes = []
+    popen = subprocess.Popen
+
+    def start(*args, **kwargs):
+        process = popen([sys.executable, "-c", script], **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(codebase_reference.subprocess, "Popen", start)
+    return processes
+
+
+def test_missing_pdf_extractor_is_a_value_error():
+    with _patch("src.helpers.codebase_reference.subprocess.Popen", side_effect=FileNotFoundError("pdftotext")):
         with _Reference(_BytesIO(b"%PDF-1.4"), "locked.pdf") as reference:
-            with pytest.raises(ValueError, match=message):
+            with pytest.raises(ValueError, match="unavailable"):
                 reference.text("locked.pdf")
 
 
-def test_pdf_text_is_capped():
+def test_encrypted_pdf_extraction_is_a_value_error(monkeypatch):
     from src.helpers import codebase_reference
 
-    big = subprocess.CompletedProcess([], 0, b"a" * 100 + b"\f", b"")
-    with _patch("src.helpers.codebase_reference.subprocess.run", return_value=big), \
-            _patch.object(codebase_reference, "PDF_TEXT_LIMIT", 50):
-        assert len(codebase_reference._pdf_text(b"%PDF").encode()) == 50
+    processes = _pdf_process(monkeypatch, "import sys; sys.stderr.write('Incorrect password'); sys.exit(1)")
+    with pytest.raises(ValueError, match="encrypted"):
+        codebase_reference._pdf_text(b"%PDF")
+    assert processes[0].returncode == 1
+
+
+@pytest.mark.parametrize("script", [
+    "import sys,time; sys.stdout.write('a' * 51); sys.stdout.flush(); time.sleep(20)",
+    "import sys,time; sys.stderr.write('a' * 33); sys.stderr.flush(); time.sleep(20)",
+    "import sys; sys.stdout.write('a' * 40 + '\\f')",
+])
+def test_pdf_output_budget_rejects_overflow_and_reaps_the_child(monkeypatch, script):
+    from src.helpers import codebase_reference
+
+    monkeypatch.setattr(codebase_reference, "PDF_TEXT_LIMIT", 50)
+    monkeypatch.setattr(codebase_reference, "MAX_RESPONSE_BYTES", 32)
+    processes = _pdf_process(monkeypatch, script)
+    with pytest.raises(ValueError, match="size limit"):
+        codebase_reference._pdf_text(b"%PDF")
+    assert processes[0].returncode is not None
+    assert processes[0].stdout.closed and processes[0].stderr.closed
+
+
+def test_pdf_timeout_terminates_and_reaps_the_child(monkeypatch):
+    from src.helpers import codebase_reference
+
+    monkeypatch.setattr(codebase_reference, "PDF_TIMEOUT", 0.05)
+    processes = _pdf_process(monkeypatch, "import time; time.sleep(20)")
+    with pytest.raises(ValueError, match="timed out"):
+        codebase_reference._pdf_text(b"%PDF")
+    assert processes[0].returncode is not None
+    assert processes[0].stdout.closed and processes[0].stderr.closed
+
+
+@pytest.mark.parametrize("operation", ["read", "search"])
+def test_pdf_budget_errors_are_reported_by_read_and_search(monkeypatch, operation):
+    from src.helpers import codebase_reference
+
+    monkeypatch.setattr(codebase_reference, "PDF_TEXT_LIMIT", 50)
+    _pdf_process(monkeypatch, "import sys; sys.stdout.write('a' * 51)")
+    with _Reference(_BytesIO(b"%PDF"), "large.pdf") as reference:
+        with pytest.raises(ValueError, match="size limit"):
+            if operation == "read":
+                reference.read_lines("large.pdf")
+            else:
+                reference.search("a")

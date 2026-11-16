@@ -371,6 +371,10 @@ the embedded agent. The agent follows the `ai-context-import` skill and
 prepares a **draft** of the System, Threat model and Risks tabs (and, when the
 document states them, the Context texts). It never saves.
 
+- Documents, including the compressed archive itself, are limited to 10 MB.
+  PDF extraction is limited to 2 MB of text, including page markers, and
+  30 seconds. Exceeding a limit rejects the document with an error rather
+  than importing incomplete text.
 - The button is disabled while the variant has unsaved changes: save or
   discard them first.
 - While the action is queued or running, the variant is read-only. A queued

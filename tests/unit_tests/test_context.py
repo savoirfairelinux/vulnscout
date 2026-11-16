@@ -1211,3 +1211,58 @@ class TestImportSourceRoutes:
                 patch("src.helpers.codebase_reference._pdf_text", side_effect=ValueError("PDF has no extractable text")):
             resp = self._post(client, variant, b"%PDF-1.4", "scan.pdf")
         assert resp.status_code == 400 and "no extractable text" in resp.get_json()["error"]
+
+    @pytest.mark.parametrize("archive", [False, True])
+    def test_source_byte_limit_preserves_the_existing_source_and_draft(self, client, variant, tmp_path, archive):
+        from io import BytesIO
+        from zipfile import ZipFile
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
+                patch("src.routes.context.MAX_FILE_BYTES", 256):
+            assert self._post(client, variant, b"saved", "saved.md").status_code == 201
+            assert client.put(f"/api/variants/{variant.id}/context/draft",
+                              json={"source": "saved.md", "base_updated_at": None,
+                                    "values": _draft_values()}).status_code == 200
+            if archive:
+                stream = BytesIO()
+                with ZipFile(stream, "w") as bundle:
+                    bundle.writestr("tiny.md", "text")
+                content, name = b"x" * 257 + stream.getvalue(), "bundle.zip"
+            else:
+                content, name = b"x" * 257, "large.md"
+            response = self._post(client, variant, content, name)
+            assert response.status_code == 413
+            assert "size limit" in response.get_json()["error"]
+            assert self._source(client, variant).get_json()["name"] == "saved.md"
+            assert client.get(f"/api/variants/{variant.id}/context/draft").status_code == 200
+
+    def test_source_at_the_byte_limit_is_accepted(self, client, variant, tmp_path):
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
+                patch("src.routes.context.MAX_FILE_BYTES", 256):
+            response = self._post(client, variant, b"x" * 256, "model.md")
+        assert response.status_code == 201 and response.get_json()["size"] == 256
+
+    def test_import_preserves_a_stricter_server_request_limit(self, client, variant):
+        with patch.dict(client.application.config, {"MAX_CONTENT_LENGTH": 128}):
+            response = self._post(client, variant, b"text", "model.md")
+        assert response.status_code == 413 and "size limit" in response.get_json()["error"]
+
+    @pytest.mark.parametrize("content_length", [True, False])
+    def test_request_limit_applies_before_unbounded_multipart_parsing(self, client, variant, tmp_path, content_length):
+        from io import BytesIO
+        from werkzeug.test import EnvironBuilder
+
+        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)), \
+                patch("src.routes.context.MAX_FILE_BYTES", 256):
+            builder = EnvironBuilder(path=f"/api/variants/{variant.id}/context/import-source", method="POST",
+                                     data={"file": (BytesIO(b"x" * (64 * 1024 + 257)), "large.md")})
+            try:
+                environ = builder.get_environ()
+                if not content_length:
+                    environ.pop("CONTENT_LENGTH", None)
+                    environ["wsgi.input_terminated"] = True
+                response = client.open(environ)
+            finally:
+                builder.close()
+        assert response.status_code == 413
+        assert "size limit" in response.get_json()["error"]
