@@ -19,6 +19,21 @@ One `export` call can write several formats:
 ./vulnscout export -p demo spdx cdx openvex
 ```
 
+## Assessments in SPDX 3 exports
+
+SPDX 3 JSON-LD includes the latest approved assessment for each exported
+vulnerability/package pair as a native VEX relationship. Re-importing it into
+another variant restores `not_affected`, `affected`, `fixed`, and
+`under_investigation` statuses, status notes, assessment dates, not-affected
+justifications and impact statements, and affected action statements.
+Pending AI suggestions and out-of-scope assessment targets are excluded.
+This is a current-status export, not an assessment-history backup.
+
+Free-text vulnerability descriptions use the vulnerability's `description`
+field. Assessment notes use `security_statusNotes`, and not-affected reasoning
+uses `security_impactStatement`; impact text for other statuses uses the VEX
+relationship's `description`. Multiline text is retained on re-import.
+
 ## Recorded files in SPDX exports
 
 SPDX 2.3 (JSON/XML) and SPDX 3.0 JSON-LD exports include file records persisted
