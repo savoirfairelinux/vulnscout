@@ -10,6 +10,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.25.0] - 2026-11-17
+
+### Added
+- CLI: add `assess` and `review` commands, with target selection, dry runs, JSON reports, model selection and timeouts, plus the container entrypoint's `--ai-assess` and `--ai-review` options.
+- AI agent: run assessments and custom assessment reviews through dedicated skill profiles, verify saved results per target, and share a backend AI queue across the web interface and CLI with HTTP and SSE updates.
+- AI context: fill the threat model from an uploaded document with AI, including PDF text extraction, temporary import sources, reviewable drafts and three-way rebasing, with matching MCP tools and an import skill.
+- AI context: let a STRIDE risk group several threats, migrate existing risks, and export context format 2.1 while upgrading format 2.0 imports.
+- AI context: add directory-based codebase references, discover directories populated by CI, and raise the file entry limit to 500,000.
+- Vulnerabilities: record metadata change history, persist exact scoped refresh runs and immutable change artifacts, and export refresh changes and timestamp-based history as JSON or CSV.
+- Vulnerabilities: export each vulnerability's latest refresh changes and optionally clean up refresh history.
+- SBOM: import and display recorded file evidence, package associations and build metadata from SPDX formats and CycloneDX, distinguish recipe inputs from compiled sources, and expose compiler observations and provenance through MCP.
+- SBOM: export recorded files, package associations and scoped evidence in SPDX, and use complete source and build evidence to refine CVE matching.
+- Settings: rename projects and variants in place.
+- Assessments: choose Manual or AI mode when adding an assessment.
+
+### Changed
+- AI agent: make the connection process-wide, share CLI runner helpers, and keep queued actions target-scoped across connection changes.
+- AI context: simplify threat-model tables and coordinate draft loading, saving, rebasing and discarding across clients.
+- Refresh: move refresh controls and history exports into the Refresh tab, group queued provider steps, and bound persisted run listings and response payloads.
+- Dependencies: redesign the SBOM dependency explorer with simpler controls, clearer tree rows and preserved relationship evidence.
+- UI: pin selection and action columns, fit table headers, wrap filter bars on narrow screens, and keep target selector columns stable.
+- Logging: add terminal-aware colors to Flask logs while respecting deployment logging handlers.
+- Performance: preload linked packages when reprocessing SBOMs and batch scoped evidence lookups.
+- Documentation: document CLI AI assessment and review, shared AI queues, threat-model drafts, recorded file evidence and SPDX3 assessment roundtrips.
+
+### Removed
+- CLI: remove the deprecated legacy flag grammar; use command-first syntax instead.
+
+### Fixed
+- Vulnerabilities: keep severity consistent between the API and reports, classify zero CVSS scores as none, preserve missing scores and unscored rating metadata in the UI and exports, and scope CVSS data correctly across variants.
+- Refresh: fix individual CVE refreshes with multiple CVSS metrics, preserve individual refresh history and scope, deduplicate NVD reference links, serialize snapshots and source finalization, validate run identifiers, and preserve EPSS failures.
+- Assessments: aggregate vulnerability status per package target, scope the vulnerability modal to the selected project and variant, and start timelines at the first recorded assessment.
+- AI agent: retain drafts during pending sends, recheck connections before enqueueing, recover views after queue interruptions, and use the logged-in Copilot user for web queue turns without a configuration.
+- CLI AI actions: evaluate filters per active target, let assessment turns revise their own pending assessments, bound queued selections, and report interrupted review runs as failures even when reviews were saved.
+- AI context: preserve concurrent edits and draft identities, guard cleanup and continuations by revision, refresh accepted context across clients, bind imports to source revisions, bound document uploads and PDF extraction, and invalidate assessments when new codebase uploads become visible.
+- SBOM: preserve imported files on CycloneDX reimport, retain complete build and package file evidence, prefer authoritative identifiers, preserve epoch aliases and bare package metadata, and reconcile epoch versions within an SBOM.
+- SPDX: preserve scoped identifiers, dependency declarations and lifecycle evidence, keep recorded-file exports standards-valid, round-trip assessments, consolidate current variant verdicts, exclude obsolete targets, and normalize imported assessment timestamps.
+- Imports and migrations: support SPDX tar.xz archives in the backend and web interface, repair migration chains, and migrate STRIDE risks in bounded batches.
+- UI: keep the agent chat height independent of open modals, show connector setup in a standalone view, allow cancelling inline renames throughout the editor, and keep vulnerability links scrollable.
+- Scans: bound oversized scan result responses.
+
+---
+
 ## [0.24.0] - 2026-10-29
 
 ### Added
