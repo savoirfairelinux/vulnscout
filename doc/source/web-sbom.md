@@ -21,6 +21,8 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
 - **Remaining Pending Vulnerabilities** — the count of vulnerabilities still awaiting triage for this package.
 
+CPEs and PURLs declared by the SBOM are kept as-is. Only components that declare neither receive a generic `cpe:2.3:a:*:<name>:<version>` CPE and `pkg:generic/<name>@<version>` PURL.
+
 **Release version** shows the release identified from the SBOM, PURL, or CPE.
 **Source revision** shows the Git commit, shortened to 12 characters. Hover either
 value to inspect its source information and the full revision. Missing values
@@ -47,6 +49,10 @@ means the imported SBOMs recorded no files for the package.
 **Compilation recorded** means a compiler target records the file as an input.
 **Other build input** includes recipe or packaging tasks and does not prove
 compilation. **Listed only** means no associated build task was recorded.
+**Binary / output** identifies explicitly contained SPDX 2 binaries and output
+artifacts; use the corresponding filter to inspect them, including their original
+file types, hashes, and licenses. These associations never count as compiled source
+or enable CVE source exclusion. Reimport older SPDX 2 SBOMs to populate them.
 None of these proves inclusion in the final firmware. The summary distinguishes
 file records from unique compiled source paths. The browser presents the
 recorded evidence without a CVE-matching policy banner; see

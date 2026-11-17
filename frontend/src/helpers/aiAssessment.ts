@@ -1,64 +1,14 @@
-import type { QueuedAgentMessage } from '../types/agent';
 import type { AssessmentTargetPair } from '../handlers/assessments';
-import type { Variant } from '../handlers/variant';
 import type { Vulnerability } from '../handlers/vulnerabilities';
-import { AGENT_MESSAGE_MAX_LENGTH, type AgentContext } from '../types/agent';
+import type { AgentContext } from '../types/agent';
 
+/** The backend's dedupe key for an assessment of these targets (src/controllers/ai_actions.py). */
 export const assessmentKey = (vulnerabilityId: string, targets: AssessmentTargetPair[]) =>
     `assess:${vulnerabilityId}:${targets.map(target => `${target.variant_id}|${target.package}`).sort().join(',')}`;
 
-/** Dedupe prefix for per-vulnerability assessments queued from a table scope. */
-export const bulkAssessmentKeyPrefix = ({ projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation }: AgentContext) =>
-    `assess:${JSON.stringify([projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation])}:`;
-
-/** Keep each variant whole so its packages are assessed together. */
-export function buildAiAssessmentMessages(
-    vulnerabilityId: string,
-    targets: AssessmentTargetPair[],
-    variants: Variant[] = [],
-): Omit<QueuedAgentMessage, 'id'>[] {
-    if (!targets.length) throw new Error(`No active assessment targets for ${vulnerabilityId}.`);
-    const variantName = (id?: string | null) => variants.find(variant => variant.id === id)?.name;
-    const variantLabel = (id?: string | null) => {
-        const name = variantName(id);
-        return name ? `"${name}" (variant_id ${id})` : `variant_id ${id}`;
-    };
-    const groupMap = new Map<string, AssessmentTargetPair[]>();
-    targets.forEach(target => {
-        const id = target.variant_id ?? '';
-        groupMap.set(id, [...(groupMap.get(id) ?? []), target]);
-    });
-    const groups = [...groupMap.values()];
-    const lines = groups.map(group =>
-        `- variant ${variantLabel(group[0].variant_id)}: ${group.map(target => target.package).join(', ')}`);
-    const prompt = (batchLines: string[], batch = '') =>
-        `Assess ${vulnerabilityId}${batch} for exactly these targets (packages listed per variant):\n${batchLines.join('\n')}\n` +
-        `Retrieve the vulnerability details and each variant's merged context with VulnScout MCP first, ` +
-        `then record the result with write_assessment for these targets only.`;
-    const budget = AGENT_MESSAGE_MAX_LENGTH - ' (batch 9999 of 9999)'.length;
-    const oversized = groups.filter((_, index) => prompt([lines[index]]).length > budget);
-    if (oversized.length) {
-        const names = oversized.map(group => variantName(group[0].variant_id) ?? group[0].variant_id).join(', ');
-        throw new Error(`Too many packages selected for variant ${names} to assess with AI in one request. Select fewer packages for that variant.`);
-    }
-    const batches: number[][] = [];
-    lines.forEach((line, index) => {
-        const current = batches[batches.length - 1];
-        if (current && prompt([...current.map(i => lines[i]), line]).length <= budget) current.push(index);
-        else batches.push([index]);
-    });
-    return batches.map((indexes, index) => {
-        const batchTargets = indexes.flatMap(i => groups[i]);
-        const unique = (values: string[]) => [...new Set(values)].join(', ');
-        const batchLabel = batches.length > 1 ? ` (batch ${index + 1} of ${batches.length})` : '';
-        return {
-            key: assessmentKey(vulnerabilityId, targets), kind: 'assess',
-            text: prompt(indexes.map(i => lines[i]), batchLabel),
-            title: `${batchTargets.length} target${batchTargets.length === 1 ? '' : 's'}${batches.length > 1 ? ` · batch ${index + 1} of ${batches.length}` : ''}`,
-            detail: `${unique(batchTargets.map(target => variantName(target.variant_id) ?? target.variant_id ?? ''))} · ${unique(batchTargets.map(target => target.package))}`,
-        };
-    });
-}
+/** Match table scope metadata independently of the backend's target-derived action key. */
+export const assessmentScopeIdentity = ({ projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation }: AgentContext) =>
+    JSON.stringify([projectId, variantId, baseVariantId, compareOperation, variantIds?.slice().sort(), multiOperation]);
 
 /** Resolve real variant/package pairs, never a Cartesian product of table packages and variants. */
 export async function loadAiAssessmentTargets(

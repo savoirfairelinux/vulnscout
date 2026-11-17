@@ -52,6 +52,8 @@ _VULN_ID = {
     "description": "Vulnerability identifier (for example CVE, GHSA or an imported advisory ID); not a UUID.",
     "example": "CVE-2025-0001",
 }
+_AGENT_CONTEXT = {"type": "object", "additionalProperties": True,
+                  "description": "The browser page the request comes from (page, project and variant selection)."}
 _PACKAGES = _array(_PACKAGE_ID)
 _VULNS = _array(_VULN_ID)
 _OPENVEX_STATUSES = ["under_investigation", "not_affected", "affected", "fixed"]
@@ -79,14 +81,13 @@ _VEX_FIELDS = {
 }
 _CONTEXT_FIELDS = {
     name: _TEXT for name in (
-        "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
+        "variant_description", "environment", "threat_model", "risks", "other_info",
     )
 }
 # Variant context fields stored as plain text; the threat model and risks are rendered from STRIDE.
 _CONTEXT_TEXT_FIELDS = {
-    name: _TEXT for name in ("variant_description", "codebase_path", "environment", "other_info")
+    name: _TEXT for name in ("variant_description", "environment", "other_info")
 }
-_CODEBASE_SOURCE = {"type": "string", "enum": ["paths", "references"]}
 _STRIDE_ROWS = {"maxItems": MAX_ROWS}
 _RATING = {"type": "string", "enum": [*RATINGS, None], "nullable": True}
 _EFFORT_KEYS = ("optimistic", "likely", "pessimistic")
@@ -420,6 +421,16 @@ SCHEMAS: dict[str, Any] = {
     "ContextFile": _object({
         "id": _UUID, "original_name": _STRING, "description": _TEXT,
     }, ("id", "original_name", "description")),
+    "CodebaseDirectory": _object({
+        "file_id": {"type": "string", "enum": ["directory"]},
+        "path": _TEXT,
+        "status": {"type": "string", "enum": [
+            "not_created", "ready", "missing", "unreadable", "unavailable",
+        ]},
+        "message": _STRING,
+        "file_count": {**_COUNT, "nullable": True},
+        "directory_count": {**_COUNT, "nullable": True},
+    }, ("file_id", "path", "status", "message", "file_count", "directory_count")),
     "ProjectContext": _object({
         "project_id": _UUID, "description": _TEXT,
     }, ("project_id", "description")),
@@ -441,25 +452,29 @@ SCHEMAS: dict[str, Any] = {
             "target_ids": _array(_STRING, minItems=1, description="Component or interaction IDs."),
         }, ("id", "category", "target_ids")), **_STRIDE_ROWS),
         "risks": _array(_object({
-            "threat_id": _STRING,
+            "id": {"type": "string", "pattern": r"^R[1-9]\d*$"},
+            "description": _TEXT,
+            "threat_ids": _array(_STRING, minItems=1, description="Threat IDs."),
             "likelihood": _RATING, "impact": _RATING,
             "mitigation": _TEXT, "residual": _TEXT,
-        }, ("threat_id",)), **_STRIDE_ROWS),
+        }, ("id", "threat_ids")), **_STRIDE_ROWS),
     }, description="Structured STRIDE model; rows reference earlier rows by ID."),
     "VariantContextEditor": _object({
-        "codebase_source": _CODEBASE_SOURCE, "codebase_path": _TEXT,
         "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
         "files": _array(_ref("ContextFile")), "updated_at": _DATE,
-    }, ("codebase_source", "codebase_path", "system", "stride", "files", "updated_at"),
-        description="Stored editor values, independent of the selected codebase source."),
+    }, ("system", "stride", "files", "updated_at"),
+        description="Stored system and STRIDE editor values."),
     "VariantContext": _object({
         "variant_id": _UUID, **_CONTEXT_FIELDS, "updated_at": _DATE,
         "files": _array(_ref("ContextFile")), "editor": _ref("VariantContextEditor"),
+        "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
     }, ("variant_id", "files", "editor"),
         description="Top-level fields are what agents see: threat_model and risks are rendered from STRIDE."),
     "MergedContext": _object({
         "project_id": _UUID, "description": _TEXT, "variant_id": _UUID,
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
+        "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
+        "editor": _ref("VariantContextEditor"),
     }, ("project_id", "variant_id", "description", "files")),
     "ScanConfiguration": _object({
         "exclude_native": _BOOL,
@@ -543,30 +558,6 @@ SCHEMAS: dict[str, Any] = {
         "cost": _NUMBER, "input_tokens": {**_INT, "nullable": True},
         "output_tokens": {**_INT, "nullable": True},
     }, ("cost", "input_tokens", "output_tokens")),
-    "AgentMessageRequest": _object({
-        "message": {"type": "string", "minLength": 1, "maxLength": 8000},
-        "model": {"type": "string", "minLength": 1, "maxLength": 100},
-        "action": {"type": "string", "enum": ["assess", "review"]},
-        "context": _object({
-            "page": {"type": "string", "enum": [
-                "metrics", "packages", "vulnerabilities", "scans", "review",
-                "exports", "settings", "ai", "unknown",
-            ]},
-            **{name: {"type": "string", "maxLength": 100} for name in (
-                "projectId", "variantId", "baseVariantId", "compareOperation", "multiOperation",
-            )},
-            "variantIds": _STRINGS, "view": _ref("JsonObject"),
-        }, ("page",), nullable=True),
-    }, ("message",)),
-    "AgentReply": _object({
-        "reply": _STRING, "model": _STRING, "usage": _ref("AgentUsage"),
-    }, ("reply", "model", "usage")),
-    "AgentConversation": _object({
-        "messages": _array(_object({
-            "role": {"type": "string", "enum": ["user", "assistant"]}, "content": _STRING,
-        }, ("role", "content"))),
-        "usage": _ref("AgentUsage"),
-    }, ("messages", "usage")),
     "AgentStatus": _object({
         "authenticated": _BOOL, "login": _TEXT, "configured": _BOOL, "device_login": _BOOL,
         "token_connected": _BOOL, "provider": _TEXT, "config_error": _TEXT,
@@ -601,20 +592,113 @@ SCHEMAS: dict[str, Any] = {
             _object({"authenticated": _BOOL, "cleanup_error": _TEXT}, ("authenticated", "cleanup_error")),
         ],
     },
+    "AgentQueueAction": {
+        "anyOf": [
+            _object({
+                "kind": {"type": "string", "enum": ["assess"]}, "vuln_id": {**_VULN_ID, "maxLength": 100},
+                "targets": _array(_object({
+                    "variant_id": _UUID, "package": {"type": "string", "minLength": 1, "maxLength": 300},
+                }, ("variant_id", "package")), minItems=1, maxItems=1000),
+                "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
+            }, ("kind", "vuln_id"),
+                description="Assess a vulnerability on the active targets in scope, or on the listed targets."),
+            _object({
+                "kind": {"type": "string", "enum": ["review"]}, "assessment_id": _UUID, "variant_id": _UUID,
+                "finding_ids": _array(_UUID, minItems=1, maxItems=1000),
+                "fingerprint": {"type": "string", "minLength": 1, "maxLength": 200, "description": (
+                    "Assessment content fingerprint pinned by the caller; an edit since then fails the review as "
+                    "changed. Pinned when the turn starts otherwise.")},
+                "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
+            }, ("kind", "assessment_id"), description="Review a custom assessment, optionally on one variant "
+                                                      "or some of its findings."),
+            _object({
+                "kind": {"type": "string", "enum": ["context-import"]},
+                "text": {"type": "string", "minLength": 1, "maxLength": 8000},
+                "title": {"type": "string", "minLength": 1, "maxLength": 120},
+                "detail": {"type": "string", "minLength": 1, "maxLength": 512},
+                "import_revision": {"type": "string", "minLength": 1, "maxLength": 128},
+                "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
+            }, ("kind", "text", "title", "detail", "import_revision"),
+                description="Draft a threat model from the uploaded document for one variant."),
+            _object({
+                "kind": {"type": "string", "enum": ["message"]},
+                "text": {"type": "string", "minLength": 1, "maxLength": 8000},
+                "key": {"type": "string", "maxLength": 500}, "context": _AGENT_CONTEXT,
+            }, ("kind", "text"), description="A chat message for the main or an existing conversation."),
+        ],
+    },
+    "AgentQueueSubmit": _object({
+        "conversation": {"type": "string", "description": "main, per-action, or an existing conversation ID."},
+        "source": {"type": "string", "minLength": 1, "maxLength": 100},
+        "model": {"type": "string", "maxLength": 100},
+        "timeout": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "context": _AGENT_CONTEXT, "require_ready": _BOOL,
+        "actions": _array(_ref("AgentQueueAction"), minItems=1, maxItems=500),
+    }, ("conversation", "source", "actions"), description=(
+        "Messages go to main or an existing conversation; assess, review and context-import actions to per-action."
+    )),
+    "AgentQueueSubmitted": _object({
+        "requests": _array(_object({"id": _STRING, "key": _STRING, "conversation_id": _STRING},
+                                   ("id", "key", "conversation_id"))),
+        "skipped": _array(_object({"key": _STRING, "request_id": _STRING, "request_ids": _array(_STRING)},
+                                  ("key", "request_id", "request_ids"))),
+    }, ("requests", "skipped")),
+    "AgentQueueRequest": _object({
+        "id": _STRING, "key": _STRING,
+        "kind": {"type": "string", "enum": ["assess", "review", "message", "context-import"]},
+        "lane": {"type": "string", "enum": ["action", "chat"]}, "conversation_id": _STRING, "source": _STRING,
+        "title": _STRING, "detail": _STRING, "model": _STRING, "import_revision": _TEXT,
+        "status": {"type": "string", "enum": ["queued", "running", "done", "failed", "cancelled"]},
+        "error": _TEXT, "error_code": _TEXT, "position": {**_INT, "nullable": True},
+        "created_at": {"type": "number"}, "started_at": _NUMBER, "finished_at": _NUMBER,
+        "context": {**_AGENT_CONTEXT, "nullable": True}, "text": _TEXT, "vuln_id": _TEXT, "assessment_id": _TEXT,
+        "timeout": _INT, "result": {"type": "object", "nullable": True, "additionalProperties": True,
+                                    "description": "Assess and review outcome, verified against the database."},
+    }, ("id", "key", "kind", "lane", "conversation_id", "source", "status", "error", "error_code", "position",
+        "result")),
+    "AgentQueueRequestStatus": _object({
+        "status": {"type": "string", "enum": ["removed", "stopping", "queued"]},
+    }, ("status",)),
+    "AgentQueueRemoved": _object({"removed": _COUNT}, ("removed",)),
+    "AgentConversationsDeleted": _object({"deleted": _COUNT}, ("deleted",)),
+    "AgentConversationSummary": _object({
+        "id": _STRING, "title": _STRING, "kind": {"type": "string", "enum": ["main", "action"]},
+        "profile": _TEXT, "archived": _BOOL, "created_at": {"type": "number"}, "last_used": {"type": "number"},
+        "message_count": _COUNT, "usage": _ref("AgentUsage"),
+        "live": _object({
+            "request_id": _STRING, "pending_message": _STRING, "live_reply": _STRING, "progress": _STRING,
+            "activity": _array(_object({"id": _TEXT, "name": _TEXT, "status": _STRING})),
+        }, nullable=True),
+    }, ("id", "title", "kind", "archived", "message_count", "usage", "live")),
+    "AgentConversation": {
+        "allOf": [
+            _ref("AgentConversationSummary"),
+            _object({"messages": _array(_object({
+                "role": {"type": "string", "enum": ["user", "assistant"]}, "content": _STRING,
+            }, ("role", "content")))}, ("messages",)),
+        ],
+    },
+    "AgentQueueSnapshot": _object({
+        "epoch": _STRING, "seq": _COUNT,
+        "paused": _object({"code": _STRING, "reason": _STRING}, ("code", "reason"), nullable=True),
+        "requests": _array(_ref("AgentQueueRequest")), "history": _array(_ref("AgentQueueRequest")),
+        "conversations": _array(_ref("AgentConversationSummary")),
+        "connection_revision": {**_COUNT, "description": "Changes when the agent connection or model changes."},
+    }, ("epoch", "seq", "paused", "requests", "history", "conversations", "connection_revision")),
     "SourceReferenceResult": {
         "anyOf": [
             _object({
-                "file_id": _UUID, "original_name": _STRING,
+                "file_id": _STRING, "original_name": _STRING,
                 "files": _array(_object({"path": _STRING, "size": _COUNT}, ("path", "size"))),
                 "total": _COUNT, "next_offset": {**_COUNT, "nullable": True},
             }, ("file_id", "original_name", "files", "total", "next_offset")),
             _object({
-                "file_id": _UUID, "original_name": _STRING, "path": _STRING, "content": _STRING,
+                "file_id": _STRING, "original_name": _STRING, "path": _STRING, "content": _STRING,
                 "start_line": _INT, "end_line": _INT, "total_lines": _COUNT,
                 "next_line": {**_INT, "nullable": True},
             }, ("file_id", "original_name", "path", "content", "start_line", "end_line", "total_lines", "next_line")),
             _object({
-                "file_id": _UUID, "original_name": _STRING, "truncated": _BOOL,
+                "file_id": _STRING, "original_name": _STRING, "truncated": _BOOL,
                 "searched_files": _COUNT, "skipped_binary_files": _COUNT,
                 "matches": _array(_object({"path": _STRING, "line": _INT, "text": _STRING}, ("path", "line", "text"))),
             }, ("file_id", "original_name", "matches", "truncated", "searched_files", "skipped_binary_files")),
@@ -623,7 +707,7 @@ SCHEMAS: dict[str, Any] = {
     "ContextExportProject": _object({
         "project_name": _STRING, "project_description": _TEXT,
         "variants": _array(_object({
-            "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS, "codebase_source": _CODEBASE_SOURCE,
+            "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS,
             "system": _ref("ContextSystem"), "stride_model": _ref("StrideModel"),
             "files": _array(
                 _object({"original_name": _STRING, "description": _TEXT}, ("original_name", "description")),
@@ -632,7 +716,7 @@ SCHEMAS: dict[str, Any] = {
         }, ("variant_name",))),
     }, ("project_name", "project_description", "variants")),
     "ContextExport": _object({
-        "version": {"type": "string", "example": "2.0"},
+        "version": {"type": "string", "example": "3.0"},
         "exported_at": _DATE, "projects": _array(_ref("ContextExportProject")),
     }, ("version", "exported_at", "projects")),
     "ContextImportEntry": _object({"project_name": _TEXT, "variant_name": _TEXT, "reason": _STRING}),
@@ -861,13 +945,12 @@ SCHEMAS.update({
     }, ("status", "op_id")),
     "ProjectContextUpdate": _object({"description": _TEXT}),
     "VariantContextUpdate": _object({
-        **_CONTEXT_TEXT_FIELDS, "codebase_source": _CODEBASE_SOURCE,
+        **_CONTEXT_TEXT_FIELDS,
         "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
     }, description=(
-        "With stride, an editor save storing every field (codebase_source required; the STRIDE "
+        "With stride, an editor save storing every field (the STRIDE "
         "model must describe a threat model). Without stride, a full replacement of the text fields; "
-        "threat_model and risks are read-only, and a new context uses codebase_source paths when "
-        "codebase_path is given, otherwise references."
+        "threat_model and risks are read-only. Source code is accessed through the variant's directory."
     )),
     "SbomUploadAccepted": _object({
         "op_id": _STRING, "scan_id": _UUID, "message": _STRING,
@@ -999,5 +1082,47 @@ SCHEMAS.update({
     "VulnerabilityRefreshResponse": _object({
         "vulnerabilities": _array(_ref("Vulnerability")),
     }, ("vulnerabilities",)),
+    "IndividualRefreshResponse": _object({
+        "run_id": _STRING,
+        "results": _map(_object({
+            "status": {"type": "integer"},
+            "body": {"type": "object", "nullable": True},
+        }, ("status", "body"))),
+    }, ("run_id", "results")),
     "ScanImportResult": SCHEMAS["ImportSummary"]["anyOf"][2],
+})
+SCHEMAS.update({
+    "ContextDraftValues": _object({
+        "variant_description": _TEXT, "environment": _TEXT, "other_info": _TEXT,
+        "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
+    }, ("system", "stride"), description=(
+        "Proposed model. A null text field keeps the saved value; an empty string clears it."
+    )),
+    "ContextDraft": _object({
+        "revision": _STRING,
+        "source": _STRING,
+        "status": {"type": "string", "enum": ["current", "rebased", "conflict"]},
+        "values": {**_ref("ContextDraftValues"), "nullable": True},
+        "conflicts": _array(_object({"path": _STRING, "reason": _STRING}, ("path", "reason"))),
+        "renumbered": _map(_STRING),
+        "base_updated_at": _DATE, "saved_updated_at": _DATE, "created_at": _DATE, "updated_at": _DATE,
+    }, ("revision", "source", "status", "values", "conflicts", "renumbered", "base_updated_at", "saved_updated_at")),
+    "ContextDraftDelete": _object({
+        "revision": {**_STRING, "nullable": True},
+    }, ("revision",)),
+    "ImportSource": _object({"name": _STRING, "size": _COUNT, "revision": _STRING}, ("name", "size", "revision")),
+    "ImportSourceResult": {"anyOf": [
+        _object(
+            {"name": _STRING, "revision": _STRING, **{
+                key: value for key, value in variant["properties"].items()
+                if key not in ("file_id", "original_name")}},
+            ("name", "revision", *[key for key in variant["required"] if key not in ("file_id", "original_name")]),
+        )
+        for variant in SCHEMAS["SourceReferenceResult"]["anyOf"]
+    ]},
+    "ContextDraftUpdate": _object({
+        "source": {"type": "string", "minLength": 1, "maxLength": 255},
+        "base_updated_at": _DATE, "values": _ref("ContextDraftValues"),
+        "import_revision": {"type": "string", "minLength": 1, "maxLength": 128},
+    }, ("source", "base_updated_at", "values")),
 })

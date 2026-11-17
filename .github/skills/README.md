@@ -29,6 +29,33 @@ Copy or symlink `sbom-dependencies/` into the same agent skills folder described
 below. Invoke it with the project and board/variant names; no package or
 assessment changes are made.
 
+## AI Context Import Skill
+
+[`ai-context-import/SKILL.md`](./ai-context-import/SKILL.md) drafts a variant's
+AI Context page (Context, System, Threat model and Risks tabs) from an input
+document: a Threagile model or report (`threagile.yaml`, `risks.json`,
+`report.pdf`; see [`references/threagile.md`](./ai-context-import/references/threagile.md)),
+another threat-model export, an architecture or security PDF, Markdown,
+or YAML/JSON. It replies with copy-ready values per form field and row, cites the source of each threat and risk, and marks
+uncertain values `[confirm: ...]`. Paste the values, review them and click
+**Save changes**, or, with the VulnScout MCP server connected, review them and
+confirm to let the skill save them through the MCP tools. It never saves
+without that confirmation. The input is treated as untrusted data; the skill
+does not extract archives, so extract them first and give it the directory.
+
+External clients: copy or symlink `ai-context-import/` into the agent skills
+folder described below, then ask, for example, “Fill the AI Context of project
+demo, variant default, from ./threagile-output/”. With the VulnScout MCP
+server connected, it reads the saved context to continue row IDs after the
+existing ones, and can send the values as a draft
+(`propose_variant_threat_model`) instead of saving. Reading PDFs needs
+`pdftotext` (poppler-utils) or the `pypdf` Python package.
+
+The built-in Agent runs it in embedded mode from **Fill from document** on
+the AI Context page: the document is uploaded to VulnScout, read with
+`read_import_source`, and the result is stored as a draft that the user
+reviews as unsaved changes, then saves or discards. The agent never saves it.
+
 ## Vulnerability Assessment Skill
 
 An AI agent skill for assessing the impact of a CVE (or GHSA advisory) on a software

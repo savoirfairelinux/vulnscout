@@ -154,7 +154,8 @@ describe('Packages Table', () => {
         const cell = await screen.findByRole('cell', { name: 'aaabbbccc Built component Workspace component' });
         expect(within(cell).getByText('Built component')).toBeTruthy();
         expect(within(cell).getByText('Workspace component')).toBeTruthy();
-        expect(screen.getByText('Total: 1')).toBeTruthy();
+        expect(screen.getAllByRole('row')).toHaveLength(2);
+        expect(screen.queryByText(/^Total:/)).toBeNull();
         expect(screen.queryByText('Original JSON-LD entries')).toBeNull();
     });
 
@@ -661,22 +662,42 @@ describe('Packages Table', () => {
         expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
     })
 
-    test('dependency actions are discoverable and open the correct scoped package by mouse or keyboard', async () => {
-        const fetch = jest.spyOn(global, 'fetch').mockImplementation(async input => {
-            const url = new URL(String(input));
-            return {
-                ok: true, json: async () => url.searchParams.has('counts')
-                    ? { counts: { [packages[0].id]: { in: 1, out: 0 }, [packages[1].id]: { in: 0, out: 1 } }, unrecorded: [] }
-                    : { documents: [{
-                        id: 'dependency-fixture', source_name: 'fixture.spdx', variant_id: 'dependency-v1', variant_name: 'default',
-                        dependencies_recorded: true, packages,
-                        edges: [{ package_id: packages[0].id, dependency_id: packages[1].id }],
-                    }] },
-            } as Response;
-        });
+    const mockDependencyFetch = () => jest.spyOn(global, 'fetch').mockImplementation(async input => {
+        const url = new URL(String(input));
+        return {
+            ok: true, json: async () => url.searchParams.has('counts')
+                ? { counts: { [packages[0].id]: { in: 1, out: 0 }, [packages[1].id]: { in: 0, out: 1 } }, unrecorded: [] }
+                : { documents: [{
+                    id: 'dependency-fixture', source_name: 'fixture.spdx', variant_id: 'dependency-v1', variant_name: 'default',
+                    dependencies_recorded: true, packages,
+                    edges: [{ package_id: packages[0].id, dependency_id: packages[1].id }],
+                }] },
+        } as Response;
+    });
+
+    // Each test passes its own dataRevision so the modal's module-level graph cache cannot satisfy it from an earlier test.
+    const renderDependencyTable = (dataRevision: number) => render(<TablePackages preferenceScopeKey="dependency-default"
+        packages={packages} variantId="dependency-v1" compareVariantId="dependency-v2" operation="intersection"
+        dataRevision={dataRevision} />);
+
+    const expectScopedDependencyRequests = (fetch: ReturnType<typeof mockDependencyFetch>) => {
+        const requests = fetch.mock.calls.map(([input]) => new URL(String(input)));
+        expect(requests.some(url => url.searchParams.has('counts'))).toBe(true);
+        expect(requests.some(url => !url.searchParams.has('counts'))).toBe(true);
+        for (const url of requests) {
+            expect(url.pathname).toBe('/api/package-dependencies');
+            expect(url.searchParams.get('variant_id')).toBe('dependency-v1');
+            expect(url.searchParams.get('compare_variant_id')).toBe('dependency-v2');
+            expect(url.searchParams.get('operation')).toBe('intersection');
+        }
+    };
+
+    // The first open of the lazy DependencyModal compiles it under coverage, which can exceed Jest's 5 s
+    // default on loaded CI runners; mouse and keyboard flows are split and given an explicit timeout.
+    test('dependency actions are discoverable and open the correct scoped package by mouse', async () => {
+        const fetch = mockDependencyFetch();
         try {
-            render(<TablePackages preferenceScopeKey="dependency-default" packages={packages}
-                variantId="dependency-v1" compareVariantId="dependency-v2" operation="intersection" />);
+            renderDependencyTable(1);
             const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
             expect(headers.slice(0, 6)).toEqual([
                 'Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities',
@@ -707,8 +728,18 @@ describe('Packages Table', () => {
                 .findByRole('heading', { name: packages[0].id })).toBeTruthy();
             await user.click(screen.getByRole('button', { name: 'Close modal' }));
             expect(screen.queryByRole('dialog')).toBeNull();
+            expectScopedDependencyRequests(fetch);
+        } finally {
+            fetch.mockRestore();
+        }
+    }, 15000);
 
-            const reverseButton = screen.getByRole('button', { name: 'Explore dependencies for xxxyyyzzz' });
+    test('dependency actions open the correct scoped package by keyboard', async () => {
+        const fetch = mockDependencyFetch();
+        try {
+            renderDependencyTable(2);
+            const user = userEvent.setup();
+            const reverseButton = await screen.findByRole('button', { name: 'Explore dependencies for xxxyyyzzz' });
             expect(reverseButton.textContent).toContain('Deps: 0 / Req by: 1');
             for (const key of ['{Enter}', ' ']) {
                 reverseButton.focus();
@@ -721,19 +752,11 @@ describe('Packages Table', () => {
                 expect(screen.getAllByRole('dialog')).toHaveLength(1);
                 await user.click(screen.getByRole('button', { name: 'Close modal' }));
             }
-            const requests = fetch.mock.calls.map(([input]) => new URL(String(input)));
-            expect(requests.some(url => url.searchParams.has('counts'))).toBe(true);
-            expect(requests.some(url => !url.searchParams.has('counts'))).toBe(true);
-            for (const url of requests) {
-                expect(url.pathname).toBe('/api/package-dependencies');
-                expect(url.searchParams.get('variant_id')).toBe('dependency-v1');
-                expect(url.searchParams.get('compare_variant_id')).toBe('dependency-v2');
-                expect(url.searchParams.get('operation')).toBe('intersection');
-            }
+            expectScopedDependencyRequests(fetch);
         } finally {
             fetch.mockRestore();
         }
-    });
+    }, 15000);
 
     test('dependency loading and unavailable states are not actions or zero counts', async () => {
         let fail!: (reason: Error) => void;
@@ -747,6 +770,123 @@ describe('Packages Table', () => {
             await waitFor(() => expect(screen.getAllByText('Unavailable')).toHaveLength(packages.length));
             expect(screen.queryByRole('button', { name: /Explore dependencies for/ })).toBeNull();
             expect(screen.queryByText('Deps: 0 / Req by: 0')).toBeNull();
+        } finally {
+            fetch.mockRestore();
+        }
+    });
+
+    test('compiler flags are opt-in, remembered, and their whole cell opens the modal without the dependency column', async () => {
+        const key = 'vulnscout.tables.packages.compiler-column.visibleColumns';
+        const metadata = {
+            id: 'build', source_name: 'build.jsonld', format: 'hardcoded', variant_id: 'v1', variant_name: 'demo',
+            package_ids: [packages[0].id],
+            build_targets: [{
+                id: 'target', name: 'target', package_ids: [packages[0].id],
+                languages: [{ language: 'C', flags: [], defines: ['-DDEFINE_ONLY=1'] }],
+            }],
+        };
+        const fetch = jest.spyOn(global, 'fetch').mockImplementation(async input => {
+            const url = new URL(String(input));
+            const summary = url.searchParams.get('summary') === '1';
+            const { build_targets: targets, ...availability } = metadata;
+            return {
+                ok: true, json: async () => url.pathname === '/api/package-compiler-metadata'
+                    ? { documents: [summary ? availability : { ...availability, build_targets: targets }] }
+                    : { counts: {}, unrecorded: [] },
+            } as Response;
+        });
+        try {
+            const view = render(<TablePackages preferenceScopeKey="compiler-column" variantId="v1" packages={packages} />);
+            expect(screen.queryByRole('columnheader', { name: 'Compiler Flags' })).toBeNull();
+            expect(fetch.mock.calls.some(([input]) => String(input).includes('package-compiler-metadata'))).toBe(false);
+            const user = userEvent.setup();
+            await user.click(screen.getByText('Columns'));
+            await user.click(screen.getByRole('checkbox', { name: 'Dependency' }));
+            await user.click(screen.getByRole('checkbox', { name: 'Compiler Flags' }));
+            await user.click(screen.getByText('Columns'));
+            const compilerButton = await screen.findByRole('button', { name: 'View compiler flags and defines for aaabbbccc' });
+            expect(compilerButton.getAttribute('type')).toBe('button');
+            for (const className of ['w-full', 'h-full', 'p-4']) {
+                expect(compilerButton.classList.contains(className)).toBe(true);
+            }
+            expect(compilerButton.parentElement?.tagName).toBe('TD');
+            expect(compilerButton.parentElement?.classList.contains('p-0')).toBe(true);
+            expect(compilerButton.parentElement?.classList.contains('p-4')).toBe(false);
+            expect(screen.queryByRole('columnheader', { name: 'Dependency' })).toBeNull();
+            const missing = screen.getByText(packages[1].name).closest('tr')!;
+            expect(within(missing).getByTitle('No compiler flags or defines recorded for the selected scope').textContent).toBe('-');
+            const detailRequests = () => fetch.mock.calls.filter(([input]) => {
+                const url = new URL(String(input));
+                return url.pathname === '/api/package-compiler-metadata' && url.searchParams.get('summary') !== '1';
+            });
+            await user.click(compilerButton);
+            expect(await screen.findByRole('dialog', { name: `Compiler flags and defines: ${packages[0].id}` })).toBeTruthy();
+            expect(await screen.findByText('-DDEFINE_ONLY=1')).toBeTruthy();
+            expect(detailRequests()).toHaveLength(1);
+            await user.click(screen.getByRole('button', { name: 'Close modal' }));
+            for (const key of ['{Enter}', ' ']) {
+                compilerButton.focus();
+                await user.keyboard(key);
+                expect(await screen.findByText('-DDEFINE_ONLY=1')).toBeTruthy();
+                expect(screen.getAllByRole('dialog')).toHaveLength(1);
+                await user.click(screen.getByRole('button', { name: 'Close modal' }));
+            }
+            expect(detailRequests()).toHaveLength(3);
+            expect(JSON.parse(window.localStorage.getItem(key)!)).toContain('Compiler Flags');
+            view.unmount();
+            render(<TablePackages preferenceScopeKey="compiler-column" variantId="v1" packages={packages} />);
+            expect(screen.getByRole('columnheader', { name: 'Compiler Flags' })).toBeTruthy();
+            expect(await screen.findByRole('button', { name: 'View compiler flags and defines for aaabbbccc' })).toBeTruthy();
+        } finally {
+            fetch.mockRestore();
+        }
+    });
+
+    test('compiler availability follows source file filtering', async () => {
+        window.localStorage.setItem('vulnscout.tables.packages.compiler-filter.visibleColumns',
+            JSON.stringify(['Name', 'Compiler Flags']));
+        const scopedPackages = packages.map(pkg => ({ ...pkg, sbom_documents: ['build.jsonld', 'other.jsonld'] }));
+        const fetch = jest.spyOn(global, 'fetch').mockImplementation(async input => ({
+            ok: true, json: async () => String(input).includes('package-compiler-metadata')
+                ? { documents: [{
+                    id: 'build', source_name: 'build.jsonld', format: 'hardcoded',
+                    variant_id: 'v1', variant_name: 'demo', package_ids: [packages[0].id],
+                }] } : { counts: {}, unrecorded: [] },
+        } as Response));
+        try {
+            render(<TablePackages preferenceScopeKey="compiler-filter" variantId="v1" packages={scopedPackages} />);
+            expect(await screen.findByRole('button', { name: 'View compiler flags and defines for aaabbbccc' })).toBeTruthy();
+            const user = userEvent.setup();
+            await user.click(screen.getByText('SBOM Source File'));
+            await user.click(screen.getByRole('checkbox', { name: 'other.jsonld' }));
+            expect(screen.queryByRole('button', { name: /View compiler flags/ })).toBeNull();
+            await user.click(screen.getByRole('checkbox', { name: 'other.jsonld' }));
+            expect(screen.getByRole('button', { name: /View compiler flags/ })).toBeTruthy();
+        } finally {
+            fetch.mockRestore();
+        }
+    });
+
+    test('compiler column reports request failures and retries instead of showing missing metadata', async () => {
+        window.localStorage.setItem('vulnscout.tables.packages.compiler-retry.visibleColumns',
+            JSON.stringify(['Name', 'Compiler Flags']));
+        let failed = false;
+        const fetch = jest.spyOn(global, 'fetch').mockImplementation(async input => {
+            if (String(input).includes('package-compiler-metadata')) {
+                if (!failed) {
+                    failed = true;
+                    throw new Error('offline');
+                }
+                return { ok: true, json: async () => ({ documents: [] }) } as Response;
+            }
+            return { ok: true, json: async () => ({ counts: {}, unrecorded: [] }) } as Response;
+        });
+        try {
+            render(<TablePackages preferenceScopeKey="compiler-retry" variantId="v1" packages={[packages[0]]} />);
+            expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy();
+            expect(screen.queryByTitle('No compiler flags or defines recorded for the selected scope')).toBeNull();
+            await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
+            expect((await screen.findByTitle('No compiler flags or defines recorded for the selected scope')).textContent).toBe('-');
         } finally {
             fetch.mockRestore();
         }

@@ -146,10 +146,8 @@ Both assessment tools return `project_id` and include it on each target beside
 When the caller supplied a project name, `vulnscout-find_project_id` remains
 the authoritative resolver for that named scope.
 
-The merged context supplies `codebase_source` (`paths` exposes
-`codebase_path`, `references` exposes `files`; the other is empty by design),
-`codebase_path` (an external agent's local source
-hint), uploaded codebase references in `files` (`id`, `original_name`,
+The merged context supplies the variant's `codebase_directory`,
+uploaded attachments in `files` (`id`, `original_name`,
 `description`), `environment`, the STRIDE-rendered `threat_model` and `risks`,
 `other_info`, and the
 project and variant descriptions. Apply them exactly as `cve-assessment`
@@ -157,6 +155,12 @@ Phases 0, 2 and 3 describe, including **STRIDE Context** and
 **Uploaded Reference Inspection**:
 use `vulnscout-list_codebase_files`, `vulnscout-search_codebase` and
 `vulnscout-read_codebase_file` for each target variant's own references.
+For an active directory use `codebase_directory.file_id="directory"` with those
+same tools, following the directory rules in `cve-assessment`. A provisioned
+directory requires no source selection; inspect it even when `files`
+is empty, since that list only describes attachments. Never open the
+server path directly. Null directory metadata, errors, empty results or exclusions
+are evidence gaps, not permission to fall back to the application CWD.
 Follow pagination, verify surrounding source, and cite reference IDs, paths
 and lines in the review rationale. The embedded Agent can read only this
 skill's files and public web pages; it cannot read host paths or use its
@@ -182,8 +186,8 @@ assessment's stored fields:
 
 - **Phase 1** — CVE intelligence from NVD plus one reference (once per assessment;
   `vuln_id` is fixed for the whole assessment, so this is not repeated per target)
-- **Phase 2** — component presence in the target variant's uploaded references
-  and any accessible external `codebase_path`, never another variant's files;
+- **Phase 2** — component presence in the target variant's provisioned directory or uploaded references
+  and any explicitly supplied accessible external source, never another variant's files;
   map the component to that variant's STRIDE `C#`/`I#` rows
 - **Phase 3** — security objectives impact, using that variant's STRIDE entry
   points, interactions, trust boundaries and threats, with its `risks` and
@@ -254,7 +258,7 @@ replacement. `rationale` names each differing field and the evidence:
 If the stored `inline_mitigations_already_exist` (or another `not_affected`
 justification) rests only on a mitigation declared in the STRIDE `risks`, and
 no evidence corroborates it, treat the justification as unsupported and say so
-in `rationale`, citing the `T#` line. Cite STRIDE IDs only from the target's
+in `rationale`, citing the `R#` risk line. Cite STRIDE IDs only from the target's
 own variant.
 
 ### Confidence gate

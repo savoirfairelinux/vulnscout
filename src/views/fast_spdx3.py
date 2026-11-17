@@ -4,6 +4,7 @@
 from typing import Dict, List, Optional, Any
 import logging
 import re
+from datetime import datetime
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability, CVSS
 from ..models.assessment import Assessment
@@ -23,6 +24,7 @@ class FastSPDX3:
         'security_VexNotAffectedVulnAssessmentRelationship',
         'security_VexAffectedVulnAssessmentRelationship',
         'security_VexFixedVulnAssessmentRelationship',
+        'security_VexUnderInvestigationVulnAssessmentRelationship',
     }
 
     # Map from SPDX VEX justification types to internal representation
@@ -52,6 +54,7 @@ class FastSPDX3:
         self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.uri_to_package: Dict[str, str] = {}
         self._document_refs: Dict[str, str] = {}
+        self.uri_to_vulnerability: Dict[str, str] = {}
 
     @staticmethod
     def find_spdx_version(spdx: Dict[str, Any]) -> Optional[str]:
@@ -190,11 +193,10 @@ class FastSPDX3:
         cpes = self.extract_cpes(pkg_element)
         for cpe in cpes:
             pkg.add_cpe(cpe)
-        pkg.generate_generic_cpe()
 
         for purl in self.extract_purls(pkg_element):
             pkg.add_purl(purl)
-        pkg.generate_generic_purl()
+        pkg.add_fallback_identifiers()
 
         return pkg
 
@@ -253,6 +255,7 @@ class FastSPDX3:
         """
         Extract Vulnerability objects from SPDX graph elements.
         """
+        self.uri_to_vulnerability = {}
         if not isinstance(vuln_dict, dict):
             self.logger.warning("Invalid SPDX document format")
             return
@@ -373,6 +376,8 @@ class FastSPDX3:
                 cve_id = ext_id.get('identifier')
                 if not cve_id:
                     continue
+                if isinstance(element.get('spdxId'), str):
+                    self.uri_to_vulnerability[element['spdxId']] = cve_id
 
                 locators = ext_id.get('identifierLocator', [])
                 if not isinstance(locators, list):
@@ -476,6 +481,16 @@ class FastSPDX3:
         for element in graph:
             if not isinstance(element, dict):
                 continue
+            if self.is_vex_relationship(element):
+                vuln_id = self._extract_cve_id(element.get('from', ''))
+                vulnerability = self.vulnerabilitiesCtrl.get(vuln_id) if vuln_id else None
+                targets = element.get('to', [])
+                if vulnerability is not None and isinstance(targets, list):
+                    for target in targets:
+                        package_id = self.uri_to_package.get(target) if isinstance(target, str) else None
+                        if package_id:
+                            vulnerability.add_package(package_id)
+                continue
             if element.get('type') != 'Relationship':
                 continue
 
@@ -509,8 +524,10 @@ class FastSPDX3:
 
     def _extract_cve_id(self, text: str) -> Optional[str]:
         """Extract CVE ID from text string if present."""
-        if not text:
+        if not isinstance(text, str) or not text:
             return None
+        if text in self.uri_to_vulnerability:
+            return self.uri_to_vulnerability[text]
 
         match = self.CVE_PATTERN.search(text)
         if match:
@@ -597,12 +614,15 @@ class FastSPDX3:
         if relationship_type == 'doesNotAffect':
             assessment.set_status('not_affected')
         elif relationship_type == 'affects':
-            # Yocto cve-check uses "affects" for Unpatched CVEs which are
-            # not yet triaged — map to under_investigation ("Pending
-            # Assessment") rather than "affected" ("Exploitable").
-            assessment.set_status('under_investigation')
+            # Standard affected VEX requires an actionStatement. Yocto omits
+            # it for untriaged Unpatched CVEs, which must stay pending.
+            assessment.set_status(
+                'affected' if isinstance(element.get('security_actionStatement'), str) else 'under_investigation'
+            )
         elif relationship_type == "fixedIn":
             assessment.set_status('fixed')
+        elif relationship_type == "underInvestigationFor":
+            assessment.set_status('under_investigation')
 
         raw_justification = element.get('security_justificationType')
 
@@ -611,6 +631,18 @@ class FastSPDX3:
 
         if element.get('security_impactStatement'):
             assessment.impact_statement = element.get("security_impactStatement", "")
+        elif isinstance(element.get('description'), str):
+            assessment.impact_statement = element['description']
+        if isinstance(element.get('security_statusNotes'), str):
+            assessment.set_status_notes(element['security_statusNotes'])
+        if isinstance(element.get('security_actionStatement'), str):
+            assessment.set_workaround(element['security_actionStatement'])
+        timestamp = element.get('security_publishedTime')
+        if isinstance(timestamp, str):
+            try:
+                assessment.timestamp = datetime.fromisoformat(timestamp)
+            except ValueError:
+                self.logger.warning("Invalid SPDX assessment published time: %r", timestamp)
 
         return assessment
 
@@ -659,7 +691,7 @@ class FastSPDX3:
                 continue
             for target in targets:
                 if isinstance(target, str):
-                    if relation in {'dependsOn', 'hasPrerequisite'}:
+                    if relation in {'dependsOn', 'hasPrerequisite', 'hasOptionalDependency', 'hasProvidedDependency'}:
                         edges.add((source, target, relation, scope))
                     elif relation == 'dependencyOf':
                         edges.add((target, source, relation, scope))

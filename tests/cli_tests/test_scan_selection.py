@@ -296,7 +296,7 @@ def test_entrypoint_runs_selected_scanners_on_active_sbom(tmp_path, args, scanne
         assert "Scan complete" in result.stdout
     if "all" in args:
         grype_args = json.loads(Path(env["TEST_GRYPE_LOG"]).read_text())
-        assert "--add-cpes-if-none" in grype_args
+        assert "--add-cpes-if-none" not in grype_args
         assert result.stdout.index("Merging Grype results") < result.stdout.index("Running NVD scan")
         assert result.stdout.index("Running OSV scan") < result.stdout.index("Running sbom-cve-check scan")
 

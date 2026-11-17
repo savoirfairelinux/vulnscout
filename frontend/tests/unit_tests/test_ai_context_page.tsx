@@ -11,6 +11,7 @@ import AIContext from '../../src/pages/AIContext';
 import type { AiContextScope } from '../../src/pages/AIContext';
 import { UnsavedGuardProvider, useUnsavedGuard } from '../../src/hooks/useUnsavedGuard';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
+import * as agentStore from '../../src/handlers/agentQueue';
 import type { AgentViewContext } from '../../src/types/agent';
 import { emptyStrideModel } from '../../src/helpers/strideModel';
 
@@ -40,6 +41,10 @@ type Backend = {
     failUrls?: string[];
     /** Requests (URL fragment + method) answered only once `until` settles. */
     holds?: { fragment: string; method: string; until: Promise<unknown> }[];
+    drafts?: Record<string, unknown>;
+    importRevisions?: Record<string, string>;
+    directoryPaths?: Record<string, string>;
+    directoryCounts?: Record<string, { files: number; directories: number }>;
 };
 
 function deferred() {
@@ -51,9 +56,8 @@ function deferred() {
 function variantContext(variantId: string, threat: string, files: FileRow[] = []) {
     return {
         project_id: 'p1', description: 'ignored', variant_id: variantId, variant_description: null,
-        codebase_path: null, environment: null, threat_model: threat, risks: null, other_info: null, files,
+        environment: null, threat_model: threat, risks: null, other_info: null, files,
         editor: {
-            codebase_source: 'paths', codebase_path: null,
             system: { scope: threat || null, actors: null, entry_points: null, trust_boundaries: null },
             stride: emptyStrideModel(), files, updated_at: null,
         },
@@ -68,6 +72,10 @@ function respond(backend: Backend, url: string, method: string, body: string | n
     const projectVariants = /^\/api\/projects\/([^/]+)\/variants$/.exec(path);
     if (projectVariants) return backend.variants?.[projectVariants[1]] ?? (projectVariants[1] === 'p1' ? VARIANTS : []);
     if (path === '/api/reviews/assessments') return backend.aiRows;
+    if (path === '/api/agent/queue' && method === 'POST') {
+        const { actions } = JSON.parse(body ?? '{}');
+        return { requests: [{ id: 'import-request', key: actions[0].key, conversation_id: 'import-conversation' }], skipped: [] };
+    }
     if (path === '/api/projects/p1/context') {
         if (method === 'PUT') backend.description = JSON.parse(body ?? '{}').description;
         return { project_id: 'p1', description: backend.description };
@@ -76,6 +84,19 @@ function respond(backend: Backend, url: string, method: string, body: string | n
         const variantId = new URL(url).searchParams.get('variant_id') ?? '';
         if (backend.contexts?.[variantId]) return backend.contexts[variantId];
         return variantContext(variantId, backend.threat, backend.files);
+    }
+    const directory = /^\/api\/variants\/([^/]+)\/context\/directory$/.exec(path);
+    if (directory) {
+        const id = directory[1];
+        const paths = backend.directoryPaths ?? (backend.directoryPaths = {});
+        if (method === 'POST') paths[id] = `/cache/vulnscout/context-project-${id}`;
+        return {
+            path: paths[id] ?? null, file_id: 'directory',
+            status: paths[id] ? 'unavailable' : 'not_created',
+            message: paths[id] ? 'Codebase directory is empty or contains no eligible source files.' : 'No codebase directory provisioned. Create it on demand.',
+            file_count: paths[id] ? backend.directoryCounts?.[id]?.files ?? 0 : null,
+            directory_count: paths[id] ? backend.directoryCounts?.[id]?.directories ?? 0 : null,
+        };
     }
     if (/^\/api\/variants\/[^/]+\/context\/files$/.test(path)) {
         const reference = { id: `f${backend.files.length + 1}`, original_name: 'source.zip', description: null };
@@ -86,7 +107,11 @@ function respond(backend: Backend, url: string, method: string, body: string | n
     if (variantPut) {
         const ctx = variantContext(variantPut[1], backend.threat, backend.files);
         // Echo the saved editor shape back, as the real server does.
-        return backend.echoPut ? { ...ctx, editor: { ...ctx.editor, ...JSON.parse(body ?? '{}') } } : ctx;
+        if (!backend.echoPut) return ctx;
+        const values = JSON.parse(body ?? '{}');
+        const saved = { ...ctx, ...values, editor: { ...ctx.editor, ...values } };
+        (backend.contexts ?? (backend.contexts = {}))[variantPut[1]] = saved;
+        return saved;
     }
     return {};
 }
@@ -102,9 +127,33 @@ function mockBackend(overrides: Partial<Backend> = {}): Backend {
             return { status: 400, body: JSON.stringify(backend.variantPutError) };
         }
         if (backend.failUrls?.some(fragment => request.url.includes(fragment))) {
-            return { status: 500, body: JSON.stringify({ error: 'Server unavailable' }) };
+            return { status: 500, body: JSON.stringify({ error: 'Server unavailable' }),
+                headers: { 'Content-Type': 'application/json' } };
         }
-        return JSON.stringify(respond(backend, request.url, request.method, body));
+        const draftRoute = /\/api\/variants\/([^/]+)\/context\/(draft|import-source)$/.exec(new URL(request.url, 'http://localhost').pathname);
+        if (draftRoute) {
+            const [, variantId, kind] = draftRoute;
+            const drafts = backend.drafts ?? (backend.drafts = {});
+            if (kind === 'import-source') {
+                delete drafts[variantId];
+                const revisions = backend.importRevisions ?? (backend.importRevisions = {});
+                revisions[variantId] = 'import-revision';
+                return { status: 201, body: JSON.stringify({ name: 'report.pdf', size: 4, revision: revisions[variantId] }) };
+            }
+            if (request.method === 'DELETE') {
+                const draft = drafts[variantId] as { revision: string } | undefined;
+                const revision = draft?.revision ?? backend.importRevisions?.[variantId];
+                if (revision && JSON.parse(body ?? '{}').revision !== revision) {
+                    return { status: 409, body: JSON.stringify({ error: 'The AI draft or import source changed. Reload it before discarding.' }) };
+                }
+                delete drafts[variantId];
+                delete backend.importRevisions?.[variantId];
+                return { status: 204, body: '' };
+            }
+            return drafts[variantId] ? JSON.stringify(drafts[variantId]) : { status: 204, body: '' };
+        }
+        return { body: JSON.stringify(respond(backend, request.url, request.method, body)),
+            headers: { 'Content-Type': 'application/json' } };
     });
     return backend;
 }
@@ -139,6 +188,24 @@ const variantTab = (name: string) => screen.getByRole('tab', { name });
 const agentWrite = (tool: string) => act(() => {
     window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool } }));
 });
+
+const NO_SYSTEM = { scope: null, actors: null, entry_points: null, trust_boundaries: null };
+function aiDraftReply(values: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
+    return {
+        revision: 'draft-revision',
+        source: 'report.pdf', status: 'current', conflicts: [], renumbered: {},
+        base_updated_at: null, saved_updated_at: null, created_at: '2026-11-11T00:00:00Z', updated_at: '2026-11-11T00:00:00Z',
+        values: {
+            variant_description: null, environment: null, other_info: null,
+            system: { ...NO_SYSTEM, scope: 'Gateway' },
+            stride: { ...emptyStrideModel(), components: [{ id: 'C1', name: 'Web UI', description: '', trust_zone: '' }] },
+            ...values,
+        },
+        ...extra,
+    };
+}
+const LOADED_TEXT = /Unsaved AI draft from report\.pdf: \+1 component \(changes to System scope\)/;
+const FILL = 'Fill from document with AI…';
 
 beforeEach(() => fetchMock.resetMocks());
 
@@ -312,7 +379,7 @@ describe('AIContext page', () => {
         const onAgentContextChange = jest.fn();
         renderPage({ projectId: 'p1' }, onAgentContextChange);
         await openVariant1();
-        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(1));
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
         await waitFor(() => expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
             selectedProjectId: 'p1', selectedProjectName: 'Project A',
             selectedVariantId: 'v1', selectedVariantName: 'Variant 1', section: 'context',
@@ -323,7 +390,11 @@ describe('AIContext page', () => {
         })));
 
         agentWrite('update_variant_context');
-        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(4));
+        const draftLoads = requestsTo(backend, '/context/draft').length;
+        agentWrite('propose_variant_threat_model');
+        await waitFor(() => expect(requestsTo(backend, '/context/draft').length).toBeGreaterThan(draftLoads));
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(5));
 
         await openProjectDescription();
         expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -478,31 +549,94 @@ describe('AIContext page', () => {
             expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
         });
 
-        test('codebase radio shows only the selected source and keeps the hidden value', async () => {
-            const backend = mockBackend();
+        test('only directory controls are shown and saving sends no legacy source settings', async () => {
+            const original = variantContext('v1', 'TM', [{ id: 'f1', original_name: 'legacy.zip', description: null }]);
+            const backend = mockBackend({ echoPut: true, contexts: { v1: original } });
             renderPage({ projectId: 'p1' });
             await openVariant1();
-            const source = screen.getByRole('radiogroup', { name: 'Codebase source' });
-            expect(within(source).getByRole('radio', { name: 'Codebase paths' })).toBeChecked();
+            expect(screen.queryByRole('radiogroup', { name: 'Codebase source' })).not.toBeInTheDocument();
+            expect(screen.queryByRole('radio')).not.toBeInTheDocument();
             expect(screen.queryByRole('region', { name: 'Codebase references' })).not.toBeInTheDocument();
-            expect(screen.getByText('No codebase paths yet.')).toBeVisible();
-            ['/src/a', '/src/b', '/src/c'].forEach((value, index) => {
-                fireEvent.click(screen.getByRole('button', { name: 'Add path' }));
-                fireEvent.change(screen.getByRole('textbox', { name: `Codebase path ${index + 1}` }), { target: { value } });
-            });
-            fireEvent.click(screen.getByRole('button', { name: 'Remove codebase path 2' }));
-            expect(screen.getByRole('textbox', { name: 'Codebase path 2' })).toHaveValue('/src/c');
-            fireEvent.click(screen.getByRole('button', { name: 'Add path' }));
-
-            fireEvent.click(within(source).getByRole('radio', { name: 'Codebase references' }));
-            expect(screen.getByRole('region', { name: 'Codebase references' })).toBeVisible();
-            expect(screen.getByRole('textbox', { name: 'Codebase path 1', hidden: true })).not.toBeVisible();
-
+            expect(screen.queryByRole('button', { name: 'Add path' })).not.toBeInTheDocument();
+            expect(screen.queryByText('legacy.zip')).not.toBeInTheDocument();
+            expect(screen.getByRole('region', { name: 'Codebase directory' })).toBeVisible();
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Directory only' } });
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
             const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
-            expect(body.codebase_source).toBe('references');
-            expect(body.codebase_path).toBe('/src/a;/src/c');
+            expect(body).not.toHaveProperty('codebase_source');
+            expect(body).not.toHaveProperty('codebase_path');
+        });
+
+        test('directory is created on demand without losing unsaved text', async () => {
+            const backend = mockBackend({ echoPut: true });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Keep my edits' } });
+            const create = await screen.findByRole('button', { name: 'Create codebase directory' });
+            await waitFor(() => expect(create).toBeEnabled());
+            expect(requestsTo(backend, '/context/directory', 'POST')).toHaveLength(0);
+            fireEvent.click(create);
+            expect(await screen.findByText('/cache/vulnscout/context-project-v1')).toBeVisible();
+            expect(screen.getByText('Codebase directory is empty or contains no eligible source files.')).toBeVisible();
+            expect(screen.getByLabelText('Environment')).toHaveValue('Keep my edits');
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+            expect(screen.getByText('Files: 0 / Directories: 0')).toBeVisible();
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await screen.findByText('Saved.');
+            expect(JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}')).toMatchObject({
+                environment: 'Keep my edits',
+            });
+        });
+
+        test('refresh updates eligible file and subdirectory counts without dirtying the context draft', async () => {
+            const backend = mockBackend({
+                directoryPaths: { v1: '/cache/vulnscout/context-project-v1' },
+                directoryCounts: { v1: { files: 3, directories: 2 } }, echoPut: true,
+            });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await screen.findByText('Files: 3 / Directories: 2');
+            expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+            backend.directoryCounts = { v1: { files: 7, directories: 4 } };
+            const refresh = screen.getByRole('button', { name: 'Refresh directory status' });
+            await waitFor(() => expect(refresh).toBeEnabled());
+            fireEvent.click(refresh);
+            expect(await screen.findByText('Files: 7 / Directories: 4')).toBeVisible();
+            expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+        });
+
+        test('directory errors are explicit and status can be retried', async () => {
+            const backend = mockBackend({ failUrls: ['/context/directory'] });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            expect(await screen.findByRole('alert')).toHaveTextContent('Server unavailable');
+            const refresh = screen.getByRole('button', { name: 'Refresh directory status' });
+            await waitFor(() => expect(refresh).toBeEnabled());
+            backend.failUrls = [];
+            fireEvent.click(refresh);
+            expect(await screen.findByText('No codebase directory provisioned. Create it on demand.')).toBeVisible();
+            expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+            backend.failUrls = ['/context/directory'];
+            fireEvent.click(screen.getByRole('button', { name: 'Create codebase directory' }));
+            expect(await screen.findByRole('alert')).toHaveTextContent('Server unavailable');
+        });
+
+        test('failed refresh removes previously displayed counts rather than reporting stale totals', async () => {
+            const backend = mockBackend({
+                directoryPaths: { v1: '/cache/vulnscout/context-project-v1' },
+                directoryCounts: { v1: { files: 3, directories: 2 } },
+            });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await screen.findByText('Files: 3 / Directories: 2');
+            backend.failUrls = ['/context/directory'];
+            const refresh = screen.getByRole('button', { name: 'Refresh directory status' });
+            await waitFor(() => expect(refresh).toBeEnabled());
+            fireEvent.click(refresh);
+            expect(await screen.findByRole('alert')).toHaveTextContent('Server unavailable');
+            expect(screen.queryByText(/Files: \d+ \/ Directories:/)).not.toBeInTheDocument();
         });
 
         test('Save changes disabled until the draft differs from saved', async () => {
@@ -533,7 +667,6 @@ describe('AIContext page', () => {
             expect(puts).toHaveLength(1);
             expect(JSON.parse(puts[0].body ?? '{}')).toEqual({
                 variant_description: 'Gateway', environment: 'Lab', other_info: null,
-                codebase_source: 'paths', codebase_path: null,
                 system: { scope: 'TM', actors: null, entry_points: null, trust_boundaries: null },
                 stride: emptyStrideModel(),
             });
@@ -655,32 +788,28 @@ describe('AIContext page', () => {
             expect(screen.queryByText(DIRTY_PROJECT_TEXT)).not.toBeInTheDocument();
         });
 
-        test('uploading references keeps unsaved fields', async () => {
+        test('directory provisioning keeps unsaved fields and status stays scoped when reopening', async () => {
             const backend = mockBackend();
             const user = userEvent.setup();
             renderPage({ projectId: 'p1' });
             await openVariant1();
             fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Unsaved desc' } });
-            fireEvent.click(screen.getByRole('radio', { name: 'Codebase references' }));
-
-            fireEvent.drop(screen.getByRole('region', { name: 'Drop codebase files' }), {
-                dataTransfer: { files: [new File(['source'], 'source.zip')] },
-            });
-
-            await screen.findByRole('button', { name: 'Delete reference source.zip' });
+            const create = await screen.findByRole('button', { name: 'Create codebase directory' });
+            await waitFor(() => expect(create).toBeEnabled());
+            fireEvent.click(create);
+            await screen.findByText('/cache/vulnscout/context-project-v1');
             expect(screen.getByLabelText('Variant description')).toHaveValue('Unsaved desc');
             expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
-            expect(requestsTo(backend, '/api/variants/v1/context/files', 'POST')).toHaveLength(1);
+            expect(requestsTo(backend, '/api/variants/v1/context/directory', 'POST')).toHaveLength(1);
 
-            // Reopening the variant shows the stored reference from the server.
             await user.click(sidebarItem('Variant 2'));
             await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
             await screen.findByRole('region', { name: 'Variant 2' });
+            expect(screen.queryByText('/cache/vulnscout/context-project-v1')).not.toBeInTheDocument();
             await user.click(sidebarItem('Variant 1'));
             await screen.findByRole('region', { name: 'Variant 1' });
             await waitFor(() => expect(screen.getByLabelText('Variant description')).toHaveValue(''));
-            fireEvent.click(screen.getByRole('radio', { name: 'Codebase references' }));
-            expect(await screen.findByRole('button', { name: 'Delete reference source.zip' })).toBeInTheDocument();
+            expect(await screen.findByText('/cache/vulnscout/context-project-v1')).toBeVisible();
         });
     });
 
@@ -697,6 +826,15 @@ describe('AIContext page', () => {
             const inputs = screen.getAllByLabelText(/^Component C\d+ name$/);
             fireEvent.change(inputs[inputs.length - 1], { target: { value: name } });
         };
+
+        test('adding a row scrolls its height-capped table to the new row', async () => {
+            await openSystemTab();
+            const scroller = screen.getByRole('table', { name: 'Components' }).parentElement!;
+            Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 900 });
+            scroller.scrollTop = 0;
+            fireEvent.click(screen.getByRole('button', { name: 'Add component' }));
+            expect(scroller.scrollTop).toBe(900);
+        });
 
         test('STRIDE mode shows the four system fields and both tables with column headers', async () => {
             await openSystemTab();
@@ -938,6 +1076,9 @@ describe('AIContext page', () => {
             fireEvent.click(within(screen.getByRole('group', { name: 'Threat T1 targets' }))
                 .getByRole('checkbox', { name: 'C1 Broker' }));
         };
+        const tickRiskThreat = (riskId: string, name: string) =>
+            fireEvent.click(within(screen.getByRole('group', { name: `Risk ${riskId} threats` }))
+                .getByRole('checkbox', { name }));
         const saveBody = async (backend: Backend) => {
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
@@ -1009,21 +1150,71 @@ describe('AIContext page', () => {
             expect(screen.queryByLabelText('Threat T2 description')).not.toBeInTheDocument();
         });
 
-        test('a threat with a risk cannot be removed and says why', async () => {
+        test('a threat ticked in risks cannot be removed until unticked from all of them', async () => {
             await openStride();
             addThreat();
             fireEvent.click(variantTab('Risks'));
             addRisk();
+            addRisk();
+            tickRiskThreat('R1', 'T1');
+            tickRiskThreat('R2', 'T1');
             fireEvent.click(variantTab('Threat model'));
 
             const remove = screen.getByRole('button', { name: 'Remove threat T1' });
             expect(remove).toBeDisabled();
-            expect(remove).toHaveAccessibleDescription('Remove its risks first.');
+            expect(remove).toHaveAccessibleDescription('Untick it from its risks first.');
 
             fireEvent.click(variantTab('Risks'));
-            fireEvent.click(screen.getByRole('button', { name: 'Remove risk 1' }));
+            tickRiskThreat('R1', 'T1');
+            fireEvent.click(variantTab('Threat model'));
+            expect(screen.getByRole('button', { name: 'Remove threat T1' })).toBeDisabled();
+
+            fireEvent.click(variantTab('Risks'));
+            tickRiskThreat('R2', 'T1');
             fireEvent.click(variantTab('Threat model'));
             expect(screen.getByRole('button', { name: 'Remove threat T1' })).toBeEnabled();
+        });
+
+        test('removed risk ids are not reused', async () => {
+            await openStride();
+            addThreat();
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+            addRisk();
+            fireEvent.click(screen.getByRole('button', { name: 'Remove risk R2' }));
+            addRisk();
+
+            expect(screen.getByLabelText('Risk R3 description')).toBeInTheDocument();
+            expect(screen.queryByLabelText('Risk R2 description')).not.toBeInTheDocument();
+        });
+
+        test('a risk without a threat blocks the save and says so next to the cell', async () => {
+            const { backend } = await openStride();
+            addTargetedThreat();
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            expect(await screen.findByText('Select at least one threat.')).toBeInTheDocument();
+            expect(screen.getByRole('group', { name: 'Risk R1 threats' }))
+                .toHaveAccessibleDescription('Select at least one threat.');
+            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+        });
+
+        test('a risk can group several threats', async () => {
+            const { backend } = await openStride();
+            addTargetedThreat();
+            addThreat();
+            fireEvent.click(within(screen.getByRole('group', { name: 'Threat T2 targets' }))
+                .getByRole('checkbox', { name: 'C1 Broker' }));
+            fireEvent.click(variantTab('Risks'));
+            addRisk();
+            tickRiskThreat('R1', 'T1');
+            tickRiskThreat('R1', 'T2');
+
+            const body = await saveBody(backend);
+
+            expect(body.stride.risks[0].threat_ids).toEqual(['T1', 'T2']);
         });
 
         test('Add risk is disabled with a hint until a threat exists', async () => {
@@ -1048,34 +1239,35 @@ describe('AIContext page', () => {
 
             const table = screen.getByRole('table', { name: 'Risks' });
             expect(within(table).getAllByRole('columnheader').map(h => h.textContent)).toEqual([
-                'Threat*', 'Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision', 'Remove',
+                'ID', 'Description', 'Threats*', 'Likelihood', 'Impact', 'Mitigation', 'Residual risk / decision', 'Remove',
             ]);
-            const likelihood = screen.getByLabelText('Risk 1 likelihood');
+            const likelihood = screen.getByLabelText('Risk R1 likelihood');
             expect(within(likelihood).getAllByRole('option').map(o => o.textContent))
                 .toEqual(['Not rated', 'Low', 'Medium', 'High']);
             expect(likelihood).toHaveValue('');
-            expect(within(screen.getByLabelText('Risk 1 threat')).getByRole('option').textContent)
-                .toBe(`T1: ${'x'.repeat(40)}`);
+            tickRiskThreat('R1', `T1: ${'x'.repeat(40)}`);
             fireEvent.change(likelihood, { target: { value: 'high' } });
-            fireEvent.change(screen.getByLabelText('Risk 1 impact'), { target: { value: 'low' } });
-            fireEvent.change(screen.getByLabelText('Risk 1 impact'), { target: { value: '' } });
-            fireEvent.change(screen.getByLabelText('Risk 1 mitigation'), { target: { value: 'Patch' } });
-            fireEvent.change(screen.getByLabelText('Risk 1 residual risk / decision'), { target: { value: 'Accept' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 impact'), { target: { value: 'low' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 impact'), { target: { value: '' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 description'), { target: { value: 'Rogue update' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 mitigation'), { target: { value: 'Patch' } });
+            fireEvent.change(screen.getByLabelText('Risk R1 residual risk / decision'), { target: { value: 'Accept' } });
 
             const body = await saveBody(backend);
 
             expect(body.stride.risks).toEqual([
-                { threat_id: 'T1', likelihood: 'high', impact: null, mitigation: 'Patch', residual: 'Accept' },
+                { id: 'R1', description: 'Rogue update', threat_ids: ['T1'], likelihood: 'high', impact: null, mitigation: 'Patch', residual: 'Accept' },
             ]);
         });
 
-        test('threat option shows just the id when the description is empty', async () => {
+        test('threat checkbox shows just the id when the description is empty', async () => {
             await openStride();
             addThreat();
             fireEvent.click(variantTab('Risks'));
             addRisk();
 
-            expect(within(screen.getByLabelText('Risk 1 threat')).getByRole('option').textContent).toBe('T1');
+            expect(within(screen.getByRole('group', { name: 'Risk R1 threats' }))
+                .getByRole('checkbox', { name: 'T1' })).not.toBeChecked();
         });
 
         async function failWith(fields: Record<string, string>, prepare: () => void) {
@@ -1098,10 +1290,11 @@ describe('AIContext page', () => {
                 addTargetedThreat();
                 fireEvent.click(variantTab('Risks'));
                 addRisk();
+                tickRiskThreat('R1', 'T1');
             });
 
             expect(variantTab('Risks')).toHaveAttribute('aria-selected', 'true');
-            const select = screen.getByLabelText('Risk 1 likelihood');
+            const select = screen.getByLabelText('Risk R1 likelihood');
             expect(select).toHaveAttribute('aria-invalid', 'true');
             expect(select).toHaveAccessibleDescription('invalid rating');
         });
@@ -1113,6 +1306,14 @@ describe('AIContext page', () => {
             expect(within(screen.getByRole('tabpanel', { name: 'Threat model' })).getByText('A threat model is required.')).toBeVisible();
         });
 
+        test('a top-level risks 400 error opens the Risks tab and shows the message', async () => {
+            const message = 'reference too much threat text through their threats';
+            await failWith({ risks: message }, addTargetedThreat);
+
+            expect(variantTab('Risks')).toHaveAttribute('aria-selected', 'true');
+            expect(within(screen.getByRole('tabpanel', { name: 'Risks' })).getByText(message)).toBeVisible();
+        });
+
         test('an unrecognised or merely prefixed path falls back to the Context tab', async () => {
             await failWith({ 'notesX': 'odd' }, addTargetedThreat);
 
@@ -1121,19 +1322,17 @@ describe('AIContext page', () => {
     });
 
     describe('copy from', () => {
-        const COPY_WARNING = 'This replaces the whole draft of this variant. Uploaded codebase references are not copied: when the source uses them, this variant keeps its own codebase source and paths. Nothing is saved until you click Save changes.';
+        const COPY_WARNING = "This replaces the context draft, but never copies codebase files or directory settings from another variant. Saving uses this variant's own codebase directory. Nothing is saved until you click Save changes.";
         const sourceContext = () => {
             const base = variantContext('v3', 'Source TM', [{ id: 'f9', original_name: 'other.zip', description: null }]);
             return {
                 ...base, project_id: 'p2', variant_description: 'Copied desc', environment: 'Plant', other_info: 'Copied info',
-                editor: { ...base.editor, codebase_source: 'references', codebase_path: '/copied' },
             };
         };
         const neverSavedContext = (variantId: string) => ({
-            project_id: 'p1', description: 'Desc', variant_id: variantId, variant_description: null, codebase_path: null,
+            project_id: 'p1', description: 'Desc', variant_id: variantId, variant_description: null,
             environment: null, threat_model: null, risks: null, other_info: null, files: [],
             editor: {
-                codebase_source: 'references', codebase_path: null,
                 system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
                 stride: emptyStrideModel(), files: [], updated_at: null,
             },
@@ -1175,8 +1374,15 @@ describe('AIContext page', () => {
             expect(copy).toBeEnabled();
         });
 
-        test('copy replaces the draft, marks it dirty and leaves references alone', async () => {
-            const backend = twoProjects({ files: [{ id: 'f1', original_name: 'source.zip', description: null }] });
+        test.each([false, true])('copy keeps the target directory (source provisioned: %s)', async provisioned => {
+            const source = {
+                ...sourceContext(),
+                codebase_directory: provisioned ? { file_id: 'directory', path: '/cache/source' } : null,
+            };
+            const backend = twoProjects({
+                contexts: { v3: source },
+                files: [{ id: 'f1', original_name: 'source.zip', description: null }],
+            });
             const user = userEvent.setup();
             renderPage({ projectId: 'p1' });
             await openVariant1();
@@ -1187,8 +1393,8 @@ describe('AIContext page', () => {
             expect(banner.closest('[role="alert"]')).toHaveClass('bg-blue-800');
             expect(screen.getByLabelText('Variant description')).toHaveValue('Copied desc');
             expect(screen.getByLabelText('Environment')).toHaveValue('Plant');
-            expect(screen.getByRole('radio', { name: 'Codebase paths' })).toBeChecked();
-            expect(screen.getByRole('button', { name: 'Delete reference source.zip', hidden: true })).toBeInTheDocument();
+            expect(screen.getByRole('region', { name: 'Codebase directory' })).toBeVisible();
+            expect(screen.queryByText('source.zip')).not.toBeInTheDocument();
             expect(screen.queryByText('other.zip')).not.toBeInTheDocument();
             expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
             expect(backend.requests.filter(r => r.method !== 'GET')).toHaveLength(0);
@@ -1196,8 +1402,8 @@ describe('AIContext page', () => {
             await user.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
             const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
-            expect(body).toMatchObject({ other_info: 'Copied info', codebase_source: 'paths', system: { scope: 'Source TM' } });
-            expect(body.codebase_path).not.toBe('/copied');
+            expect(body).toMatchObject({ other_info: 'Copied info', system: { scope: 'Source TM' } });
+            expect(body).not.toHaveProperty('codebase_directory');
         });
 
         test('copy clears the field errors of the replaced draft', async () => {
@@ -1226,7 +1432,7 @@ describe('AIContext page', () => {
             await copyFrom(user, 'Variant 2');
 
             expect(screen.getByLabelText('System scope and assets')).toHaveValue('');
-            expect(within(screen.getByRole('radiogroup', { name: 'Codebase source' })).getByRole('radio', { name: 'Codebase paths' })).toBeChecked();
+            expect(screen.getByRole('region', { name: 'Codebase directory' })).toBeVisible();
             ['Variant description', 'Environment', 'Other information']
                 .forEach(name => expect(screen.getByRole('textbox', { name })).toHaveValue(''));
             await user.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -1322,7 +1528,7 @@ describe('AIContext page', () => {
             const backend = mockBackend();
             renderPage({ projectId: 'p1' });
             await openVariant1();
-            await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(1));
+            await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
             fetchMock.mockResponseOnce(JSON.stringify({
                 imported: [{ project_name: 'Project A', variant_name: 'Variant 1' }],
                 ignored: [{ project_name: 'X', variant_name: 'Y', reason: 'Project not found' }],
@@ -1337,7 +1543,7 @@ describe('AIContext page', () => {
                 c => String(c[0]).includes('/api/context/import') && (c[1] as any)?.method === 'POST'
             );
             expect(JSON.parse((importCall![1] as any).body).version).toBe('1.0');
-            await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+            await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(4));
         });
 
         test('import rejects a file that is not valid JSON', async () => {
@@ -1363,12 +1569,12 @@ describe('AIContext page', () => {
     });
 });
 
-function GuardHarness({ save }: Readonly<{ save: () => Promise<boolean> }>) {
+function GuardHarness({ save, discard }: Readonly<{ save: () => Promise<boolean>; discard?: () => void | boolean | Promise<void | boolean> }>) {
     const { registerGuard, hasGuard, confirmLeave } = useUnsavedGuard();
     const [result, setResult] = useState('');
     return (
         <div>
-            <button type="button" onClick={() => registerGuard({ label: 'Thing', save })}>register</button>
+            <button type="button" onClick={() => registerGuard({ label: 'Thing', save, discard })}>register</button>
             <button type="button" onClick={() => registerGuard(null)}>unregister</button>
             <button type="button" onClick={() => { void confirmLeave().then(ok => setResult(String(ok))); }}>leave</button>
             <span data-testid="has-guard">{String(hasGuard)}</span>
@@ -1415,6 +1621,18 @@ describe('useUnsavedGuard', () => {
         await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('false'));
     });
 
+    test('Discard runs the guard discard callback and lets leaving proceed', async () => {
+        const save = jest.fn().mockResolvedValue(true);
+        const discard = jest.fn();
+        render(<UnsavedGuardProvider><GuardHarness save={save} discard={discard} /></UnsavedGuardProvider>);
+        fireEvent.click(screen.getByRole('button', { name: 'register' }));
+        fireEvent.click(screen.getByRole('button', { name: 'leave' }));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('true'));
+        expect(discard).toHaveBeenCalledTimes(1);
+        expect(save).not.toHaveBeenCalled();
+    });
+
     test('beforeunload is prevented only while a guard is registered', () => {
         render(<UnsavedGuardProvider><GuardHarness save={jest.fn()} /></UnsavedGuardProvider>);
         const unload = () => {
@@ -1428,5 +1646,566 @@ describe('useUnsavedGuard', () => {
         expect(unload()).toBe(true);
         fireEvent.click(screen.getByRole('button', { name: 'unregister' }));
         expect(unload()).toBe(false);
+    });
+
+    test.each([true, false])('Discard waits for its callback before returning %s', async proceed => {
+        const gate = deferred();
+        const discard = jest.fn(async () => { await gate.promise; return proceed; });
+        render(<UnsavedGuardProvider><GuardHarness save={jest.fn()} discard={discard} /></UnsavedGuardProvider>);
+        fireEvent.click(screen.getByRole('button', { name: 'register' }));
+        fireEvent.click(screen.getByRole('button', { name: 'leave' }));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(discard).toHaveBeenCalledTimes(1));
+        expect(screen.getByTestId('result')).toBeEmptyDOMElement();
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent(String(proceed)));
+    });
+});
+
+describe('AI threat-model drafts', () => {
+    beforeEach(() => agentStore.__resetAgentQueue());
+    afterEach(async () => {
+        await act(async () => { await Promise.resolve(); });
+        jest.restoreAllMocks();
+    });
+
+    test('a stored draft loads as unsaved changes and Save accepts it', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply() }, echoPut: true });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
+        expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: FILL })).toBeDisabled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+        const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+        expect(body.system.scope).toBe('Gateway');
+        expect(body.stride.components[0].id).toBe('C1');
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        await waitFor(() => expect(screen.queryByText(LOADED_TEXT)).not.toBeInTheDocument());
+    });
+
+    test('Discard AI draft deletes it and restores the saved values', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply() } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard AI draft' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        await waitFor(() => expect(screen.queryByText(LOADED_TEXT)).not.toBeInTheDocument());
+        expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+    });
+
+    test('Discard AI draft preserves edits made while deletion is pending', async () => {
+        const deletion = deferred();
+        const backend = mockBackend({
+            drafts: { v1: aiDraftReply() }, echoPut: true,
+            holds: [{ fragment: '/context/draft', method: 'DELETE', until: deletion.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.click(await screen.findByRole('button', { name: 'Discard AI draft' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'New local environment' } });
+        await act(async () => { deletion.resolve(); await deletion.promise; });
+        await waitFor(() => expect(screen.queryByText(LOADED_TEXT)).not.toBeInTheDocument());
+        expect(screen.getByLabelText('Environment')).toHaveValue('New local environment');
+        expect(screen.getByRole('region', { name: 'Codebase directory' })).toBeVisible();
+        expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        await screen.findByText('Saved.');
+        const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+        expect(body.environment).toBe('New local environment');
+        expect(body).not.toHaveProperty('codebase_source');
+    });
+
+    test('a draft equal to the saved model is deleted silently', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply({ system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() }) } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        expect(screen.queryByText(/Unsaved AI draft/)).not.toBeInTheDocument();
+        expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    });
+
+    test('a draft fetched for a variant the user left is ignored', async () => {
+        const gate = deferred();
+        const backend = mockBackend({
+            drafts: { v1: aiDraftReply() },
+            holds: [{ fragment: '/api/variants/v1/context/draft', method: 'GET', until: gate.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        fireEvent.click(await screen.findByRole('button', { name: 'Variant 1' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft').length).toBeGreaterThan(0));
+        fireEvent.click(sidebarItem('Variant 2'));
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
+        await waitFor(() => expect(screen.getByLabelText('Variant description')).toBeInTheDocument());
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v2/context/draft').length).toBeGreaterThan(0));
+        expect(screen.queryByText(/Unsaved AI draft/)).not.toBeInTheDocument();
+        expect(screen.queryByText('Unsaved changes in Variant 2')).not.toBeInTheDocument();
+    });
+
+    test('a cleared Environment shows as a change', async () => {
+        mockBackend({
+            contexts: { v1: { ...variantContext('v1', 'TM'), environment: 'Lab' } },
+            drafts: { v1: aiDraftReply({ environment: '', system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() }) },
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        expect(await screen.findByText(/Unsaved AI draft from report\.pdf: changes to Environment\./)).toBeInTheDocument();
+        expect(screen.getByLabelText('Environment')).toHaveValue('');
+    });
+
+    test('Fill is disabled while the variant has unsaved edits', async () => {
+        mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        expect(screen.getByRole('button', { name: FILL })).toBeEnabled();
+        fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Mine' } });
+        const fill = screen.getByRole('button', { name: FILL });
+        expect(fill).toBeDisabled();
+        expect(fill).toHaveAttribute('title', 'Save or discard your changes before filling from a document.');
+    });
+
+    test('Fill uploads the document, queues the action and locks the editor until it is cancelled', async () => {
+        let queue: agentStore.AgentTask[] = [];
+        jest.spyOn(agentStore, 'getAgentQueue').mockImplementation(() => queue);
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        const file = new File(['%PDF'], 'report.pdf', { type: 'application/pdf' });
+        fireEvent.change(screen.getByLabelText('Threat model document'), { target: { files: [file] } });
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/import-source', 'POST')).toHaveLength(1));
+        await waitFor(() => expect(requestsTo(backend, '/api/agent/queue', 'POST')).toHaveLength(1));
+        const submitted = JSON.parse(requestsTo(backend, '/api/agent/queue', 'POST')[0].body ?? '{}');
+        expect(submitted).toMatchObject({ conversation: 'per-action', source: 'AI Context Variant 1' });
+        expect(submitted.actions[0]).toMatchObject({ kind: 'context-import', key: 'context-import:v1', title: 'Variant 1 from report.pdf' });
+        expect(submitted.context).toMatchObject({ page: 'ai', projectId: 'p1', variantId: 'v1' });
+        expect(submitted.actions[0].text).toContain('propose_variant_threat_model');
+        await waitFor(() => expect(agentStore.getAgentChatRequest().taskId).toBe('import-request'));
+        act(() => {
+            queue = [{
+                ...submitted.actions[0], id: 'import-request', source: submitted.source, context: submitted.context,
+                conversationId: 'import-conversation', status: 'queued', position: 1, importRevision: submitted.actions[0].import_revision,
+            }];
+            agentStore.openAgentChat();
+        });
+
+        expect(await screen.findByText('AI is drafting from report.pdf… Editing is paused until the draft is ready.')).toBeInTheDocument();
+        expect(screen.getByLabelText('Variant description')).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/agent/queue/requests/import-request', 'DELETE')).toHaveLength(1));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        act(() => {
+            queue = [];
+            agentStore.openAgentChat();
+        });
+        expect(screen.getByLabelText('Variant description')).toBeEnabled();
+    });
+
+    test('a failed queue submission shows the error instead of opening the chat', async () => {
+        mockBackend({ failUrls: ['/api/agent/queue'] });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.change(screen.getByLabelText('Threat model document'), { target: { files: [new File(['x'], 'a.pdf')] } });
+        expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
+        expect(agentStore.getAgentChatRequest().nonce).toBe(0);
+        expect(screen.getByLabelText('Variant description')).toBeEnabled();
+    });
+
+    test('an upload finishing on another variant keeps its loaded review state', async () => {
+        const upload = deferred();
+        const backend = mockBackend({
+            drafts: { v2: aiDraftReply() }, echoPut: true,
+            holds: [{ fragment: '/api/variants/v1/context/import-source', method: 'POST', until: upload.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.change(screen.getByLabelText('Threat model document'), {
+            target: { files: [new File(['document A'], 'report.pdf')] },
+        });
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/import-source', 'POST')).toHaveLength(1));
+        fireEvent.click(sidebarItem('Variant 2'));
+        await screen.findByText(LOADED_TEXT);
+        await act(async () => { upload.resolve(); await upload.promise; });
+        await waitFor(() => expect(requestsTo(backend, '/api/agent/queue', 'POST')).toHaveLength(1));
+        expect(screen.getByText(LOADED_TEXT)).toBeInTheDocument();
+        expect(screen.getByLabelText('System scope and assets')).toHaveValue('Gateway');
+        const queued = JSON.parse(requestsTo(backend, '/api/agent/queue', 'POST')[0].body ?? '{}');
+        expect(queued.actions[0].key).toBe('context-import:v1');
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v2/context/draft', 'DELETE')).toHaveLength(1));
+        expect(JSON.parse(requestsTo(backend, '/api/variants/v2/context/draft', 'DELETE')[0].body ?? '{}'))
+            .toEqual({ revision: 'draft-revision' });
+    });
+
+    test.each(['import-revision', 'newer-import'])('cancellation after reload only cleans its original import (%s)', async revision => {
+        const queue: agentStore.AgentTask[] = [{
+            id: 'import-request', kind: 'context-import', key: 'context-import:v1', text: '', title: 'Variant 1',
+            detail: 'report.pdf', importRevision: 'import-revision', source: 'AI Context Variant 1', context: { page: 'ai' },
+            conversationId: 'import-conversation', status: 'queued', position: 1,
+        }];
+        jest.spyOn(agentStore, 'getAgentQueue').mockReturnValue(queue);
+        const backend = mockBackend({ importRevisions: { v1: revision } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        if (revision === 'newer-import') {
+            expect(await screen.findByText(/The AI draft or import source changed/)).toBeInTheDocument();
+            expect(backend.importRevisions?.v1).toBe(revision);
+        } else {
+            await waitFor(() => expect(backend.importRevisions?.v1).toBeUndefined());
+        }
+    });
+
+    test('failed cancellation keeps the import document and reports the error', async () => {
+        const queue: agentStore.AgentTask[] = [{
+            id: 'import-request', kind: 'context-import', key: 'context-import:v1', text: '', title: 'Variant 1',
+            detail: 'report.pdf', source: 'AI Context Variant 1', context: { page: 'ai' },
+            conversationId: 'import-conversation', status: 'queued', position: 1,
+        }];
+        jest.spyOn(agentStore, 'getAgentQueue').mockReturnValue(queue);
+        const backend = mockBackend({ failUrls: ['/api/agent/queue/requests/import-request'] });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+        expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
+        expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        expect(screen.getByLabelText('Variant description')).toBeDisabled();
+    });
+
+    test('a failed upload shows the error and queues nothing', async () => {
+        mockBackend({ failUrls: ['/context/import-source'] });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.change(screen.getByLabelText('Threat model document'), { target: { files: [new File(['x'], 'a.pdf')] } });
+        expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
+        expect(agentStore.getAgentQueue()).toHaveLength(0);
+    });
+
+    test('the propose write event loads the draft into a clean editor', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        backend.drafts = { v1: aiDraftReply() };
+        agentWrite('propose_variant_threat_model');
+        expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
+    });
+
+    test('a draft keeps concurrently saved Context texts and codebase settings', async () => {
+        const original = variantContext('v1', 'TM');
+        const backend = mockBackend({ contexts: { v1: {
+            ...original, environment: 'Lab',
+            editor: { ...original.editor, updated_at: 'revision-1' },
+        } }, echoPut: true });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+        backend.contexts = { v1: {
+            ...original, environment: 'Production',
+            editor: { ...original.editor, updated_at: 'revision-2' },
+        } };
+        backend.drafts = { v1: aiDraftReply({}, { status: 'rebased', saved_updated_at: 'revision-2' }) };
+        agentWrite('propose_variant_threat_model');
+        await screen.findByText(LOADED_TEXT);
+        expect(screen.getByLabelText('Environment')).toHaveValue('Production');
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+        const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+        expect(body).toMatchObject({ environment: 'Production' });
+    });
+
+    test('a revision mismatch retries the draft against the refreshed context', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+        const gate = deferred();
+        backend.holds = [{ fragment: 'variant_id=v1', method: 'GET', until: gate.promise }];
+        backend.drafts = { v1: aiDraftReply({}, { saved_updated_at: 'revision-1' }) };
+        agentWrite('propose_variant_threat_model');
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+        const latest = variantContext('v1', 'TM');
+        backend.contexts = { v1: { ...latest, environment: 'Production', editor: { ...latest.editor, updated_at: 'revision-2' } } };
+        backend.drafts = { v1: aiDraftReply({ system: { ...NO_SYSTEM, scope: 'Latest' } }, { saved_updated_at: 'revision-2' }) };
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(screen.getByLabelText('System scope and assets')).toHaveValue('Latest'));
+        expect(screen.getByLabelText('Environment')).toHaveValue('Production');
+        expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(3);
+    });
+
+    test('edits made during a saved-context refresh are kept and the AI draft waits', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+        const gate = deferred();
+        backend.holds = [{ fragment: 'variant_id=v1', method: 'GET', until: gate.promise }];
+        backend.drafts = { v1: aiDraftReply() };
+        agentWrite('propose_variant_threat_model');
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+        fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Mine' } });
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await screen.findByText('The agent prepared a draft from report.pdf. Save or discard your edits to review it.');
+        expect(screen.getByLabelText('Variant description')).toHaveValue('Mine');
+        expect(screen.getByLabelText('System scope and assets')).toHaveValue('TM');
+    });
+
+    test('repeated revision mismatches report an error without applying the draft', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply({}, { saved_updated_at: 'different-revision' }) } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText('The saved context keeps changing. Reload the variant to review the AI draft.');
+        expect(screen.getByLabelText('System scope and assets')).toHaveValue('TM');
+        expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+        expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(3);
+    });
+
+    describe('while an agent task is running', () => {
+        let queue: agentStore.AgentTask[] = [];
+        const setQueue = (next: agentStore.AgentTask[]) => act(() => {
+            queue = next;
+            agentStore.openAgentChat();
+        });
+        const runningTask = (kind: agentStore.AgentTask['kind'], key: string): agentStore.AgentTask => ({
+            id: 't1', text: '', key, kind, title: 'Variant 1', source: 'AI Context Variant 1',
+            context: { page: 'ai' }, conversationId: agentStore.MAIN_CONVERSATION, status: 'running',
+        });
+        let spy: jest.SpyInstance;
+        beforeEach(() => {
+            queue = [];
+            spy = jest.spyOn(agentStore, 'getAgentQueue').mockImplementation(() => queue);
+        });
+        afterEach(() => spy.mockRestore());
+
+        test.each([
+            ['the import', 'context-import' as const, 'context-import:v1'],
+            ['a chat turn', 'message' as const, 'chat'],
+        ])('partial drafts written during %s load only once it ends', async (_label, kind, key) => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft', 'GET')).toHaveLength(1));
+            setQueue([runningTask(kind, key)]);
+            backend.drafts = { v1: aiDraftReply() };
+            agentWrite('propose_variant_threat_model');
+            await act(async () => { await Promise.resolve(); });
+            expect(requestsTo(backend, '/api/variants/v1/context/draft', 'GET')).toHaveLength(1);
+            expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+
+            setQueue([]);
+            expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
+            expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        });
+
+        test.each([false, true])('variant re-entry defers an unfinished draft (no changes: %s)', async noChanges => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+            setQueue([runningTask('context-import', 'context-import:v1')]);
+            backend.drafts = { v1: noChanges
+                ? aiDraftReply({ system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() })
+                : aiDraftReply() };
+            fireEvent.click(sidebarItem('Variant 2'));
+            await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
+            fireEvent.click(sidebarItem('Variant 1'));
+            await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+            await waitFor(() => expect(screen.getByLabelText('Variant description')).toBeDisabled());
+            expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+            expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+            expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1);
+            backend.drafts = { v1: aiDraftReply() };
+            setQueue([]);
+            await screen.findByText(LOADED_TEXT);
+            expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+        });
+
+        test('a draft response arriving after an import starts is held until it finishes', async () => {
+            const backend = mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(1));
+            const gate = deferred();
+            backend.holds = [{ fragment: '/api/variants/v1/context/draft', method: 'GET', until: gate.promise }];
+            backend.drafts = { v1: aiDraftReply({ system: { ...NO_SYSTEM, scope: 'TM' }, stride: emptyStrideModel() }) };
+            agentWrite('propose_variant_threat_model');
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft')).toHaveLength(2));
+            setQueue([runningTask('context-import', 'context-import:v1')]);
+            await act(async () => { gate.resolve(); await gate.promise; });
+            expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(0);
+            expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+            backend.drafts = { v1: aiDraftReply() };
+            setQueue([]);
+            await screen.findByText(LOADED_TEXT);
+        });
+
+        test.each([false, true])('a deferred refresh during save cleanup keeps the accepted model (new edits: %s)', async edit => {
+            const cleanup = deferred();
+            const backend = mockBackend({
+                drafts: { v1: aiDraftReply() }, echoPut: true,
+                holds: [{ fragment: '/context/draft', method: 'DELETE', until: cleanup.promise }],
+            });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await screen.findByText(LOADED_TEXT);
+            const loads = requestsTo(backend, '/context/draft').length;
+            setQueue([runningTask('message', 'chat')]);
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+            // The server deleted the draft, but the cleanup response has not arrived.
+            delete backend.drafts?.v1;
+            setQueue([]);
+            await act(async () => { await Promise.resolve(); });
+            if (edit) fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Newer edits' } });
+            await act(async () => { cleanup.resolve(); await cleanup.promise; });
+
+            await screen.findByText('Saved.');
+            await waitFor(() => expect(requestsTo(backend, '/context/draft').length).toBeGreaterThan(loads));
+            expect(screen.getByLabelText('System scope and assets')).toHaveValue('Gateway');
+            expect(screen.getByLabelText('Variant description')).toHaveValue(edit ? 'Newer edits' : '');
+            if (edit) expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+            else expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+            if (!edit) fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Next edit' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(2));
+            const nextSave = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[1].body ?? '{}');
+            expect(nextSave.system.scope).toBe('Gateway');
+            expect(nextSave.stride.components).toMatchObject([{ id: 'C1', name: 'Web UI' }]);
+        });
+
+        test.each([false, true])('a missing draft refreshes another client acceptance (local edits: %s)', async edit => {
+            const backend = mockBackend({ drafts: { v1: aiDraftReply() }, echoPut: true });
+            renderPage({ projectId: 'p1' });
+            await openVariant1();
+            await screen.findByText(LOADED_TEXT);
+            if (edit) fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'My edits' } });
+            setQueue([runningTask('message', 'chat')]);
+            // Another client saves the accepted draft, including a newer field, and deletes it.
+            const saved = variantContext('v1', 'Gateway');
+            backend.contexts = { v1: {
+                ...saved, environment: 'Production',
+                editor: { ...saved.editor, stride: aiDraftReply().values.stride, updated_at: '2026-11-16T13:00:00Z' },
+            } };
+            delete backend.drafts?.v1;
+            setQueue([]);
+            await waitFor(() => expect(screen.queryByText(LOADED_TEXT)).not.toBeInTheDocument());
+            expect(screen.getByLabelText('System scope and assets')).toHaveValue('Gateway');
+            expect(screen.getByLabelText('Variant description')).toHaveValue(edit ? 'My edits' : '');
+            expect(screen.getByLabelText('Environment')).toHaveValue(edit ? '' : 'Production');
+            if (!edit) {
+                expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+                fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Next edit' } });
+            }
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
+            const nextSave = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
+            expect(nextSave.system.scope).toBe('Gateway');
+            expect(nextSave.stride.components).toMatchObject([{ id: 'C1', name: 'Web UI' }]);
+        });
+    });
+
+    test('a draft arriving over unsaved edits waits until they are saved', async () => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Mine' } });
+        backend.drafts = { v1: aiDraftReply() };
+        agentWrite('propose_variant_threat_model');
+        expect(await screen.findByText('The agent prepared a draft from report.pdf. Save or discard your edits to review it.')).toBeInTheDocument();
+        expect(screen.getByLabelText('Variant description')).toHaveValue('Mine');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        expect(await screen.findByText(LOADED_TEXT)).toBeInTheDocument();
+    });
+
+    test('a conflicting draft is not loaded, lists its conflicts and blocks Fill', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply({}, {
+            status: 'conflict', values: null, conflicts: [{ path: 'components.C1', reason: 'changed in both' }],
+        }) } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        expect(await screen.findByText(/conflicts with changes saved since it was made/)).toBeInTheDocument();
+        expect(screen.getByText('components.C1: changed in both')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: FILL })).toBeDisabled();
+        expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Discard AI draft' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        await waitFor(() => expect(screen.getByRole('button', { name: FILL })).toBeEnabled());
+    });
+
+    test('leaving a loaded draft with Discard deletes it', async () => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply() } });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText(LOADED_TEXT);
+        fireEvent.click(sidebarItem('Variant 2'));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft', 'DELETE')).toHaveLength(1));
+    });
+
+    test('navigation waits for deletion and a failed discard keeps the notice for retry', async () => {
+        const gate = deferred();
+        const backend = mockBackend({
+            drafts: { v1: aiDraftReply() },
+            holds: [{ fragment: '/context/draft', method: 'DELETE', until: gate.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText(LOADED_TEXT);
+        fireEvent.click(sidebarItem('Variant 2'));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(0);
+        backend.failUrls = ['/context/draft'];
+        await act(async () => { gate.resolve(); await gate.promise; });
+        expect(await screen.findByText('Server unavailable')).toBeInTheDocument();
+        expect(screen.getByText(LOADED_TEXT)).toBeInTheDocument();
+        expect(sidebarItem('Variant 1')).toHaveAttribute('aria-current', 'true');
+        expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(0);
+        backend.failUrls = [];
+        fireEvent.click(sidebarItem('Variant 2'));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
+    });
+
+    test.each(['Save', 'Discard'])('edits made during navigation %s cleanup are kept', async choice => {
+        const gate = deferred();
+        const backend = mockBackend({
+            drafts: { v1: aiDraftReply() }, echoPut: true,
+            holds: [{ fragment: '/context/draft', method: 'DELETE', until: gate.promise }],
+        });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText(LOADED_TEXT);
+        fireEvent.click(sidebarItem('Variant 2'));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: choice }));
+        await waitFor(() => expect(requestsTo(backend, '/context/draft', 'DELETE')).toHaveLength(1));
+        fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Newer edits' } });
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(screen.queryByText(/Unsaved AI draft from report\.pdf:/)).not.toBeInTheDocument());
+        expect(sidebarItem('Variant 1')).toHaveAttribute('aria-current', 'true');
+        expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(0);
+        expect(screen.getByLabelText('Variant description')).toHaveValue('Newer edits');
+        expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
+    });
+
+    test.each(['Save changes', 'Discard AI draft'])('stale %s preserves a newer draft', async action => {
+        const backend = mockBackend({ drafts: { v1: aiDraftReply() }, echoPut: true });
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await screen.findByText(LOADED_TEXT);
+        backend.drafts = { v1: aiDraftReply({}, { revision: 'newer-revision' }) };
+        fireEvent.click(screen.getByRole('button', { name: action }));
+        expect(await screen.findByText(/The AI draft or import source changed\. Reload it before discarding\./)).toBeInTheDocument();
+        expect(backend.drafts.v1).toMatchObject({ revision: 'newer-revision' });
+        expect(JSON.parse(requestsTo(backend, '/context/draft', 'DELETE')[0].body ?? '{}')).toEqual({ revision: 'draft-revision' });
+        expect(screen.getByText(/Unsaved AI draft from report\.pdf:/)).toBeInTheDocument();
     });
 });

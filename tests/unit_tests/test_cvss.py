@@ -87,7 +87,7 @@ def test_invalid_cvss(cvss_invalid):
     WHEN creating a CVSS object
     THEN check the CVSS severity and parsing of vector string is correct
     """
-    assert cvss_invalid.severity() == "Low"
+    assert cvss_invalid.severity() == "None"
     assert cvss_invalid.scope_long == "Unknown"
     assert cvss_invalid.attack_vector_long == "Unknown"
     assert cvss_invalid.authentication_long == "Unknown"
@@ -97,6 +97,16 @@ def test_invalid_cvss(cvss_invalid):
     assert cvss_invalid.privileges_required_long == "Unknown"
     assert cvss_invalid.availability_impact_long == "Unknown"
     assert cvss_invalid.confidentiality_impact_long == "Unknown"
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1", "4.0"])
+@pytest.mark.parametrize("score, expected", [(0.0, "None"), (0.1, "Low")])
+def test_zero_score_has_none_severity(version, score, expected):
+    cvss = CVSS(version, "", "test", score, 0.0, 0.0)
+
+    assert cvss.severity() == expected
+    assert cvss.to_dict()["severity"] == expected
+    assert CVSS.summarize([cvss.to_dict()])["severity"] == expected.lower()
 
 
 def test_vector_string_2():

@@ -170,12 +170,13 @@ def test_empty_archive_rejected():
         validate_reference(zip_source([]), "s.zip")
 
 
-def test_archive_entry_member_and_expansion_limits(monkeypatch):
+@pytest.mark.parametrize("archive_type", ["zip", "tar"])
+def test_archive_entry_limit_error_uses_configured_limit(monkeypatch, archive_type):
     import src.helpers.codebase_reference as module
     monkeypatch.setattr(module, "MAX_ENTRIES", 1)
-    with pytest.raises(ValueError, match="5000"):
-        validate_reference(zip_source([("a", b"x"), ("b", b"x")]), "s.zip")
-    monkeypatch.setattr(module, "MAX_ENTRIES", 5000)
+    source = zip_source if archive_type == "zip" else tar_source
+    with pytest.raises(ValueError, match="more than 1 entries"):
+        validate_reference(source([("a", b"x"), ("b", b"x")]), f"s.{archive_type}")
 
 
 def test_large_plain_files_remain_readable_without_archive_limits(monkeypatch):
@@ -198,12 +199,34 @@ def test_large_archive_members_are_rejected():
 
 
 def test_real_archive_entry_count_boundary():
-    entries = [(f"source-{index}.c", b"") for index in range(5000)]
-    with CodebaseReference(zip_source(entries), "at-limit.zip") as reference:
-        assert len(reference.entries) == 5000
-    entries.append(("extra.c", b""))
-    with pytest.raises(ValueError, match="5000"):
-        validate_reference(zip_source(entries), "over-limit.zip")
+    source = zip_source((f"source-{index:06d}.c", b"") for index in range(500_000))
+    with CodebaseReference(source, "at-limit.zip") as reference:
+        assert len(reference.entries) == 500_000
+        assert reference.list_files(offset=499_999) == {
+            "files": [{"path": "source-499999.c", "size": 0}], "total": 500_000, "next_offset": None,
+        }
+    with zipfile.ZipFile(source, "a") as archive:
+        archive.writestr("extra.c", b"")
+    with pytest.raises(ValueError, match="more than 500000 entries"):
+        validate_reference(source, "over-limit.zip")
+
+
+@pytest.mark.parametrize("count", [500_000, 500_001])
+def test_tar_entry_count_boundary(monkeypatch, count):
+    from unittest.mock import MagicMock
+
+    # Stream metadata to exercise the real threshold without a 256 MB TAR fixture.
+    archive = MagicMock()
+    archive.__enter__.return_value = archive
+    archive.__iter__.side_effect = lambda: (tarfile.TarInfo(f"source-{index}.c") for index in range(count))
+    monkeypatch.setattr(tarfile, "open", lambda **kwargs: archive)
+    if count > 500_000:
+        with pytest.raises(ValueError, match="more than 500000 entries"):
+            with CodebaseReference(BytesIO(), "over-limit.tar"):
+                pass
+    else:
+        with CodebaseReference(BytesIO(), "at-limit.tar") as reference:
+            assert len(reference.entries) == count
 
 
 def test_zip_checksum_failure_is_rejected():
@@ -225,3 +248,144 @@ def test_read_response_byte_limit_and_long_lines(monkeypatch):
     with CodebaseReference(BytesIO(b"12345\n"), "a.txt") as ref:
         with pytest.raises(ValueError, match="line exceeds"):
             ref.read_lines("a.txt")
+
+
+import shutil
+import subprocess
+import sys
+import zipfile as _zipfile
+from io import BytesIO as _BytesIO
+from unittest.mock import patch as _patch
+
+from src.helpers.codebase_reference import CodebaseReference as _Reference
+
+needs_pdftotext = pytest.mark.skipif(shutil.which("pdftotext") is None, reason="pdftotext not installed")
+
+
+def make_pdf(pages):
+    """A minimal valid PDF with one Helvetica text line per page."""
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>", None,
+               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for text in pages:
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET"
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                       f"/Resources << /Font << /F1 3 0 R >> >> /Contents {len(objects)} 0 R >>")
+        kids.append(f"{len(objects)} 0 R")
+    objects[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {len(kids)} >>"
+    out, offsets = b"%PDF-1.4\n", []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += "".join(f"{offset:010d} 00000 n \n" for offset in offsets).encode()
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+@needs_pdftotext
+def test_pdf_pages_are_marked_read_and_searched():
+    with _Reference(_BytesIO(make_pdf(["Gateway overview", "CSRF on admin UI"])), "report.pdf") as reference:
+        text = reference.text("report.pdf")
+        read = reference.read_lines("report.pdf", 1, 200)
+        found = reference.search("CSRF")
+    assert text.startswith("--- page 1 ---\n") and "--- page 2 ---\n" in text
+    assert "Gateway overview" in read["content"]
+    assert found["matches"][0]["path"] == "report.pdf"
+    assert found["matches"][0]["line"] > 2 and found["skipped_binary_files"] == 0
+
+
+@needs_pdftotext
+def test_pdf_inside_a_zip_is_readable():
+    archive = _BytesIO()
+    with _zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("docs/report.pdf", make_pdf(["Inside zip"]))
+    with _Reference(archive, "bundle.zip") as reference:
+        text = reference.text("docs/report.pdf")
+    assert text.startswith("--- page 1 ---\n") and "Inside zip" in text
+
+
+@needs_pdftotext
+def test_pdf_without_text_and_garbage_pdf_are_errors():
+    with _Reference(_BytesIO(make_pdf([""])), "scan.pdf") as reference:
+        with pytest.raises(ValueError, match="no extractable text"):
+            reference.text("scan.pdf")
+    with _Reference(_BytesIO(b"%PDF-1.4 garbage"), "bad.pdf") as reference:
+        with pytest.raises(ValueError, match="could not be read"):
+            reference.text("bad.pdf")
+        assert reference.search("x")["skipped_binary_files"] == 1
+
+
+def _pdf_process(monkeypatch, script):
+    from src.helpers import codebase_reference
+
+    processes = []
+    popen = subprocess.Popen
+
+    def start(*args, **kwargs):
+        process = popen([sys.executable, "-c", script], **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(codebase_reference.subprocess, "Popen", start)
+    return processes
+
+
+def test_missing_pdf_extractor_is_a_value_error():
+    with _patch("src.helpers.codebase_reference.subprocess.Popen", side_effect=FileNotFoundError("pdftotext")):
+        with _Reference(_BytesIO(b"%PDF-1.4"), "locked.pdf") as reference:
+            with pytest.raises(ValueError, match="unavailable"):
+                reference.text("locked.pdf")
+
+
+def test_encrypted_pdf_extraction_is_a_value_error(monkeypatch):
+    from src.helpers import codebase_reference
+
+    processes = _pdf_process(monkeypatch, "import sys; sys.stderr.write('Incorrect password'); sys.exit(1)")
+    with pytest.raises(ValueError, match="encrypted"):
+        codebase_reference._pdf_text(b"%PDF")
+    assert processes[0].returncode == 1
+
+
+@pytest.mark.parametrize("script", [
+    "import sys,time; sys.stdout.write('a' * 51); sys.stdout.flush(); time.sleep(20)",
+    "import sys,time; sys.stderr.write('a' * 33); sys.stderr.flush(); time.sleep(20)",
+    "import sys; sys.stdout.write('a' * 40 + '\\f')",
+])
+def test_pdf_output_budget_rejects_overflow_and_reaps_the_child(monkeypatch, script):
+    from src.helpers import codebase_reference
+
+    monkeypatch.setattr(codebase_reference, "PDF_TEXT_LIMIT", 50)
+    monkeypatch.setattr(codebase_reference, "MAX_RESPONSE_BYTES", 32)
+    processes = _pdf_process(monkeypatch, script)
+    with pytest.raises(ValueError, match="size limit"):
+        codebase_reference._pdf_text(b"%PDF")
+    assert processes[0].returncode is not None
+    assert processes[0].stdout.closed and processes[0].stderr.closed
+
+
+def test_pdf_timeout_terminates_and_reaps_the_child(monkeypatch):
+    from src.helpers import codebase_reference
+
+    monkeypatch.setattr(codebase_reference, "PDF_TIMEOUT", 0.05)
+    processes = _pdf_process(monkeypatch, "import time; time.sleep(20)")
+    with pytest.raises(ValueError, match="timed out"):
+        codebase_reference._pdf_text(b"%PDF")
+    assert processes[0].returncode is not None
+    assert processes[0].stdout.closed and processes[0].stderr.closed
+
+
+@pytest.mark.parametrize("operation", ["read", "search"])
+def test_pdf_budget_errors_are_reported_by_read_and_search(monkeypatch, operation):
+    from src.helpers import codebase_reference
+
+    monkeypatch.setattr(codebase_reference, "PDF_TEXT_LIMIT", 50)
+    _pdf_process(monkeypatch, "import sys; sys.stdout.write('a' * 51)")
+    with _Reference(_BytesIO(b"%PDF"), "large.pdf") as reference:
+        with pytest.raises(ValueError, match="size limit"):
+            if operation == "read":
+                reference.read_lines("large.pdf")
+            else:
+                reference.search("a")

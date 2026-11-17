@@ -4,12 +4,52 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pytest
+from datetime import datetime, timezone
 from src.views.openvex import OpenVex
 from src.models.package import Package
 from src.models.vulnerability import Vulnerability
 from src.models.assessment import Assessment
 from src.controllers import ControllersCache
 import json
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-11-12T12:00:00Z",
+    "2026-11-12T07:00:00-05:00",
+    "2026-11-12T12:00:00",
+])
+def test_timestamped_import_is_persisted_for_the_variant(tmp_path, timestamp):
+    from src.bin.cmd_process import read_inputs
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.project import Project
+    from src.models.sbom_document import SBOMDocument
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+
+    project = Project.create("timestamped-import")
+    variant = Variant.create("destination", project.id)
+    scan = Scan.create("OpenVEX import", variant.id, scan_type="sbom")
+    document = tmp_path / "input.openvex.json"
+    document.write_text(json.dumps({
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "statements": [{
+            "vulnerability": {"name": "CVE-2026-1234"},
+            "products": [{"@id": "pkg:generic/parser@1.0"}],
+            "status": "fixed", "status_notes": "Patched downstream", "timestamp": timestamp,
+        }],
+    }))
+    SBOMDocument.create(str(document), document.name, scan.id, format="openvex")
+    controllers = ControllersCache()
+    controllers.assessments.current_variant_id = variant.id
+    read_inputs(controllers, scan_id=scan.id)
+    db.session.expire_all()
+
+    finding = Finding.get_by_package_and_vulnerability("parser@1.0", "CVE-2026-1234")
+    assessment, = Assessment.get_by_finding_and_variant(finding.id, variant.id)
+    assert assessment.status == "fixed"
+    assert assessment.status_notes == "Patched downstream"
+    assert assessment.timestamp.replace(tzinfo=timezone.utc) == datetime(2026, 11, 12, 12, tzinfo=timezone.utc)
 
 
 @pytest.fixture

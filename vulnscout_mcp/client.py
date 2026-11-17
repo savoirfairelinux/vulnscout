@@ -9,9 +9,14 @@ class VulnScoutError(Exception):
     pass
 
 
+class VulnScoutConflict(VulnScoutError):
+    """Raised on HTTP 409: the resource changed since it was read."""
+
+
 class VulnScoutClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
+        self.import_revisions: dict[str, str] = {}
 
     def write_assessment(self, vuln_id: str, payload: dict) -> dict:
         """POST /api/vulnerabilities/<vuln_id>/assessments.
@@ -254,6 +259,50 @@ class VulnScoutClient:
             raise VulnScoutError(error_msg)
         return response.json()
 
+    def _send(self, method: str, url: str, **kwargs) -> httpx.Response:
+        try:
+            with httpx.Client(timeout=30) as http:
+                response = http.request(method, url, **kwargs)
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if response.is_success:
+            return response
+        try:
+            error_msg = response.json().get("error", response.text)
+        except ValueError:
+            error_msg = response.text
+        if response.status_code == 409:
+            raise VulnScoutConflict(error_msg)
+        raise VulnScoutError(error_msg)
+
+    def _variant_context_url(self, variant_id: str, suffix: str) -> str:
+        return f"{self.base_url}/api/variants/{quote(variant_id, safe='')}/context/{suffix}"
+
+    def get_context_draft(self, variant_id: str) -> Optional[dict]:
+        """GET the variant's pending AI draft; None when there is none."""
+        response = self._send("GET", self._variant_context_url(variant_id, "draft"))
+        return None if response.status_code == 204 else response.json()
+
+    def put_context_draft(self, variant_id: str, body: dict) -> dict:
+        """PUT an AI draft for review; raises VulnScoutConflict when the saved context moved."""
+        if variant_id in self.import_revisions:
+            body = {**body, "import_revision": self.import_revisions[variant_id]}
+        response = self._send("PUT", self._variant_context_url(variant_id, "draft"), json=body)
+        return response.json()
+
+    def get_import_source(self, variant_id: str, params: dict, *, new_import: bool = False) -> dict:
+        """List, read or search the document uploaded for an AI draft."""
+        if not new_import and variant_id in self.import_revisions:
+            params = {**params, "revision": self.import_revisions[variant_id]}
+        response = self._send("GET", self._variant_context_url(variant_id, "import-source/source"), params=params)
+        source = response.json()
+        if new_import:
+            self.import_revisions[variant_id] = source["revision"]
+        revision = self.import_revisions.setdefault(variant_id, source["revision"])
+        if revision != source["revision"]:
+            raise VulnScoutConflict("The import source changed. Start a new import.")
+        return source
+
     def update_project_context(self, project_id: str, description: str | None) -> dict:
         """PUT /api/projects/<project_id>/context."""
         url = f"{self.base_url}/api/projects/{project_id}/context"
@@ -487,6 +536,8 @@ class ScopedVulnScoutClient(VulnScoutClient):
         super().__init__(base_url)
         self.project_ids = frozenset(scope["project_ids"])
         self.variant_ids = frozenset(scope["variant_ids"])
+        self.import_revisions = dict(scope.get("import_revisions") or {})
+        self._fixed_import_variants = frozenset(self.import_revisions)
         # CLI assessment turns may only write their selected (vulnerability, variant, package) targets.
         self.write_targets = frozenset(
             (target["vuln_id"], target["variant_id"], target["package"]) for target in scope["write_targets"]
@@ -552,6 +603,20 @@ class ScopedVulnScoutClient(VulnScoutClient):
     def get_codebase_source(self, variant_id: str, file_id: str, params: dict) -> dict:
         self._variant(variant_id)
         return super().get_codebase_source(variant_id, file_id, params)
+
+    def get_context_draft(self, variant_id: str) -> Optional[dict]:
+        self._variant(variant_id)
+        return super().get_context_draft(variant_id)
+
+    def put_context_draft(self, variant_id: str, body: dict) -> dict:
+        self._variant(variant_id)
+        return super().put_context_draft(variant_id, body)
+
+    def get_import_source(self, variant_id: str, params: dict, *, new_import: bool = False) -> dict:
+        self._variant(variant_id)
+        if new_import and variant_id in self._fixed_import_variants:
+            raise VulnScoutError("A queued import cannot switch documents. Start a new import from the AI Context page.")
+        return super().get_import_source(variant_id, params, new_import=new_import)
 
     def get_dependency_graph(self, variant_id: str) -> dict:
         self._variant(variant_id)

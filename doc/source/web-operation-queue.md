@@ -5,6 +5,13 @@ The navigation bar's **Operation queue** shows the status, progress, and logs fo
 
 Scans and refreshes share one serial pipeline. In a batch, scans run in Grype, NVD, OSV, sbom-cve-check order, followed by NVD, EPSS, GHSA, EUVD refreshes. Each source/variant pair is one operation; a batch accepts at most 100 expanded operations. Document exports run in a separate two-worker lane, and SBOM uploads have their own lane, so they can proceed during scans.
 
+Multi-step scan batches and refresh batches appear as one task with expandable steps.
+For example, one vulnerability-data refresh can contain EPSS and EUVD steps,
+each with its own progress and logs. A refresh task keeps its parent even when
+only one provider step is present. The navigation counter counts the parent
+task, not its steps. Cancel the whole task or an individual active step.
+Separate launches remain separate tasks.
+
 An operation can be `queued`, `running`, `done`, `error`, or `cancelled`. Cancel a queued job to prevent it from starting; running jobs stop at a cancellation checkpoint, not necessarily immediately. Check whether an operation is cancellable before requesting cancellation. Failed or cancelled scans prevent dependent post-scan refreshes from doing work. Finished items can be dismissed from every tab without removing scan results.
 
 The queue keeps terminal operations for up to one hour unless dismissed. This state is process-local: restarting the server clears the queue, not just the browser view. A missed export download can be retried from the queue while its ZIP is retained, but the archive expires and is consumed on its first download. A repeat or expired download normally returns `404`; start a new export instead. Settings uploads also remain visible here when leaving Settings, and successful uploads refresh the affected data.

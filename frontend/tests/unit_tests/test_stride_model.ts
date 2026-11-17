@@ -13,9 +13,8 @@ beforeEach(() => fetchMock.resetMocks());
 function ctxWithEditor(editor: Partial<MergedContext['editor']> = {}): MergedContext {
     return {
         project_id: 'p1', description: null, variant_id: 'v1', variant_description: 'VD',
-        codebase_path: null, environment: null, threat_model: null, risks: null, other_info: null,
+        environment: null, threat_model: null, risks: null, other_info: null,
         editor: {
-            codebase_source: 'paths', codebase_path: null,
             system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
             stride: emptyStrideModel(), files: [], updated_at: null,
             ...editor,
@@ -27,7 +26,7 @@ const populated: StrideModel = {
     components: [{ id: 'C1', name: 'API', description: '', trust_zone: '' }],
     interactions: [{ id: 'I1', name: 'call', source_id: 'C1', destination_id: 'C2', interface: '', data: '', trust_boundary: '' }],
     threats: [{ id: 'T1', category: 'spoofing', description: 'x', target_ids: ['I1'] }],
-    risks: [{ threat_id: 'T1', likelihood: 'low', impact: null, mitigation: '', residual: '' }],
+    risks: [{ id: 'R1', description: '', threat_ids: ['T1'], likelihood: 'low', impact: null, mitigation: '', residual: '' }],
 };
 
 describe('constants', () => {
@@ -47,23 +46,20 @@ describe('constants', () => {
 });
 
 describe('drafts', () => {
-    test('emptyDraft defaults to the references source and an empty STRIDE model', () => {
+    test('emptyDraft has no legacy source settings and an empty STRIDE model', () => {
         const d = emptyDraft();
-        expect(d.codebase_source).toBe('references');
-        expect(d.codebase_paths).toEqual([]);
+        expect(d).not.toHaveProperty('codebase_source');
+        expect(d).not.toHaveProperty('codebase_paths');
         expect(d.stride).toEqual(emptyStrideModel());
     });
 
     test('draftFromContext maps nulls to empty strings and reads the editor block', () => {
         const d = draftFromContext(ctxWithEditor({
-            codebase_source: 'references', codebase_path: ' /src/a;;/src/b ;',
             system: { scope: 'S', actors: null, entry_points: null, trust_boundaries: null },
         }));
         expect(d.variant_description).toBe('VD');
         expect(d.environment).toBe('');
         expect(d.other_info).toBe('');
-        expect(d.codebase_source).toBe('references');
-        expect(d.codebase_paths).toEqual(['/src/a', '/src/b']);
         expect(d.system).toEqual({ scope: 'S', actors: '', entry_points: '', trust_boundaries: '' });
     });
 
@@ -73,6 +69,7 @@ describe('drafts', () => {
         expect(d.stride).toEqual(populated);
         expect(d.stride.threats[0]).not.toBe(populated.threats[0]);
         expect(d.stride.threats[0].target_ids).not.toBe(populated.threats[0].target_ids);
+        expect(d.stride.risks[0].threat_ids).not.toBe(populated.risks[0].threat_ids);
     });
 
     test('draftsEqual ignores object identity but detects changes', () => {
@@ -95,6 +92,10 @@ describe('ids and references', () => {
         expect(nextId([{ id: 'C1' }], 'C', ['C2'])).toBe('C3');
     });
 
+    test('nextId numbers risks with the R prefix', () => {
+        expect(nextId([{ id: 'R1' }, { id: 'T7' }], 'R', ['R2'])).toBe('R3');
+    });
+
     test('nextId ignores other prefixes and malformed ids', () => {
         expect(nextId([{ id: 'I9' }, { id: 'Cx' }], 'C')).toBe('C1');
     });
@@ -105,6 +106,7 @@ describe('ids and references', () => {
         expect(isReferenced(populated, 'I1')).toBe(true);
         expect(isReferenced(populated, 'T1')).toBe(true);
         expect(isReferenced(populated, 'C9')).toBe(false);
+        expect(isReferenced({ ...populated, risks: [] }, 'T1')).toBe(false);
     });
 });
 
@@ -131,7 +133,7 @@ describe('requiredFieldErrors', () => {
             components: [{ ...populated.components[0], name: '  ' }],
             interactions: [{ ...populated.interactions[0], source_id: '', destination_id: '' }],
             threats: [{ ...populated.threats[0], category: '', target_ids: [] }],
-            risks: [{ ...populated.risks[0], threat_id: '' }],
+            risks: [{ ...populated.risks[0], threat_ids: [] }],
         };
         expect(requiredFieldErrors(model)).toEqual({
             'components[0].name': 'Enter a component name.',
@@ -139,7 +141,7 @@ describe('requiredFieldErrors', () => {
             'interactions[0].destination_id': 'Select a destination component.',
             'threats[0].category': 'Select a STRIDE category.',
             'threats[0].target_ids': 'Select at least one target.',
-            'risks[0].threat_id': 'Select a threat.',
+            'risks[0].threat_ids': 'Select at least one threat.',
         });
     });
 });
@@ -149,7 +151,6 @@ describe('Context.saveVariantEditor', () => {
         fetchMock.mockResponseOnce(JSON.stringify(ctxWithEditor()));
         const draft = {
             ...emptyDraft(), variant_description: ' ', environment: '', other_info: 'info',
-            codebase_paths: ['', ' '],
         };
         await Context.saveVariantEditor('v 1', draft);
         const [url, init] = fetchMock.mock.calls[0];
@@ -159,18 +160,12 @@ describe('Context.saveVariantEditor', () => {
         expect(body.variant_description).toBeNull();
         expect(body.environment).toBeNull();
         expect(body.other_info).toBe('info');
-        expect(body.codebase_path).toBeNull();
+        expect(body).not.toHaveProperty('codebase_path');
         expect(body.system).toEqual({ scope: null, actors: null, entry_points: null, trust_boundaries: null });
         expect(body).not.toHaveProperty('editor_mode');
         expect(body).not.toHaveProperty('free');
-        expect(body.codebase_source).toBe('references');
+        expect(body).not.toHaveProperty('codebase_source');
         expect(body.stride).toEqual(emptyStrideModel());
-    });
-
-    test('joins the trimmed non-blank codebase paths with ";"', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify(ctxWithEditor()));
-        await Context.saveVariantEditor('v1', { ...emptyDraft(), codebase_paths: [' /src/a ', '', '/src/b'] });
-        expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).codebase_path).toBe('/src/a;/src/b');
     });
 
     test('returns the saved variant context on success', async () => {

@@ -17,12 +17,12 @@ def _stride(label):
 
 
 def _entry(variant_name, label):
-    return {"variant_name": variant_name, "codebase_source": "paths", "stride_model": _stride(label)}
+    return {"variant_name": variant_name, "stride_model": _stride(label)}
 
 
 def _save(variant_id, label, **fields):
     from src.models.variant_context import VariantContext
-    VariantContext.save_editor(variant_id, {**fields, "codebase_source": "paths", "stride": _stride(label)})
+    VariantContext.save_editor(variant_id, {**fields, "stride": _stride(label)})
 
 
 def _build_db(app):
@@ -91,7 +91,7 @@ class TestExportContextCLI:
         assert result.exit_code == 0, result.output
         assert out.exists()
         doc = json.loads(out.read_text())
-        assert doc["version"] == "2.0"
+        assert doc["version"] == "3.0"
         assert isinstance(doc["exported_at"], str) and doc["exported_at"]
         keys = {(e["project_name"], e["variant_name"]) for e in self._flat(doc)}
         assert keys == {
@@ -185,7 +185,7 @@ class TestImportContextCLI:
                 _entry("NoSuchVariant", "t"),
             ]},
             {"project_name": "ProjectB", "project_description": "d", "variants": [
-                {"variant_name": "VariantB1", "codebase_source": "paths"},  # no threat model
+                {"variant_name": "VariantB1"},  # no threat model
             ]},
         ]
         path = self._write(tmp_path, payload)

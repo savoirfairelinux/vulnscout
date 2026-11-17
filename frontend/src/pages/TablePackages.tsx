@@ -361,7 +361,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                         )}
                     </div>
                 ),
-                footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 300
             }),
             columnHelper.accessor(row => releaseVersion(row) ?? '', {
@@ -387,8 +386,8 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 id: 'source_files',
                 header: () => <div className="flex items-center justify-center">Recorded Files</div>,
                 HintText: <p>
-                    Non-binary file records associated with this component in the imported SBOMs.
-                    May include source code, patches, licenses, and configuration files;
+                    File records associated with this component in the imported SBOMs.
+                    May include source code, patches, licenses, configuration files, and SPDX 2 binaries/outputs;
                     not necessarily a complete source inventory.
                 </p>,
                 HintAriaLabel: 'Recorded files helper',
@@ -648,8 +647,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     </div>
                 ),
                 enableSorting: false,
-                minSize: 10,
-                size: 10
+                size: 200
             })
         ]
     }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError, compilerError, compilerDocuments]);
@@ -744,7 +742,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                         onClose={() => setOutdatedLoadError('')}
                     />
                 )}
-        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
+        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <ExplicitSearchInput
                 id="package-search"
                 ref={searchInputRef}

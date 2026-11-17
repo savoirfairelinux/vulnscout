@@ -308,7 +308,13 @@ setup_user() {
         mkdir -p /builder
         # Source trees under /scan may be bind-mounted from the host in dev mode.
         chown -f "$uid:$gid" /scan
-        chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs /cache
+        chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs
+        # Administrator source directories may be read-only mounts; never traverse or chown them.
+        local cache_dir="${VULNSCOUT_CACHE_DIR:-/cache/vulnscout}"
+        cache_dir="${cache_dir%/}"
+        find /cache -type d -path "$cache_dir/context-*" ! -path "$cache_dir/context-*/*" \
+            ! -name context-files -prune \
+            -o -exec chown -h "$uid:$gid" {} +
     fi
 }
 
@@ -541,6 +547,11 @@ cmd_scan() {
             esac
         done
     fi
+    if [[ "$has_inputs" == "true" && "${REFRESH_VULNERABILITY_DATA:-false}" == "true" &&
+          -n "${REFRESH_RUN_ID:-}" ]]; then
+        console_err error "Error: refresh --run-id cannot process pending inputs. Process them with scan before retrying refresh."
+        return 1
+    fi
     (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade) || return $?
 
     local has_condition=false
@@ -595,11 +606,11 @@ cmd_scan() {
                 _grype_gomemlimit=$(resolve_grype_memlimit)
                 if [[ -n "$_grype_gomemlimit" ]]; then
                     console_out info "Grype memory limit (GOMEMLIMIT): $_grype_gomemlimit"
-                    GOMEMLIMIT="$_grype_gomemlimit" grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
+                    GOMEMLIMIT="$_grype_gomemlimit" grype "sbom:$exported_cdx" -o json > "$grype_out" || {
                         rm -rf "$grype_tmp"; return 1
                     }
                 else
-                    grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
+                    grype "sbom:$exported_cdx" -o json > "$grype_out" || {
                         rm -rf "$grype_tmp"; return 1
                     }
                 fi
@@ -677,6 +688,7 @@ cmd_scan() {
         local -a refresh_args=()
         [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_args+=(--project "$PROJECT_NAME")
         [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_args+=(--variant "$VARIANT_NAME")
+        [[ -n "${REFRESH_RUN_ID:-}" ]] && refresh_args+=(--run-id "$REFRESH_RUN_ID")
         (cd "$BASE_DIR" && flask --app src.bin.webapp refresh-vulnerability-data "${refresh_args[@]}") || _cmd_scan_exit=$?
     elif [[ "${INTERACTIVE_MODE}" == "true" ]] && [[ "$has_inputs" == "false" ]]; then
         set_status "1" "No new input files to merge, skipping"
@@ -1120,6 +1132,12 @@ while [[ $# -gt 0 ]]; do
             request_scans sbom-cve-check; shift ;;
         --refresh-vulnerability-data)
             REFRESH_VULNERABILITY_DATA=true; SCAN_REQUIRED=true; shift ;;
+        --refresh-run-id)
+            REFRESH_RUN_ID="$2"; shift 2 ;;
+        --export-refresh-changes)
+            EXPORT_REFRESH_RUN_ID="$2"; shift 2 ;;
+        --refresh-changes-format)
+            REFRESH_CHANGES_FORMAT="$2"; shift 2 ;;
         --dry-run)
             DRY_RUN=true; shift ;;
         --clear-vulnerability-history)
@@ -1188,6 +1206,14 @@ while [[ $# -gt 0 ]]; do
             console_out error "Unknown command: $1"; console_out info "Run --help for usage."; exit 1 ;;
     esac
 done
+
+if [[ -n "${EXPORT_REFRESH_RUN_ID:-}" ]]; then
+    refresh_export_args=(--run-id "$EXPORT_REFRESH_RUN_ID" --format "${REFRESH_CHANGES_FORMAT:-json}")
+    [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_export_args+=(--project "$PROJECT_NAME")
+    [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_export_args+=(--variant "$VARIANT_NAME")
+    cd "$BASE_DIR"
+    exec flask --app src.bin.webapp export-refresh-changes "${refresh_export_args[@]}"
+fi
 
 if [[ -n "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-}" && -z "${IMPORT_CUSTOM_VULNSCOUT_DATA_FILE:-}" && -z "${IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE:-}" ]]; then
     console_err error "Error: timestamp options require a custom VulnScout or OpenVEX import."

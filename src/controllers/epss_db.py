@@ -55,29 +55,24 @@ class EPSS_DB(BaseAPIClient):
         Returns a dict mapping each CVE ID that has a score to
         ``{"score": float, "percentile": float}``.
         CVE IDs with no score are absent from the returned dict.
+        HTTP, transport and decoding failures propagate to the caller.
         """
         if not cve_ids:
             return {}
-        try:
-            encoded = ",".join(urllib.parse.quote(c, safe='') for c in cve_ids)
-            url = f"{EPSS_API_URL}?cve={encoded}&limit={len(cve_ids)}"
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=30) as response:
-                if response.status != 200:
-                    return {}
-                data = self._decode_response_json(response)
-                results = {}
-                for entry in data.get("data", []):
-                    cve = entry.get("cve")
-                    if cve:
-                        results[cve] = {
-                            "score": float(entry["epss"]),
-                            "percentile": float(entry["percentile"]),
-                        }
-                return results
-        except urllib.error.HTTPError as e:
-            print(f"Error fetching EPSS batch: {e}", flush=True)
-            return {}
-        except Exception as e:
-            print(f"Error fetching EPSS batch: {e}", flush=True)
-            return {}
+        encoded = ",".join(urllib.parse.quote(c, safe='') for c in cve_ids)
+        url = f"{EPSS_API_URL}?cve={encoded}&limit={len(cve_ids)}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            if response.status != 200:
+                raise urllib.error.HTTPError(url, response.status, "Unexpected EPSS response status",
+                                             response.headers, None)
+            data = self._decode_response_json(response)
+            results = {}
+            for entry in data.get("data", []):
+                cve = entry.get("cve")
+                if cve:
+                    results[cve] = {
+                        "score": float(entry["epss"]),
+                        "percentile": float(entry["percentile"]),
+                    }
+            return results

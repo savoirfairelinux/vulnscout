@@ -27,17 +27,14 @@ import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import NvdRefreshHandler from "../handlers/nvdRefresh";
-import EpssRefreshHandler from "../handlers/epssRefresh";
-import GhsaRefreshHandler from "../handlers/ghsaRefresh";
+import { refreshIndividual } from "../handlers/individualRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
-import type { QueuedAgentMessage } from '../types/agent';
-import { agentActionState as queueActionState, enqueueAgentMessages, openAgentChat } from '../handlers/agentQueue';
+import { agentActionState as queueActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
 import AgentActionButton from './AgentActionButton';
 import useAgentQueue from '../hooks/useAgentQueue';
-import { AGENT_WRITE_EVENT, type AgentActionState, type AgentContext } from "../types/agent";
-import { assessmentKey, buildAiAssessmentMessages } from "../helpers/aiAssessment";
-import { assessmentReviewKey, buildAssessmentReviewAction } from "../helpers/aiAssessmentReview";
+import { AGENT_WRITE_EVENT, type AgentAction, type AgentActionState, type AgentContext } from "../types/agent";
+import { assessmentKey } from "../helpers/aiAssessment";
+import { assessmentReviewKey } from "../helpers/aiAssessmentReview";
 import VulnHistory from "./VulnHistory";
 
 type Props = {
@@ -191,33 +188,45 @@ type VariantScopedSnapshot = {
         queueActionState(agentMessageQueue, item => item.key === key);
 
     /** Queue an AI action in its own conversation of the agent chat, which opens beside this modal. */
-    const queueAgentActions = (actions: Omit<QueuedAgentMessage, 'id'>[]) => {
+    const queueAgentAction = async (action: AgentAction, key: string) => {
         setIsEditing(true);
-        const existing = actions.length ? agentActionState(actions[0].key) : undefined;
+        const existing = agentActionState(key);
         if (existing) {
             openAgentChat(existing.taskId);
             return;
         }
-        const queued = actions.map(action => ({
-            ...action, id: crypto.randomUUID(),
-            title: action.kind === 'assess' ? `${vuln.id} · ${action.title}` : action.title,
-        }));
-        enqueueAgentMessages(queued, assessmentAgentContext, `Vulnerability ${vuln.id}`, 'per-action');
-        openAgentChat(queued[0]?.id);
+        try {
+            const { requests, skipped } = await enqueueAgentActions([action], {
+                conversation: 'per-action', source: `Vulnerability ${vuln.id}`, context: assessmentAgentContext,
+            });
+            openAgentChat(requests[0]?.id ?? skipped[0]?.request_id);
+        } catch (error) {
+            showMessage(error instanceof Error ? error.message : 'Unable to queue the AI request.', 'error');
+        }
     };
 
     const assessWithAiState = (targets: AssessmentTargetPair[]) => agentActionState(assessmentKey(vuln.id, targets));
 
     const assessWithAi = (targets: AssessmentTargetPair[]) => {
-        try {
-            queueAgentActions(buildAiAssessmentMessages(vuln.id, targets, availableVariants));
-        } catch (error) {
-            showMessage(error instanceof Error ? error.message : 'Unable to prepare AI assessment.', 'error');
+        if (!targets.length) {
+            showMessage(`No active assessment targets for ${vuln.id}.`, 'error');
+            return;
         }
+        const variantIds = new Set<string>();
+        for (const target of targets) {
+            if (!target.variant_id) {
+                showMessage(`No active variant for assessment target ${target.package}.`, 'error');
+                return;
+            }
+            variantIds.add(target.variant_id);
+        }
+        const context: AgentContext = { ...assessmentAgentContext, variantId: undefined,
+            variantIds: projectId ? [...variantIds] : undefined };
+        void queueAgentAction({ kind: 'assess', vuln_id: vuln.id, targets, context }, assessmentKey(vuln.id, targets));
     };
 
     const reviewWithAi = (assessment: Assessment) => {
-        queueAgentActions([buildAssessmentReviewAction(assessment)]);
+        void queueAgentAction({ kind: 'review', assessment_id: assessment.id }, assessmentReviewKey(assessment.id));
     };
 
     const assessmentAgentContext: AgentContext = {
@@ -633,24 +642,42 @@ type VariantScopedSnapshot = {
         setRefreshing(true);
         setRefreshError(null);
         setRefreshedList([]);
+        const reloadMetadata = async (): Promise<Vulnerability> => {
+            const details = await Vulnerabilities.getDetails(vuln.id, variantId, projectId);
+            if (!details) throw new Error("Failed to load refreshed vulnerability details.");
+            // Refresh endpoints return global records, not the modal's project/variant scope.
+            return {
+                ...vuln,
+                aliases: details.aliases,
+                related_vulnerabilities: details.related_vulnerabilities,
+                urls: details.urls,
+                cpes: details.cpes,
+                published: details.published,
+                data_fetched_at: details.data_fetched_at,
+                data_updated_at: details.data_updated_at,
+                nvd_fetched_at: details.nvd_fetched_at,
+                ghsa_fetched_at: details.ghsa_fetched_at,
+                texts: details.texts,
+                severity: details.severity,
+                euvd: details.euvd,
+                euvd_fetched_at: details.euvd_fetched_at,
+            };
+        };
+        const latest = (...values: Array<string | undefined>) =>
+            values.filter((value): value is string => Boolean(value)).sort().pop();
         try {
+            const results = await refreshIndividual(vuln.id, projectId, variantId);
             if (vuln.id.toUpperCase().startsWith('GHSA-')) {
-                const result = await GhsaRefreshHandler.triggerSingleRefresh(vuln.id);
+                const result = results.ghsa;
                 if (result) {
-                    const { simplified_status: _ss, assessments: _a, packages_current: _pc, variants: _v, found_by: _fb, ...ghsaUpdates } = result;
-                    patchVuln(vuln.id, { ...vuln, ...ghsaUpdates });
+                    patchVuln(vuln.id, await reloadMetadata());
                     setRefreshedList(['GHSA']);
                 } else {
                     setRefreshError("GitHub Advisory Database refresh failed. Please try again later.");
                 }
             } else {
-                const [nvdResult, epssResult] = await Promise.allSettled([
-                    NvdRefreshHandler.triggerSingleRefresh(vuln.id, "api"),
-                    EpssRefreshHandler.triggerSingleRefresh(vuln.id),
-                ]);
-
                 const errors: string[] = [];
-                const nvdValue = nvdResult.status === "fulfilled" ? nvdResult.value : null;
+                const nvdValue = results.nvd;
                 const nvdUpdated = nvdValue?.kind === "success";
                 if (!nvdUpdated) {
                     if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
@@ -663,32 +690,48 @@ type VariantScopedSnapshot = {
                         errors.push("NVD API unavailable. Please try again later.");
                     }
                 }
-                if (epssResult.status === "rejected" || epssResult.value === null) {
+                if (!results.epss) {
                     errors.push("EPSS API unavailable");
                 }
+                const euvdValue = results.euvd;
+                if (!euvdValue) {
+                    errors.push("ENISA EUVD unavailable");
+                }
 
-                const epssUpdated = epssResult.status === "fulfilled" && epssResult.value !== null;
+                const epssUpdated = results.epss !== null;
 
                 let merged = { ...vuln };
 
-                if (nvdUpdated || epssUpdated) {
+                if (nvdUpdated || epssUpdated || euvdValue) {
                     if (nvdUpdated) {
-                        const {
-                            simplified_status: _ss,
-                            assessments: _a,
-                            packages_current: _pc,
-                            variants: _v,
-                            found_by: _fb,
-                            ...nvdUpdates
-                        } = nvdValue.vuln;
-
-                        merged = { ...merged, ...nvdUpdates };
-                        setRefreshedList(prev => [...prev, "NVD"]);
+                        try {
+                            merged = await reloadMetadata();
+                            setRefreshedList(prev => [...prev, "NVD"]);
+                        } catch (error) {
+                            errors.push(`Failed to load refreshed vulnerability details: ${String(error)}`);
+                        }
                     }
 
                     if (epssUpdated) {
-                        merged = { ...merged, epss: epssResult.value!.epss };
+                        merged = {
+                            ...merged,
+                            epss: results.epss!.epss,
+                            data_fetched_at: latest(merged.data_fetched_at, results.epss!.data_fetched_at),
+                            data_updated_at: latest(merged.data_updated_at, results.epss!.data_updated_at),
+                        };
                         setRefreshedList(prev => [...prev, "EPSS"]);
+                    }
+
+                    if (euvdValue) {
+                        merged = {
+                            ...merged,
+                            aliases: [...new Set([...merged.aliases, ...euvdValue.aliases])],
+                            euvd: euvdValue.euvd,
+                            euvd_fetched_at: euvdValue.euvd_fetched_at,
+                            data_fetched_at: latest(merged.data_fetched_at, euvdValue.data_fetched_at),
+                            data_updated_at: latest(merged.data_updated_at, euvdValue.data_updated_at),
+                        };
+                        setRefreshedList(prev => [...prev, "ENISA EUVD"]);
                     }
 
                     patchVuln(vuln.id, merged);
@@ -704,7 +747,7 @@ type VariantScopedSnapshot = {
             setRefreshing(false);
             setHistoryVersion(version => version + 1);
         }
-    }, [vuln, patchVuln]);
+    }, [vuln, patchVuln, variantId, projectId]);
 
     const copyRowId = async (row: Assessment) => {
         try {
@@ -1307,10 +1350,10 @@ type VariantScopedSnapshot = {
         </div>
     );
 
-    const bothRefreshed = isGhsaVuln
+    const allRefreshed = isGhsaVuln
         ? refreshedList.includes('GHSA')
-        : refreshedList.includes('NVD') && refreshedList.includes('EPSS');
-    const partialRefreshed = refreshedList.length > 0 && !bothRefreshed;
+        : ['NVD', 'EPSS', 'ENISA EUVD'].every(source => refreshedList.includes(source));
+    const partialRefreshed = refreshedList.length > 0 && !allRefreshed;
 
     // Get the default status for new assessments
     // Use the most recent assessment's status, or "under_investigation" if no assessments exist
@@ -1607,19 +1650,19 @@ type VariantScopedSnapshot = {
                     <button
                         onClick={handleRefresh}
                         disabled={refreshing}
-                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD & EPSS"}
+                        title={isGhsaVuln ? "Refresh from GitHub Advisory Database" : "Refresh from NVD, EPSS & ENISA EUVD"}
                         type="button"
                         className={`rounded-lg border bg-transparent px-3 py-2 text-sm font-medium transition-colors focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${
-                            bothRefreshed
+                            allRefreshed
                                 ? "border-green-600 text-green-400 hover:bg-green-900"
                                 : partialRefreshed
                                     ? "border-yellow-600 text-yellow-400 hover:bg-yellow-900"
                                     : "border-gray-600 text-gray-300 hover:bg-gray-600 hover:text-white"
                         }`}
                     >
-                        <FontAwesomeIcon icon={(bothRefreshed || partialRefreshed) ? faCheck : faRotate} className={refreshing ? "animate-spin" : ""} />
-                        {bothRefreshed && <span className="ml-2 text-xs">Updated</span>}
-                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList[0]} Updated</span>}
+                        <FontAwesomeIcon icon={(allRefreshed || partialRefreshed) ? faCheck : faRotate} className={refreshing ? "animate-spin" : ""} />
+                        {allRefreshed && <span className="ml-2 text-xs">Updated</span>}
+                        {partialRefreshed && <span className="ml-2 text-xs">{refreshedList.join(', ')} Updated</span>}
                     </button>
                     {refreshError && <span className="text-xs text-red-400">{refreshError}</span>}
                 </div>
@@ -1704,7 +1747,7 @@ type VariantScopedSnapshot = {
                 </div>
             )}
                     {/* Scrollable content region (only the body scrolls) */}
-                    <div className="min-w-0 flex-1 overflow-y-auto min-h-0">
+                    <div className="relative min-w-0 flex-1 overflow-y-auto min-h-0">
 
                     {/* Message Banner - Sticky at top */}
                     {showBanner && (
@@ -1884,9 +1927,9 @@ type VariantScopedSnapshot = {
 
                         <div className="mb-6 mt-6">
                             <h3 className="font-bold mb-2">Links</h3>
-                            <ul>
+                            <ul className="max-h-64 overflow-y-auto bg-gray-800 p-2 px-4 rounded-lg">
                                 {vuln.urls.map(url => (
-                                    <li key={encodeURIComponent(url)}><a className="underline" href={encodeURI(url)} target="_blank">{url}</a></li>
+                                    <li key={encodeURIComponent(url)} className="truncate"><a className="underline" href={encodeURI(url)} target="_blank" title={url}>{url}</a></li>
                                 ))}
                             </ul>
                         </div>
@@ -1978,7 +2021,7 @@ type VariantScopedSnapshot = {
 
                         <div className="mt-6">
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                <h3 className="font-bold">Assessments</h3>
+                                <h3 className="font-bold">Assessment summary</h3>
                             </div>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
@@ -1992,32 +2035,30 @@ type VariantScopedSnapshot = {
                                     {renderStatusTable(sortStatusRows(deprecatedAssessmentRows))}
                                 </div>
                             )}
+                            {isEditing && (
+                                <div className="text-white mb-8">
+                                    <h4 className="font-semibold text-gray-200 mb-2">Add a new assessment</h4>
+                                    <StatusEditor
+                                        onAddAssessment={(data) => addAssessment(data)}
+                                        clearFields={clearAssessmentFields}
+                                        onFieldsChange={setHasAssessmentChanges}
+                                        triggerBanner={showMessage}
+                                        defaultStatus={defaultStatus}
+                                        variants={availableVariants}
+                                        availablePackages={projectPackages}
+                                        defaultSelectedPackages={vuln.packages_current}
+                                        variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
+                                        variantFindingsMap={variantFindingsMap}
+                                        findingsLoading={!variantPackageMapLoaded}
+                                        findingsError={variantPackageMapError ?? undefined}
+                                        exactTargetSelection={true}
+                                        onAssessWithAi={readOnly ? undefined : assessWithAi}
+                                        aiAssessState={assessWithAiState}
+                                    />
+                                </div>
+                            )}
                             <h4 className="font-semibold text-gray-200 mb-2">Assessment history</h4>
-                            <ol className="relative border-s border-gray-800">
-                                {isEditing && (
-                                    <li className="ms-4 text-white pb-8">
-                                        <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-sky-500 bg-sky-500"></div>
-                                        <time className="mb-1 text-sm font-normal leading-none text-gray-400">Add a new assessment</time>
-                                        <StatusEditor
-                                            onAddAssessment={(data) => addAssessment(data)}
-                                            clearFields={clearAssessmentFields}
-                                            onFieldsChange={setHasAssessmentChanges}
-                                            triggerBanner={showMessage}
-                                            defaultStatus={defaultStatus}
-                                            variants={availableVariants}
-                                            availablePackages={projectPackages}
-                                            defaultSelectedPackages={vuln.packages_current}
-                                            variantPackageMap={variantPackageMapLoaded && !variantPackageMapError ? variantPackageMap : undefined}
-                                            variantFindingsMap={variantFindingsMap}
-                                            findingsLoading={!variantPackageMapLoaded}
-                                            findingsError={variantPackageMapError ?? undefined}
-                                            exactTargetSelection={true}
-                                            onAssessWithAi={readOnly ? undefined : assessWithAi}
-                                            aiAssessState={assessWithAiState}
-                                        />
-                                    </li>
-                                )}
-
+                            <div>
                                 {aiRows.map(row => {
                                     const rowKey = row.id;
                                     const targets = row.targets ?? [];
@@ -2118,7 +2159,9 @@ type VariantScopedSnapshot = {
                                     );
                                 })}
 
-                                {nonAiRows.map(row => {
+                                {nonAiRows.length > 0 && (
+                                <ol className="relative">
+                                {nonAiRows.map((row, index) => {
                                     const dt = new Date(row.timestamp);
                                     const rowKey = row.id;
                                     const targets = row.targets ?? [];
@@ -2147,8 +2190,12 @@ type VariantScopedSnapshot = {
                                     };
 
                                     return (
-                                        <li key={rowKey} data-assessment-id={row.id} className={`mb-10 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
-                                            <div className="absolute w-3 h-3 bg-gray-200 rounded-full mt-1.5 -start-1.5 border border-gray-800 bg-gray-800"></div>
+                                        <li key={rowKey} data-assessment-id={row.id} className={`relative mb-10 last:mb-0 ms-4 ${isNewlyAdded ? 'new-element-glow' : ''}`}>
+                                            {index < nonAiRows.length - 1 && (
+                                                // Runs from this node's centre to the next one's, across the mb-10 gap.
+                                                <span aria-hidden="true" data-timeline-connector className="absolute -start-4 top-3 -bottom-[3.25rem] w-px bg-gray-800"></span>
+                                            )}
+                                            <div className="absolute w-3 h-3 rounded-full top-1.5 -start-[1.375rem] border border-gray-800 bg-gray-800"></div>
                                             <div className="mb-2 flex flex-wrap items-center gap-2">
                                                 <time className="text-sm font-normal leading-none text-gray-400">{dt.toLocaleString(undefined, dt_options)}</time>
                                                 {row.origin && (
@@ -2326,7 +2373,9 @@ type VariantScopedSnapshot = {
                                         </li>
                                     );
                                 })}
-                            </ol>
+                                </ol>
+                                )}
+                            </div>
                         </div>
                     </div>
 

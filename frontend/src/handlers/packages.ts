@@ -16,8 +16,28 @@ export type SourceFile = {
     builds: Record<string, unknown>[];
 };
 
-export const hasCompilationEvidence = (file: SourceFile): boolean => file.builds.some(build =>
-    build.compiled === true);
+export const isArtifactFile = (file: SourceFile): boolean => {
+    let properties = file.properties;
+    const prefix = 'VulnScout recorded file evidence v1:\n';
+    if (typeof properties.comment === 'string' && properties.comment.startsWith(prefix)) {
+        try {
+            const evidence: unknown = JSON.parse(properties.comment.slice(prefix.length));
+            if (typeof evidence === 'object' && evidence !== null && 'builds' in evidence
+                && Array.isArray(evidence.builds) && 'properties' in evidence
+                && typeof evidence.properties === 'object' && evidence.properties !== null
+                && !Array.isArray(evidence.properties)) {
+                properties = { ...evidence.properties, ...properties };
+            }
+        } catch { /* Invalid exported metadata cannot override native file properties. */ }
+    }
+    return (Array.isArray(properties.fileTypes) && properties.fileTypes.includes('BINARY'))
+        || (typeof properties.software_primaryPurpose === 'string'
+            && ['executable', 'library', 'firmware', 'archive'].includes(properties.software_primaryPurpose))
+        || /\.(o|obj|a|so(?:\.\d+)*|dylib|dll|exe|elf|bin|hex|uf2)$/i.test(file.path);
+};
+
+export const hasCompilationEvidence = (file: SourceFile): boolean => !isArtifactFile(file)
+    && file.builds.some(build => build.compiled === true);
 
 type Package = PackageVersionMetadata & {
     id: string;

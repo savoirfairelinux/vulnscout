@@ -32,6 +32,7 @@ RUN apk add --no-cache \
     git \
     gcompat \
     icu \
+    poppler-utils \
     python3 \
     py3-pip \
     ruby \
@@ -70,7 +71,7 @@ COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
-ARG VULNSCOUT_VERSION=v0.24
+ARG VULNSCOUT_VERSION=v0.25
 ENV VULNSCOUT_VERSION=${VULNSCOUT_VERSION}
 
 LABEL org.opencontainers.image.title="VulnScout"

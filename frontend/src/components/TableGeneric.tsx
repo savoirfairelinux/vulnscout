@@ -3,7 +3,7 @@ import { getCoreRowModel, getSortedRowModel, getFilteredRowModel, getPaginationR
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowUpShortWide, faArrowDownWideShort, faSort, faCircleQuestion } from "@fortawesome/free-solid-svg-icons";
-import { ReactNode, useMemo, useRef, useState, useEffect, useCallback } from "react";
+import { ReactNode, useMemo, useRef, useState, useEffect, useCallback, useLayoutEffect } from "react";
 import Fuse from 'fuse.js';
 import { useLocalStorageState } from '../handlers/localStorage';
 
@@ -16,6 +16,36 @@ declare module '@tanstack/react-table' {
 
 // These cells pad themselves so the whole cell stays clickable.
 const unpaddedCellColumnIds = new Set(['id', 'dependencies', 'source_files', 'compiler_flags']);
+const leftPinnedColumnIds = new Set(['select-checkbox']);
+const rightPinnedColumnIds = new Set(['actions', 'ai-actions']);
+
+type PinnedShadows = { left: boolean; right: boolean };
+
+function isPinnedColumn(columnId: string): boolean {
+    return leftPinnedColumnIds.has(columnId) || rightPinnedColumnIds.has(columnId);
+}
+
+// Pinned columns keep their width and cast a shadow only while other columns scroll beneath them.
+function columnLayoutClassName(columnId: string, pinnedBackground: string, shadows: PinnedShadows): string {
+    if (leftPinnedColumnIds.has(columnId)) {
+        return `flex-none sticky left-0 z-10 ${pinnedBackground} ${shadows.left ? 'shadow-[6px_0_8px_-4px_rgba(0,0,0,0.6)]' : ''}`;
+    }
+    if (rightPinnedColumnIds.has(columnId)) {
+        return `flex-none sticky right-0 z-10 ${pinnedBackground} ${shadows.right ? 'shadow-[-6px_0_8px_-4px_rgba(0,0,0,0.6)]' : ''}`;
+    }
+    return 'flex-auto';
+}
+
+function bodyCellClassName(columnId: string, shadows: PinnedShadows): string {
+    const padding = unpaddedCellColumnIds.has(columnId) ? 'p-0' : 'p-4';
+    return `${padding} border border-slate-500 ${columnLayoutClassName(columnId, 'bg-inherit', shadows)}`;
+}
+
+function horizontalChrome(element: Element): number {
+    const style = window.getComputedStyle(element);
+    return ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
+        .reduce((total, property) => total + (parseFloat(style[property as keyof CSSStyleDeclaration] as string) || 0), 0);
+}
 
 /* tslint:disable:no-explicit-any */
 type Props<DataType> = {
@@ -241,6 +271,55 @@ function TableGeneric<DataType> ({
     // Only use virtualization if tableHeight is not 'auto'
     const useVirtualization = tableHeight !== 'auto'
 
+    // Columns grow to fit their header on one line, so titles are never wrapped or clipped.
+    const headerContentRefs = useRef(new Map<string, HTMLElement>())
+    const [headerMinWidths, setHeaderMinWidths] = useState<Record<string, number>>({})
+    const visibleColumns = table.getVisibleLeafColumns()
+    const visibleColumnKey = visibleColumns.map(column => column.id).join('|')
+    const measureHeaders = useCallback(() => {
+        const next: Record<string, number> = {}
+        headerContentRefs.current.forEach((element, columnId) => {
+            const cell = element.closest('th')
+            if (cell) next[columnId] = Math.ceil(element.getBoundingClientRect().width + horizontalChrome(cell))
+        })
+        setHeaderMinWidths(current => {
+            const keys = Object.keys(next)
+            return keys.length === Object.keys(current).length && keys.every(key => current[key] === next[key]) ? current : next
+        })
+    }, [])
+    useLayoutEffect(() => {
+        measureHeaders()
+        if (typeof ResizeObserver === 'undefined') return
+        const observer = new ResizeObserver(measureHeaders)
+        headerContentRefs.current.forEach(element => observer.observe(element))
+        return () => observer.disconnect()
+    }, [measureHeaders, visibleColumnKey])
+    const columnWidth = (column: { id: string, getSize: () => number }) => Math.max(column.getSize(), headerMinWidths[column.id] ?? 0)
+    const tableMinWidth = visibleColumns.reduce((total, column) => total + columnWidth(column), 0)
+
+    const [pinnedShadows, setPinnedShadows] = useState<PinnedShadows>({ left: false, right: false })
+    const updatePinnedShadows = useCallback(() => {
+        const container = tableContainerRef.current
+        if (!container) return
+        const left = container.scrollLeft > 0
+        const right = container.scrollLeft + container.clientWidth < container.scrollWidth - 1
+        setPinnedShadows(current => current.left === left && current.right === right ? current : { left, right })
+    }, [])
+    useEffect(() => {
+        const container = tableContainerRef.current
+        if (!container) return
+        container.addEventListener('scroll', updatePinnedShadows, { passive: true })
+        window.addEventListener('resize', updatePinnedShadows)
+        const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updatePinnedShadows)
+        observer?.observe(container)
+        return () => {
+            container.removeEventListener('scroll', updatePinnedShadows)
+            window.removeEventListener('resize', updatePinnedShadows)
+            observer?.disconnect()
+        }
+    }, [updatePinnedShadows])
+    useEffect(updatePinnedShadows, [updatePinnedShadows, tableMinWidth, rows.length])
+
     const rowVirtualizer = useVirtualizer({
         count: rows.length,
         estimateSize: () => estimateRowHeight, //estimate row height for accurate scrollbar dragging
@@ -395,8 +474,8 @@ function TableGeneric<DataType> ({
     return (
         <>
         <div className="flex flex-col" style={{ height: tableHeight === 'auto' ? 'auto' : tableHeight }}>
-            <div className={`relative ${tableHeight === 'auto' ? '' : 'overflow-auto'}`} ref={tableContainerRef}>
-                <table className="rounded-md border-collapse border border-slate-500 w-full text-white grid">
+            <div className={`relative ${tableHeight === 'auto' ? 'overflow-x-auto' : 'overflow-auto'}`} ref={tableContainerRef}>
+                <table className="rounded-md border-collapse border border-slate-500 w-full text-white grid" style={{ minWidth: tableMinWidth }}>
                     <thead className="grid sticky top-0 z-20">
                         {table.getHeaderGroups().map(headerGroup => (
                             <tr key={headerGroup.id} className="bg-slate-700 flex w-full">
@@ -407,20 +486,26 @@ function TableGeneric<DataType> ({
                                 <th
                                     key={header.id}
                                     className={[
-                                        `relative p-4 border border-slate-600 flex-auto`,
+                                        `p-4 border border-slate-600 ${isPinnedColumn(header.column.id) ? '' : 'relative '}${columnLayoutClassName(header.column.id, 'bg-slate-700', pinnedShadows)}`,
                                         header.column.getCanSort() ? 'cursor-pointer select-none' : ''
                                     ].join(' ')}
-                                    style={{width: header.getSize()}}
+                                    style={{width: columnWidth(header.column), minWidth: columnWidth(header.column)}}
                                     onClick={header.column.getToggleSortingHandler()}
                                 >
-                                    {hintText ? (
-                                        <div className="relative flex items-center justify-center gap-1">
-                                            {header.isPlaceholder
-                                                ? null
-                                                : flexRender(
-                                                    header.column.columnDef.header,
-                                                    header.getContext()
-                                                )}
+                                    <div
+                                        ref={element => {
+                                            if (element) headerContentRefs.current.set(header.column.id, element)
+                                            else headerContentRefs.current.delete(header.column.id)
+                                        }}
+                                        className="relative mx-auto flex w-max items-center justify-center gap-1 whitespace-nowrap"
+                                    >
+                                        {header.isPlaceholder
+                                            ? null
+                                            : flexRender(
+                                                header.column.columnDef.header,
+                                                header.getContext()
+                                            )}
+                                        {hintText && (
                                             <button
                                                 type="button"
                                                 aria-label={hintAriaLabel}
@@ -434,36 +519,27 @@ function TableGeneric<DataType> ({
                                             >
                                                 <FontAwesomeIcon icon={faCircleQuestion} />
                                             </button>
-                                            {hintColumnId === header.column.id && (
-                                                <div
-                                                    role="tooltip"
-                                                    data-column-hint
-                                                    className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] text-sm text-left"
-                                                    onClick={(event) => event.stopPropagation()}
-                                                >
-                                                    {hintText}
-                                                </div>
-                                            )}
-                                        </div>
-                                    ) : (
-                                        <span className="mr-2">
-                                            {header.isPlaceholder
-                                                ? null
-                                                : flexRender(
-                                                    header.column.columnDef.header,
-                                                    header.getContext()
-                                                )}
-                                        </span>
-                                    )}
-                                    {header.column.getCanSort()
-                                        ? (header.column.getIsSorted() === false
-                                            ? <FontAwesomeIcon icon={faSort} />
-                                            : (header.column.getIsSorted() === 'asc'
-                                                ? <FontAwesomeIcon icon={faArrowUpShortWide} />
-                                                : <FontAwesomeIcon icon={faArrowDownWideShort} />
+                                        )}
+                                        {header.column.getCanSort()
+                                            ? (header.column.getIsSorted() === false
+                                                ? <FontAwesomeIcon icon={faSort} />
+                                                : (header.column.getIsSorted() === 'asc'
+                                                    ? <FontAwesomeIcon icon={faArrowUpShortWide} />
+                                                    : <FontAwesomeIcon icon={faArrowDownWideShort} />
+                                                )
                                             )
-                                        )
-                                        : ''}
+                                            : null}
+                                        {hintText && hintColumnId === header.column.id && (
+                                            <div
+                                                role="tooltip"
+                                                data-column-hint
+                                                className="absolute top-full mt-1 right-0 bg-sky-900 border border-sky-700 rounded-lg shadow-lg p-3 z-50 w-[360px] whitespace-normal text-sm text-left"
+                                                onClick={(event) => event.stopPropagation()}
+                                            >
+                                                {hintText}
+                                            </div>
+                                        )}
+                                    </div>
                                 </th>
                                 );
                             })}
@@ -507,9 +583,10 @@ function TableGeneric<DataType> ({
                                             return (
                                             <td
                                                 key={cell.id}
-                                                className={unpaddedCellColumnIds.has(cell.column.id) ? 'p-0 border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
+                                                className={bodyCellClassName(cell.column.id, pinnedShadows)}
                                                 style={{
-                                                    width: cell.column.getSize(),
+                                                    width: columnWidth(cell.column),
+                                                    minWidth: columnWidth(cell.column),
                                                 }}
                                             >
                                                 {flexRender(
@@ -549,9 +626,10 @@ function TableGeneric<DataType> ({
                                         return (
                                         <td
                                             key={cell.id}
-                                            className={unpaddedCellColumnIds.has(cell.column.id) ? 'p-0 border border-slate-500 flex-auto' : 'p-4 border border-slate-500 flex-auto'}
+                                            className={bodyCellClassName(cell.column.id, pinnedShadows)}
                                             style={{
-                                                width: cell.column.getSize(),
+                                                width: columnWidth(cell.column),
+                                                minWidth: columnWidth(cell.column),
                                             }}
                                         >
                                             {flexRender(
@@ -564,29 +642,6 @@ function TableGeneric<DataType> ({
                             ])
                         )}
                     </tbody>
-                    <tfoot className="grid sticky bottom-0 z-10">
-                        {table.getFooterGroups().some(group =>
-                            group.headers.some(header => header.column.columnDef.footer)
-                        ) &&
-                            table.getFooterGroups().map(footerGroup => (
-                            <tr key={footerGroup.id} className="bg-slate-700 flex w-full">
-                                {footerGroup.headers.map(header => (
-                                <th
-                                    key={header.id}
-                                    className="px-4 py-2 border border-slate-600 flex-auto"
-                                    style={{width: header.getSize()}}
-                                >
-                                    {header.isPlaceholder
-                                    ? null
-                                    : flexRender(
-                                        header.column.columnDef.footer,
-                                        header.getContext()
-                                        )}
-                                </th>
-                                ))}
-                            </tr>
-                            ))}
-                        </tfoot>
                 </table>
             </div>
 

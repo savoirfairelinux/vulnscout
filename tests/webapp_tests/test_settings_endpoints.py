@@ -897,6 +897,16 @@ class TestSBOMUpload:
         Draft202012Validator(
             json.loads(schema_path.read_text()), format_checker=FormatChecker(),
         ).validate(json.loads(content))
+        graph = json.loads(content)["@graph"]
+        dependency_relationship, = [
+            node for node in graph if node.get("relationshipType") == "dependsOn"
+        ]
+        assert dependency_relationship["type"] == "Relationship"
+        from src.helpers.export_evidence import read_evidence
+        evidence = read_evidence(json.loads(content))
+        assert evidence is not None
+        dependency_record, = evidence["dependencies"]
+        assert dependency_record["declarations"] == []
 
         def run_inline(op_id, lane, runner, ctx):
             runner(ctx)
@@ -920,7 +930,7 @@ class TestSBOMUpload:
             {
                 "package_id": "cairo@1.16.0", "dependency_id": "libpng@1.6.37",
                 "declarations": [{
-                    "relationship_type": "dependsOn", "lifecycle_scope": "",
+                    "relationship_type": "", "lifecycle_scope": "",
                     "source_document_id": imported_graph["id"], "source_name": "spdx_v3_0.spdx.json",
                 }],
             },

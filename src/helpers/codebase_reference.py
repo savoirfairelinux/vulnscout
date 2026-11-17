@@ -5,9 +5,14 @@
 
 import gzip
 import io
+import os
+import re
+import selectors
 import stat
+import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 import zlib
 from contextlib import ExitStack
@@ -17,9 +22,20 @@ from typing import IO
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_EXPANDED_BYTES = 100 * 1024 * 1024
-MAX_ENTRIES = 5000
+MAX_ENTRIES = 500_000
 MAX_RESPONSE_BYTES = 64 * 1024
 ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz")
+PDF_TEXT_LIMIT = 2 * 1024 * 1024
+PDF_TIMEOUT = 30
+PDF_SIZE_ERROR = "PDF text extraction exceeds its output size limit; provide a smaller document or a text export."
+
+
+class SourceLimitError(ValueError):
+    """Source processing exceeded a budget that search must not silently skip."""
+
+
+class PdfExtractionLimitError(SourceLimitError):
+    """The PDF exceeded an output or runtime budget."""
 
 
 def _safe_path(name: str) -> str:
@@ -29,6 +45,75 @@ def _safe_path(name: str) -> str:
             or ".." in path.parts or ":" in name or not path.parts):
         raise ValueError("Archive contains an unsafe path.")
     return str(path)
+
+
+def _pdf_output(path: str) -> tuple[bytearray, bytearray, int]:
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": PDF_TEXT_LIMIT, "stderr": MAX_RESPONSE_BYTES}
+    deadline = time.monotonic() + PDF_TIMEOUT
+    with subprocess.Popen(
+        ["pdftotext", "-layout", "-enc", "UTF-8", path, "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) as process:
+        assert process.stdout is not None and process.stderr is not None
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+                selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(process.args, PDF_TIMEOUT)
+                    ready = selector.select(remaining)
+                    if not ready:
+                        raise subprocess.TimeoutExpired(process.args, PDF_TIMEOUT)
+                    for key, _ in ready:
+                        buffer, limit = output[key.data], limits[key.data]
+                        chunk = os.read(key.fd, min(64 * 1024, limit - len(buffer) + 1))
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        buffer.extend(chunk)
+                        if len(buffer) > limit:
+                            raise PdfExtractionLimitError(PDF_SIZE_ERROR)
+            process.wait(timeout=max(0, deadline - time.monotonic()))
+            return output["stdout"], output["stderr"], process.returncode
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+
+
+def _pdf_text(content: bytes) -> str:
+    """Text of a PDF via poppler's pdftotext, one '--- page N ---' header per page."""
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
+        handle.write(content)
+        handle.flush()
+        try:
+            stdout, stderr, returncode = _pdf_output(handle.name)
+        except FileNotFoundError as exc:
+            raise ValueError("PDF text extraction is unavailable on this server (pdftotext is missing).") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise PdfExtractionLimitError(f"PDF text extraction timed out after {PDF_TIMEOUT} s.") from exc
+    if returncode != 0:
+        if b"password" in stderr.lower():
+            raise ValueError("PDF is encrypted; provide an unencrypted copy or a text export.")
+        raise ValueError("PDF could not be read.")
+    decoded = stdout.decode("utf-8", errors="replace")
+    text = bytearray()
+    has_text = False
+    for number, match in enumerate(re.finditer(r"[^\f]*\f|[^\f]+$", decoded), 1):
+        page = match.group().removesuffix("\f")
+        if not match.group().endswith("\f") and not page.strip():
+            continue
+        has_text = has_text or bool(page.strip())
+        chunk = f"--- page {number} ---\n{page.rstrip()}\n".encode("utf-8")
+        if len(text) + len(chunk) > PDF_TEXT_LIMIT:
+            raise PdfExtractionLimitError(PDF_SIZE_ERROR)
+        text.extend(chunk)
+    if not has_text:
+        raise ValueError("PDF has no extractable text (it may be a scan); provide a text export.")
+    return text.decode("utf-8")
 
 
 class CodebaseReference:
@@ -75,7 +160,7 @@ class CodebaseReference:
             archive = self.stack.enter_context(zipfile.ZipFile(self.stream))
             self.archive = archive
             if len(archive.infolist()) > MAX_ENTRIES:
-                raise ValueError("Archive contains more than 5000 entries.")
+                raise ValueError(f"Archive contains more than {MAX_ENTRIES} entries.")
             for member in archive.infolist():
                 if member.is_dir() and member.filename in (".", "./"):
                     continue
@@ -102,7 +187,7 @@ class CodebaseReference:
             self.archive = tar
             for count, entry in enumerate(tar, 1):
                 if count > MAX_ENTRIES:
-                    raise ValueError("Archive contains more than 5000 entries.")
+                    raise ValueError(f"Archive contains more than {MAX_ENTRIES} entries.")
                 if entry.isdir() and entry.name in (".", "./"):
                     continue
                 _safe_path(entry.name)
@@ -142,6 +227,8 @@ class CodebaseReference:
         return content
 
     def text(self, path: str) -> str:
+        if path.lower().endswith(".pdf"):
+            return _pdf_text(self.read_bytes(path))
         content = self.read_bytes(path)
         if b"\x00" in content:
             raise ValueError("Source file is binary; only UTF-8 text can be read.")
@@ -154,6 +241,9 @@ class CodebaseReference:
         if path not in self.entries:
             raise LookupError("Source file not found.")
         _, member = self.entries[path]
+        if path.lower().endswith(".pdf"):
+            yield from io.StringIO(self.text(path))
+            return
         if member is None and self.archive is None:
             self.stream.seek(0)
             reader = io.TextIOWrapper(self.stream, encoding="utf-8-sig", errors="strict", newline="")
@@ -217,6 +307,8 @@ class CodebaseReference:
                                     "searched_files": searched + 1, "skipped_binary_files": skipped}
                         matches.append({"path": path, "line": number, "text": line.rstrip("\r\n")[:500]})
                 searched += 1
+            except SourceLimitError:
+                raise
             except ValueError:
                 skipped += 1
                 continue

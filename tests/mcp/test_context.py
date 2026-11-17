@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+
 import pytest
 import respx
 import httpx
@@ -10,9 +12,12 @@ from vulnscout_mcp.tools.context import (
     _find_variant_id_impl,
     _get_merged_context_impl,
     _get_project_context_impl,
+    _import_source_impl,
     _list_variants_impl,
+    _propose_variant_threat_model_impl,
     _update_project_context_impl,
     _update_variant_context_impl,
+    _update_variant_threat_model_impl,
 )
 
 
@@ -148,23 +153,22 @@ class TestGetMergedContextImpl:
                         "description": "proj desc",
                         "variant_id": "v1",
                         "variant_description": "var desc",
-                        "codebase_path": "/src/app",
+                        "codebase_directory": {"file_id": "directory", "path": "/cache/source"},
                         "environment": "linux",
                         "threat_model": "CVSS >= 7",
                         "risks": "none",
                         "other_info": "n/a",
                         "files": [{"id": "f1", "original_name": "report.pdf"}],
-                        "editor": {"codebase_source": "references"},
                     },
                 )
             )
             result = _get_merged_context_impl(client, "p1", "v1")
         assert "proj desc" in result
         assert "var desc" in result
-        assert "/src/app" in result
+        assert "/cache/source" in result
         assert "CVSS >= 7" in result
         assert "report.pdf" in result
-        assert "codebase_source=references" in result
+        assert "codebase_source=" not in result and "codebase_path=" not in result
 
     def test_returns_no_files_placeholder_when_empty(self, client):
         with respx.mock:
@@ -253,32 +257,28 @@ class TestUpdateVariantContextImpl:
                     json={
                         "variant_id": "v1",
                         "variant_description": None,
-                        "codebase_path": "/repo/src",
                         "environment": None,
                         "threat_model": "CVSS >= 7",
                         "risks": None,
                         "other_info": None,
                         "files": [],
-                        "editor": {"codebase_source": "paths"},
                     },
                 )
             )
             result = _update_variant_context_impl(
                 client,
                 "v1",
-                codebase_path="/repo/src",
+                environment="Linux",
             )
         body = json.loads(route.calls[0].request.content)
         # All fields are always sent, even when None, per full-replacement semantics.
         assert body == {
             "variant_description": None,
-            "codebase_path": "/repo/src",
-            "environment": None,
+            "environment": "Linux",
             "other_info": None,
         }
         assert "threat_model=CVSS >= 7" in result
-        assert "codebase_path=/repo/src" in result
-        assert "codebase_source=paths" in result
+        assert "codebase_path=" not in result and "codebase_source=" not in result
 
     def test_api_error_returns_error_string(self, client):
         with respx.mock:
@@ -289,10 +289,147 @@ class TestUpdateVariantContextImpl:
         assert result == "Error: Variant not found"
 
 
+def _saved_context(stride, system=None):
+    return {
+        "project_id": "p1", "variant_id": "v1", "variant_description": "Board A",
+        "environment": "LAN only", "other_info": None,
+        "editor": {
+            "system": system or {"scope": "Gateway", "actors": None, "entry_points": None,
+                                 "trust_boundaries": None},
+            "stride": stride, "updated_at": "2026-11-10T00:00:00Z",
+        },
+    }
+
+
+SAVED_STRIDE = {
+    "components": [
+        {"id": "C1", "name": "Web UI", "description": "lighttpd", "trust_zone": "LAN"},
+        {"id": "C2", "name": "Browser", "description": "", "trust_zone": "User"},
+    ],
+    "interactions": [{"id": "I1", "name": "Login", "source_id": "C2", "destination_id": "C1",
+                      "interface": "HTTPS", "data": "", "trust_boundary": ""}],
+    "threats": [{"id": "T1", "category": "spoofing", "description": "CSRF", "target_ids": ["C1"]}],
+    "risks": [{"id": "R1", "description": "", "threat_ids": ["T1"], "likelihood": "low",
+               "impact": None, "mitigation": "", "residual": ""}],
+}
+
+
+class TestVariantThreatModel:
+
+    def test_merged_context_returns_the_editable_model_on_request(self, client):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/context").mock(
+                return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
+            respx.get(f"{BASE_URL}/api/variants/v1/context/draft").mock(
+                return_value=httpx.Response(204))
+            plain = _get_merged_context_impl(client, "p1", "v1")
+            result = _get_merged_context_impl(client, "p1", "v1", include_model=True)
+        assert "\nmodel=" not in plain
+        assert result.startswith(plain + "\nmodel=")
+        model = json.loads(result.rsplit("\nmodel=", 1)[1].rsplit("\ndraft=", 1)[0])
+        assert model["system"]["scope"] == "Gateway"
+        assert model["stride"] == SAVED_STRIDE
+        assert result.endswith("\ndraft=null")
+
+    def test_update_merges_rows_and_keeps_the_rest_of_the_context(self, client):
+        from src.models.variant_context import _editor_values
+
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/context").mock(
+                return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
+            route = respx.put(f"{BASE_URL}/api/variants/v1/context").mock(
+                side_effect=lambda request: httpx.Response(200, json={"editor": {
+                    **json.loads(request.content), "updated_at": "2026-11-11T00:00:00Z"}}))
+            result = _update_variant_threat_model_impl(
+                client, "p1", "v1",
+                system={"actors": "Operator", "scope": None},
+                rows={
+                    "components": [{"id": "C1", "trust_zone": "DMZ"},
+                                   {"id": "C3", "name": "OTA updater"}],
+                    "threats": [{"id": "T2", "category": "tampering", "target_ids": ["C3"]}],
+                    "risks": [{"id": "R2", "threat_ids": ["T2"], "likelihood": "high", "impact": "high"}],
+                },
+                remove_ids=["R1"],
+            )
+        body = json.loads(route.calls[0].request.content)
+        _editor_values(body)
+        assert {key: body[key] for key in (
+            "variant_description", "environment", "other_info",
+        )} == {"variant_description": "Board A", "environment": "LAN only", "other_info": None}
+        assert not {"codebase_source", "codebase_path"} & body.keys()
+        assert body["system"] == {"scope": None, "actors": "Operator", "entry_points": None,
+                                  "trust_boundaries": None}
+        stride = body["stride"]
+        assert stride["components"][0] == {**SAVED_STRIDE["components"][0], "trust_zone": "DMZ"}
+        assert [row["id"] for row in stride["components"]] == ["C1", "C2", "C3"]
+        assert stride["interactions"] == SAVED_STRIDE["interactions"]
+        assert [row["id"] for row in stride["threats"]] == ["T1", "T2"]
+        assert [row["id"] for row in stride["risks"]] == ["R2"]
+        assert "components=3, interactions=1, threats=2, risks=1" in result
+        assert "system fields filled: actors" in result
+
+    def test_update_creates_the_context_of_a_new_variant(self, client):
+        from src.models.variant_context import _editor_values
+
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(
+                200, json={"project_id": "p1", "variant_id": "v1", "files": [], "editor": {
+                    "system": {"scope": None, "actors": None, "entry_points": None, "trust_boundaries": None},
+                    "stride": {"components": [], "interactions": [], "threats": [], "risks": []},
+                }}))
+            route = respx.put(f"{BASE_URL}/api/variants/v1/context").mock(
+                return_value=httpx.Response(200, json={"editor": {}}))
+            _update_variant_threat_model_impl(client, "p1", "v1", system={"scope": "Gateway"})
+        body = json.loads(route.calls[0].request.content)
+        _editor_values(body)
+        assert body["system"]["scope"] == "Gateway"
+
+    @pytest.mark.parametrize("kwargs, message", [
+        ({"remove_ids": ["C9"]}, "Cannot remove unknown ids: C9."),
+        ({"rows": {"risks": [{"description": "x"}]}}, "Every risks row needs an id."),
+        ({"rows": {"risks": [{"id": "R1"}]}, "remove_ids": ["R1"]}, "R1 is both removed and updated."),
+        ({"system": {"assets": "x"}}, "Unknown system keys: assets."),
+    ])
+    def test_update_rejects_bad_changes_without_saving(self, client, kwargs, message):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/context").mock(
+                return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
+            route = respx.put(f"{BASE_URL}/api/variants/v1/context")
+            result = _update_variant_threat_model_impl(client, "p1", "v1", **kwargs)
+        assert result.startswith(f"Error: {message}")
+        assert not route.called
+
+    @pytest.mark.parametrize("expected, saved", [
+        ("2026-11-09T00:00:00Z", False), (None, True), ("2026-11-10T00:00:00+00:00", True),
+    ])
+    def test_update_checks_the_expected_revision(self, client, expected, saved):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/context").mock(
+                return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
+            route = respx.put(f"{BASE_URL}/api/variants/v1/context").mock(
+                return_value=httpx.Response(200, json={"editor": {}}))
+            result = _update_variant_threat_model_impl(
+                client, "p1", "v1", system={"actors": "Operator"}, expected_updated_at=expected)
+        assert route.called is saved
+        if not saved:
+            assert result.startswith("Error: The variant context changed since 2026-11-09T00:00:00Z")
+        else:
+            assert "expected_updated_at" not in json.loads(route.calls[0].request.content)
+
+    def test_update_reports_validation_errors(self, client):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/context").mock(
+                return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
+            respx.put(f"{BASE_URL}/api/variants/v1/context").mock(return_value=httpx.Response(
+                400, json={"error": "threats[0].target_ids: references an unknown id"}))
+            result = _update_variant_threat_model_impl(client, "p1", "v1", remove_ids=["C1"])
+        assert result == "Error: threats[0].target_ids: references an unknown id"
+
+
 class TestAiContextFormGuide:
     LABELS = (
-        "Project description", "Variant description", "Codebase source", "Codebase references",
-        "Codebase paths", "Environment", "Other information", "System scope and assets",
+        "Project description", "Variant description", "Codebase directory", "Create codebase directory",
+        "Refresh directory status", "Environment", "Other information", "System scope and assets",
         "Actors and access", "Entry points and data flows", "Trust boundaries", "Components",
         "Interactions", "Description / role", "Trust zone", "Interface / protocol", "Data / commands",
         "Trust boundary", "Threats", "STRIDE category", "Targets", "Risks", "Likelihood", "Impact",
@@ -330,6 +467,244 @@ class TestAiContextFormGuide:
         from vulnscout_mcp.server import create_server
 
         monkeypatch.delenv("VULNSCOUT_AGENT_SCOPE", raising=False)
-        tools = asyncio.run(create_server(BASE_URL).list_tools())
-        guide = next(tool for tool in tools if tool.name == "get_ai_context_form_guide")
-        assert "AI Context" in guide.description
+        tools = {tool.name: tool for tool in asyncio.run(create_server(BASE_URL).list_tools())}
+        assert "AI Context" in tools["get_ai_context_form_guide"].description
+        update = tools["update_variant_threat_model"].input_schema["properties"]
+        assert {"system", "components", "interactions", "threats", "risks", "remove_ids"} <= set(update)
+        assert "include_model" in tools["get_merged_context"].input_schema["properties"]
+        propose = tools["propose_variant_threat_model"].input_schema["properties"]
+        assert {"source", "system", "components", "remove_ids", "environment", "replace"} <= set(propose)
+        assert "expected_updated_at" in tools["propose_variant_threat_model"].input_schema["required"]
+        assert "pending review" in tools["propose_variant_threat_model"].description
+        assert "read_import_source" in tools
+        assert tools["read_import_source"].input_schema["properties"]["new_import"]["type"] == "boolean"
+
+
+class TestAiContextImportSkill:
+    ROOT = Path(__file__).resolve().parents[2]
+    SKILL_DIR = ROOT / ".github/skills/ai-context-import"
+    FORM_LABELS = tuple(label for label in TestAiContextFormGuide.LABELS
+                        if label not in ("Create codebase directory", "Refresh directory status")) + (
+        "Description", "Source", "Destination", "Not rated",
+    )
+
+    def test_skill_uses_the_shipped_form_labels_and_limits(self):
+        from src.helpers.stride_model import CATEGORY_LABELS, MAX_ROWS, MAX_TEXT, RATING_LABELS
+
+        skill = (self.SKILL_DIR / "SKILL.md").read_text()
+        threagile = (self.SKILL_DIR / "references/threagile.md").read_text()
+        form = "\n".join(path.read_text() for path in [
+            *(self.ROOT / "frontend/src/components/aiContext").glob("*.tsx"),
+            self.ROOT / "frontend/src/helpers/strideModel.ts",
+        ])
+        for label in self.FORM_LABELS:
+            assert label in skill, label
+            assert label in form, label
+        assert all(label in skill for label in CATEGORY_LABELS.values())
+        assert all(label in skill for label in RATING_LABELS.values())
+        assert all(label in threagile for label in CATEGORY_LABELS.values() if label != "Repudiation")
+        assert f"{MAX_TEXT:,}" in skill and str(MAX_ROWS) in skill
+        assert "DESCRIPTION_PREVIEW = 40;" in form and "first 40 characters" in skill
+
+    def test_skill_saves_only_after_review_documented_and_linked(self):
+        skill = (self.SKILL_DIR / "SKILL.md").read_text()
+        readme = (self.ROOT / ".github/skills/README.md").read_text()
+        assert skill.startswith("---\nname: ai-context-import\ndescription: ")
+        assert all(term in skill for term in (
+            "references/threagile.md", "untrusted data", "Never invent", "[confirm:",
+            "```text", "update_variant_context", "update_project_context", "write_assessment",
+            "Not imported", "include_model", "update_variant_threat_model",
+            "explicitly confirmed", "expected_updated_at", "Never open, list or extract an archive",
+            "Embedded mode", "read_import_source", "propose_variant_threat_model", "replace=true", "Discard",
+        ))
+        assert "ai-context-import/SKILL.md" in readme
+        embedded = skill.split("## 7. Embedded mode", 1)[1].split("\n## ", 1)[0]
+        assert "update_variant_threat_model" not in embedded and "update_variant_context" not in embedded
+        assert "ai-context-import" in readme and "propose_variant_threat_model" in readme
+        guide = (self.ROOT / "vulnscout_mcp/ai_context_form_guide.md").read_text()
+        assert "propose_variant_threat_model" in guide
+
+    def test_skill_save_example_passes_backend_validation(self):
+        import re
+        from src.models.variant_context import _editor_values
+
+        skill = (self.SKILL_DIR / "SKILL.md").read_text()
+        example = json.loads(re.search(r"   ```json\n(.*?)\n   ```", skill, re.S).group(1))
+        sections = ("components", "interactions", "threats", "risks")
+        assert set(example) == {"project_id", "variant_id", *sections}
+        _editor_values({
+            "variant_description": None, "environment": None, "other_info": None,
+            "system": {key: None for key in ("scope", "actors", "entry_points", "trust_boundaries")},
+            "stride": {section: example[section] for section in sections},
+        })
+
+
+DRAFT_URL = f"{BASE_URL}/api/variants/v1/context/draft"
+
+
+def _mock_context(draft=None):
+    respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(200, json=_saved_context(SAVED_STRIDE)))
+    respx.get(DRAFT_URL).mock(return_value=httpx.Response(200, json=draft) if draft is not None
+                              else httpx.Response(204))
+
+
+def _echo_put():
+    return respx.put(DRAFT_URL).mock(side_effect=lambda request: httpx.Response(
+        200, json={"status": "current", **json.loads(request.content)}))
+
+
+class TestProposeThreatModel:
+
+    @pytest.mark.parametrize("original_revision", [None, "2026-11-09T00:00:00Z"])
+    def test_first_proposal_rejects_a_collision_since_the_original_read(self, client, original_revision):
+        with respx.mock:
+            _mock_context()
+            put = _echo_put()
+            result = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", replace=True,
+                expected_updated_at=original_revision,
+                rows={"components": [{"id": "C2", "name": "Updater"}]})
+        assert "changed while drafting" in result and "replace=true" in result
+        assert not put.called
+
+    def test_first_proposal_accepts_an_explicit_null_revision(self, client):
+        ctx = _saved_context({section: [] for section in SAVED_STRIDE})
+        ctx["editor"]["updated_at"] = None
+        with respx.mock:
+            _mock_context()
+            respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(200, json=ctx))
+            put = _echo_put()
+            result = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", replace=True, expected_updated_at=None,
+                rows={"components": [{"id": "C1", "name": "Updater"}]})
+        assert result.startswith("Draft stored")
+        assert json.loads(put.calls.last.request.content)["base_updated_at"] is None
+
+    def test_first_proposal_builds_on_the_saved_model(self, client):
+        with respx.mock:
+            _mock_context()
+            put = _echo_put()
+            result = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", expected_updated_at="2026-11-10T00:00:00Z",
+                system={"actors": "Admins"},
+                rows={"components": [{"id": "C3", "name": "Updater"}]}, texts={"environment": ""})
+        body = json.loads(put.calls.last.request.content)
+        assert body["source"] == "report.pdf" and body["base_updated_at"] == "2026-11-10T00:00:00Z"
+        assert [row["id"] for row in body["values"]["stride"]["components"]] == ["C1", "C2", "C3"]
+        assert body["values"]["system"]["scope"] == "Gateway" and body["values"]["system"]["actors"] == "Admins"
+        assert body["values"]["environment"] == "" and body["values"]["variant_description"] is None
+        assert result.startswith("Draft stored for variant v1 (pending review, not saved): ")
+        assert "components=3 (+1 ~0 -0)" in result and "actors" in result and "environment" in result
+
+    def test_later_proposals_build_on_the_pending_draft(self, client):
+        pending = {"status": "rebased", "values": {
+            "variant_description": None, "environment": "Field", "other_info": None,
+            "system": {"scope": "Gateway", "actors": None, "entry_points": None, "trust_boundaries": None},
+            "stride": {**SAVED_STRIDE, "components": [*SAVED_STRIDE["components"], {"id": "C3", "name": "Updater"}]},
+        }}
+        with respx.mock:
+            _mock_context(pending)
+            put = _echo_put()
+            _propose_variant_threat_model_impl(client, "p1", "v1", "report.pdf",
+                                               expected_updated_at="2026-11-10T00:00:00Z",
+                                               rows={"threats": [{"id": "T2", "category": "tampering",
+                                                                  "target_ids": ["C3"]}]})
+        values = json.loads(put.calls.last.request.content)["values"]
+        assert values["environment"] == "Field"
+        assert [row["id"] for row in values["stride"]["components"]] == ["C1", "C2", "C3"]
+        assert [row["id"] for row in values["stride"]["threats"]] == ["T1", "T2"]
+
+    def test_conflicting_draft_needs_replace(self, client):
+        with respx.mock:
+            _mock_context({"status": "conflict", "values": None, "conflicts": [{"path": "components[C1]"}]})
+            refused = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", expected_updated_at="2026-11-10T00:00:00Z")
+            put = _echo_put()
+            draft_reads = respx.calls.call_count
+            replaced = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", replace=True, expected_updated_at="2026-11-10T00:00:00Z")
+            calls = respx.calls.call_count
+        assert refused.startswith("Error:") and "replace=true" in refused
+        assert replaced.startswith("Draft stored") and put.called
+        assert calls == draft_reads + 2  # context read and PUT; the draft is not read
+
+    def test_continuation_rejects_ids_renumbered_after_a_concurrent_save(self, client):
+        from src.helpers.context_draft import rebase
+
+        with respx.mock:
+            _mock_context()
+            put = _echo_put()
+            first = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf",
+                expected_updated_at="2026-11-10T00:00:00Z",
+                rows={"components": [{"id": "C3", "name": "Updater", "description": "", "trust_zone": ""}]})
+            assert first.startswith("Draft stored")
+            proposal = json.loads(put.calls.last.request.content)["values"]
+            original = _saved_context(SAVED_STRIDE)
+            saved_values = {
+                **proposal, "system": original["editor"]["system"], "stride": SAVED_STRIDE,
+            }
+            concurrent = {
+                **saved_values, "stride": {
+                    **SAVED_STRIDE, "components": [
+                        *SAVED_STRIDE["components"],
+                        {"id": "C3", "name": "Cloud", "description": "", "trust_zone": ""},
+                    ],
+                },
+            }
+            values, conflicts, renumbered = rebase(saved_values, concurrent, proposal)
+            assert conflicts == [] and renumbered == {"C3": "C4"}
+            _mock_context({"status": "rebased", "values": values, "renumbered": renumbered})
+            refused = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf",
+                expected_updated_at="2026-11-10T00:00:00Z",
+                rows={"threats": [{"id": "T2", "category": "tampering", "target_ids": ["C3"]}]})
+            assert put.call_count == 1
+            restarted = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", replace=True, expected_updated_at="2026-11-10T00:00:00Z")
+        assert "requires renumbering" in refused and "replace=true" in refused
+        assert restarted.startswith("Draft stored") and put.call_count == 2
+
+    def test_conflict_on_put_and_invalid_input(self, client):
+        with respx.mock:
+            _mock_context()
+            respx.put(DRAFT_URL).mock(return_value=httpx.Response(409, json={"error": "changed", "updated_at": "y"}))
+            moved = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", expected_updated_at="2026-11-10T00:00:00Z")
+            unknown = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "report.pdf", remove_ids=["C9"], expected_updated_at="2026-11-10T00:00:00Z")
+            no_source = _propose_variant_threat_model_impl(
+                client, "p1", "v1", " ", expected_updated_at="2026-11-10T00:00:00Z")
+            bad_text = _propose_variant_threat_model_impl(
+                client, "p1", "v1", "a", texts={"codebase_path": "/x"}, expected_updated_at="2026-11-10T00:00:00Z")
+        assert "changed while drafting" in moved and "replace=true" in moved
+        assert unknown == "Error: Cannot remove unknown ids: C9."
+        assert no_source.startswith("Error:") and bad_text.startswith("Error:")
+
+    def test_merged_context_summarizes_the_pending_draft(self, client):
+        draft = {"source": "report.pdf", "status": "current", "updated_at": "2026-11-11T00:00:00+00:00",
+                 "values": {"stride": {"components": [{"id": "C1"}], "interactions": [], "threats": [],
+                                       "risks": []}}}
+        with respx.mock:
+            _mock_context(draft)
+            result = _get_merged_context_impl(client, "p1", "v1", include_model=True)
+        summary = json.loads(result.rsplit("\ndraft=", 1)[1])
+        assert summary == {"source": "report.pdf", "status": "current", "updated_at": "2026-11-11T00:00:00+00:00",
+                           "ids": {"components": ["C1"], "interactions": [], "threats": [], "risks": []}}
+
+    def test_read_import_source(self, client):
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/variants/v1/context/import-source/source",
+                      params={"operation": "search", "query": "CSRF"}).mock(
+                return_value=httpx.Response(200, json={"name": "r.pdf", "matches": [], "revision": "source-a"}))
+            respx.get(f"{BASE_URL}/api/variants/v2/context/import-source/source").mock(
+                return_value=httpx.Response(404, json={"error": "No import source uploaded."}))
+            found = _import_source_impl(client, "v1", {"operation": "search", "query": "CSRF"})
+            restarted_route = respx.get(f"{BASE_URL}/api/variants/v1/context/import-source/source").mock(
+                return_value=httpx.Response(200, json={"name": "new.pdf", "matches": [], "revision": "source-b"}))
+            restarted = _import_source_impl(client, "v1", {}, new_import=True)
+            missing = _import_source_impl(client, "v2", {})
+        assert json.loads(found)["name"] == "r.pdf"
+        assert json.loads(restarted)["name"] == "new.pdf"
+        assert "revision" not in restarted_route.calls[0].request.url.params
+        assert missing == "Error: No import source uploaded."

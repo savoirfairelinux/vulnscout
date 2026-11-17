@@ -1,9 +1,8 @@
 /**
  * Every operation of one enqueued batch, collapsed into a single queue entry.
  *
- * A scan launched on several scanners and variants creates one operation per
- * step; this panel shows the batch's overall progress and expands to the
- * individual steps.
+ * Scans create one step per scanner and variant, refreshes one per provider.
+ * This panel shows the batch's overall progress and expands to its steps.
  */
 
 import { useId, useState } from "react";
@@ -36,7 +35,7 @@ const BAR_CLASS: Record<string, string> = {
 
 function runTitle(steps: readonly Operation[]): string {
     const label = steps.some(step => step.kind === "scan") ? "Scan run" : "Vulnerability data refresh";
-    const variants = [...new Set(steps.flatMap(step => step.scope ? [step.scope.variant_name] : []))];
+    const variants = [...new Set(steps.flatMap(step => step.scope?.variant_name ? [step.scope.variant_name] : []))];
     if (variants.length === 0) return label;
     return `${label} – ${variants.length === 1 ? variants[0] : `${variants.length} variants`}`;
 }
@@ -53,7 +52,7 @@ export default function OperationRunPanel({ steps, renderStep, onDismiss, onCanc
         : Math.round(((finished + (current ? percentOf(current) / 100 : 0)) / steps.length) * 100);
     const title = runTitle(steps);
     const currentLabel = current
-        ? `${current.label}${current.scope ? ` – ${current.scope.variant_name}` : ""}: ${current.progress.message}`
+        ? `${current.label}${current.scope?.variant_name ? ` – ${current.scope.variant_name}` : ""}: ${current.progress.message}`
         : "";
 
     return (

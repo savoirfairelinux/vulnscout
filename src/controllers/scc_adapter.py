@@ -24,12 +24,12 @@ def _comp_ids_for_package(name: str, version: str, cpes: Iterable[str],
                           purls: Iterable[str]) -> set[CompId]:
     """Build the set of component identifiers used to match a package.
 
-    Identifiers are collected from three sources so that a single package can be
-    matched whichever way an advisory references it:
+    Identifiers are collected from declared CPEs and PURLs so that a package can
+    be matched whichever way an advisory references it:
 
     * every CPE → :meth:`CompId.build_from_cpe` (carries vendor + canonical product)
-    * every PURL package name → ``CompId(name=...)``
-    * the bare package name → ``CompId(name=...)``
+    * every PURL → ``CompId(name=..., vendor=namespace)`` when namespaced
+    * the bare package name → ``CompId(name=...)`` only when no usable identifier exists
     """
     ids: set[CompId] = set()
 
@@ -43,17 +43,23 @@ def _comp_ids_for_package(name: str, version: str, cpes: Iterable[str],
         if cid is not None:
             ids.add(cid)
 
+    has_identifier = bool(ids)
     for purl in purls:
         if not purl:
             continue
         try:
-            pname = PackageURL.from_string(purl).name
+            parsed_purl = PackageURL.from_string(purl)
         except Exception:
-            pname = None
-        if pname:
-            ids.add(CompId(name=pname.lower()))
+            parsed_purl = None
+        if parsed_purl is not None and parsed_purl.name:
+            namespace = parsed_purl.namespace
+            ids.add(CompId(
+                name=parsed_purl.name.lower(),
+                vendor=namespace.lower() if namespace else None,
+            ))
+            has_identifier = True
 
-    if name:
+    if name and not has_identifier:
         ids.add(CompId(name=name.lower()))
 
     return ids

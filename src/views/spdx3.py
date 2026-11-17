@@ -7,8 +7,14 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import uuid
 
-from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController
+from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
+from ..helpers.active_scans import active_package_ids_for_scans, active_sbom_scan_ids_for_variant
+from ..helpers.datetime_utils import normalize_timestamp_for_sort
 from ..helpers.export_files import file_metadata, INVENTORY_UNKNOWN_COMMENT
+from ..helpers.export_evidence import dependency_relationships, export_evidence, EVIDENCE_PREFIX
+from ..helpers.verbose import warn
+from ..models.assessment import Assessment
+from .fast_spdx3 import FastSPDX3
 
 
 def generate_spdx_namespace() -> str:
@@ -21,8 +27,10 @@ class SPDX3:
     def __init__(self, controllers: ControllersCache):
         self.packagesCtrl: PackagesController = controllers.packages
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
+        self.assessmentsCtrl: AssessmentsController = controllers.assessments
         self.pkg_to_ref: Dict[str, str] = {}
         self.vuln_to_ref: Dict[str, str] = {}
+        self._active_package_ids_by_variant: Dict[str, set[uuid.UUID]] = {}
         self.namespace = generate_spdx_namespace()
         self._creation_info_ref: Optional[str] = None
         self._id_counter = 0  # sequential counter for gnrtdX IDs
@@ -136,6 +144,8 @@ class SPDX3:
             "externalIdentifier": external_identifiers,
             "creationInfo": "_:creationInfo_0"
         }
+        if vuln.description:
+            element["description"] = vuln.description
 
         return element
 
@@ -154,7 +164,105 @@ class SPDX3:
             "creationInfo": "_:creationInfo_0"
         }
 
+    def generate_assessment_relationships(self, vuln_id: str) -> List[Dict[str, Any]]:
+        """Consolidate current target verdicts without hiding affected variants."""
+        latest: Dict[tuple[Optional[str], str], Assessment] = {}
+        scope = self.assessmentsCtrl.scope
+        allowed_variants = {str(variant_id) for variant_id in scope.variant_ids} if scope is not None else None
+        current_variant_id = self.assessmentsCtrl.current_variant_id
+        dto_variant_id = str(current_variant_id) if current_variant_id is not None else None
+        for assessment in self.assessmentsCtrl.gets_by_vuln(vuln_id):
+            if assessment.origin == "ai":
+                continue
+            targets: List[tuple[Optional[str], str]] = [
+                (target["variant_id"], target["package"]) for target in assessment.target_pairs
+            ] or [(dto_variant_id, package_id) for package_id in assessment.packages]
+            for variant_id, package_id in targets:
+                if allowed_variants is not None and variant_id is not None and variant_id not in allowed_variants:
+                    continue
+                if package_id not in self.pkg_to_ref:
+                    continue
+                if variant_id is not None:
+                    active_package_ids = self._active_package_ids_by_variant.get(variant_id)
+                    if active_package_ids is None:
+                        active_package_ids = active_package_ids_for_scans(
+                            active_sbom_scan_ids_for_variant(uuid.UUID(variant_id)),
+                            restrict_to_package_ids=scope.package_ids if scope is not None else None,
+                        )
+                        self._active_package_ids_by_variant[variant_id] = active_package_ids
+                    if self.packagesCtrl.get_or_resolve_db_id(package_id) not in active_package_ids:
+                        continue
+                target_key = (variant_id, package_id)
+                previous = latest.get(target_key)
+                if previous is None or (
+                    normalize_timestamp_for_sort(previous.timestamp)
+                    < normalize_timestamp_for_sort(assessment.timestamp)
+                ):
+                    latest[target_key] = assessment
+
+        by_package: Dict[str, List[Assessment]] = {}
+        for (_, package_id), assessment in latest.items():
+            by_package.setdefault(package_id, []).append(assessment)
+        status_map = {
+            "not_affected": ("NotAffected", "doesNotAffect"),
+            "affected": ("Affected", "affects"),
+            "fixed": ("Fixed", "fixedIn"),
+            "under_investigation": ("UnderInvestigation", "underInvestigationFor"),
+        }
+        justification_map = {value: key for key, value in FastSPDX3.JUSTIFICATION_MAP.items()}
+        relationships = []
+        for package_id, current_assessments in by_package.items():
+            statuses = {assessment.get_status_openvex() or "" for assessment in current_assessments}
+            if not statuses <= status_map.keys():
+                warn(f"[SPDX3 export {vuln_id!r}] unsupported assessment statuses {statuses!r}")
+                continue
+            conflicting = len(statuses) > 1
+            status = next(iter(statuses))
+            if conflicting:
+                status = "affected" if "affected" in statuses else "under_investigation"
+            matching_assessments = [
+                assessment for assessment in current_assessments if assessment.get_status_openvex() == status
+            ]
+            assessment = max(
+                matching_assessments or current_assessments,
+                key=lambda assessment: normalize_timestamp_for_sort(assessment.timestamp),
+            )
+            vex_type, relationship_type = status_map[status]
+            relationship = self.generate_relationship(
+                self.vuln_to_ref[vuln_id], [self.pkg_to_ref[package_id]], relationship_type,
+            )
+            relationship["type"] = f"security_Vex{vex_type}VulnAssessmentRelationship"
+            relationship["security_vexVersion"] = "1.0.0"
+            if assessment.timestamp is not None:
+                relationship["security_publishedTime"] = (
+                    normalize_timestamp_for_sort(assessment.timestamp).astimezone(timezone.utc)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ")
+                )
+            notes = assessment.status_notes if matching_assessments else ""
+            if conflicting:
+                conflict_note = (
+                    f"Consolidated export: conflicting current variant statuses ({', '.join(sorted(statuses))}); "
+                    f"reported as {status}."
+                )
+                notes = f"{conflict_note}\n{notes}" if notes else conflict_note
+            if notes:
+                relationship["security_statusNotes"] = notes
+            if matching_assessments:
+                if status == "not_affected":
+                    justification = assessment.get_justification_openvex()
+                    if justification in justification_map:
+                        relationship["security_justificationType"] = justification_map[justification]
+                    if assessment.impact_statement:
+                        relationship["security_impactStatement"] = assessment.impact_statement
+                elif assessment.impact_statement:
+                    relationship["description"] = assessment.impact_statement
+                if status == "affected":
+                    relationship["security_actionStatement"] = assessment.workaround or ""
+            relationships.append(relationship)
+        return relationships
+
     def output_as_json(self, author: str = "Savoir-faire Linux") -> str:
+        self._active_package_ids_by_variant.clear()
         spdx_doc = self.create_document_structure(author)
         graph = spdx_doc["@graph"]
 
@@ -193,11 +301,28 @@ class SPDX3:
                 if owner in self.pkg_to_ref:
                     relationships_to_add.append(self.generate_relationship(self.pkg_to_ref[owner], [ref], "contains"))
 
-        dependencies: Dict[str, List[str]] = {}
-        for source, target in sorted(self.packagesCtrl.dependency_edges()):
-            dependencies.setdefault(self.pkg_to_ref[source], []).append(self.pkg_to_ref[target])
-        for source_ref, target_refs in dependencies.items():
-            relationships_to_add.append(self.generate_relationship(source_ref, target_refs, "dependsOn"))
+        for source, target, kind, scope in dependency_relationships(self.packagesCtrl, spdx3=True):
+            relationship = self.generate_relationship(self.pkg_to_ref[source], [self.pkg_to_ref[target]], kind)
+            if scope:
+                relationship.update(type="LifecycleScopedRelationship", scope=scope)
+            relationships_to_add.append(relationship)
+
+        evidence = export_evidence(self.packagesCtrl, self.pkg_to_ref)
+        graph[1]["comment"] = EVIDENCE_PREFIX + json.dumps(evidence, sort_keys=True)
+        for build_target in evidence["build_targets"]:
+            build_ref = self._next_spdx_ref()
+            elements_to_add.append({
+                "type": "build_Build", "spdxId": build_ref, "name": build_target["name"],
+                "creationInfo": self._creation_info_ref,
+                "build_buildType": "https://vulnscout.io/build-types/recorded-compiler-metadata",
+                "comment": "Recorded compiler metadata only; not a reconstruction of the full build graph.",
+                "build_parameter": [
+                    {"type": "DictionaryEntry", "key": f"compile:{kind}:{language['language']}", "value": value}
+                    for language in build_target["languages"] for kind in ("flags", "defines")
+                    for value in language[kind]
+                ],
+            })
+            relationships_to_add.append(self.generate_relationship(build_ref, build_target["package_ids"], "hasOutput"))
 
         for vuln_id, vuln in self.vulnerabilitiesCtrl.vulnerabilities.items():
             vuln_element = self.generate_vulnerability_element(vuln_id, vuln)
@@ -218,13 +343,16 @@ class SPDX3:
             vuln_ref = self.vuln_to_ref.get(vuln_id)
             if not vuln_ref:
                 continue
+            assessment_relationships = self.generate_assessment_relationships(vuln_id)
+            assessed_refs = {ref for relationship in assessment_relationships for ref in relationship["to"]}
             if hasattr(vuln, "packages"):
                 for pkg_id in vuln.packages:
                     pkg_ref = self.pkg_to_ref.get(pkg_id)
-                    if pkg_ref:
+                    if pkg_ref and pkg_ref not in assessed_refs:
                         rel = self.generate_relationship(vuln_ref, [pkg_ref], "affects")
                         rel["creationInfo"] = self._creation_info_ref
                         relationships_to_add.append(rel)
+            relationships_to_add.extend(assessment_relationships)
 
         graph.extend(relationships_to_add)
         return json.dumps(spdx_doc, indent=2)

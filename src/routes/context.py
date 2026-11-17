@@ -4,13 +4,23 @@
 import os
 import uuid
 import logging
+from contextlib import ExitStack
+from datetime import datetime, timezone
 
 from flask import jsonify, request
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
-from ..helpers.codebase_reference import CodebaseReference, validate_reference
+from ..helpers import context_draft
+from ..helpers.datetime_utils import ensure_utc_iso
+from ..helpers.codebase_reference import (
+    ARCHIVE_SUFFIXES, MAX_ENTRIES, MAX_FILE_BYTES, CodebaseReference, validate_reference,
+)
+from ..helpers.codebase_directory import (
+    CodebaseDirectory, EmptyCodebaseDirectory, directory_exists, directory_name, directory_path, provision_directory,
+)
 from ..helpers.context_io import (
     build_export_document,
     collect_entries,
@@ -32,17 +42,167 @@ logger = logging.getLogger(__name__)
 
 # Agent-facing variant keys of GET /api/context (besides ``files``).
 _AGENT_VARIANT_KEYS = (
-    "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
+    "variant_description", "environment", "threat_model", "risks", "other_info",
 )
 
 
 # Agent-facing text rendered from the STRIDE model; text writes are rejected.
 _STRIDE_TEXT_KEYS = ("threat_model", "risks")
 STRIDE_TEXT_READ_ONLY = "is generated from the STRIDE model; edit it in the AI Context page"
+DIRECTORY_NAME_CONFLICT = (
+    "Codebase directory name is already assigned to another variant; use distinct project/variant names."
+)
 
 
 def _get_cache_dir() -> str:
     return os.getenv("VULNSCOUT_CACHE_DIR", "/cache/vulnscout")
+
+
+def _directory_in_use(name: str, variant_id: uuid.UUID) -> bool:
+    return db.session.execute(db.select(VariantContext.id).where(
+        VariantContext.codebase_directory == name,
+        VariantContext.variant_id != variant_id,
+    )).first() is not None
+
+
+def _register_directory(vc: VariantContext, name: str):
+    if vc.codebase_directory is None:
+        try:
+            db.session.execute(db.update(VariantContext).where(
+                VariantContext.id == vc.id, VariantContext.codebase_directory.is_(None)
+            ).values(codebase_directory=name, updated_at=datetime.now(timezone.utc)))
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            if not _directory_in_use(name, vc.variant_id):
+                raise
+            return vc, (jsonify({"error": DIRECTORY_NAME_CONFLICT}), 409)
+        db.session.refresh(vc)
+    return vc, None
+
+
+def _directory_context(variant_id: uuid.UUID):
+    """Register existing CI source directories on reads, without creating filesystem paths."""
+    vc = VariantContext.get_by_variant(variant_id)
+    if vc is not None and vc.codebase_directory is not None:
+        return vc, None
+    variant = Variant.get_by_id(variant_id)
+    assert variant is not None
+    project = Project.get_by_id(variant.project_id)
+    assert project is not None
+    name = directory_name(project.name, variant.name)
+    try:
+        if not directory_exists(_get_cache_dir(), name):
+            return vc, None
+    except OSError:
+        logger.exception("Could not discover codebase directory for variant %s", variant_id)
+        return vc, (jsonify({"error": "Could not inspect codebase directory; check its type and permissions."}), 500)
+    if _directory_in_use(name, variant_id):
+        return vc, (jsonify({"error": DIRECTORY_NAME_CONFLICT}), 409)
+    candidates = db.session.execute(db.select(Project.name, Variant.name).select_from(Variant).join(
+        Project, Variant.project_id == Project.id
+    ).outerjoin(VariantContext, VariantContext.variant_id == Variant.id).where(
+        Variant.id != variant_id, VariantContext.codebase_directory.is_(None)
+    )).all()
+    if any(directory_name(project_name, variant_name) == name for project_name, variant_name in candidates):
+        return vc, (jsonify({
+            "error": "Ambiguous codebase directory name; rename the variants or explicitly provision its owner.",
+        }), 409)
+    return _register_directory(vc or VariantContext.get_or_create(variant_id), name)
+
+
+def _variant_uuid_or_error(variant_id):
+    """(variant UUID, None) for an existing variant, else (None, error response)."""
+    variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
+    if err or variant_uuid is None:
+        return None, err
+    if Variant.get_by_id(variant_uuid) is None:
+        return None, (jsonify({"error": "Variant not found"}), 404)
+    return variant_uuid, None
+
+
+def _revision(vc) -> str | None:
+    return ensure_utc_iso(vc.updated_at) if vc is not None else None
+
+
+def _draft_dir(vc) -> str:
+    return context_draft.context_dir(_get_cache_dir(), vc.id)
+
+
+def _draft_body(draft: dict, status: str, values, conflicts: list, renumbered: dict, saved_at, revision) -> dict:
+    return {
+        "revision": revision,
+        "source": draft.get("source"), "status": status, "values": values, "conflicts": conflicts,
+        "renumbered": renumbered, "base_updated_at": draft.get("base_updated_at"),
+        "saved_updated_at": saved_at, "created_at": draft.get("created_at"), "updated_at": draft.get("updated_at"),
+    }
+
+
+def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(request.args.get(name, default))
+    except ValueError as exc:
+        raise ValueError(f"Invalid {name}.") from exc
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}.")
+    return value
+
+
+def _browse_reference(file_path: str, name: str, label: str, *, directory: bool = False) -> tuple[dict, int]:
+    """List, read or search a stored file or archive as the request's query asks."""
+    try:
+        operation = request.args.get("operation", "list")
+        pattern = request.args.get("pattern", "*")
+        if len(pattern) > 512:
+            raise ValueError("File pattern must be at most 512 characters.")
+        with ExitStack() as stack:
+            reference: CodebaseReference
+            if directory:
+                reference = stack.enter_context(CodebaseDirectory(file_path, name))
+            else:
+                stream = stack.enter_context(open(file_path, "rb"))
+                reference = stack.enter_context(CodebaseReference(stream, name))
+            if operation == "list":
+                result = reference.list_files(
+                    pattern, _integer("offset", 0, 0, MAX_ENTRIES), _integer("limit", 200, 1, 200),
+                )
+            elif operation == "read":
+                result = reference.read_lines(
+                    request.args.get("path", ""),
+                    _integer("start_line", 1, 1, 10 * 1024 * 1024),
+                    _integer("max_lines", 200, 1, 200),
+                )
+            elif operation == "search":
+                query = request.args.get("query", "")
+                if not query or len(query) > 200:
+                    raise ValueError("Search query must contain 1-200 characters.")
+                result = reference.search(query, pattern, _integer("max_results", 100, 1, 100))
+            else:
+                raise ValueError("Operation must be list, read, or search.")
+            if directory:
+                from flask import current_app
+                from ..helpers.codebase_reference import MAX_RESPONSE_BYTES
+                result = {"file_id": "directory", "original_name": "Codebase directory", **result}
+                if len(current_app.json.dumps(result).encode("utf-8")) > MAX_RESPONSE_BYTES:
+                    raise ValueError("Source response exceeds 64 KB; reduce limit, max_lines or max_results.")
+    except LookupError as exc:
+        return {"error": str(exc)}, 404
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
+    except OSError:
+        logger.exception("Could not read stored %s %s", label, file_path)
+        if directory:
+            return {"error": "Codebase directory is missing or unreadable; check its mount and permissions."}, 400
+        return {"error": f"Stored {label} is unavailable."}, 500
+    return result, 200
+
+
+def _import_name(filename: str) -> str | None:
+    """Base name of an uploaded import source, or None when it is unsafe to store."""
+    name = os.path.basename(filename.replace('\\', '/'))
+    if name in ("", ".", "..") or any(ord(char) < 32 for char in name) or len(name.encode("utf-8")) > 255:
+        return None
+    return name
 
 
 def init_app(app):
@@ -57,6 +217,8 @@ def init_app(app):
         response 200 MergedContext Merged project and variant context.
         response 400 Error Invalid identifiers or mismatched project and variant.
         response 404 Error Project or variant not found.
+        response 409 Error Existing codebase directory ownership is ambiguous or conflicts.
+        response 500 Error Existing codebase directory could not be inspected.
         """
         project_id_str = request.args.get('project_id', '')
         variant_id_str = request.args.get('variant_id', '')
@@ -81,7 +243,9 @@ def init_app(app):
 
         from ..models.project_context import ProjectContext
         pc = ProjectContext.get_by_project(project_uuid)
-        vc = VariantContext.get_by_variant(variant_uuid)
+        vc, err = _directory_context(variant_uuid)
+        if err:
+            return err
 
         variant_part = vc.to_dict() if vc else {"files": [], "editor": default_editor_block()}
         return jsonify({
@@ -91,7 +255,75 @@ def init_app(app):
             **{key: variant_part.get(key) for key in _AGENT_VARIANT_KEYS},
             "files": variant_part["files"],
             "editor": variant_part["editor"],
+            "codebase_directory": variant_part.get("codebase_directory"),
         })
+
+    @app.route('/api/variants/<variant_id>/context/directory', methods=['GET', 'POST'])
+    def codebase_directory(variant_id):
+        """Inspect or provision the variant's server-side source directory.
+
+        GET discovers existing CI directories; POST also creates missing directories on demand.
+        Both expose directories to agents without saving context drafts.
+
+        OpenAPI:
+        response 200 CodebaseDirectory Directory path and availability.
+        response 400 Error Invalid variant identifier.
+        response 404 Error Variant not found.
+        response 409 Error Directory name ownership conflicts or is ambiguous.
+        response 500 Error Directory could not be inspected or provisioned.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        cache_dir = _get_cache_dir()
+        if request.method == 'POST':
+            assert variant_uuid is not None
+            vc = VariantContext.get_or_create(variant_uuid)
+            name = vc.codebase_directory
+            if name is None:
+                variant = Variant.get_by_id(variant_uuid)
+                assert variant is not None
+                project = Project.get_by_id(variant.project_id)
+                assert project is not None
+                name = directory_name(project.name, variant.name)
+            if _directory_in_use(name, variant_uuid):
+                return jsonify({"error": DIRECTORY_NAME_CONFLICT}), 409
+            try:
+                provision_directory(cache_dir, name)
+            except (OSError, ValueError):
+                logger.exception("Could not provision codebase directory for variant %s", variant_id)
+                return jsonify({
+                    "error": "Could not create codebase directory; check cache ownership and permissions.",
+                }), 500
+            vc, err = _register_directory(vc, name)
+        else:
+            vc, err = _directory_context(variant_uuid)
+        if err:
+            return err
+        if vc is None or vc.codebase_directory is None:
+            return jsonify({"path": None, "file_id": "directory", "status": "not_created",
+                            "message": "No codebase directory provisioned. Create it on demand.",
+                            "file_count": None, "directory_count": None})
+        path = directory_path(cache_dir, vc.codebase_directory)
+        status, message = "ready", "Directory is available. Only eligible source files are exposed."
+        file_count: int | None = None
+        directory_count: int | None = None
+        reference = CodebaseDirectory(cache_dir, vc.codebase_directory)
+        try:
+            with reference:
+                file_count, directory_count = len(reference.entries), reference.directory_count
+        except EmptyCodebaseDirectory as exc:
+            status, message = "unavailable", str(exc)
+            file_count, directory_count = 0, reference.directory_count
+        except FileNotFoundError:
+            status, message = "missing", "Codebase directory is missing; restore its mount or recreate it."
+        except OSError:
+            logger.exception("Codebase directory is unreadable: %s", path)
+            status, message = "unreadable", "Codebase directory is unreadable; check its mount and permissions."
+        except ValueError as exc:
+            status, message = "unavailable", str(exc)
+        return jsonify({"path": path, "file_id": "directory", "status": status, "message": message,
+                        "file_count": file_count, "directory_count": directory_count})
 
     @app.route('/api/projects/<project_id>/context', methods=['GET'])
     def get_project_context(project_id):
@@ -168,7 +400,6 @@ def init_app(app):
                 vc = VariantContextController.upsert(
                     variant_uuid,
                     variant_description=body.get('variant_description'),
-                    codebase_path=body.get('codebase_path'),
                     environment=body.get('environment'),
                     other_info=body.get('other_info'),
                 )
@@ -177,6 +408,258 @@ def init_app(app):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify(VariantContextController.serialize(vc))
+
+    @app.route('/api/variants/<variant_id>/context/draft', methods=['GET'])
+    def get_context_draft(variant_id):
+        """Return the variant's pending AI threat-model draft against the saved model.
+
+        A draft built on an older saved revision is rebased on read; when the
+        same rows or fields changed on both sides it is reported as a conflict.
+
+        OpenAPI:
+        response 200 ContextDraft Pending draft and its status against the saved model.
+        response 204 empty No pending draft for this variant.
+        response 400 Error Invalid variant identifier.
+        response 404 Error Variant not found.
+        response 500 Error Rebased draft could not be stored.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        vc = VariantContext.get_by_variant(variant_uuid)
+        if vc is None:
+            return "", 204
+        try:
+            with context_draft.lock_for(vc.id):
+                directory = _draft_dir(vc)
+                draft = context_draft.read_draft(directory)
+                revision = context_draft.revision(directory)
+                if draft is None:
+                    return "", 204
+                db.session.refresh(vc)
+                saved_at = _revision(vc)
+                previous = draft.get("renumbered") or {}
+                if draft.get("base_updated_at") == saved_at:
+                    status = "rebased" if draft.get("rebased") else "current"
+                    return jsonify(_draft_body(draft, status, draft["values"], [], previous, saved_at, revision))
+                saved = context_draft.saved_values(vc)
+                values, conflicts, moved = context_draft.rebase(draft["base_values"], saved, draft["values"])
+                renumbered = {old: moved.get(current, current) for old, current in previous.items()}
+                renumbered.update({old: new for old, new in moved.items() if old not in previous.values()})
+                if not conflicts:
+                    draft = {**draft, "base_updated_at": saved_at, "base_values": saved, "values": values,
+                             "renumbered": renumbered, "rebased": True}
+                    context_draft.write_draft(directory, draft, revision=revision)
+                status = "conflict" if conflicts else "rebased"
+                return jsonify(_draft_body(draft, status, values, conflicts, renumbered, saved_at, revision))
+        except OSError:
+            logger.exception("Failed to store the rebased AI context draft")
+            return jsonify({"error": "Failed to store the rebased draft on server"}), 500
+
+    @app.route('/api/variants/<variant_id>/context/draft', methods=['PUT'])
+    def put_context_draft(variant_id):
+        """Store an AI threat-model draft for review; the saved context is unchanged.
+
+        OpenAPI:
+        body ContextDraftUpdate required Draft values and the saved revision they were built on.
+        response 200 ContextDraft Stored draft.
+        response 400 Error Invalid identifier or draft values.
+        response 404 Error Variant not found.
+        response 409 Error The saved context changed since base_updated_at.
+        response 409 Error The import source changed since import_revision.
+        response 500 Error Draft could not be stored.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({
+                "error": "Request body must be a JSON object.", "fields": {"body": "must be an object"},
+            }), 400
+        source = body.get("source")
+        if not isinstance(source, str) or not source.strip() or len(source) > 255:
+            return jsonify({"error": "source must contain 1-255 characters.",
+                            "fields": {"source": "must contain 1-255 characters"}}), 400
+        if "import_revision" in body and (
+                not isinstance(body["import_revision"], str) or not 1 <= len(body["import_revision"]) <= 128):
+            return jsonify({"error": "import_revision must be the revision of the document read."}), 400
+        try:
+            values = context_draft.normalize_values(body.get("values"))
+        except StrideValidationError as exc:
+            return jsonify({"error": str(exc), "fields": exc.fields}), 400
+        vc = VariantContext.get_by_variant(variant_uuid)
+        if body.get("base_updated_at") != _revision(vc):
+            return jsonify({"error": "The variant context changed since base_updated_at; read it again.",
+                            "updated_at": _revision(vc)}), 409
+        try:
+            if vc is None:
+                vc = VariantContext.get_or_create(variant_uuid)
+            directory = _draft_dir(vc)
+            with context_draft.lock_for(vc.id):
+                db.session.refresh(vc)
+                if body.get("base_updated_at") != _revision(vc):
+                    return jsonify({"error": "The variant context changed since base_updated_at; read it again.",
+                                    "updated_at": _revision(vc)}), 409
+                if ("import_revision" in body
+                        and body["import_revision"] != context_draft.import_revision(directory)):
+                    return jsonify({"error": "The import source changed. Start a new import."}), 409
+                previous = context_draft.read_draft(directory) or {}
+                now = ensure_utc_iso(datetime.now(timezone.utc))
+                draft = {
+                    "source": source.strip(), "created_at": previous.get("created_at", now), "updated_at": now,
+                    "base_updated_at": _revision(vc), "base_values": context_draft.saved_values(vc),
+                    "values": values,
+                }
+                context_draft.write_draft(directory, draft)
+                revision = context_draft.revision(directory)
+        except (OSError, SQLAlchemyError):
+            db.session.rollback()
+            logger.exception("Failed to store the AI context draft")
+            return jsonify({"error": "Failed to store the draft on server"}), 500
+        return jsonify(_draft_body(draft, "current", values, [], {}, _revision(vc), revision))
+
+    @app.route('/api/variants/<variant_id>/context/draft', methods=['DELETE'])
+    def delete_context_draft(variant_id):
+        """Discard the variant's AI draft and its import source.
+
+        OpenAPI:
+        body ContextDraftDelete required Revision of the reviewed draft or uploaded import.
+        response 204 empty Draft and import source deleted (or there were none).
+        response 400 Error Invalid variant identifier.
+        response 404 Error Variant not found.
+        response 409 Error A newer draft or import source replaced the reviewed version.
+        response 500 Error Draft could not be deleted.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        body = request.get_json(silent=True)
+        if (not isinstance(body, dict) or "revision" not in body
+                or (body["revision"] is not None and not isinstance(body["revision"], str))):
+            return jsonify({"error": "revision must be the reviewed revision, or null when none existed."}), 400
+        vc = VariantContext.get_by_variant(variant_uuid)
+        if vc is not None:
+            try:
+                with context_draft.lock_for(vc.id):
+                    directory = _draft_dir(vc)
+                    revision = context_draft.revision(directory)
+                    if revision is not None and body["revision"] != revision:
+                        return jsonify({
+                            "error": "The AI draft or import source changed. Reload it before discarding.",
+                        }), 409
+                    context_draft.delete_draft(directory)
+            except OSError:
+                logger.exception("Failed to delete the AI context draft")
+                return jsonify({"error": "Failed to delete the draft on server"}), 500
+        return "", 204
+
+    @app.route('/api/variants/<variant_id>/context/import-source', methods=['POST'])
+    def post_import_source(variant_id):
+        """Store the document the agent drafts a threat model from.
+
+        It is temporary: it is not a codebase reference, replaces any previous
+        import source and AI draft of the variant, and leaves the saved context
+        (and its updated_at) unchanged.
+
+        OpenAPI:
+        body multipart required Document to import.
+        form file binary required A text, Markdown, YAML/JSON or PDF document, or a ZIP/TAR archive of them (10 MB).
+        response 201 ImportSource Stored import source.
+        response 400 Error Invalid identifier, missing or unsafe file name, or unreadable document.
+        response 404 Error Variant not found.
+        response 413 Error Document or multipart request exceeds the upload size limit.
+        response 500 Error File could not be stored.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        request_limit = MAX_FILE_BYTES + 64 * 1024
+        if request.max_content_length is None or request.max_content_length > request_limit:
+            request.max_content_length = request_limit
+        try:
+            file = request.files.get('file')
+        except RequestEntityTooLarge:
+            return jsonify({"error": "Document upload exceeds the request size limit."}), 413
+        if file is None or not file.filename:
+            return jsonify({"error": "No file provided"}), 400
+        name = _import_name(file.filename)
+        if name is None:
+            return jsonify({"error": "Invalid file name."}), 400
+        try:
+            file.stream.seek(0, os.SEEK_END)
+            size = file.stream.tell()
+            file.stream.seek(0)
+            if size > MAX_FILE_BYTES:
+                return jsonify({"error": "Document exceeds the source size limit of 10 MB."}), 413
+            validate_reference(file.stream, name)
+            if not name.lower().endswith(ARCHIVE_SUFFIXES):
+                with CodebaseReference(file.stream, name) as reference:
+                    reference.text(name)
+                file.stream.seek(0)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        try:
+            vc = VariantContext.get_by_variant(variant_uuid) or VariantContext.get_or_create(variant_uuid)
+            directory = _draft_dir(vc)
+            with context_draft.lock_for(vc.id):
+                context_draft.delete_draft(directory)
+                folder = os.path.join(directory, context_draft.IMPORT_DIR)
+                os.makedirs(folder, exist_ok=True)
+                path = os.path.join(folder, name)
+                file.save(path)
+                size = os.path.getsize(path)
+                revision = context_draft.revision(directory)
+        except (OSError, SQLAlchemyError):
+            db.session.rollback()
+            logger.exception("Failed to store the import source")
+            return jsonify({"error": "Failed to store file on server"}), 500
+        return jsonify({"name": name, "size": size, "revision": revision}), 201
+
+    @app.route('/api/variants/<variant_id>/context/import-source/source', methods=['GET'])
+    def get_import_source(variant_id):
+        """List, read or search the variant's import source.
+
+        OpenAPI:
+        query operation string optional list (default), read, or search.
+        query revision string optional Import revision to read; rejects replacement documents.
+        query path string optional Exact member path for read.
+        query pattern string optional File-path glob for list or search (default *).
+        query offset integer optional List offset (default 0).
+        query limit integer optional List page size, 1-200 (default 200).
+        query start_line integer optional First line for read (default 1).
+        query max_lines integer optional Read line count, 1-200 (default 200).
+        query query string optional Literal case-sensitive search text, required for search.
+        query max_results integer optional Search limit, 1-100 (default 100).
+        response 200 ImportSourceResult Files, line-numbered content (PDF pages marked), or search matches.
+        response 400 Error Invalid parameters or unreadable document.
+        response 404 Error Variant, import source, or member not found.
+        response 409 Error The import source changed since revision.
+        response 500 Error Stored import source is unavailable.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        vc = VariantContext.get_by_variant(variant_uuid)
+        if vc is None:
+            return jsonify({"error": "No import source uploaded."}), 404
+        try:
+            with context_draft.lock_for(vc.id):
+                directory = _draft_dir(vc)
+                revision = context_draft.import_revision(directory)
+                if "revision" in request.args and request.args["revision"] != revision:
+                    return jsonify({"error": "The import source changed. Start a new import."}), 409
+                path = context_draft.import_source_path(directory)
+                if path is None:
+                    return jsonify({"error": "No import source uploaded."}), 404
+                name = os.path.basename(path)
+                body, status = _browse_reference(path, name, "import source")
+        except OSError:
+            logger.exception("Failed to read the import source")
+            return jsonify({"error": "Stored import source is unavailable."}), 500
+        if status != 200:
+            return jsonify(body), status
+        return jsonify({"name": name, "revision": revision, **body})
 
     @app.route('/api/context/export', methods=['GET'])
     def export_context():
@@ -335,9 +818,10 @@ def init_app(app):
 
     @app.route('/api/variants/<variant_id>/context/files/<file_id>/source', methods=['GET'])
     def get_codebase_source(variant_id, file_id):
-        """List, read or search a variant's uploaded codebase reference.
+        """List, read or search an upload, or the active directory using file_id=directory.
 
         OpenAPI:
+        path file_id string required Upload UUID or directory for the active server directory.
         query operation string optional list (default), read, or search.
         query path string optional Exact member path for read.
         query pattern string optional File-path glob for list or search (default *).
@@ -350,12 +834,27 @@ def init_app(app):
         response 200 SourceReferenceResult Source files, line-numbered content, or search matches.
         response 400 Error Invalid parameters or unreadable reference.
         response 404 Error Variant, reference, or source member not found.
+        response 409 Error Directory name ownership conflicts or is ambiguous.
         response 500 Error Stored reference is unavailable.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
         if err:
             return err
         assert variant_uuid is not None
+        if file_id == "directory":
+            if Variant.get_by_id(variant_uuid) is None:
+                return jsonify(error="Variant not found"), 404
+            vc, err = _directory_context(variant_uuid)
+            if err:
+                return err
+            if vc is None or vc.codebase_directory is None:
+                return jsonify(error=(
+                    "No codebase directory found. Create its expected cache folder or use AI Context."
+                )), 404
+            body, status = _browse_reference(
+                _get_cache_dir(), vc.codebase_directory, "codebase directory", directory=True
+            )
+            return jsonify(body), status
         file_uuid, err = parse_uuid_or_400(file_id, 'file_id')
         if err:
             return err
@@ -367,46 +866,10 @@ def init_app(app):
         if cf is None:
             return jsonify(error="File not found"), 404
 
-        def integer(name, default, minimum, maximum):
-            try:
-                value = int(request.args.get(name, default))
-            except ValueError as exc:
-                raise ValueError(f"Invalid {name}.") from exc
-            if not minimum <= value <= maximum:
-                raise ValueError(f"{name} must be between {minimum} and {maximum}.")
-            return value
-
-        try:
-            operation = request.args.get("operation", "list")
-            pattern = request.args.get("pattern", "*")
-            if len(pattern) > 512:
-                raise ValueError("File pattern must be at most 512 characters.")
-            with open(cf.file_path, "rb") as stream, CodebaseReference(stream, cf.original_name) as reference:
-                if operation == "list":
-                    result = reference.list_files(
-                        pattern, integer("offset", 0, 0, 5000), integer("limit", 200, 1, 200),
-                    )
-                elif operation == "read":
-                    result = reference.read_lines(
-                        request.args.get("path", ""),
-                        integer("start_line", 1, 1, 10 * 1024 * 1024),
-                        integer("max_lines", 200, 1, 200),
-                    )
-                elif operation == "search":
-                    query = request.args.get("query", "")
-                    if not query or len(query) > 200:
-                        raise ValueError("Search query must contain 1-200 characters.")
-                    result = reference.search(query, pattern, integer("max_results", 100, 1, 100))
-                else:
-                    raise ValueError("Operation must be list, read, or search.")
-        except LookupError as exc:
-            return jsonify(error=str(exc)), 404
-        except ValueError as exc:
-            return jsonify(error=str(exc)), 400
-        except OSError:
-            logger.exception("Could not read stored codebase reference %s", file_id)
-            return jsonify(error="Stored codebase reference is unavailable."), 500
-        return jsonify({"file_id": file_id, "original_name": cf.original_name, **result})
+        body, status = _browse_reference(cf.file_path, cf.original_name, "codebase reference")
+        if status != 200:
+            return jsonify(body), status
+        return jsonify({"file_id": file_id, "original_name": cf.original_name, **body})
 
     @app.route('/api/variants/<variant_id>/context/files/<file_id>', methods=['DELETE'])
     def delete_context_file(variant_id, file_id):

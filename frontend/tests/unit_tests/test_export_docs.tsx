@@ -6,6 +6,7 @@ import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
 import Exports from '../../src/pages/Exports';
+import ExportWizard from '../../src/components/ExportWizard';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 
 class TestEventSource {
@@ -75,6 +76,7 @@ describe('Exports Page', () => {
         fireEvent.click(beta);
 
         fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+        expect(screen.queryByRole('radio', { name: /^Vulnerability history/i })).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole('radio', { name: /^Reports/i }));
         expect(screen.getByRole('heading', { name: 'Output layout' })).toBeInTheDocument();
         fireEvent.click(screen.getByRole('radio', { name: /one report per variant and template/i }));
@@ -317,12 +319,18 @@ describe('Exports Page', () => {
         });
 
         async function openHistory(singleVariant = false) {
-            loadProject();
-            render(<Exports projectId="project-1" />);
+            render(<ExportWizard
+                isOpen
+                historyOnly
+                project={{ id: 'project-1', name: 'Demo Project' }}
+                variants={[
+                    { id: 'variant-1', name: 'alpha', project_id: 'project-1' },
+                    { id: 'variant-2', name: 'beta', project_id: 'project-1' },
+                ]}
+                documents={[]}
+            />);
             await screen.findByRole('checkbox', { name: 'alpha' });
             if (singleVariant) fireEvent.click(screen.getByRole('checkbox', { name: 'beta' }));
-            fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-            fireEvent.click(screen.getByRole('radio', { name: /^Vulnerability history/i }));
             fireEvent.click(screen.getByRole('button', { name: 'Next' }));
             expect(screen.getByRole('heading', { name: 'Export vulnerability history' })).toHaveFocus();
         }
@@ -419,17 +427,12 @@ describe('Exports Page', () => {
             expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         });
 
-        test('preserves options when navigating back and switching export families', async () => {
+        test('preserves options when navigating back to the scope step', async () => {
             await openHistory();
             fireEvent.change(screen.getByLabelText('Since (required)'), { target: { value: '2026-10-01T12:30' } });
             fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-            fireEvent.click(screen.getByRole('radio', { name: /^Reports/i }));
             fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-            expect(screen.getByRole('heading', { name: 'Select reports' })).toHaveFocus();
-            expect(screen.queryByLabelText('Since (required)')).not.toBeInTheDocument();
-            fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-            fireEvent.click(screen.getByRole('radio', { name: /^Vulnerability history/i }));
-            fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+            expect(screen.getByRole('heading', { name: 'Export vulnerability history' })).toHaveFocus();
             expect(screen.getByLabelText('Since (required)')).toHaveValue('2026-10-01T12:30');
         });
 

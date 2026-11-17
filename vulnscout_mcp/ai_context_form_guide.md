@@ -8,13 +8,18 @@ paste. Labels in **bold** are the exact labels shown on the page.
 ## How to help
 
 - You only guide; the user types or pastes values and clicks **Save changes**.
-  For form help, do not call `update_project_context` or `update_variant_context`
-  unless the user explicitly asks you to save. Those tools cannot change the
-  System, Threat model or Risks tabs or the **Codebase source** anyway.
-- You can read only the saved context (`get_merged_context`). Edits the user has
+  For form help, do not call `update_project_context`, `update_variant_context`
+  or `update_variant_threat_model` unless the user explicitly asks you to save.
+  None of them provisions codebase directories. When the user wants the System,
+  Threat model or Risks values filled in for them, call
+  `propose_variant_threat_model`: it stores a draft that the page shows as
+  unsaved changes, and the user saves or discards it.
+- You can read only the saved context (`get_merged_context`; pass
+  `include_model=true` for the System text and table rows). Edits the user has
   not saved are invisible to you, so ask the user to paste them when they matter.
-- Start from evidence: the saved context, uploaded codebase references
-  (`list_codebase_files`, `search_codebase`, `read_codebase_file`) and the SBOM
+- Start from evidence: the saved context, uploaded codebase references or the active server directory
+  (`list_codebase_files`, `search_codebase`, `read_codebase_file`; use
+  `codebase_directory.file_id="directory"` when provisioned) and the SBOM
   (`list_dependency_documents`, `list_dependency_packages`,
   `get_package_dependencies`). Cite where a value came from. Never invent
   hardware, interfaces, users or mitigations; ask instead.
@@ -93,8 +98,8 @@ write commands to PLCs.
 
 Variants are selected in the sidebar. **Copy from…** replaces the whole unsaved
 draft with another variant's context (uploads are not copied); it is a good
-start when variants differ only slightly. Edits survive tab switches; nothing is
-stored until **Save changes**. Saving needs a threat model: at least one System
+start when variants differ only slightly. Edits survive tab switches; text and table edits are not
+stored until **Save changes**. Directory creation is immediate. Saving needs a threat model: at least one System
 text field or one Components, Interactions or Threats row.
 
 ### Context tab
@@ -102,13 +107,14 @@ text field or one Components, Interactions or Threats row.
 - **Variant description**: what makes this variant different (board, image,
   enabled features, build options). Example: `core-image-minimal for
   stm32mp25-eval; Wi-Fi and web UI enabled, debug console disabled.`
-- **Codebase source**: **Codebase references** (default) or **Codebase paths**.
-  Only the selected one is sent to agents; the other is kept.
-  - **Codebase references**: upload ZIP, TAR, TAR.GZ/TGZ archives or single
-    files. Uploads apply immediately (not part of **Save changes**). The in-app
-    agent can read them, so recommend this when assessments should cite source.
-  - **Codebase paths**: one path per row (**Add path**), for an external agent
-    with filesystem access. The in-app agent cannot read these paths.
+- **Codebase directory**: click **Create codebase directory** to provision a
+  per-variant server directory; an administrator copies source there or mounts
+  it read-only. **Refresh directory status** shows eligible file/subdirectory
+  counts. Provisioned directories are immediately available through the scoped
+  list/read/search tools, without **Save changes**, and take precedence over
+  legacy uploaded references or external paths. The page has no source selector,
+  upload panel or path table. Empty `files` metadata does not mean the directory
+  is empty; use `codebase_directory.file_id="directory"` to inspect it.
 - **Environment**: where and how the device runs: network exposure (internet,
   LAN, isolated), physical access, who can reach it, hardening (firewall,
   secure boot, read-only rootfs), runtime (kernel version, init system, users).
@@ -170,10 +176,12 @@ keep threats that are plausible for this variant.
 
 ### Risks tab
 
-**Risks** table (**Add risk**). Add threats first. One row per threat you rate;
-several rows may point at the same threat.
+**Risks** table (**Add risk**). Add threats first. A risk can cover one or more
+threats, and several risks may cover the same threat.
 
-- **Threat** (required): select the threat, shown as `T1: <start of its description>`.
+- **Description**: the risk in one line, e.g. `Firmware replaced via OTA.`
+- **Threats** (required, at least one): tick the threats this risk covers,
+  shown as `T1: <first 40 characters of its description>`.
 - **Likelihood** and **Impact**: **Not rated**, **Low**, **Medium** or **High**.
   Base likelihood on exposure (who can reach the entry point) and impact on the
   assets at stake.

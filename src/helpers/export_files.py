@@ -80,6 +80,23 @@ def file_metadata(record: dict, spdx3: bool) -> dict:
         ]
         if not result["verifiedUsing"]:
             result.pop("verifiedUsing")
+    if spdx3 and "software_contentIdentifier" in result:
+        identifiers = result["software_contentIdentifier"]
+        if not isinstance(identifiers, list):
+            identifiers = [identifiers]
+        identifiers = [
+            {
+                key: value for key, value in identifier.items() if key not in {"spdxId", "@id"}
+            }
+            for identifier in identifiers
+            if isinstance(identifier, dict) and identifier.get("type") == "software_ContentIdentifier"
+            and identifier.get("software_contentIdentifierType") in ("gitoid", "swhid")
+            and isinstance(identifier.get("software_contentIdentifierValue"), str)
+        ]
+        if identifiers:
+            result["software_contentIdentifier"] = identifiers
+        else:
+            result.pop("software_contentIdentifier")
     if spdx3 and "verifiedUsing" not in result:
         hashes = [
             {"type": "Hash", "algorithm": HASH_ALGORITHMS[item["algorithm"]], "hashValue": item["checksumValue"]}

@@ -1,19 +1,20 @@
 import fetchMock from 'jest-fetch-mock';
 fetchMock.enableMocks();
 
-import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
+import Vulnerabilities from "../../src/handlers/vulnerabilities";
 import Assessments from "../../src/handlers/assessments";
 import type { Assessment } from "../../src/handlers/assessments";
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import VulnModal from '../../src/components/VulnModal';
 import AgentChat from '../../src/components/AgentChat';
-import { resetAgentQueue } from '../../src/handlers/agentQueue';
+import { __resetAgentQueue, __setEventSourceFactory } from '../../src/handlers/agentQueue';
 import AssessmentReviews from "../../src/handlers/assessmentReviews";
 import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
 
@@ -244,6 +245,26 @@ describe('Vulnerability Modal', () => {
         });
         expect(within(history).getAllByText('first@1.0.0')).toHaveLength(1);
         expect(within(history).getAllByText('second@1.0.0')).toHaveLength(1);
+        expect(history.querySelectorAll('[data-timeline-connector]')).toHaveLength(1);
+        expect(within(history).getAllByRole('listitem')[1].querySelector('[data-timeline-connector]')).toBeNull();
+    });
+
+    test('titles the add form above the assessment history and draws no bar for a single assessment', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(JSON.stringify([]));
+        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+
+        const formTitle = screen.getByRole('heading', { name: 'Add a new assessment' });
+        const historyTitle = screen.getByRole('heading', { name: 'Assessment history' });
+        expect(screen.getByRole('heading', { name: 'Assessment summary' }).compareDocumentPosition(formTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(formTitle.compareDocumentPosition(historyTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+        const history = historyTitle.nextElementSibling as HTMLElement;
+        await waitFor(() => {
+            expect(within(history).getAllByRole('listitem')).toHaveLength(1);
+        });
+        expect(within(history).queryByText('Add a new assessment')).toBeNull();
+        expect(history.querySelector('[data-timeline-connector]')).toBeNull();
     });
 
 
@@ -3543,14 +3564,177 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         simplified_status: 'Pending Assessment',
     };
 
+    type ProviderResponse = { status: number; body: object };
+    const success = (payload: object = updatedVulnPayload): ProviderResponse => ({ status: 200, body: { vulnerabilities: [payload] } });
+    const failure = (body: object = {}): ProviderResponse => ({ status: 503, body });
+    const refreshResponse = (nvd = success(), epss = success(), euvd = success()) =>
+        JSON.stringify({ results: { nvd, epss, euvd } });
+
+    beforeEach(() => {
+        jest.spyOn(Vulnerabilities, 'getDetails').mockResolvedValue({
+            ...vulnerability,
+            texts: updatedVulnPayload.texts,
+            severity: updatedVulnPayload.severity,
+        });
+    });
+
+    afterEach(() => {
+        jest.mocked(Vulnerabilities.getDetails).mockRestore();
+    });
+
+    test.each([
+        { variantId: 'variant-a', projectId: 'project-a' },
+        { variantId: undefined, projectId: 'project-a' },
+    ])('refreshes metadata without replacing scoped data ($variantId)', async ({ variantId, projectId }) => {
+        const scopedVuln: Vulnerability = {
+            ...vulnerability,
+            packages: ['scoped@1'],
+            packages_current: ['scoped@1'],
+            packages_current_by_variant: { 'variant-a': ['scoped@1'] },
+            variants: ['variant-a'],
+            first_scan_date: '2025-01-01T00:00:00Z',
+            effort: {
+                optimistic: new Iso8601Duration('PT1H'),
+                likely: new Iso8601Duration('PT2H'),
+                pessimistic: new Iso8601Duration('PT3H'),
+            },
+            fix: { state: 'fixed' },
+            status_summary: {
+                counts: { Fixed: 1 }, ordered: [{ status: 'Fixed', count: 1 }],
+                total_assessments: 1, dominant_status: 'Fixed', has_active_status: false,
+            },
+        };
+        const customCvss = {
+            author: 'user', origin: 'custom', variant_id: 'variant-a',
+            severity: 'critical', version: '3.1',
+            vector_string: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H',
+            base_score: 9.8, exploitability_score: 3.9, impact_score: 5.9,
+        };
+        const details: Vulnerability = {
+            ...vulnerability,
+            ...updatedVulnPayload,
+            effort: vulnerability.effort,
+            texts: [{ title: 'description', content: 'Fresh scoped description' }],
+            urls: ['https://example.org/refreshed'],
+            cpes: ['cpe:2.3:a:example:refreshed:*:*:*:*:*:*:*:*'],
+            published: '2026-01-01',
+            nvd_fetched_at: '2026-11-10T12:00:00Z',
+            data_fetched_at: '2026-11-10T12:00:00Z',
+            data_updated_at: '2026-11-10T12:00:00Z',
+            severity: { severity: 'critical', min_score: 8.1, max_score: 9.8, cvss: [customCvss] },
+        };
+        jest.mocked(Vulnerabilities.getDetails).mockResolvedValue(details);
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => ({
+            body: request.url.includes('/refresh?')
+                ? refreshResponse() : JSON.stringify([]),
+        }));
+        const patchVuln = jest.fn();
+        const { rerender } = render(<VulnModal vuln={scopedVuln} variantId={variantId} projectId={projectId}
+            onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        await waitFor(() => expect(patchVuln).toHaveBeenCalledTimes(1));
+        const refreshCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/refresh?'));
+        expect(refreshCalls).toHaveLength(1);
+        const refreshUrl = new URL(String(refreshCalls[0][0]), 'http://localhost');
+        expect(refreshUrl.searchParams.get('project_id')).toBe(projectId);
+        expect(refreshUrl.searchParams.get('variant_id')).toBe(variantId ?? null);
+        expect(Vulnerabilities.getDetails).toHaveBeenCalledWith(vulnerability.id, variantId, projectId);
+        const refreshed = patchVuln.mock.calls[0][1] as Vulnerability;
+        expect(refreshed).toEqual({
+            ...scopedVuln,
+            aliases: details.aliases,
+            related_vulnerabilities: details.related_vulnerabilities,
+            texts: details.texts,
+            urls: details.urls,
+            cpes: details.cpes,
+            published: details.published,
+            nvd_fetched_at: details.nvd_fetched_at,
+            ghsa_fetched_at: undefined,
+            data_fetched_at: details.data_fetched_at,
+            data_updated_at: details.data_updated_at,
+            severity: details.severity,
+            epss: updatedVulnPayload.epss,
+        });
+        rerender(<VulnModal vuln={refreshed} variantId={variantId} projectId={projectId}
+            onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
+        expect(screen.getByText('Fresh scoped description')).toBeInTheDocument();
+        expect(screen.getByText('Updated')).toBeInTheDocument();
+        expect(screen.queryByText('other-project@2')).not.toBeInTheDocument();
+    });
+
+    test('reports detail reload errors while retaining successful EPSS and EUVD updates', async () => {
+        jest.mocked(Vulnerabilities.getDetails).mockRejectedValue(new Error('HTTP 503'));
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => ({
+            body: request.url.includes('/refresh?') ? refreshResponse() : JSON.stringify([]),
+        }));
+        const patchVuln = jest.fn();
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={patchVuln} />);
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        expect(await screen.findByText(/Failed to load refreshed vulnerability details: Error: HTTP 503/)).toBeInTheDocument();
+        expect(screen.getByText('EPSS, ENISA EUVD Updated')).toBeInTheDocument();
+        expect(screen.queryByText('Updated')).not.toBeInTheDocument();
+        expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({
+            texts: vulnerability.texts, severity: vulnerability.severity, epss: updatedVulnPayload.epss,
+        }));
+    });
+
+    test('applies refreshed ENISA EUVD and EU KEV data to the modal', async () => {
+        const euvd = {
+            id: 'EUVD-2010-0001', known_exploited: true, sources: ['CISA'], date_added: '2026-11-01',
+            url: 'https://euvd.enisa.europa.eu/vulnerability/EUVD-2010-0001',
+        };
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => {
+            if (request.url.includes('/refresh?')) return { body: refreshResponse(failure(), success(), success({
+                ...updatedVulnPayload, aliases: [euvd.id], euvd, euvd_fetched_at: '2026-11-11T10:00:00Z',
+            })) };
+            return { body: JSON.stringify([]) };
+        });
+        const patchVuln = jest.fn();
+        const { rerender } = render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={patchVuln} />);
+        expect(screen.queryByText('EU KEV — Known Exploited')).not.toBeInTheDocument();
+
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        await waitFor(() => expect(patchVuln).toHaveBeenCalledTimes(1));
+        const refreshed = patchVuln.mock.calls[0][1] as Vulnerability;
+        expect(refreshed).toEqual(expect.objectContaining({
+            aliases: [euvd.id], euvd, euvd_fetched_at: '2026-11-11T10:00:00Z',
+            texts: vulnerability.texts, packages: vulnerability.packages,
+        }));
+        expect(screen.getByText('EPSS, ENISA EUVD Updated')).toBeInTheDocument();
+
+        rerender(<VulnModal vuln={refreshed} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={patchVuln} />);
+        expect(screen.getByRole('link', { name: euvd.id })).toHaveAttribute('href', euvd.url);
+        expect(screen.getByText('EU KEV — Known Exploited')).toBeInTheDocument();
+    });
+
+    test('reports an ENISA EUVD refresh failure while keeping NVD and EPSS updates', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => {
+            return { body: request.url.includes('/refresh?')
+                ? refreshResponse(success(), success(), failure()) : JSON.stringify([]) };
+        });
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={() => {}} />);
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        expect(await screen.findByText('NVD, EPSS Updated')).toBeInTheDocument();
+        expect(screen.getByText(/ENISA EUVD unavailable/)).toBeInTheDocument();
+    });
+
     test('refresh button renders in header when not readOnly', () => {
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        expect(screen.getByTitle('Refresh from NVD & EPSS')).toBeInTheDocument();
+        expect(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD')).toBeInTheDocument();
     });
 
     test('refresh button is not rendered in readOnly mode', () => {
         render(<VulnModal vuln={vulnerability} readOnly={true} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        expect(screen.queryByTitle('Refresh from NVD & EPSS')).not.toBeInTheDocument();
+        expect(screen.queryByTitle('Refresh from NVD, EPSS & ENISA EUVD')).not.toBeInTheDocument();
     });
 
     test('calls patchVuln with updated vulnerability on successful refresh', async () => {
@@ -3559,14 +3743,13 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse());
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({ id: vulnerability.id }));
@@ -3594,14 +3777,13 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse());
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={vulnWithAssessment} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledWith(
@@ -3623,13 +3805,12 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse());
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText('Updated')).toBeInTheDocument();
@@ -3642,16 +3823,15 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
-        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse(failure(), failure(), failure()));
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
-            expect(screen.getByText(/NVD.*unavailable.*EPSS API unavailable/i)).toBeInTheDocument();
+            expect(screen.getByText(/NVD.*unavailable.*EPSS API unavailable.*ENISA EUVD unavailable/i)).toBeInTheDocument();
         });
     });
 
@@ -3661,16 +3841,12 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(
-            JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: false }),
-            { status: 429 }
-        ); // nvd-refresh
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse(failure({ error_code: 'rate_limited', api_key_configured: false })));
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD rate-limited.*NVD API key/i)).toBeInTheDocument();
@@ -3683,38 +3859,33 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(
-            JSON.stringify({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: true }),
-            { status: 429 }
-        ); // nvd-refresh
-        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse(failure({ error_code: 'rate_limited', api_key_configured: true }), failure()));
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD rate-limited.*exhausted/i)).toBeInTheDocument();
         });
     });
 
-    test('single refresh always sends mode "api" to the nvd-refresh endpoint', async () => {
+    test('single refresh sends mode "api" in one refresh request', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // nvd-refresh
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse());
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
-            const nvdCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/nvd-refresh'));
+            const nvdCall = fetchMock.mock.calls.find(([url]) => String(url).includes('/refresh?'));
             expect(nvdCall).toBeDefined();
             expect(JSON.parse(String(nvdCall![1]!.body))).toEqual({ mode: 'api' });
         });
@@ -3732,16 +3903,12 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce(
-            JSON.stringify({ error: 'unauthorized', error_code: 'unauthorized' }),
-            { status: 401 }
-        ); // nvd-refresh
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse(failure({ error_code: 'unauthorized' })));
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD API key rejected/i)).toBeInTheDocument();
@@ -3754,13 +3921,12 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows mount fetch
-        fetchMock.mockResponseOnce('Service Unavailable', { status: 503 }); // nvd-refresh
-        fetchMock.mockResponseOnce(JSON.stringify({ vulnerabilities: [updatedVulnPayload] })); // epss-refresh
+        fetchMock.mockResponseOnce(refreshResponse(failure()));
 
         render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
 
-        await user.click(screen.getByTitle('Refresh from NVD & EPSS'));
+        await user.click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD API unavailable/i)).toBeInTheDocument();
@@ -3963,7 +4129,14 @@ describe('Refresh button', () => {
         simplified_status: 'active',
     });
 
-    beforeEach(() => { fetchMock.resetMocks(); });
+    beforeEach(() => {
+        fetchMock.resetMocks();
+        jest.spyOn(Vulnerabilities, 'getDetails').mockImplementation(async id => ({ ...baseVuln, id }));
+    });
+
+    afterEach(() => {
+        jest.mocked(Vulnerabilities.getDetails).mockRestore();
+    });
 
     test('NVD + EPSS refresh success calls patchVuln and shows Updated badge', async () => {
         // Mount fetches
@@ -3971,29 +4144,21 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
-        // NVD refresh
-        fetchMock.mockImplementationOnce(() => Promise.resolve({
-            ok: true, status: 200,
-            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
-        } as Response));
-        // EPSS refresh
-        fetchMock.mockImplementationOnce(() => Promise.resolve({
-            ok: true, status: 200,
-            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
-        } as Response));
+        const provider = { status: 200, body: { vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] } };
+        fetchMock.mockResponseOnce(JSON.stringify({ results: { nvd: provider, epss: provider, euvd: provider } }));
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        const refreshBtn = screen.getByTitle(/Refresh from NVD & EPSS/i);
+        const refreshBtn = screen.getByTitle(/Refresh from NVD, EPSS & ENISA EUVD/i);
         await user.click(refreshBtn);
 
         await waitFor(() => {
             expect(patchVuln).toHaveBeenCalledTimes(1);
         });
 
-        // After both NVD and EPSS succeed, "Updated" badge should appear
+        // After NVD, EPSS and EUVD succeed, "Updated" badge should appear
         expect(await screen.findByText('Updated')).toBeInTheDocument();
     });
 
@@ -4002,49 +4167,36 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
-        // NVD refresh → rate limited
-        fetchMock.mockImplementationOnce(() => Promise.resolve({
-            ok: false, status: 429,
-            json: () => Promise.resolve({ error: 'rate limited', error_code: 'rate_limited', api_key_configured: false }),
-        } as Response));
-        // EPSS refresh → success
-        fetchMock.mockImplementationOnce(() => Promise.resolve({
-            ok: true, status: 200,
-            json: () => Promise.resolve({ vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] }),
-        } as Response));
+        fetchMock.mockResponseOnce(JSON.stringify({ results: {
+            nvd: { status: 429, body: { error_code: 'rate_limited', api_key_configured: false } },
+            epss: { status: 200, body: { vulnerabilities: [makeVulnBody('CVE-2010-1234', 0.4)] } },
+            euvd: { status: 503, body: {} },
+        } }));
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
+        await user.click(screen.getByTitle(/Refresh from NVD, EPSS & ENISA EUVD/i));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD rate-limited/i)).toBeInTheDocument();
         });
     });
 
-    test('NVD + EPSS both unavailable shows combined error', async () => {
+    test('NVD, EPSS and EUVD all unavailable shows combined error', async () => {
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
-        // NVD refresh → 503
-        fetchMock.mockImplementationOnce(() => Promise.resolve({
-            ok: false, status: 503,
-            json: () => Promise.resolve({ error_code: 'unavailable', api_key_configured: true }),
-        } as Response));
-        // EPSS refresh → fail
-        fetchMock.mockImplementationOnce(() => Promise.resolve({
-            ok: false, status: 503,
-            json: () => Promise.resolve({}),
-        } as Response));
+        const failure = { status: 503, body: {} };
+        fetchMock.mockResponseOnce(JSON.stringify({ results: { nvd: failure, epss: failure, euvd: failure } }));
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={baseVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
 
         const user = userEvent.setup();
-        await user.click(screen.getByTitle(/Refresh from NVD & EPSS/i));
+        await user.click(screen.getByTitle(/Refresh from NVD, EPSS & ENISA EUVD/i));
 
         await waitFor(() => {
             expect(screen.getByText(/NVD.*unavailable/i)).toBeInTheDocument();
@@ -4063,16 +4215,9 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
-        // GHSA refresh
-        fetchMock.mockImplementationOnce(() => Promise.resolve({
-            ok: true, status: 200,
-            json: () => Promise.resolve({
-                vulnerabilities: [{
-                    ...makeVulnBody('GHSA-abcd-1234-efgh', 0.3),
-                    id: 'GHSA-abcd-1234-efgh',
-                }]
-            }),
-        } as Response));
+        fetchMock.mockResponseOnce(JSON.stringify({ results: { ghsa: { status: 200, body: {
+            vulnerabilities: [makeVulnBody('GHSA-abcd-1234-efgh', 0.3)],
+        } } } }));
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={ghsaVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
@@ -4097,11 +4242,7 @@ describe('Refresh button', () => {
         fetchMock.mockResponseOnce(JSON.stringify([])); // variants
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessments
         fetchMock.mockResponseOnce(JSON.stringify([])); // assessment rows
-        // GHSA refresh → not ok → returns null → triggers error
-        fetchMock.mockImplementationOnce(() => Promise.resolve({
-            ok: false, status: 503,
-            json: () => Promise.resolve({}),
-        } as Response));
+        fetchMock.mockResponseOnce(JSON.stringify({ results: { ghsa: { status: 503, body: {} } } }));
 
         const patchVuln = jest.fn();
         render(<VulnModal vuln={ghsaVuln} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={patchVuln} />);
@@ -4257,7 +4398,12 @@ describe("VulnModal AI review block", () => {
     });
 
     test("keeps a failed AI review deduplicated until its explicit retry saves the review", async () => {
-        resetAgentQueue();
+        __resetAgentQueue();
+        const handlers = new Map<string, (event: MessageEvent) => void>();
+        const restore = __setEventSourceFactory(() => ({
+            addEventListener: (type: string, handler: (event: MessageEvent) => void) => handlers.set(type, handler),
+            close: () => undefined, onerror: null,
+        }) as unknown as EventSource);
         mockReviews({});
         await renderModalWithAssessment({
             id: 'assess-1', origin: 'custom', targets: [{ variant_id: 'v1', package: 'pkgA@1.0.0' }],
@@ -4266,41 +4412,51 @@ describe("VulnModal AI review block", () => {
         const json = (data: unknown, ok = true) => ({
             ok, headers: { get: () => 'application/json' }, json: async () => data,
         }) as unknown as Response;
-        let attempts = 0;
+        const summary = { id: 'c1', title: 'Review assessment assess-1', kind: 'action', profile: null, archived: false,
+            created_at: 1, last_used: 1, message_count: 0, usage: {}, live: null };
+        const request = { id: 'r1', key: 'review:assess-1', kind: 'review', lane: 'action', conversation_id: 'c1',
+            source: 'Vulnerability', title: 'assessment assess-1', detail: '', status: 'failed', position: null,
+            error: 'Review provider unavailable', error_code: 'agent_error', context: null, text: 'Review assess-1' };
+        const publish = (requests: unknown[]) => act(() => handlers.get('queue')?.({
+            data: JSON.stringify({ paused: null, requests, history: [], conversations: [summary] }), lastEventId: '',
+        } as MessageEvent));
+        const posted: string[] = [];
+        let saved = false;
         fetchMock.mockImplementation((input, init) => {
             const path = String(input);
             if (path.endsWith('/api/agent/models')) return Promise.resolve(json({ models: [{ id: 'auto', name: 'Auto' }] }));
-            if (path.endsWith('/api/agent/messages')) {
-                attempts++;
-                return Promise.resolve(attempts === 1 ? json({ error: 'Review provider unavailable' }, false)
-                    : json({ reply: 'Review saved', model: 'auto', usage: {} }));
+            if (path.startsWith('/api/agent/queue')) {
+                posted.push(`${init?.method} ${path}`);
+                return Promise.resolve(path.endsWith('/retry') ? json({ status: 'queued' })
+                    : json({ requests: [{ id: 'r1', key: 'review:assess-1', conversation_id: 'c1' }], skipped: [] }));
             }
             if (path.startsWith('/api/agent')) return Promise.resolve(json({
                 authenticated: true, configured: true, messages: [], model: 'auto', usage: {},
             }));
-            if (path.endsWith('/api/assessments/assess-1/reviews')) return Promise.resolve(json({
-                reviews: attempts >= 2 ? [review] : [],
-            }));
-            if (path.endsWith('/api/assessments/assess-1')) return Promise.resolve(json({
-                id: 'assess-1', vuln_id: baseVulnerability.id, origin: 'custom', status: 'affected',
-                timestamp: '2026-08-06T09:00:00Z', targets: [{ variant_id: 'v1', package: 'pkgA@1.0.0' }],
-            }));
+            if (path.endsWith('/api/assessments/assess-1/reviews')) return Promise.resolve(json({ reviews: saved ? [review] : [] }));
             return serveModal(input, init);
         });
         render(<AgentChat context={{ page: 'vulnerabilities' }} onClose={() => {}} />);
         await userEvent.click(screen.getByRole('button', { name: /Review assessment assess-1 with AI/ }));
+        await waitFor(() => expect(posted).toEqual(['POST /api/agent/queue']));
+        publish([request]);
         expect(await screen.findByRole('alert')).toHaveTextContent('Review provider unavailable');
-        // The failed review keeps its button linked to the paused request instead of queueing a duplicate.
+        // The failed review keeps its button linked to the failed request instead of queueing a duplicate.
         const reviewButton = screen.getByRole('button', { name: 'Review assessment assess-1 with AI (failed)' });
         expect(reviewButton).toHaveTextContent('Failed · view');
-        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toHaveAttribute('placeholder', expect.stringContaining('paused'));
+        expect(screen.getByRole('textbox', { name: 'Message the agent' })).toBeEnabled();
         await userEvent.click(reviewButton);
-        expect(attempts).toBe(1);
+        expect(posted).toHaveLength(1);
         await userEvent.click(screen.getByRole('button', { name: 'Retry failed action' }));
+        expect(posted).toEqual(['POST /api/agent/queue', 'POST /api/agent/queue/requests/r1/retry']);
+        publish([{ ...request, status: 'running', error: null, error_code: null }]);
+        expect(screen.getByRole('button', { name: 'Review assessment assess-1 with AI (running)' })).toBeInTheDocument();
+        saved = true;
+        publish([]);
         await waitFor(() => expect(screen.getByRole('button', { name: 'Review assessment assess-1 with AI' })).toBeEnabled());
-        expect(attempts).toBe(2);
         expect(screen.queryByRole('button', { name: 'Retry failed action' })).not.toBeInTheDocument();
         expect(screen.queryByText('Review provider unavailable')).not.toBeInTheDocument();
+        restore();
     });
 
     test("labels the sole reviewed target of a multi-target assessment", async () => {

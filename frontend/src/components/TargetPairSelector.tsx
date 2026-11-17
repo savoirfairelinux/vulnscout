@@ -12,6 +12,23 @@ type Props = {
 
 const pairKey = (variantId: string, pkg: string) => JSON.stringify([variantId, pkg]);
 
+/** Stack every label in one grid cell so toggling text never changes the width. */
+function StableLabel({ shown, labels }: Readonly<{ shown: string; labels: string[] }>) {
+    return (
+        <span className="inline-grid">
+            {labels.map(label => (
+                <span
+                    key={label}
+                    aria-hidden={label === shown ? undefined : true}
+                    className={`col-start-1 row-start-1 ${label === shown ? '' : 'invisible'}`}
+                >
+                    {label}
+                </span>
+            ))}
+        </span>
+    );
+}
+
 /** Select exact observed (variant, package) pairs without implying a cross-product. */
 export default function TargetPairSelector({
     variants, packages, variantPackageMap, selectedTargets, onChange,
@@ -97,7 +114,7 @@ export default function TargetPairSelector({
                                             aria-label={`${selected ? 'Deselect' : 'Select'} all for package ${formatPkgId(pkg)}`}
                                             className="mt-1 text-xs font-normal text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:text-gray-600"
                                         >
-                                            {selected ? 'Deselect column' : 'Select column'}
+                                            <StableLabel shown={selected ? 'Deselect column' : 'Select column'} labels={['Select column', 'Deselect column']} />
                                         </button>
                                     </th>
                                 );
@@ -120,9 +137,9 @@ export default function TargetPairSelector({
                                         disabled={variantKeys.length === 0}
                                         onClick={() => setKeys(variantKeys, !rowSelected)}
                                         aria-label={`${rowSelected ? 'Deselect' : 'Select'} all for variant ${variant.name}`}
-                                        className="mt-1 text-xs font-normal text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:text-gray-600"
+                                        className="mt-1 text-left text-xs font-normal text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:text-gray-600"
                                     >
-                                        {rowSelected ? 'Deselect row' : 'Select row'}
+                                        <StableLabel shown={rowSelected ? 'Deselect row' : 'Select row'} labels={['Select row', 'Deselect row']} />
                                     </button>
                                 </th>
                                 {packages.map(pkg => {
@@ -153,7 +170,9 @@ export default function TargetPairSelector({
                                                         [pairKey(variant.id, pkg)], event.target.checked)}
                                                     className="h-4 w-4 accent-blue-500"
                                                 />
-                                                <span>{compatible ? (selected ? 'Selected' : 'Select') : 'Unavailable'}</span>
+                                                {compatible
+                                                    ? <StableLabel shown={selected ? 'Selected' : 'Select'} labels={['Select', 'Selected']} />
+                                                    : <span>Unavailable</span>}
                                             </label>
                                         </td>
                                     );
