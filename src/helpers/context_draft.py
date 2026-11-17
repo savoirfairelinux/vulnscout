@@ -156,8 +156,7 @@ def normalize_values(values: object) -> Values:
         texts[key] = value if isinstance(value, str) else None
     editor: dict[str, Any] = {}
     try:
-        editor = _editor_values({"codebase_source": "references", "system": values.get("system"),
-                                 "stride": values.get("stride")})
+        editor = _editor_values({"system": values.get("system"), "stride": values.get("stride")})
     except StrideValidationError as exc:
         errors.update({path: message for path, message in exc.fields.items() if path not in errors})
     if errors:

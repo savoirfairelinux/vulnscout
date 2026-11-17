@@ -58,8 +58,8 @@ const values = (overrides: Partial<AiContextDraftValues> = {}): AiContextDraftVa
 const comp = (id: string, name: string) => ({ id, name, description: '', trust_zone: '' });
 
 describe('aiContextImport helpers', () => {
-    test('applyAiDraft keeps null texts, clears "" and never touches the codebase settings', () => {
-        const baseline = { ...emptyDraft(), variant_description: 'Gateway', environment: 'Lab', codebase_paths: ['/src'],
+    test('applyAiDraft keeps null texts and clears ""', () => {
+        const baseline = { ...emptyDraft(), variant_description: 'Gateway', environment: 'Lab',
             system: { scope: 'Old', actors: 'Admin', entry_points: '', trust_boundaries: '' } };
         const applied = applyAiDraft(baseline, values({
             environment: '', other_info: 'Notes', system: { ...NO_SYSTEM, scope: 'New' },
@@ -69,8 +69,6 @@ describe('aiContextImport helpers', () => {
         expect(applied.environment).toBe('');
         expect(applied.other_info).toBe('Notes');
         expect(applied.system).toEqual({ scope: 'New', actors: '', entry_points: '', trust_boundaries: '' });
-        expect(applied.codebase_paths).toEqual(['/src']);
-        expect(applied.codebase_source).toBe(baseline.codebase_source);
         expect(applied.stride.components).toEqual([comp('C1', 'UI')]);
     });
 

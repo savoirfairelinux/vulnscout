@@ -1,7 +1,6 @@
 import type {
     MergedContext, Rating, StrideModel, SystemFields, VariantDraft,
 } from '../handlers/context';
-import { splitCodebasePaths } from '../handlers/context';
 
 export const STRIDE_CATEGORIES: readonly {
     key: string; label: string; letter: 'S' | 'T' | 'R' | 'I' | 'D' | 'E';
@@ -34,8 +33,6 @@ export function emptyDraft(): VariantDraft {
         variant_description: '',
         environment: '',
         other_info: '',
-        codebase_source: 'references',
-        codebase_paths: [],
         system: { scope: '', actors: '', entry_points: '', trust_boundaries: '' },
         stride: emptyStrideModel(),
     };
@@ -56,8 +53,6 @@ export function draftFromContext(ctx: MergedContext): VariantDraft {
         variant_description: ctx.variant_description ?? '',
         environment: ctx.environment ?? '',
         other_info: ctx.other_info ?? '',
-        codebase_source: editor.codebase_source,
-        codebase_paths: splitCodebasePaths(editor.codebase_path),
         system: {
             scope: editor.system.scope ?? '',
             actors: editor.system.actors ?? '',

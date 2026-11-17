@@ -2,7 +2,7 @@ import { useRef } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faSpinner } from "@fortawesome/free-solid-svg-icons";
-import type { ContextFile, VariantDraft } from "../../handlers/context";
+import type { VariantDraft } from "../../handlers/context";
 import ContextTab from "./ContextTab";
 import SystemTab from "./SystemTab";
 import ThreatModelTab from "./ThreatModelTab";
@@ -16,14 +16,12 @@ type Props = {
     variantName: string;
     draft: VariantDraft;
     onDraftChange: (draft: VariantDraft) => void;
-    files: ContextFile[];
     onSave: () => void;
     saving: boolean;
     dirty: boolean;
     /** Opens the copy dialog; the button is disabled without it. */
     onCopyFrom?: () => void;
     fieldErrors: Record<string, string>;
-    notify: (message: string, type: 'success' | 'error') => void;
     /** Changes whenever the draft is loaded, reset or saved; per-draft UI state starts over. */
     draftGeneration: number;
     tab: VariantTab;
@@ -56,8 +54,8 @@ function keyTarget(key: string, index: number): number | null {
 }
 
 function VariantEditor({
-    variantId, variantName, draft, onDraftChange, files, onSave, saving, dirty,
-    onCopyFrom, fieldErrors, notify, draftGeneration, tab, onTabChange, locked = false, extraActions,
+    variantId, variantName, draft, onDraftChange, onSave, saving, dirty,
+    onCopyFrom, fieldErrors, draftGeneration, tab, onTabChange, locked = false, extraActions,
 }: Readonly<Props>) {
     const tabRefs = useRef<Partial<Record<VariantTab, HTMLButtonElement | null>>>({});
 
@@ -114,8 +112,6 @@ function VariantEditor({
                             draft={draft}
                             onDraftChange={onDraftChange}
                             variantId={variantId}
-                            files={files}
-                            notify={notify}
                             fieldErrors={fieldErrors}
                             disabled={saving || locked}
                             locked={locked}

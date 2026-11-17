@@ -4,10 +4,11 @@
 import os
 import uuid
 import logging
+from contextlib import ExitStack
 from datetime import datetime, timezone
 
 from flask import jsonify, request
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from ..controllers.context import ProjectContextController, VariantContextController
@@ -15,6 +16,9 @@ from ..extensions import db
 from ..helpers import context_draft
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.codebase_reference import ARCHIVE_SUFFIXES, MAX_FILE_BYTES, CodebaseReference, validate_reference
+from ..helpers.codebase_directory import (
+    CodebaseDirectory, EmptyCodebaseDirectory, directory_name, directory_path, provision_directory,
+)
 from ..helpers.context_io import (
     build_export_document,
     collect_entries,
@@ -36,17 +40,27 @@ logger = logging.getLogger(__name__)
 
 # Agent-facing variant keys of GET /api/context (besides ``files``).
 _AGENT_VARIANT_KEYS = (
-    "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
+    "variant_description", "environment", "threat_model", "risks", "other_info",
 )
 
 
 # Agent-facing text rendered from the STRIDE model; text writes are rejected.
 _STRIDE_TEXT_KEYS = ("threat_model", "risks")
 STRIDE_TEXT_READ_ONLY = "is generated from the STRIDE model; edit it in the AI Context page"
+DIRECTORY_NAME_CONFLICT = (
+    "Codebase directory name is already assigned to another variant; use distinct project/variant names."
+)
 
 
 def _get_cache_dir() -> str:
     return os.getenv("VULNSCOUT_CACHE_DIR", "/cache/vulnscout")
+
+
+def _directory_in_use(name: str, variant_id: uuid.UUID) -> bool:
+    return db.session.execute(db.select(VariantContext.id).where(
+        VariantContext.codebase_directory == name,
+        VariantContext.variant_id != variant_id,
+    )).first() is not None
 
 
 def _variant_uuid_or_error(variant_id):
@@ -86,14 +100,20 @@ def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
-def _browse_reference(file_path: str, name: str, label: str) -> tuple[dict, int]:
+def _browse_reference(file_path: str, name: str, label: str, *, directory: bool = False) -> tuple[dict, int]:
     """List, read or search a stored file or archive as the request's query asks."""
     try:
         operation = request.args.get("operation", "list")
         pattern = request.args.get("pattern", "*")
         if len(pattern) > 512:
             raise ValueError("File pattern must be at most 512 characters.")
-        with open(file_path, "rb") as stream, CodebaseReference(stream, name) as reference:
+        with ExitStack() as stack:
+            reference: CodebaseReference
+            if directory:
+                reference = stack.enter_context(CodebaseDirectory(file_path, name))
+            else:
+                stream = stack.enter_context(open(file_path, "rb"))
+                reference = stack.enter_context(CodebaseReference(stream, name))
             if operation == "list":
                 result = reference.list_files(pattern, _integer("offset", 0, 0, 5000), _integer("limit", 200, 1, 200))
             elif operation == "read":
@@ -109,12 +129,20 @@ def _browse_reference(file_path: str, name: str, label: str) -> tuple[dict, int]
                 result = reference.search(query, pattern, _integer("max_results", 100, 1, 100))
             else:
                 raise ValueError("Operation must be list, read, or search.")
+            if directory:
+                from flask import current_app
+                from ..helpers.codebase_reference import MAX_RESPONSE_BYTES
+                result = {"file_id": "directory", "original_name": "Codebase directory", **result}
+                if len(current_app.json.dumps(result).encode("utf-8")) > MAX_RESPONSE_BYTES:
+                    raise ValueError("Source response exceeds 64 KB; reduce limit, max_lines or max_results.")
     except LookupError as exc:
         return {"error": str(exc)}, 404
     except ValueError as exc:
         return {"error": str(exc)}, 400
     except OSError:
         logger.exception("Could not read stored %s %s", label, file_path)
+        if directory:
+            return {"error": "Codebase directory is missing or unreadable; check its mount and permissions."}, 400
         return {"error": f"Stored {label} is unavailable."}, 500
     return result, 200
 
@@ -173,7 +201,82 @@ def init_app(app):
             **{key: variant_part.get(key) for key in _AGENT_VARIANT_KEYS},
             "files": variant_part["files"],
             "editor": variant_part["editor"],
+            "codebase_directory": variant_part.get("codebase_directory"),
         })
+
+    @app.route('/api/variants/<variant_id>/context/directory', methods=['GET', 'POST'])
+    def codebase_directory(variant_id):
+        """Inspect or provision the variant's server-side source directory.
+
+        POST creates the directory on demand and exposes it to agents without saving context drafts.
+
+        OpenAPI:
+        response 200 CodebaseDirectory Directory path and availability.
+        response 400 Error Invalid variant identifier.
+        response 404 Error Variant not found.
+        response 409 Error Directory name is assigned to another variant.
+        response 500 Error Directory could not be provisioned.
+        """
+        variant_uuid, err = _variant_uuid_or_error(variant_id)
+        if err:
+            return err
+        vc = VariantContext.get_by_variant(variant_uuid)
+        cache_dir = _get_cache_dir()
+        if request.method == 'POST':
+            assert variant_uuid is not None
+            vc = VariantContext.get_or_create(variant_uuid)
+            name = vc.codebase_directory
+            if name is None:
+                variant = Variant.get_by_id(variant_uuid)
+                assert variant is not None
+                project = Project.get_by_id(variant.project_id)
+                assert project is not None
+                name = directory_name(project.name, variant.name)
+            if _directory_in_use(name, variant_uuid):
+                return jsonify({"error": DIRECTORY_NAME_CONFLICT}), 409
+            try:
+                provision_directory(cache_dir, name)
+            except (OSError, ValueError):
+                logger.exception("Could not provision codebase directory for variant %s", variant_id)
+                return jsonify({
+                    "error": "Could not create codebase directory; check cache ownership and permissions.",
+                }), 500
+            if vc.codebase_directory is None:
+                try:
+                    db.session.execute(db.update(VariantContext).where(
+                        VariantContext.id == vc.id, VariantContext.codebase_directory.is_(None)
+                    ).values(codebase_directory=name, updated_at=datetime.now(timezone.utc)))
+                    db.session.commit()
+                except IntegrityError:
+                    db.session.rollback()
+                    if not _directory_in_use(name, variant_uuid):
+                        raise
+                    return jsonify({"error": DIRECTORY_NAME_CONFLICT}), 409
+                db.session.refresh(vc)
+        if vc is None or vc.codebase_directory is None:
+            return jsonify({"path": None, "file_id": "directory", "status": "not_created",
+                            "message": "No codebase directory provisioned. Create it on demand.",
+                            "file_count": None, "directory_count": None})
+        path = directory_path(cache_dir, vc.codebase_directory)
+        status, message = "ready", "Directory is available. Only eligible source files are exposed."
+        file_count: int | None = None
+        directory_count: int | None = None
+        reference = CodebaseDirectory(cache_dir, vc.codebase_directory)
+        try:
+            with reference:
+                file_count, directory_count = len(reference.entries), reference.directory_count
+        except EmptyCodebaseDirectory as exc:
+            status, message = "unavailable", str(exc)
+            file_count, directory_count = 0, reference.directory_count
+        except FileNotFoundError:
+            status, message = "missing", "Codebase directory is missing; restore its mount or recreate it."
+        except OSError:
+            logger.exception("Codebase directory is unreadable: %s", path)
+            status, message = "unreadable", "Codebase directory is unreadable; check its mount and permissions."
+        except ValueError as exc:
+            status, message = "unavailable", str(exc)
+        return jsonify({"path": path, "file_id": "directory", "status": status, "message": message,
+                        "file_count": file_count, "directory_count": directory_count})
 
     @app.route('/api/projects/<project_id>/context', methods=['GET'])
     def get_project_context(project_id):
@@ -250,7 +353,6 @@ def init_app(app):
                 vc = VariantContextController.upsert(
                     variant_uuid,
                     variant_description=body.get('variant_description'),
-                    codebase_path=body.get('codebase_path'),
                     environment=body.get('environment'),
                     other_info=body.get('other_info'),
                 )
@@ -669,9 +771,10 @@ def init_app(app):
 
     @app.route('/api/variants/<variant_id>/context/files/<file_id>/source', methods=['GET'])
     def get_codebase_source(variant_id, file_id):
-        """List, read or search a variant's uploaded codebase reference.
+        """List, read or search an upload, or the active directory using file_id=directory.
 
         OpenAPI:
+        path file_id string required Upload UUID or directory for the active server directory.
         query operation string optional list (default), read, or search.
         query path string optional Exact member path for read.
         query pattern string optional File-path glob for list or search (default *).
@@ -690,6 +793,16 @@ def init_app(app):
         if err:
             return err
         assert variant_uuid is not None
+        if file_id == "directory":
+            if Variant.get_by_id(variant_uuid) is None:
+                return jsonify(error="Variant not found"), 404
+            vc = VariantContext.get_by_variant(variant_uuid)
+            if vc is None or vc.codebase_directory is None:
+                return jsonify(error="No codebase directory. Provision it in AI Context."), 404
+            body, status = _browse_reference(
+                _get_cache_dir(), vc.codebase_directory, "codebase directory", directory=True
+            )
+            return jsonify(body), status
         file_uuid, err = parse_uuid_or_400(file_id, 'file_id')
         if err:
             return err

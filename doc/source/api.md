@@ -339,8 +339,9 @@ Returns the merged project and variant context, including uploaded codebase refe
 and the variant must belong to the selected project.
 
 The agent-facing keys are plain text: `threat_model` and `risks` are rendered from the variant's STRIDE model.
-`codebase_path` is `null` when the codebase source is references, and `files` is `[]` when it is paths. An additive
-`editor` object carries the raw editor data (system and STRIDE data, and both stored codebase values).
+Source access uses `codebase_directory`: `{"file_id": "directory", "path": "<container-path>"}`
+or `null` if not provisioned. There is no source selector or external path setting.
+The `editor` object carries system and STRIDE data, uploaded attachment metadata and the revision timestamp.
 
 ### Get or Update Project Context
 
@@ -361,7 +362,6 @@ Two body shapes are accepted.
 
 **Editor shape** (body contains `stride`) is the full draft saved by the AI Context page:
 `variant_description`, `environment`, `other_info`,
-`codebase_source` (`"paths"` or `"references"`), `codebase_path`,
 `system` (`scope`, `actors`, `entry_points`, `trust_boundaries`) and
 `stride` (`components`, `interactions`, `threats`, `risks`).
 Validation failures return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`
@@ -371,10 +371,10 @@ A blank required STRIDE field reports `is required` (for example
 (`"threats[0].target_ids": "is required"`). A non-empty id that matches no row reports
 `references an unknown id`.
 
-**Legacy shape** (no `stride`) accepts the four text fields `variant_description`, `codebase_path`, `environment`
-and `other_info`. Each is replaced by the sent value (omitted means null). It never changes `codebase_source` or the
-system and STRIDE data; on a variant whose codebase source is references, a null `codebase_path` keeps the stored
-paths. The threat model and risks are read-only here: a non-null `threat_model` or `risks` returns `400` with a
+**Text-only shape** (no `stride`) accepts `variant_description`, `environment`
+and `other_info`. Each is replaced by the sent value (omitted means null). It never changes the
+directory, system or STRIDE data. The threat model and risks are read-only here:
+a non-null `threat_model` or `risks` returns `400` with a
 `fields` entry for each.
 
 ### Read an AI Context Draft
@@ -399,16 +399,18 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-Export format `2.1` carries `codebase_source`, `system` and `stride_model` per variant, alongside the text fields,
+Export format `3.0` carries `system` and `stride_model` per variant, alongside the text fields,
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
-contents are not exported, and import ignores `files`.
-Every entry is imported through the editor path, so it needs a valid `codebase_source` and a non-empty threat model;
+contents are not exported, and import ignores `files`. Directory names,
+mounts and contents are not transferred; provision each destination variant's own directory.
+Every entry is imported through the editor path, so it needs a non-empty threat model;
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
-Files exported as `2.0` still import: each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
+Files exported as `2.x` still import, but their removed source selector and external paths are discarded.
+For `2.0`, each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
 
 ```json
 {
-  "version": "2.1",
+  "version": "3.0",
   "exported_at": "2026-01-01T12:00:00+00:00",
   "projects": [{
     "project_name": "demo",
@@ -418,8 +420,6 @@ Files exported as `2.0` still import: each risk's `threat_id` becomes `threat_id
       "variant_description": "text or null",
       "environment": "text or null",
       "other_info": "text or null",
-      "codebase_source": "paths",
-      "codebase_path": "/src/app;/src/lib",
       "system": {"scope": "", "actors": "", "entry_points": "", "trust_boundaries": ""},
       "stride_model": {
         "components": [
@@ -466,8 +466,8 @@ DELETE /api/variants/<variant_id>/context/files/<file_id>
 ```
 
 Upload uses `multipart/form-data` with a required `file` and an optional `description`.
-The AI Context page exposes drag-and-drop and a file picker in a variant's **Context** tab when its codebase source is
-references. Files belong to one variant and are saved immediately.
+These legacy APIs remain available, but the AI Context page only exposes server directories.
+Uploaded files belong to one variant and are saved immediately.
 ZIP, TAR and TAR.GZ/TGZ archives are validated before storage and limited to 5,000 entries.
 Each archive member is capped at 10 MiB, and total expanded archive content is capped at 100 MiB.
 Unsafe paths, duplicate file paths, encrypted ZIP members, links,
@@ -477,13 +477,42 @@ Context JSON import/export does not include uploaded file contents; export lists
 Upload returns `201` with the file's `id`, `original_name`, and `description`; delete returns an empty `204` response.
 Invalid uploads/UUIDs return `400`, missing variants/references `404`, and upload storage failures `500`.
 
-### Browse Uploaded Source
+### Provision a Codebase Directory
+
+```
+GET /api/variants/<variant_id>/context/directory
+POST /api/variants/<variant_id>/context/directory
+```
+
+`GET` reports availability without creating anything. `POST` provisions the variant's directory on demand
+and exposes it to agents without saving text fields or requiring a valid threat model.
+Initial provisioning updates the context timestamp, marking older pending assessments outdated.
+Both return `200` with
+`{"file_id": "directory", "path": "<container-path-or-null>", "status": "...", "message": "...", "file_count": 0, "directory_count": 0}`.
+Status is `not_created`, `ready`, `missing`, `unreadable` or `unavailable` (for example empty or over budget).
+Counts reflect a complete scan of eligible regular files and subdirectories, excluding the root,
+hidden/sensitive names and linked entries. Empty trees return zero files and their eligible directory count.
+Both counts are `null` when unprovisioned, missing, unreadable or incompletely scanned (including over budget);
+partial totals are never returned. Every `GET`, including the page's **Refresh directory status**, rescans.
+Invalid IDs return `400`, unknown variants `404`, and provisioning failures `500`.
+New directories are named `context-<sanitized-project>-<sanitized-variant>`, without database IDs;
+existing saved paths are preserved. `POST` returns `409` if another variant already owns the name,
+including after sanitization or truncation. No custom path is accepted.
+Recreating the same names reuses any retained directory contents.
+A provisioned directory is discoverable and browsable immediately; no source selection
+or separate editor save is required.
+See [administrator directory setup](ai-assessments.md#administrator-provided-codebase-directories)
+for naming, retention, copying, read-only mounts and permissions.
+
+### Browse Codebase Source
 
 ```
 GET /api/variants/<variant_id>/context/files/<file_id>/source
 ```
 
-The file must belong to that variant. `operation` selects `list` (default), `read` or `search`.
+For an upload, the file UUID must belong to that variant. For the variant's active server directory,
+use the literal `file_id=directory`; unprovisioned directories return `404`.
+`operation` selects `list` (default), `read` or `search`.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
@@ -495,6 +524,12 @@ Every response includes `file_id` and `original_name`. Follow pagination for com
 truncated searches. Binary/non-UTF-8 files return 400 for reads and are counted as skipped in searches.
 Missing references/members return 404; unavailable stored files return 500 with an explicit error.
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
+
+Directory operations exclude hidden/sensitive names, symbolic/hard links and special files. They visit
+at most 5,000 entries, read at most 10 MiB/file and return at most 64 KiB of serialized JSON.
+Directory searches have a 100 MiB candidate-file budget; oversized files are skipped and counted alongside
+binary/non-UTF-8 files. Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.
+No shell, extraction or source execution is available.
 
 ---
 

@@ -29,21 +29,17 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-CODEBASE_SOURCES = ("paths", "references")
-
 THREAT_MODEL_REQUIRED = "A threat model is required."
 
 # Editor payload key -> column for the four system-description fields.
 _SYSTEM_COLUMNS: dict[str, str] = {key: f"system_{key}" for key in SYSTEM_KEYS}
 # Top-level editor payload keys stored as nullable text in the same-named column.
-_EDITOR_TEXT_KEYS = ("variant_description", "environment", "other_info", "codebase_path")
+_EDITOR_TEXT_KEYS = ("variant_description", "environment", "other_info")
 
 
 def default_editor_block() -> dict:
     """Editor block for a variant that has no context row yet."""
     return {
-        "codebase_source": "references",
-        "codebase_path": None,
         "system": {key: None for key in SYSTEM_KEYS},
         "stride": empty_stride_model(),
         "files": [],
@@ -60,13 +56,6 @@ def _optional_text(value: object, path: str, errors: dict[str, str]) -> str | No
         errors.setdefault(path, "must be a string")
         return None
     return _blank_to_none(value)
-
-
-def _choice(value: object, field: str, allowed: tuple[str, ...], errors: dict[str, str]) -> str:
-    if value not in allowed:
-        errors.setdefault(field, f"must be one of: {', '.join(allowed)}")
-        return allowed[0]
-    return typing.cast(str, value)
 
 
 def _validated(call: typing.Callable[[object], typing.Any], raw: object, errors: dict[str, str]) -> typing.Any:
@@ -86,9 +75,6 @@ def _editor_values(payload: object) -> dict[str, typing.Any]:
     values: dict[str, typing.Any] = {
         key: _optional_text(payload.get(key), key, errors) for key in _EDITOR_TEXT_KEYS
     }
-    values["codebase_source"] = _choice(
-        payload.get("codebase_source"), "codebase_source", CODEBASE_SOURCES, errors
-    )
     system = _validated(normalize_system, payload.get("system"), errors) or {}
     for key, column in _SYSTEM_COLUMNS.items():
         values[column] = _blank_to_none(system.get(key))
@@ -182,23 +168,23 @@ class VariantContext(Base):
     """Stores AI assessment context tied to a variant."""
 
     __tablename__ = "variant_context"
-    __table_args__ = (UniqueConstraint("variant_id", name="uq_variant_context_variant"),)
+    __table_args__ = (
+        UniqueConstraint("variant_id", name="uq_variant_context_variant"),
+        sa.Index("uq_variant_context_codebase_directory", "codebase_directory", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     variant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("variants.id", ondelete="CASCADE"), nullable=False
     )
     variant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    codebase_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    codebase_directory: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_info: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Bumped only when a field's value actually changes; AI assessments older
     # than this were written against a previous context.  NULL = never modified.
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    codebase_source: Mapped[str] = mapped_column(
-        sa.String, nullable=False, default="paths", server_default="paths"
-    )
     system_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_actors: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_entry_points: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -225,26 +211,29 @@ class VariantContext(Base):
     def to_dict(self) -> dict:
         updated_at = ensure_utc_iso(self.updated_at) if self.updated_at else None
         files = [f.to_dict() for f in self.files]
-        uses_references = self.codebase_source == "references"
         return {
             "variant_id": str(self.variant_id),
             "variant_description": self.variant_description,
-            "codebase_path": None if uses_references else self.codebase_path,
+            "codebase_directory": self.directory_metadata(),
             "environment": self.environment,
             "threat_model": self.agent_threat_model(),
             "risks": self.agent_risks(),
             "other_info": self.other_info,
             "updated_at": updated_at,
-            "files": files if uses_references else [],
+            "files": files,
             "editor": {
-                "codebase_source": self.codebase_source,
-                "codebase_path": self.codebase_path,
                 "system": self._system(),
                 "stride": self.stride_model if self.stride_model is not None else empty_stride_model(),
                 "files": files,
                 "updated_at": updated_at,
             },
         }
+
+    def directory_metadata(self) -> dict | None:
+        if self.codebase_directory is None:
+            return None
+        from ..helpers.codebase_directory import directory_path
+        return {"file_id": "directory", "path": directory_path(_get_cache_dir(), self.codebase_directory)}
 
     # ------------------------------------------------------------------
     # CRUD helpers
@@ -264,7 +253,7 @@ class VariantContext(Base):
             return existing
         try:
             with db.session.begin_nested():
-                vc = VariantContext(variant_id=variant_id, codebase_source="references")
+                vc = VariantContext(variant_id=variant_id)
                 db.session.add(vc)
                 db.session.flush()
             db.session.commit()
@@ -278,7 +267,6 @@ class VariantContext(Base):
     def upsert(
         variant_id: uuid.UUID,
         variant_description: str | None = None,
-        codebase_path: str | None = None,
         environment: str | None = None,
         other_info: str | None = None,
         commit: bool = True,
@@ -288,29 +276,22 @@ class VariantContext(Base):
         if existing is not None:
             new_values: dict[str, typing.Any] = {
                 "variant_description": variant_description,
-                "codebase_path": codebase_path,
                 "environment": environment,
                 "other_info": other_info,
             }
-            if codebase_path is None and existing.codebase_source == "references":
-                # Paths are hidden from legacy readers on a references variant.
-                del new_values["codebase_path"]
             existing._apply(new_values)
             if commit:
                 db.session.commit()
             return existing
         has_content = any(
             v is not None
-            for v in (variant_description, codebase_path, environment, other_info)
+            for v in (variant_description, environment, other_info)
         )
         vc = VariantContext(
             variant_id=variant_id,
             variant_description=variant_description,
-            codebase_path=codebase_path,
             environment=environment,
             other_info=other_info,
-            # Same default as the AI Context page unless the caller supplied paths.
-            codebase_source="paths" if codebase_path is not None else "references",
             updated_at=datetime.now(timezone.utc) if has_content else None,
         )
         db.session.add(vc)

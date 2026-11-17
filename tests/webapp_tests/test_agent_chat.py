@@ -997,6 +997,24 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
             agent_client.get_codebase_source(other_id, other_file_id, {"operation": "list"})
         with pytest.raises(VulnScoutError, match="File not found"):
             agent_client.get_codebase_source(chosen_id, other_file_id, {"operation": "list"})
+        provisioned = client.post(f"/api/variants/{chosen_id}/context/directory")
+        assert provisioned.status_code == 200
+        directory = Path(provisioned.get_json()["path"])
+        (directory / "source.c").write_text("first\nvulnerable_call();\n")
+        context = agent_client.get_merged_context(project_id, chosen_id)
+        assert context["files"][0]["id"] == file_id
+        assert not {"codebase_source", "codebase_path"} & context["editor"].keys()
+        directory_id = context["codebase_directory"]["file_id"]
+        listing = json.loads(_codebase_source_impl(agent_client, chosen_id, directory_id, {"operation": "list"}))
+        assert listing["files"] == [{"path": "source.c", "size": 25}]
+        matches = agent_client.get_codebase_source(
+            chosen_id, directory_id, {"operation": "search", "query": "vulnerable_call"})
+        assert matches["matches"] == [{"path": "source.c", "line": 2, "text": "vulnerable_call();"}]
+        source = agent_client.get_codebase_source(
+            chosen_id, directory_id, {"operation": "read", "path": "source.c", "start_line": 2})
+        assert source["content"] == "vulnerable_call();\n"
+        with pytest.raises(VulnScoutError, match="outside"):
+            agent_client.get_codebase_source(other_id, directory_id, {"operation": "list"})
         assessments = agent_client.list_assessments_by_vuln("CVE-2024-1234")
         assert [assessment["id"] for assessment in assessments] == [shared_id]
         assert assessments[0]["variant_ids"] == [chosen_id]
@@ -1388,34 +1406,37 @@ def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None, models=("model
     return captured, deleted
 
 
-def test_ephemeral_assess_profile_turn_limits_tools_and_deletes_its_session(monkeypatch):
+@pytest.mark.parametrize("action", ["assess", "review"])
+def test_ephemeral_action_profile_turn_limits_tools_and_deletes_its_session(monkeypatch, action):
     import asyncio
     from src.routes import agent, agent_skills
 
     monkeypatch.delenv("VULNSCOUT_AGENT_WEB_ACCESS", raising=False)
+    profile = agent_skills.PROFILES[action]
     captured, deleted = _assess_sdk(monkeypatch)
     conversation = agent.Conversation(session_id="old", session_scope="{}")
     conversation.usage["cost"] = 5
     reply, usage = asyncio.run(agent._reply(
         conversation, "Assess", agent._mcp_path(), "model", "{}",
-        profile=agent_skills.ASSESS, timeout=5, api_url="http://127.0.0.1:4321", ephemeral=True,
+        profile=profile, timeout=5, api_url="http://127.0.0.1:4321", ephemeral=True,
     ))
 
     assert reply == "Assessed" and "resumed" not in captured
     assert usage == agent._session_usage([])  # the turn's own usage, not the conversation's total
     assert captured["send_timeout"] == 5
-    tools = agent.READ_TOOLS + agent_skills.ASSESS.write_tools
+    tools = agent.READ_TOOLS + profile.write_tools
     server = captured["mcp_servers"]["vulnscout"]
     assert server["tools"] == list(tools)
     assert server["env"]["VULNSCOUT_BASE_URL"] == "http://127.0.0.1:4321"
     assert captured["available_tools"] == ([f"mcp:vulnscout-{tool}" for tool in tools]
                                            + ["builtin:skill", "builtin:view", "builtin:web_fetch"])
-    assert not {"update_project_context", "update_variant_context", "write_assessment_review"} & set(tools)
-    assert captured["enable_skills"] is True and captured["agent"] == "vulnscout-assess"
-    assert captured["custom_agents"][0]["skills"] == ["cve-assessment"]
+    assert {"get_merged_context", "list_codebase_files", "search_codebase", "read_codebase_file"} <= set(tools)
+    assert not (set(agent.WRITE_TOOLS) - set(profile.write_tools)) & set(tools)
+    assert captured["enable_skills"] is True and captured["agent"] == f"vulnscout-{action}"
+    assert captured["custom_agents"][0]["skills"] == list(profile.skills)
     assert captured["on_permission_request"](SimpleNamespace(kind="shell"), {}).kind == "reject"
     assert captured["system_message"]["content"] == agent_skills.PROFILE_SYSTEM_MESSAGE
-    assert captured["message"] == "Use the cve-assessment skill.\n\nAssess"
+    assert captured["message"] == f"Use the {profile.skill} skill.\n\nAssess"
     assert deleted == ["assess-session"]
     assert conversation.session_id == "old"
 
