@@ -48,6 +48,17 @@ def directory_path(cache_dir: str, name: str) -> str:
     return os.path.join(os.path.abspath(cache_dir), name)
 
 
+def directory_exists(cache_dir: str, name: str) -> bool:
+    """Check a readable directory without following links or creating paths."""
+    directory_path(cache_dir, name)
+    try:
+        with _open_directory(cache_dir) as cache_fd:
+            with _open_directory(name, cache_fd):
+                return True
+    except FileNotFoundError:
+        return False
+
+
 def provision_directory(cache_dir: str, name: str) -> None:
     directory_path(cache_dir, name)
     os.makedirs(cache_dir, mode=0o750, exist_ok=True)

@@ -484,9 +484,12 @@ GET /api/variants/<variant_id>/context/directory
 POST /api/variants/<variant_id>/context/directory
 ```
 
-`GET` reports availability without creating anything. `POST` provisions the variant's directory on demand
-and exposes it to agents without saving text fields or requiring a valid threat model.
-Initial provisioning updates the context timestamp, marking older pending assessments outdated.
+`GET` reports availability and automatically registers an existing matching cache directory,
+without creating filesystem paths. Merged-context and directory-source reads perform the same
+discovery, so CI can create and populate the directory without a web interaction or provisioning request.
+`POST` can also create a missing directory on demand. Neither operation saves text fields or
+requires a valid threat model. Initial registration updates the context timestamp,
+marking older pending assessments outdated.
 Both return `200` with
 `{"file_id": "directory", "path": "<container-path-or-null>", "status": "...", "message": "...", "file_count": 0, "directory_count": 0}`.
 Status is `not_created`, `ready`, `missing`, `unreadable` or `unavailable` (for example empty or over budget).
@@ -494,10 +497,12 @@ Counts reflect a complete scan of eligible regular files and subdirectories, exc
 hidden/sensitive names and linked entries. Empty trees return zero files and their eligible directory count.
 Both counts are `null` when unprovisioned, missing, unreadable or incompletely scanned (including over budget);
 partial totals are never returned. Every `GET`, including the page's **Refresh directory status**, rescans.
-Invalid IDs return `400`, unknown variants `404`, and provisioning failures `500`.
+Invalid IDs return `400`, unknown variants `404`, and inspection/provisioning failures `500`.
 New directories are named `context-<sanitized-project>-<sanitized-variant>`, without database IDs;
-existing saved paths are preserved. `POST` returns `409` if another variant already owns the name,
-including after sanitization or truncation. No custom path is accepted.
+existing saved paths are preserved. Requests return `409` if another variant already owns the name,
+including after sanitization or truncation. Automatic discovery also returns `409` when several
+unregistered variants have the same normalized name; rename them or explicitly provision the intended owner.
+No custom path is accepted.
 Recreating the same names reuses any retained directory contents.
 A provisioned directory is discoverable and browsable immediately; no source selection
 or separate editor save is required.

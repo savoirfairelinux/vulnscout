@@ -17,7 +17,7 @@ from ..helpers import context_draft
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.codebase_reference import ARCHIVE_SUFFIXES, MAX_FILE_BYTES, CodebaseReference, validate_reference
 from ..helpers.codebase_directory import (
-    CodebaseDirectory, EmptyCodebaseDirectory, directory_name, directory_path, provision_directory,
+    CodebaseDirectory, EmptyCodebaseDirectory, directory_exists, directory_name, directory_path, provision_directory,
 )
 from ..helpers.context_io import (
     build_export_document,
@@ -61,6 +61,52 @@ def _directory_in_use(name: str, variant_id: uuid.UUID) -> bool:
         VariantContext.codebase_directory == name,
         VariantContext.variant_id != variant_id,
     )).first() is not None
+
+
+def _register_directory(vc: VariantContext, name: str):
+    if vc.codebase_directory is None:
+        try:
+            db.session.execute(db.update(VariantContext).where(
+                VariantContext.id == vc.id, VariantContext.codebase_directory.is_(None)
+            ).values(codebase_directory=name, updated_at=datetime.now(timezone.utc)))
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            if not _directory_in_use(name, vc.variant_id):
+                raise
+            return vc, (jsonify({"error": DIRECTORY_NAME_CONFLICT}), 409)
+        db.session.refresh(vc)
+    return vc, None
+
+
+def _directory_context(variant_id: uuid.UUID):
+    """Register existing CI source directories on reads, without creating filesystem paths."""
+    vc = VariantContext.get_by_variant(variant_id)
+    if vc is not None and vc.codebase_directory is not None:
+        return vc, None
+    variant = Variant.get_by_id(variant_id)
+    assert variant is not None
+    project = Project.get_by_id(variant.project_id)
+    assert project is not None
+    name = directory_name(project.name, variant.name)
+    try:
+        if not directory_exists(_get_cache_dir(), name):
+            return vc, None
+    except OSError:
+        logger.exception("Could not discover codebase directory for variant %s", variant_id)
+        return vc, (jsonify({"error": "Could not inspect codebase directory; check its type and permissions."}), 500)
+    if _directory_in_use(name, variant_id):
+        return vc, (jsonify({"error": DIRECTORY_NAME_CONFLICT}), 409)
+    candidates = db.session.execute(db.select(Project.name, Variant.name).select_from(Variant).join(
+        Project, Variant.project_id == Project.id
+    ).outerjoin(VariantContext, VariantContext.variant_id == Variant.id).where(
+        Variant.id != variant_id, VariantContext.codebase_directory.is_(None)
+    )).all()
+    if any(directory_name(project_name, variant_name) == name for project_name, variant_name in candidates):
+        return vc, (jsonify({
+            "error": "Ambiguous codebase directory name; rename the variants or explicitly provision its owner.",
+        }), 409)
+    return _register_directory(vc or VariantContext.get_or_create(variant_id), name)
 
 
 def _variant_uuid_or_error(variant_id):
@@ -167,6 +213,8 @@ def init_app(app):
         response 200 MergedContext Merged project and variant context.
         response 400 Error Invalid identifiers or mismatched project and variant.
         response 404 Error Project or variant not found.
+        response 409 Error Existing codebase directory ownership is ambiguous or conflicts.
+        response 500 Error Existing codebase directory could not be inspected.
         """
         project_id_str = request.args.get('project_id', '')
         variant_id_str = request.args.get('variant_id', '')
@@ -191,7 +239,9 @@ def init_app(app):
 
         from ..models.project_context import ProjectContext
         pc = ProjectContext.get_by_project(project_uuid)
-        vc = VariantContext.get_by_variant(variant_uuid)
+        vc, err = _directory_context(variant_uuid)
+        if err:
+            return err
 
         variant_part = vc.to_dict() if vc else {"files": [], "editor": default_editor_block()}
         return jsonify({
@@ -208,19 +258,19 @@ def init_app(app):
     def codebase_directory(variant_id):
         """Inspect or provision the variant's server-side source directory.
 
-        POST creates the directory on demand and exposes it to agents without saving context drafts.
+        GET discovers existing CI directories; POST also creates missing directories on demand.
+        Both expose directories to agents without saving context drafts.
 
         OpenAPI:
         response 200 CodebaseDirectory Directory path and availability.
         response 400 Error Invalid variant identifier.
         response 404 Error Variant not found.
-        response 409 Error Directory name is assigned to another variant.
-        response 500 Error Directory could not be provisioned.
+        response 409 Error Directory name ownership conflicts or is ambiguous.
+        response 500 Error Directory could not be inspected or provisioned.
         """
         variant_uuid, err = _variant_uuid_or_error(variant_id)
         if err:
             return err
-        vc = VariantContext.get_by_variant(variant_uuid)
         cache_dir = _get_cache_dir()
         if request.method == 'POST':
             assert variant_uuid is not None
@@ -241,18 +291,11 @@ def init_app(app):
                 return jsonify({
                     "error": "Could not create codebase directory; check cache ownership and permissions.",
                 }), 500
-            if vc.codebase_directory is None:
-                try:
-                    db.session.execute(db.update(VariantContext).where(
-                        VariantContext.id == vc.id, VariantContext.codebase_directory.is_(None)
-                    ).values(codebase_directory=name, updated_at=datetime.now(timezone.utc)))
-                    db.session.commit()
-                except IntegrityError:
-                    db.session.rollback()
-                    if not _directory_in_use(name, variant_uuid):
-                        raise
-                    return jsonify({"error": DIRECTORY_NAME_CONFLICT}), 409
-                db.session.refresh(vc)
+            vc, err = _register_directory(vc, name)
+        else:
+            vc, err = _directory_context(variant_uuid)
+        if err:
+            return err
         if vc is None or vc.codebase_directory is None:
             return jsonify({"path": None, "file_id": "directory", "status": "not_created",
                             "message": "No codebase directory provisioned. Create it on demand.",
@@ -787,6 +830,7 @@ def init_app(app):
         response 200 SourceReferenceResult Source files, line-numbered content, or search matches.
         response 400 Error Invalid parameters or unreadable reference.
         response 404 Error Variant, reference, or source member not found.
+        response 409 Error Directory name ownership conflicts or is ambiguous.
         response 500 Error Stored reference is unavailable.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
@@ -796,9 +840,13 @@ def init_app(app):
         if file_id == "directory":
             if Variant.get_by_id(variant_uuid) is None:
                 return jsonify(error="Variant not found"), 404
-            vc = VariantContext.get_by_variant(variant_uuid)
+            vc, err = _directory_context(variant_uuid)
+            if err:
+                return err
             if vc is None or vc.codebase_directory is None:
-                return jsonify(error="No codebase directory. Provision it in AI Context."), 404
+                return jsonify(error=(
+                    "No codebase directory found. Create its expected cache folder or use AI Context."
+                )), 404
             body, status = _browse_reference(
                 _get_cache_dir(), vc.codebase_directory, "codebase directory", directory=True
             )

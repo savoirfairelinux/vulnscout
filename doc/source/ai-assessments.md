@@ -440,15 +440,23 @@ as evidence gaps, not used to claim a component is absent.
 
 ### Administrator-provided codebase directories
 
-Open the variant's **Context** tab and click **Create codebase directory**.
-No source selector, upload panel or path table is needed. Creation immediately
-exposes the directory to agents and marks older pending assessments outdated,
-without saving other context fields. The page displays the **container path** and
-whether the directory is available, empty, missing or unreadable.
+CI pipelines can create or mount `context-<sanitized-project>-<sanitized-variant>`
+directly under `VULNSCOUT_CACHE_DIR` and populate it with reviewed source.
+Merged-context, directory-status and directory-source lookups automatically
+register an existing readable directory and expose it to assessments and reviews.
+No web interaction, provisioning request or editor save is required. These reads
+never create filesystem paths. Automatic discovery rejects ambiguous names shared
+by unregistered variants: use distinct names or explicitly provision the intended
+owner instead of allowing an arbitrary reader to claim the source.
+
+Alternatively, open the variant's **Context** tab and click **Create codebase
+directory** to create a missing directory. Initial registration, whether automatic
+or explicit, marks older pending assessments outdated without saving other
+context fields. The page displays the **container path** and whether the directory
+is available, empty, missing or unreadable.
 **Refresh directory status** checks files or mounts added by an administrator;
 it does not change the context draft. **Save changes** is not required for
-directory discovery, including for previously provisioned directories whose
-legacy saved source was references or paths.
+directory discovery or source access.
 
 Status includes **Files** and **Directories** counts after a complete scan,
 including on refresh. Files count eligible regular files (even if binary or too
