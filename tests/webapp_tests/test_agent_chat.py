@@ -91,7 +91,7 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
             pass
 
         async def list_models(self):
-            return [SimpleNamespace(id="model", policy=None)]
+            return [SimpleNamespace(id="model", name="Model", policy=None)]
 
         async def create_session(self, **options):
             captured.update(options)
@@ -580,7 +580,7 @@ def test_environment_only_model_selection_preserves_connection(client, monkeypat
     for key in agent.AGENT_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     expected = {key: value for key, value in environment.items() if value}
-    assert agent._agent_environment() == {**expected, "AI_MODEL": "selected-model"}
+    assert agent._agent_environment() == {**expected, "AI_MODEL": "selected-model", "AI_CONTEXT_TIER": "default"}
     fresh = agent.Conversation()
     assert agent._load_env_credentials(fresh) is None
     assert fresh.model == "selected-model"
@@ -1217,7 +1217,9 @@ def test_connection_changes_wait_for_the_running_request_but_model_selection_doe
         assert connection.credentials.device_code == "code"
         assert not connection.lock.locked()
         response = client.post("/api/agent/model", json={"model": "gpt-4o"})
-        assert response.status_code == 200 and response.get_json() == {"model": "gpt-4o"}
+        assert response.status_code == 200 and response.get_json() == {
+            "model": "gpt-4o", "context_tier": "default", "reasoning_effort": None,
+        }
     finally:
         release.set()
         thread.join(10)
@@ -1388,7 +1390,8 @@ def _assess_sdk(monkeypatch, *, delay=0.0, disconnect_error=None, models=("model
             pass
 
         async def list_models(self):
-            return [SimpleNamespace(id=model, policy=None) for model in models]
+            return [SimpleNamespace(id=model, name=model, policy=None) if isinstance(model, str) else model
+                    for model in models]
 
         async def create_session(self, **options):
             captured.update(options)

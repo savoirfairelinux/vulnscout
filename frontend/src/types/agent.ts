@@ -29,6 +29,7 @@ export type AgentRequestRecord = {
     import_revision?: string | null;
     /** null until the request starts when it was queued before the agent connection was set up. */
     model: string | null;
+    model_options?: { context_tier?: string; reasoning_effort?: string } | null;
     status: AgentRequestStatus;
     error: string | null;
     error_code: string | null;
