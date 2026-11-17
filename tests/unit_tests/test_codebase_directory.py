@@ -25,6 +25,38 @@ def test_directory_names_are_portable_sanitized_and_bounded():
         module.directory_path("/cache", "../outside")
 
 
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("effective_uid", [0, 1000])
+@pytest.mark.parametrize("cache_ids", [(1234, 5678), (0, 0)], ids=["mapped-host", "rootless"])
+def test_provision_inherits_corrected_cache_ownership_only_for_new_root_created_directories(
+    tmp_path, monkeypatch, existing, effective_uid, cache_ids,
+):
+    from types import SimpleNamespace
+
+    name = directory_name("project", "variant")
+    root = tmp_path / name
+    if existing:
+        root.mkdir()
+    cache_inode = tmp_path.stat().st_ino
+    fstat = os.fstat
+    changes = []
+
+    def cache_owner(fd):
+        info = fstat(fd)
+        if info.st_ino == cache_inode:
+            return SimpleNamespace(st_uid=cache_ids[0], st_gid=cache_ids[1])
+        return info
+
+    monkeypatch.setattr(module.os, "geteuid", lambda: effective_uid)
+    monkeypatch.setattr(module.os, "fstat", cache_owner)
+    monkeypatch.setattr(module.os, "fchown", lambda fd, uid, gid: changes.append((fstat(fd).st_ino, uid, gid)))
+
+    provision_directory(str(tmp_path), name)
+
+    assert root.is_dir()
+    assert changes == ([(root.stat().st_ino, *cache_ids)] if effective_uid == 0 and not existing else [])
+
+
 def test_list_read_and_search_with_pagination(tree):
     cache, name, root = tree
     (root / "z.c").write_text("needle again\n")
