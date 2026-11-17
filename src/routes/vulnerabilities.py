@@ -36,7 +36,7 @@ from ..extensions import db
 from ..controllers.scc_engine import get_cve_json
 from ..controllers.nvd_db import NVD_DB
 from ..controllers.nvd_extract import extract_cve_details
-from ..controllers.nvd_apply import apply_nvd_update
+from ..controllers.nvd_apply import apply_cvss_update, apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
 from ..controllers.euvd_db import EUVD_DB
 from ..controllers.refresh_jobs import CVE_RE, _apply_euvd
@@ -1503,31 +1503,7 @@ def init_app(app: Flask) -> None:
         now = datetime.datetime.now(datetime.timezone.utc)
         apply_nvd_update(rec, details, now)
 
-        # Update CVSS metric record if NVD returned score data
-        base_score = details.get("base_score")
-        cvss_version = details.get("cvss_version")
-        cvss_vector = details.get("cvss_vector")
-        if base_score is not None and cvss_version is not None:
-            existing = db.session.execute(
-                db.select(Metrics).where(
-                    Metrics.vulnerability_id == rec.id,
-                    Metrics.version == cvss_version,
-                    Metrics.variant_id.is_(None),
-                )
-            ).scalar_one_or_none()
-            if existing is not None:
-                if float(existing.score or 0) != float(base_score) or existing.vector != cvss_vector:
-                    existing.score = base_score
-                    existing.vector = cvss_vector or existing.vector
-            else:
-                db.session.add(Metrics(
-                    vulnerability_id=rec.id,
-                    version=cvss_version,
-                    score=base_score,
-                    vector=cvss_vector or "",
-                    author="nvd",
-                ))
-
+        apply_cvss_update(rec, details, db)
         db.session.commit()
 
         # After commit, mapped columns are expired but transient attributes
