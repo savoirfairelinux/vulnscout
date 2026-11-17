@@ -8,6 +8,15 @@ function CvssGauge ({ data }: Readonly<Props>) {
     // percent to deg => Math.round(((value / 100) * 180 - 45) * 10) / 10
     // src: https://gist.github.com/gquittet/77dd931ebfa7b8a73f2711faee0a7292
 
+    if (data.base_score === null) {
+        return (
+            <div className="bg-gray-800 w-full aspect-[2] flex flex-col items-center justify-center">
+                <span className="text-3xl">Unknown</span>
+                <span className="text-sm">{data.author}</span>
+            </div>
+        );
+    }
+
     if (typeof data.base_score !== 'number' || data.base_score < 0.0 || data.base_score > 10.0)
         return <></>;
 

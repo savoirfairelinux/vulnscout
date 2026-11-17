@@ -165,6 +165,23 @@ describe('CVSS Gauge', () => {
         expect(container.firstChild).toBeNull();
     })
 
+    test('render an unknown label for a missing base_score', () => {
+        const unscored: CVSS = {
+            author: 'nvd',
+            version: '3.1',
+            vector_string: 'CVSS:3.1/AV:N',
+            severity: 'unknown',
+            base_score: null,
+            exploitability_score: 0,
+            impact_score: 0,
+        };
+
+        render(<CvssGauge data={unscored} />);
+
+        expect(screen.getByText('Unknown')).toBeInTheDocument();
+        expect(screen.getByText('nvd')).toBeInTheDocument();
+    })
+
     test('render nothing for base_score below 0', () => {
         // ARRANGE
         const invalidScore: CVSS = {
