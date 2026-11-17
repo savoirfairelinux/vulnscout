@@ -20,7 +20,8 @@ def upgrade():
         op.execute(sa.text(
             "UPDATE variant_context SET updated_at = :now "
             "WHERE codebase_directory IS NULL AND codebase_source = 'paths' "
-            "AND TRIM(COALESCE(codebase_path, '')) <> ''"
+            "AND (TRIM(COALESCE(codebase_path, '')) <> '' OR EXISTS ("
+            "SELECT 1 FROM context_files WHERE context_files.variant_context_id = variant_context.id))"
         ).bindparams(now=datetime.now(timezone.utc)))
     # Rebuilding this parent table can cascade-delete context files on SQLite.
     for name in ("codebase_source", "codebase_path"):
