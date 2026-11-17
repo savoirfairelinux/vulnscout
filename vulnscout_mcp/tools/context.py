@@ -6,6 +6,7 @@ from vulnscout_mcp.client import VulnScoutClient, VulnScoutConflict, VulnScoutEr
 
 
 _FORM_GUIDE = Path(__file__).resolve().parent.parent / "ai_context_form_guide.md"
+MERGED_CONTEXT_PAGE_BYTES = 12 * 1024
 
 
 def _ai_context_form_guide_impl() -> str:
@@ -105,22 +106,47 @@ _TEXT_KEYS = ("variant_description", "environment", "other_info")
 
 
 def _get_merged_context_impl(
-    client: VulnScoutClient, project_id: str, variant_id: str, include_model: bool = False
+    client: VulnScoutClient,
+    project_id: str,
+    variant_id: str,
+    include_model: bool = False,
+    offset: int = 0,
+    limit_bytes: int = MERGED_CONTEXT_PAGE_BYTES,
 ) -> str:
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        return "Error: offset must be a non-negative integer."
+    if (isinstance(limit_bytes, bool) or not isinstance(limit_bytes, int)
+            or not 1 <= limit_bytes <= MERGED_CONTEXT_PAGE_BYTES):
+        return f"Error: limit_bytes must be between 1 and {MERGED_CONTEXT_PAGE_BYTES}."
     try:
         ctx = client.get_merged_context(project_id, variant_id)
     except VulnScoutError as e:
         return f"Error: {e}"
     text = _fmt_merged_context(ctx)
-    if not include_model:
-        return text
-    editor = ctx.get("editor") or {}
-    model = {
-        "updated_at": editor.get("updated_at"),
-        "system": editor.get("system") or {key: None for key in _SYSTEM_KEYS},
-        "stride": editor.get("stride") or {section: [] for section in _STRIDE_SECTIONS.values()},
-    }
-    return f"{text}\nmodel={json.dumps(model, ensure_ascii=False)}\ndraft={_draft_line(client, variant_id)}"
+    if include_model:
+        editor = ctx.get("editor") or {}
+        model = {
+            "updated_at": editor.get("updated_at"),
+            "system": editor.get("system") or {key: None for key in _SYSTEM_KEYS},
+            "stride": editor.get("stride") or {section: [] for section in _STRIDE_SECTIONS.values()},
+        }
+        text = f"{text}\nmodel={json.dumps(model, ensure_ascii=False)}\ndraft={_draft_line(client, variant_id)}"
+
+    if offset > len(text):
+        return f"Error: offset must not exceed the context length of {len(text)} characters."
+    end = offset
+    page_bytes = 0
+    while end < len(text):
+        char_bytes = len(text[end].encode("utf-8"))
+        if page_bytes + char_bytes > limit_bytes:
+            break
+        page_bytes += char_bytes
+        end += 1
+    next_offset = end if end < len(text) else "null"
+    return (
+        f"offset={offset} next_offset={next_offset} total_chars={len(text)}\n"
+        f"{text[offset:end]}"
+    )
 
 
 def _draft_line(client: VulnScoutClient, variant_id: str) -> str:
@@ -404,8 +430,19 @@ def register_tools(server, client: VulnScoutClient) -> None:
         return _list_variants_impl(client)
 
     @server.tool()
-    def get_merged_context(project_id: str, variant_id: str, include_model: bool = False) -> str:
+    def get_merged_context(
+        project_id: str,
+        variant_id: str,
+        include_model: bool = False,
+        offset: int = 0,
+        limit_bytes: int = MERGED_CONTEXT_PAGE_BYTES,
+    ) -> str:
         """Get the merged context for a project + variant pair.
+
+        Output is paginated to keep each response below Copilot's large-tool-output
+        threshold. Start with offset=0, then pass each returned next_offset until
+        it is null; concatenate page contents in order before analyzing the context.
+        Offsets count Unicode characters. limit_bytes is 1-12288 UTF-8 bytes.
 
         Returns the project's description together with the variant's
         variant_description, codebase_directory, environment,
@@ -462,8 +499,12 @@ def register_tools(server, client: VulnScoutClient) -> None:
             include_model: Also return the editable System and STRIDE model.
             With include_model, a final draft= line names the pending AI draft
             (source, status, row IDs) or is null.
+            offset: Character offset from which to return this page.
+            limit_bytes: Maximum UTF-8 bytes in the page content.
         """
-        return _get_merged_context_impl(client, project_id, variant_id, include_model)
+        return _get_merged_context_impl(
+            client, project_id, variant_id, include_model, offset, limit_bytes
+        )
 
     @server.tool()
     def list_codebase_files(

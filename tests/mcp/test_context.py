@@ -10,6 +10,7 @@ from vulnscout_mcp.client import VulnScoutClient
 from vulnscout_mcp.tools.context import (
     _find_project_id_impl,
     _find_variant_id_impl,
+    _fmt_merged_context,
     _get_merged_context_impl,
     _get_project_context_impl,
     _import_source_impl,
@@ -196,6 +197,38 @@ class TestGetMergedContextImpl:
             result = _get_merged_context_impl(client, "p1", "v1")
         assert "Error: Could not connect to VulnScout" in result
 
+    def test_paginates_merged_context_with_utf8_byte_bounded_pages(self, client):
+        context = {
+            "project_id": "p1",
+            "variant_id": "v1",
+            "threat_model": "é🙂\n" * 5000,
+            "files": [],
+        }
+        expected = _fmt_merged_context(context)
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/context").mock(
+                return_value=httpx.Response(200, json=context)
+            )
+            pages = []
+            offset = 0
+            while True:
+                page = _get_merged_context_impl(client, "p1", "v1", offset=offset)
+                header, content = page.split("\n", 1)
+                fields = dict(item.split("=", 1) for item in header.split())
+                pages.append(content)
+                assert len(content.encode("utf-8")) <= 12 * 1024
+                assert int(fields["offset"]) == offset
+                if fields["next_offset"] == "null":
+                    break
+                offset = int(fields["next_offset"])
+
+        assert len(pages) > 1
+        assert "".join(pages) == expected
+
+    def test_merged_context_rejects_invalid_page_arguments(self, client):
+        assert _get_merged_context_impl(client, "p1", "v1", offset=-1).startswith("Error:")
+        assert _get_merged_context_impl(client, "p1", "v1", limit_bytes=12 * 1024 + 1).startswith("Error:")
+
 
 class TestGetProjectContextImpl:
 
@@ -324,12 +357,14 @@ class TestVariantThreatModel:
                 return_value=httpx.Response(204))
             plain = _get_merged_context_impl(client, "p1", "v1")
             result = _get_merged_context_impl(client, "p1", "v1", include_model=True)
-        assert "\nmodel=" not in plain
-        assert result.startswith(plain + "\nmodel=")
-        model = json.loads(result.rsplit("\nmodel=", 1)[1].rsplit("\ndraft=", 1)[0])
+        plain_content = plain.split("\n", 1)[1]
+        result_content = result.split("\n", 1)[1]
+        assert "\nmodel=" not in plain_content
+        assert result_content.startswith(plain_content + "\nmodel=")
+        model = json.loads(result_content.rsplit("\nmodel=", 1)[1].rsplit("\ndraft=", 1)[0])
         assert model["system"]["scope"] == "Gateway"
         assert model["stride"] == SAVED_STRIDE
-        assert result.endswith("\ndraft=null")
+        assert result_content.endswith("\ndraft=null")
 
     def test_update_merges_rows_and_keeps_the_rest_of_the_context(self, client):
         from src.models.variant_context import _editor_values
