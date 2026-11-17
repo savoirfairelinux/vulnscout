@@ -44,7 +44,9 @@ MAX_PROMPT_VARIANTS = 50
 INVALID_PROVIDER_URL = "Invalid provider URL."
 BUSY_AGENT_ERROR = "The agent is already responding."
 ENV_PROVIDER_CHOICES = ("openai", "azure", "anthropic", "local")
-AGENT_ENV_KEYS = ("AI_PROVIDER", "AI_AUTH_CREDENTIALS", "AI_MODEL", "AI_BASE_URL")
+AGENT_ENV_KEYS = ("AI_PROVIDER", "AI_AUTH_CREDENTIALS", "AI_MODEL", "AI_BASE_URL",
+                  "AI_CONTEXT_TIER", "AI_REASONING_EFFORT")
+REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 GITHUB_DEVICE_URL = "https://github.com/login/device/code"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -66,6 +68,9 @@ class ProviderConnection:
 class AgentCredentials:
     token: str | None = None
     provider: ProviderConnection | None = None
+    options_model: str | None = None
+    context_tier: str = "default"
+    reasoning_effort: str | None = None
     device_code: str | None = None
     device_expires: float = 0.0
     device_interval: int = 5
@@ -213,8 +218,47 @@ async def _token_status(token):
 
 async def _models(token):
     async with _sdk_client(token) as client:
-        return [{"id": model.id, "name": model.name} for model in await client.list_models()
+        return [_model_choice(model) for model in await client.list_models()
                 if model.policy is None or model.policy.state == "enabled"]
+
+
+def _model_choice(model):
+    choice = {"id": model.id, "name": model.name}
+    capabilities = getattr(model, "capabilities", None)
+    if getattr(getattr(capabilities, "supports", None), "reasoning_effort", False):
+        efforts = [effort for effort in REASONING_EFFORTS
+                   if effort in (getattr(model, "supported_reasoning_efforts", None) or [])]
+        if efforts:
+            choice["reasoning_efforts"] = efforts
+            default = getattr(model, "default_reasoning_effort", None)
+            if default in efforts:
+                choice["default_reasoning_effort"] = default
+    prices = getattr(getattr(model, "billing", None), "token_prices", None)
+    long_context = getattr(prices, "long_context", None)
+    budget = (getattr(long_context, "max_prompt_tokens", None)
+              or getattr(long_context, "context_max", None))
+    # A large context-window limit alone does not establish a selectable Copilot tier.
+    if budget and budget > 272000:
+        choice["context_tiers"] = ["default", "long_context"]
+    return choice
+
+
+def _model_options(credentials, model):
+    if credentials.provider or credentials.options_model != model:
+        return {}
+    options = {"context_tier": credentials.context_tier}
+    if credentials.reasoning_effort:
+        options["reasoning_effort"] = credentials.reasoning_effort
+    return options
+
+
+def _validate_model_options(choice, context_tier, reasoning_effort):
+    if not isinstance(context_tier, str) or context_tier not in choice.get("context_tiers", ["default"]):
+        raise ValueError("Selected context tier is not available for this model and provider.")
+    if reasoning_effort is not None and (
+        not isinstance(reasoning_effort, str) or reasoning_effort not in choice.get("reasoning_efforts", [])
+    ):
+        raise ValueError("Selected reasoning effort is not available for this model and provider.")
 
 
 def _parse_provider_url(base_url):
@@ -276,6 +320,8 @@ def _persist_agent_credentials(token: str | None = None, provider: ProviderConne
         "AI_AUTH_CREDENTIALS": None,
         "AI_MODEL": None,
         "AI_BASE_URL": None,
+        "AI_CONTEXT_TIER": None,
+        "AI_REASONING_EFFORT": None,
     }
     if provider:
         updates["AI_PROVIDER"] = provider.kind
@@ -325,8 +371,19 @@ def _load_env_credentials(root):
     except (OSError, ValueError):
         return "Could not read AI provider configuration from config.env."
     provider = environment.get("AI_PROVIDER", "").strip().lower()
+    context_tier = environment.get("AI_CONTEXT_TIER") or "default"
+    reasoning_effort = environment.get("AI_REASONING_EFFORT") or None
+    if context_tier not in ("default", "long_context") or (
+        reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS
+    ):
+        return "Invalid AI_CONTEXT_TIER or AI_REASONING_EFFORT."
+    if provider not in ("", "github") and (context_tier != "default" or reasoning_effort):
+        return "Context tier and reasoning effort selections require GitHub Copilot."
     if provider in ("", "github"):
         root.model = environment.get("AI_MODEL") or "auto"
+        root.credentials.options_model = root.model
+        root.credentials.context_tier = context_tier
+        root.credentials.reasoning_effort = reasoning_effort
     if not provider:
         return None
     credentials = environment.get("AI_AUTH_CREDENTIALS", "")
@@ -636,6 +693,14 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
             if model not in {choice.id for choice in models
                              if choice.policy is None or choice.policy.state == "enabled"}:
                 raise UnavailableModelError("Selected model is not available for this account.")
+        selected_options = _model_options(conversation.credentials, model)
+        if not conversation.credentials.provider:
+            choice = next(_model_choice(choice) for choice in models if choice.id == model)
+            try:
+                _validate_model_options(choice, selected_options.get("context_tier", "default"),
+                                        selected_options.get("reasoning_effort"))
+            except ValueError as exc:
+                raise UnavailableModelError(str(exc)) from exc
         provider_options = (_provider_options(conversation.credentials.provider, model)
                             if conversation.credentials.provider else None)
         options = {
@@ -701,6 +766,9 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
             "enable_file_hooks": False,
         }
         options.update(profile_options)
+        options.update(selected_options)
+        if not provider_options:
+            options.setdefault("context_tier", "default")
         if provider_options:
             options["provider"] = provider_options
         if (
@@ -765,7 +833,9 @@ def agent_status():
                       "token_connected": state.credentials.token is not None,
                       "provider": state.credentials.provider.kind if state.credentials.provider else None,
                       "config_error": config_error,
-                      **_queue().main_transcript(), "model": state.model})
+                      **_queue().main_transcript(), "model": state.model,
+                      "context_tier": state.credentials.context_tier,
+                      "reasoning_effort": state.credentials.reasoning_effort})
 
 
 @agent_blueprint.route("/api/agent/provider", methods=["POST", "DELETE"])
@@ -805,6 +875,9 @@ def agent_provider():
                 return _response({"error": str(exc)}, 500)
             state.model = connection.model if connection else "auto"
             state.credentials.provider = connection
+            state.credentials.options_model = None
+            state.credentials.context_tier = "default"
+            state.credentials.reasoning_effort = None
             if connection:
                 state.credentials.token = None
         return _response({"provider": connection.kind if connection else None, "model": state.model})
@@ -828,6 +901,9 @@ def _sign_out(state):
                 state.model = "auto"
                 state.credentials.token = None
                 state.credentials.provider = None
+                state.credentials.options_model = None
+                state.credentials.context_tier = "default"
+                state.credentials.reasoning_effort = None
                 state.credentials.device_code = None
                 state.credentials.device_expires = 0.0
                 state.credentials.device_interval = 5
@@ -941,6 +1017,9 @@ def _complete_device_sign_in(state):
     state.model = "auto"
     state.credentials.token = token
     state.credentials.provider = None
+    state.credentials.options_model = None
+    state.credentials.context_tier = "default"
+    state.credentials.reasoning_effort = None
     return _response({"status": "connected", **auth})
 
 
@@ -970,11 +1049,12 @@ def agent_models():
 
 @agent_blueprint.route("/api/agent/model", methods=["POST"])
 def agent_model():
-    """Select and persist the agent model.
+    """Select and persist the agent model, context tier and reasoning effort.
 
     OpenAPI:
     body AgentModelRequest required Available model identifier.
     response 200 AgentModelStatus Selected model.
+    response 400 Error Invalid or unsupported model options.
     response 500 Error Model selection could not be persisted.
     response 503 Error Copilot models could not be verified.
     """
@@ -1000,15 +1080,26 @@ def agent_model():
                 return _response({"error": "Unable to verify this Copilot model."}, 503)
         if data["model"] not in {choice["id"] for choice in choices}:
             return _response({"error": "Selected model is not available for this account."}, 400)
-        updates = {"AI_MODEL": data["model"]}
+        choice = next(choice for choice in choices if choice["id"] == data["model"])
+        context_tier = data.get("context_tier", "default")
+        reasoning_effort = data.get("reasoning_effort")
+        try:
+            _validate_model_options(choice, context_tier, reasoning_effort)
+        except ValueError as exc:
+            return _response({"error": str(exc)}, 400)
+        updates = {"AI_MODEL": data["model"], "AI_CONTEXT_TIER": context_tier,
+                   "AI_REASONING_EFFORT": reasoning_effort}
         if not Path(_config_file_path()).is_file():
             updates = {**_agent_environment(), **updates}
         ok, _ = persist_env_keys(updates)
         if not ok:
             return _response({"error": "Failed to persist model to config.env."}, 500)
         state.model = data["model"]
+        state.credentials.options_model = state.model
+        state.credentials.context_tier = context_tier
+        state.credentials.reasoning_effort = reasoning_effort
     _queue().model_changed()
-    return _response({"model": data["model"]})
+    return _response({"model": data["model"], "context_tier": context_tier, "reasoning_effort": reasoning_effort})
 
 
 def init_app(app):

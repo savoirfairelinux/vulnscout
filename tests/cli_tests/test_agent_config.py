@@ -20,6 +20,7 @@ def config_environment(tmp_path):
     config.write_text(
         "AI_PROVIDER=openai\nAI_AUTH_CREDENTIALS='private key'\n"
         "AI_MODEL=model\nAI_BASE_URL=https://example.org/v1\nNVD_API_KEY=nvd-private\n"
+        "AI_CONTEXT_TIER=default\nAI_REASONING_EFFORT=\n"
     )
     config.chmod(0o666)
     fake_bin = tmp_path / "bin"
@@ -70,8 +71,10 @@ def test_wrapper_uses_mounted_file_instead_of_agent_environment(config_environme
     )
     arguments = Path(environment["ENGINE_LOG"]).read_text().splitlines()
     assert any(f"{config}:/etc/vulnscout/config.env" in arg for arg in arguments)
-    assert not any(arg.startswith(("AI_PROVIDER=", "AI_AUTH_CREDENTIALS=", "AI_MODEL=", "AI_BASE_URL="))
-                   for arg in arguments)
+    assert not any(arg.startswith((
+        "AI_PROVIDER=", "AI_AUTH_CREDENTIALS=", "AI_MODEL=", "AI_BASE_URL=",
+        "AI_CONTEXT_TIER=", "AI_REASONING_EFFORT=",
+    )) for arg in arguments)
     assert config.stat().st_mode & 0o777 == 0o600
 
 
@@ -142,13 +145,14 @@ def test_wrapper_recovers_cache_before_testing_config(config_environment, recove
 @pytest.mark.parametrize("signed_out", [False, True])
 def test_entrypoint_startup_overrides_stale_agent_environment(config_environment, signed_out):
     config, environment = config_environment
-    environment.update(AI_PROVIDER="github", AI_AUTH_CREDENTIALS="stale-token", AI_MODEL="stale-model")
+    environment.update(AI_PROVIDER="github", AI_AUTH_CREDENTIALS="stale-token", AI_MODEL="stale-model",
+                       AI_CONTEXT_TIER="long_context", AI_REASONING_EFFORT="high")
     if signed_out:
         config.write_text("")
     startup = ENTRYPOINT.read_text().split("# The sbom-cve-check", 1)[0]
     result = subprocess.run(
-        ["bash", "-c", startup + '\nprintf "%s|%s|%s" "${AI_PROVIDER:-}" '
-         '"${AI_AUTH_CREDENTIALS:-}" "${AI_MODEL:-}"'],
+        ["bash", "-c", startup + '\nprintf "%s|%s|%s|%s|%s" "${AI_PROVIDER:-}" '
+         '"${AI_AUTH_CREDENTIALS:-}" "${AI_MODEL:-}" "${AI_CONTEXT_TIER:-}" "${AI_REASONING_EFFORT:-}"'],
         env=environment, cwd=ROOT, capture_output=True, text=True, check=True,
     )
-    assert result.stdout == ("||" if signed_out else "openai|private key|model")
+    assert result.stdout == ("||||" if signed_out else "openai|private key|model|default|")

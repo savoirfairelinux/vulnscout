@@ -124,6 +124,7 @@ class AgentRequest:
     model: str | None  # None until it starts: queued without a configured connection, or re-resolved
     timeout: int
     model_explicit: bool = False  # the caller chose the model: kept on retry and connection changes
+    model_options: dict[str, str] | None = None
     status: Status = "queued"
     error: str | None = None
     error_code: str | None = None
@@ -146,7 +147,8 @@ class AgentRequest:
             result = {key: value for key, value in result.items() if key != "reply"}
         return {"id": self.id, "key": self.key, "kind": self.kind, "lane": self.lane,
                 "conversation_id": self.conversation_id, "source": self.source, "title": self.title,
-                "detail": self.detail, "model": self.model, "status": self.status, "error": self.error,
+                "detail": self.detail, "model": self.model, "model_options": self.model_options,
+                "status": self.status, "error": self.error,
                 "error_code": self.error_code, "position": position, "created_at": self.created_at,
                 "started_at": self.started_at, "finished_at": self.finished_at, "context": self.context,
                 "text": self.text, "vuln_id": self.vuln_id, "assessment_id": self.assessment_id,
@@ -573,6 +575,11 @@ class AgentQueue:
         if selected is None:
             configured, connected = self._configured_model()
             selected = configured if connected else None
+            selection = _agent()._connection()
+        else:
+            selection = _agent().Conversation()
+            _agent()._load_env_credentials(selection)
+        model_options = _agent()._model_options(selection.credentials, selected) if selected else None
         with self._lock:
             active_keys: dict[str, str] = {}
             for request in self._requests:
@@ -610,6 +617,7 @@ class AgentQueue:
                     skipped.append({"key": plan.key, "request_id": plan.skipped})
                     continue
                 for request in self._build(plan, conversation, target, source, selected, model is not None, timeout):
+                    request.model_options = dict(model_options or {}) if selected is not None else None
                     added.append(request)
                     keys.setdefault(request.key, request.id)
             self._requests.extend(added)
@@ -751,6 +759,7 @@ class AgentQueue:
             request.started_at = request.finished_at = None
             if not request.model_explicit:
                 request.model = None  # takes the model selected now
+                request.model_options = None
             self._requests.append(request)
             self._publish_queue()
             self._cond.notify_all()
@@ -889,6 +898,7 @@ class AgentQueue:
     def _reset_connection_locked(self) -> None:
         previous = self._conversations
         for request in self._requests:
+            request.model_options = None
             if not request.model_explicit:
                 request.model = None  # the new connection's model, when it starts
             owner = previous.get(request.conversation_id)
@@ -1014,6 +1024,8 @@ class AgentQueue:
             request.status, request.started_at = "running", time.time()
             if request.model is None:
                 request.model = model
+            if request.model_options is None:
+                request.model_options = dict(_agent()._model_options(credentials, request.model))
             conversation.live = {"request_id": request.id, "pending_message": request.text or "", "live_reply": "",
                                  "activity": [], "progress": "Connecting to Copilot..."}
             self._publish_queue()
@@ -1142,7 +1154,11 @@ class AgentQueue:
 
         agent = _agent()
         assert request.model is not None  # resolved when it started
-        conversation.session.credentials = self._with_model(credentials, request.model)
+        conversation.session.credentials = replace(
+            self._with_model(credentials, request.model), options_model=request.model,
+            context_tier=(request.model_options or {}).get("context_tier", "default"),
+            reasoning_effort=(request.model_options or {}).get("reasoning_effort"),
+        )
         previous = conversation.session.session_id
         call: TurnCall | None = None
         reply: str | None = None

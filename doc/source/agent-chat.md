@@ -108,6 +108,31 @@ request keeps the model it was queued with; `POST /api/agent/model` is accepted
 while a request runs and applies to later requests. Provider changes, sign-in
 and sign-out return `409` while a request runs.
 
+For **GitHub Copilot**, the same toolbar offers **Context**: default
+(up to 272K input tokens, subject to the model's lower limit) or
+**Copilot Long context** (above 272K input). Long context appears only when
+Copilot's model metadata advertises a long-context tier with a prompt budget
+above 272K; a large model context-window limit alone is not sufficient.
+This is a Copilot tier selection, not an OpenAI API 1M-token configuration.
+Long context may increase Copilot usage charges.
+
+**Thinking** appears only for models whose Copilot metadata explicitly advertises
+reasoning effort support and valid levels. Choices are the intersection of those
+levels and SDK-supported `low`, `medium`, `high`, `xhigh`, `max`; **Model default**
+omits the reasoning override. Other connectors currently expose neither override:
+their integration does not discover these capabilities.
+
+`POST /api/agent/model` accepts `context_tier` (`default` or `long_context`) and
+nullable `reasoning_effort` alongside `model`. Omitted options reset to defaults.
+Selections persist as `AI_CONTEXT_TIER` and `AI_REASONING_EFFORT` in `config.env`
+and are passed to SDK session creation **and resumption**, including CLI turns.
+Queued requests snapshot these options with their model; retrying an implicit-model
+request takes the current selection. Changing models, disconnecting, signing in,
+or choosing **Use model defaults** resets overrides. A CLI `--model` override uses
+defaults when it differs from the saved model. Capabilities are rechecked before
+each Copilot invocation; a saved override that becomes unsupported fails explicitly
+rather than silently changing the requested behavior.
+
 ### GitHub Device Sign-in
 
 Device sign-in defaults to the public GitHub Copilot (VS Code) OAuth client ID.

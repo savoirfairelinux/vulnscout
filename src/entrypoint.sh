@@ -77,10 +77,10 @@ DEV_MODE="${DEV_MODE:-false}"
 
 # Load config file if present
 if [ -f "$CONFIG_FILE" ]; then
-    unset AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL
+    unset AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL AI_CONTEXT_TIER AI_REASONING_EFFORT
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
-    export AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL
+    export AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL AI_CONTEXT_TIER AI_REASONING_EFFORT
 fi
 
 # Preserve console eligibility through internal pipes, but never style data outputs.

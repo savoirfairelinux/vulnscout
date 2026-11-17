@@ -237,6 +237,7 @@ test('connects a local provider when already signed in and restores the GitHub a
         if (path.endsWith('/models')) return jsonResponse(connected ? {
             models: [{ id: 'Qwen/Qwen3-Coder', name: 'Qwen/Qwen3-Coder' }],
         } : models);
+        if (path.endsWith('/model') && options?.method === 'POST') return jsonResponse(JSON.parse(String(options.body)));
         return jsonResponse(connected ? { ...signedIn, provider: 'local', login: null,
             token_connected: false, model: '' } : signedIn);
     };
@@ -370,7 +371,7 @@ test('keeps model selection above both views and exposes sign-out only through t
     fireEvent.change(model, { target: { value: 'gpt-6-sol' } });
     await waitFor(() => expect(model).toBeEnabled());
     expect(model).toHaveValue('gpt-6-sol');
-    expect(modelRequests).toEqual([{ model: 'gpt-6-sol' }]);
+    expect(modelRequests).toEqual([{ model: 'gpt-6-sol', context_tier: 'default', reasoning_effort: null }]);
     fireEvent.click(screen.getByRole('button', { name: 'Back to conversation' }));
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Configure model provider' }));
@@ -694,6 +695,57 @@ test('model rejection restores the choice and retry reloads the connection', asy
     expect(select).toHaveValue('auto');
     fireEvent.click(screen.getByRole('button', { name: 'Retry connection' }));
     await waitFor(() => expect(requests.filter(path => path === '/api/agent')).toHaveLength(2));
+});
+
+test('Copilot context and thinking choices persist together and reset on model change', async () => {
+    const changes: object[] = [];
+    serve({ ...signedIn, model: 'reasoner', context_tier: 'long_context', reasoning_effort: 'high' }, (path, options) => {
+        if (path.endsWith('/models')) return jsonResponse({ models: [
+            { id: 'reasoner', name: 'Reasoner', context_tiers: ['default', 'long_context'],
+                reasoning_efforts: ['low', 'high'], default_reasoning_effort: 'high' },
+            { id: 'simple', name: 'Simple' },
+        ] });
+        if (path.endsWith('/model') && options?.method === 'POST') {
+            const change = JSON.parse(String(options.body));
+            changes.push(change);
+            return jsonResponse(change);
+        }
+    });
+    renderChat();
+    const tier = await screen.findByRole('combobox', { name: 'Agent context tier' });
+    const thinking = await screen.findByRole('combobox', { name: 'Agent thinking level' });
+    expect(tier).toHaveValue('long_context');
+    expect(thinking).toHaveValue('high');
+    expect(within(thinking).queryByRole('option', { name: 'medium' })).not.toBeInTheDocument();
+    fireEvent.change(thinking, { target: { value: 'low' } });
+    await waitFor(() => expect(thinking).toHaveValue('low'));
+    expect(changes[0]).toEqual({ model: 'reasoner', context_tier: 'long_context', reasoning_effort: 'low' });
+    fireEvent.change(tier, { target: { value: 'default' } });
+    await waitFor(() => expect(tier).toHaveValue('default'));
+    expect(changes[1]).toEqual({ model: 'reasoner', context_tier: 'default', reasoning_effort: 'low' });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Agent model' }), { target: { value: 'simple' } });
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Agent thinking level' })).not.toBeInTheDocument());
+    expect(changes[2]).toEqual({ model: 'simple', context_tier: 'default', reasoning_effort: null });
+    expect(within(tier).queryByRole('option', { name: /Long context/ })).not.toBeInTheDocument();
+});
+
+test('Copilot override controls are absent for other connectors', async () => {
+    serve({ ...signedIn, provider: 'openai' });
+    renderChat();
+    await screen.findByRole('combobox', { name: 'Agent model' });
+    expect(screen.queryByRole('combobox', { name: 'Agent context tier' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Agent thinking level' })).not.toBeInTheDocument();
+});
+
+test('stale Copilot options can be explicitly reset to model defaults', async () => {
+    serve({ ...signedIn, context_tier: 'long_context', reasoning_effort: 'high' }, (path, options) => {
+        if (path.endsWith('/model') && options?.method === 'POST') return jsonResponse(JSON.parse(String(options.body)));
+    });
+    renderChat();
+    expect(await screen.findByText(/Saved context or thinking settings are no longer available/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use model defaults' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Use model defaults' })).not.toBeInTheDocument());
+    expect(screen.getByRole('combobox', { name: 'Agent context tier' })).toHaveValue('default');
 });
 
 test('reset confirmation can be cancelled and then saves the preference', async () => {
