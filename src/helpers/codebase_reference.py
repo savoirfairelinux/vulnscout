@@ -30,7 +30,11 @@ PDF_TIMEOUT = 30
 PDF_SIZE_ERROR = "PDF text extraction exceeds its output size limit; provide a smaller document or a text export."
 
 
-class PdfExtractionLimitError(ValueError):
+class SourceLimitError(ValueError):
+    """Source processing exceeded a budget that search must not silently skip."""
+
+
+class PdfExtractionLimitError(SourceLimitError):
     """The PDF exceeded an output or runtime budget."""
 
 
@@ -303,7 +307,7 @@ class CodebaseReference:
                                     "searched_files": searched + 1, "skipped_binary_files": skipped}
                         matches.append({"path": path, "line": number, "text": line.rstrip("\r\n")[:500]})
                 searched += 1
-            except PdfExtractionLimitError:
+            except SourceLimitError:
                 raise
             except ValueError:
                 skipped += 1

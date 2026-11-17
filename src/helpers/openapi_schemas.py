@@ -81,14 +81,13 @@ _VEX_FIELDS = {
 }
 _CONTEXT_FIELDS = {
     name: _TEXT for name in (
-        "variant_description", "codebase_path", "environment", "threat_model", "risks", "other_info",
+        "variant_description", "environment", "threat_model", "risks", "other_info",
     )
 }
 # Variant context fields stored as plain text; the threat model and risks are rendered from STRIDE.
 _CONTEXT_TEXT_FIELDS = {
-    name: _TEXT for name in ("variant_description", "codebase_path", "environment", "other_info")
+    name: _TEXT for name in ("variant_description", "environment", "other_info")
 }
-_CODEBASE_SOURCE = {"type": "string", "enum": ["paths", "references"]}
 _STRIDE_ROWS = {"maxItems": MAX_ROWS}
 _RATING = {"type": "string", "enum": [*RATINGS, None], "nullable": True}
 _EFFORT_KEYS = ("optimistic", "likely", "pessimistic")
@@ -422,6 +421,16 @@ SCHEMAS: dict[str, Any] = {
     "ContextFile": _object({
         "id": _UUID, "original_name": _STRING, "description": _TEXT,
     }, ("id", "original_name", "description")),
+    "CodebaseDirectory": _object({
+        "file_id": {"type": "string", "enum": ["directory"]},
+        "path": _TEXT,
+        "status": {"type": "string", "enum": [
+            "not_created", "ready", "missing", "unreadable", "unavailable",
+        ]},
+        "message": _STRING,
+        "file_count": {**_COUNT, "nullable": True},
+        "directory_count": {**_COUNT, "nullable": True},
+    }, ("file_id", "path", "status", "message", "file_count", "directory_count")),
     "ProjectContext": _object({
         "project_id": _UUID, "description": _TEXT,
     }, ("project_id", "description")),
@@ -451,19 +460,21 @@ SCHEMAS: dict[str, Any] = {
         }, ("id", "threat_ids")), **_STRIDE_ROWS),
     }, description="Structured STRIDE model; rows reference earlier rows by ID."),
     "VariantContextEditor": _object({
-        "codebase_source": _CODEBASE_SOURCE, "codebase_path": _TEXT,
         "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
         "files": _array(_ref("ContextFile")), "updated_at": _DATE,
-    }, ("codebase_source", "codebase_path", "system", "stride", "files", "updated_at"),
-        description="Stored editor values, independent of the selected codebase source."),
+    }, ("system", "stride", "files", "updated_at"),
+        description="Stored system and STRIDE editor values."),
     "VariantContext": _object({
         "variant_id": _UUID, **_CONTEXT_FIELDS, "updated_at": _DATE,
         "files": _array(_ref("ContextFile")), "editor": _ref("VariantContextEditor"),
+        "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
     }, ("variant_id", "files", "editor"),
         description="Top-level fields are what agents see: threat_model and risks are rendered from STRIDE."),
     "MergedContext": _object({
         "project_id": _UUID, "description": _TEXT, "variant_id": _UUID,
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
+        "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
+        "editor": _ref("VariantContextEditor"),
     }, ("project_id", "variant_id", "description", "files")),
     "ScanConfiguration": _object({
         "exclude_native": _BOOL,
@@ -677,17 +688,17 @@ SCHEMAS: dict[str, Any] = {
     "SourceReferenceResult": {
         "anyOf": [
             _object({
-                "file_id": _UUID, "original_name": _STRING,
+                "file_id": _STRING, "original_name": _STRING,
                 "files": _array(_object({"path": _STRING, "size": _COUNT}, ("path", "size"))),
                 "total": _COUNT, "next_offset": {**_COUNT, "nullable": True},
             }, ("file_id", "original_name", "files", "total", "next_offset")),
             _object({
-                "file_id": _UUID, "original_name": _STRING, "path": _STRING, "content": _STRING,
+                "file_id": _STRING, "original_name": _STRING, "path": _STRING, "content": _STRING,
                 "start_line": _INT, "end_line": _INT, "total_lines": _COUNT,
                 "next_line": {**_INT, "nullable": True},
             }, ("file_id", "original_name", "path", "content", "start_line", "end_line", "total_lines", "next_line")),
             _object({
-                "file_id": _UUID, "original_name": _STRING, "truncated": _BOOL,
+                "file_id": _STRING, "original_name": _STRING, "truncated": _BOOL,
                 "searched_files": _COUNT, "skipped_binary_files": _COUNT,
                 "matches": _array(_object({"path": _STRING, "line": _INT, "text": _STRING}, ("path", "line", "text"))),
             }, ("file_id", "original_name", "matches", "truncated", "searched_files", "skipped_binary_files")),
@@ -696,7 +707,7 @@ SCHEMAS: dict[str, Any] = {
     "ContextExportProject": _object({
         "project_name": _STRING, "project_description": _TEXT,
         "variants": _array(_object({
-            "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS, "codebase_source": _CODEBASE_SOURCE,
+            "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS,
             "system": _ref("ContextSystem"), "stride_model": _ref("StrideModel"),
             "files": _array(
                 _object({"original_name": _STRING, "description": _TEXT}, ("original_name", "description")),
@@ -705,7 +716,7 @@ SCHEMAS: dict[str, Any] = {
         }, ("variant_name",))),
     }, ("project_name", "project_description", "variants")),
     "ContextExport": _object({
-        "version": {"type": "string", "example": "2.1"},
+        "version": {"type": "string", "example": "3.0"},
         "exported_at": _DATE, "projects": _array(_ref("ContextExportProject")),
     }, ("version", "exported_at", "projects")),
     "ContextImportEntry": _object({"project_name": _TEXT, "variant_name": _TEXT, "reason": _STRING}),
@@ -929,13 +940,12 @@ SCHEMAS.update({
     }, ("status", "op_id")),
     "ProjectContextUpdate": _object({"description": _TEXT}),
     "VariantContextUpdate": _object({
-        **_CONTEXT_TEXT_FIELDS, "codebase_source": _CODEBASE_SOURCE,
+        **_CONTEXT_TEXT_FIELDS,
         "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
     }, description=(
-        "With stride, an editor save storing every field (codebase_source required; the STRIDE "
+        "With stride, an editor save storing every field (the STRIDE "
         "model must describe a threat model). Without stride, a full replacement of the text fields; "
-        "threat_model and risks are read-only, and a new context uses codebase_source paths when "
-        "codebase_path is given, otherwise references."
+        "threat_model and risks are read-only. Source code is accessed through the variant's directory."
     )),
     "SbomUploadAccepted": _object({
         "op_id": _STRING, "scan_id": _UUID, "message": _STRING,

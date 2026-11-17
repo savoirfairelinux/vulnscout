@@ -13,9 +13,8 @@ beforeEach(() => fetchMock.resetMocks());
 function ctxWithEditor(editor: Partial<MergedContext['editor']> = {}): MergedContext {
     return {
         project_id: 'p1', description: null, variant_id: 'v1', variant_description: 'VD',
-        codebase_path: null, environment: null, threat_model: null, risks: null, other_info: null,
+        environment: null, threat_model: null, risks: null, other_info: null,
         editor: {
-            codebase_source: 'paths', codebase_path: null,
             system: { scope: null, actors: null, entry_points: null, trust_boundaries: null },
             stride: emptyStrideModel(), files: [], updated_at: null,
             ...editor,
@@ -47,23 +46,20 @@ describe('constants', () => {
 });
 
 describe('drafts', () => {
-    test('emptyDraft defaults to the references source and an empty STRIDE model', () => {
+    test('emptyDraft has no legacy source settings and an empty STRIDE model', () => {
         const d = emptyDraft();
-        expect(d.codebase_source).toBe('references');
-        expect(d.codebase_paths).toEqual([]);
+        expect(d).not.toHaveProperty('codebase_source');
+        expect(d).not.toHaveProperty('codebase_paths');
         expect(d.stride).toEqual(emptyStrideModel());
     });
 
     test('draftFromContext maps nulls to empty strings and reads the editor block', () => {
         const d = draftFromContext(ctxWithEditor({
-            codebase_source: 'references', codebase_path: ' /src/a;;/src/b ;',
             system: { scope: 'S', actors: null, entry_points: null, trust_boundaries: null },
         }));
         expect(d.variant_description).toBe('VD');
         expect(d.environment).toBe('');
         expect(d.other_info).toBe('');
-        expect(d.codebase_source).toBe('references');
-        expect(d.codebase_paths).toEqual(['/src/a', '/src/b']);
         expect(d.system).toEqual({ scope: 'S', actors: '', entry_points: '', trust_boundaries: '' });
     });
 
@@ -155,7 +151,6 @@ describe('Context.saveVariantEditor', () => {
         fetchMock.mockResponseOnce(JSON.stringify(ctxWithEditor()));
         const draft = {
             ...emptyDraft(), variant_description: ' ', environment: '', other_info: 'info',
-            codebase_paths: ['', ' '],
         };
         await Context.saveVariantEditor('v 1', draft);
         const [url, init] = fetchMock.mock.calls[0];
@@ -165,18 +160,12 @@ describe('Context.saveVariantEditor', () => {
         expect(body.variant_description).toBeNull();
         expect(body.environment).toBeNull();
         expect(body.other_info).toBe('info');
-        expect(body.codebase_path).toBeNull();
+        expect(body).not.toHaveProperty('codebase_path');
         expect(body.system).toEqual({ scope: null, actors: null, entry_points: null, trust_boundaries: null });
         expect(body).not.toHaveProperty('editor_mode');
         expect(body).not.toHaveProperty('free');
-        expect(body.codebase_source).toBe('references');
+        expect(body).not.toHaveProperty('codebase_source');
         expect(body.stride).toEqual(emptyStrideModel());
-    });
-
-    test('joins the trimmed non-blank codebase paths with ";"', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify(ctxWithEditor()));
-        await Context.saveVariantEditor('v1', { ...emptyDraft(), codebase_paths: [' /src/a ', '', '/src/b'] });
-        expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).codebase_path).toBe('/src/a;/src/b');
     });
 
     test('returns the saved variant context on success', async () => {

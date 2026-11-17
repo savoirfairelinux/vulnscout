@@ -505,7 +505,6 @@ def test_stride_editor_save_matches_context_contracts(client, contract_data):
     spec = client.get("/api/openapi").get_json()
     payload = {
         "variant_description": "Gateway", "environment": None, "other_info": None,
-        "codebase_source": "paths", "codebase_path": "/src",
         "system": {"scope": "Gateway firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
         "stride": {
             "components": [{"id": "C1", "name": "Web UI"}, {"id": "C2", "name": "Daemon"}],

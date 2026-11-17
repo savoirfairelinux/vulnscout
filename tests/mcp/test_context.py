@@ -153,23 +153,22 @@ class TestGetMergedContextImpl:
                         "description": "proj desc",
                         "variant_id": "v1",
                         "variant_description": "var desc",
-                        "codebase_path": "/src/app",
+                        "codebase_directory": {"file_id": "directory", "path": "/cache/source"},
                         "environment": "linux",
                         "threat_model": "CVSS >= 7",
                         "risks": "none",
                         "other_info": "n/a",
                         "files": [{"id": "f1", "original_name": "report.pdf"}],
-                        "editor": {"codebase_source": "references"},
                     },
                 )
             )
             result = _get_merged_context_impl(client, "p1", "v1")
         assert "proj desc" in result
         assert "var desc" in result
-        assert "/src/app" in result
+        assert "/cache/source" in result
         assert "CVSS >= 7" in result
         assert "report.pdf" in result
-        assert "codebase_source=references" in result
+        assert "codebase_source=" not in result and "codebase_path=" not in result
 
     def test_returns_no_files_placeholder_when_empty(self, client):
         with respx.mock:
@@ -258,32 +257,28 @@ class TestUpdateVariantContextImpl:
                     json={
                         "variant_id": "v1",
                         "variant_description": None,
-                        "codebase_path": "/repo/src",
                         "environment": None,
                         "threat_model": "CVSS >= 7",
                         "risks": None,
                         "other_info": None,
                         "files": [],
-                        "editor": {"codebase_source": "paths"},
                     },
                 )
             )
             result = _update_variant_context_impl(
                 client,
                 "v1",
-                codebase_path="/repo/src",
+                environment="Linux",
             )
         body = json.loads(route.calls[0].request.content)
         # All fields are always sent, even when None, per full-replacement semantics.
         assert body == {
             "variant_description": None,
-            "codebase_path": "/repo/src",
-            "environment": None,
+            "environment": "Linux",
             "other_info": None,
         }
         assert "threat_model=CVSS >= 7" in result
-        assert "codebase_path=/repo/src" in result
-        assert "codebase_source=paths" in result
+        assert "codebase_path=" not in result and "codebase_source=" not in result
 
     def test_api_error_returns_error_string(self, client):
         with respx.mock:
@@ -294,12 +289,11 @@ class TestUpdateVariantContextImpl:
         assert result == "Error: Variant not found"
 
 
-def _saved_context(stride, system=None, codebase_source="paths", codebase_path="/src"):
+def _saved_context(stride, system=None):
     return {
         "project_id": "p1", "variant_id": "v1", "variant_description": "Board A",
-        "codebase_path": codebase_path, "environment": "LAN only", "other_info": None,
+        "environment": "LAN only", "other_info": None,
         "editor": {
-            "codebase_source": codebase_source, "codebase_path": codebase_path,
             "system": system or {"scope": "Gateway", "actors": None, "entry_points": None,
                                  "trust_boundaries": None},
             "stride": stride, "updated_at": "2026-11-10T00:00:00Z",
@@ -360,9 +354,9 @@ class TestVariantThreatModel:
         body = json.loads(route.calls[0].request.content)
         _editor_values(body)
         assert {key: body[key] for key in (
-            "variant_description", "environment", "other_info", "codebase_source", "codebase_path",
-        )} == {"variant_description": "Board A", "environment": "LAN only", "other_info": None,
-               "codebase_source": "paths", "codebase_path": "/src"}
+            "variant_description", "environment", "other_info",
+        )} == {"variant_description": "Board A", "environment": "LAN only", "other_info": None}
+        assert not {"codebase_source", "codebase_path"} & body.keys()
         assert body["system"] == {"scope": None, "actors": "Operator", "entry_points": None,
                                   "trust_boundaries": None}
         stride = body["stride"]
@@ -380,7 +374,6 @@ class TestVariantThreatModel:
         with respx.mock:
             respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(
                 200, json={"project_id": "p1", "variant_id": "v1", "files": [], "editor": {
-                    "codebase_source": "references", "codebase_path": None,
                     "system": {"scope": None, "actors": None, "entry_points": None, "trust_boundaries": None},
                     "stride": {"components": [], "interactions": [], "threats": [], "risks": []},
                 }}))
@@ -389,7 +382,7 @@ class TestVariantThreatModel:
             _update_variant_threat_model_impl(client, "p1", "v1", system={"scope": "Gateway"})
         body = json.loads(route.calls[0].request.content)
         _editor_values(body)
-        assert body["codebase_source"] == "references" and body["system"]["scope"] == "Gateway"
+        assert body["system"]["scope"] == "Gateway"
 
     @pytest.mark.parametrize("kwargs, message", [
         ({"remove_ids": ["C9"]}, "Cannot remove unknown ids: C9."),
@@ -435,8 +428,8 @@ class TestVariantThreatModel:
 
 class TestAiContextFormGuide:
     LABELS = (
-        "Project description", "Variant description", "Codebase source", "Codebase references",
-        "Codebase paths", "Environment", "Other information", "System scope and assets",
+        "Project description", "Variant description", "Codebase directory", "Create codebase directory",
+        "Refresh directory status", "Environment", "Other information", "System scope and assets",
         "Actors and access", "Entry points and data flows", "Trust boundaries", "Components",
         "Interactions", "Description / role", "Trust zone", "Interface / protocol", "Data / commands",
         "Trust boundary", "Threats", "STRIDE category", "Targets", "Risks", "Likelihood", "Impact",
@@ -491,7 +484,7 @@ class TestAiContextImportSkill:
     ROOT = Path(__file__).resolve().parents[2]
     SKILL_DIR = ROOT / ".github/skills/ai-context-import"
     FORM_LABELS = tuple(label for label in TestAiContextFormGuide.LABELS
-                        if label not in ("Codebase references", "Codebase paths")) + (
+                        if label not in ("Create codebase directory", "Refresh directory status")) + (
         "Description", "Source", "Destination", "Not rated",
     )
 
@@ -541,7 +534,6 @@ class TestAiContextImportSkill:
         assert set(example) == {"project_id", "variant_id", *sections}
         _editor_values({
             "variant_description": None, "environment": None, "other_info": None,
-            "codebase_source": "references", "codebase_path": None,
             "system": {key: None for key in ("scope", "actors", "entry_points", "trust_boundaries")},
             "stride": {section: example[section] for section in sections},
         })

@@ -5,7 +5,6 @@ type ProjectContext = {
 
 type VariantContextData = {
     variant_description: string | null;
-    codebase_path: string | null;
     environment: string | null;
     threat_model: string | null;
     risks: string | null;
@@ -15,10 +14,18 @@ type VariantContextData = {
 type VariantContext = VariantContextData & {
     variant_id: string;
     files?: ContextFile[];
+    codebase_directory?: Pick<CodebaseDirectory, 'file_id' | 'path'> | null;
     editor: VariantEditorData;
 };
 
-type CodebaseSource = 'paths' | 'references';
+type CodebaseDirectory = {
+    file_id: 'directory';
+    path: string | null;
+    status: 'not_created' | 'ready' | 'missing' | 'unreadable' | 'unavailable';
+    message: string;
+    file_count: number | null;
+    directory_count: number | null;
+};
 type Rating = 'low' | 'medium' | 'high' | null;
 
 type StrideComponent = { id: string; name: string; description: string; trust_zone: string };
@@ -61,8 +68,6 @@ type SystemFields = {
 
 /** Editor-shaped view of a variant's context, as returned by the backend. */
 type VariantEditorData = {
-    codebase_source: CodebaseSource;
-    codebase_path: string | null;
     system: SystemFields;
     stride: StrideModel;
     files: ContextFile[];
@@ -74,8 +79,6 @@ type VariantDraft = {
     variant_description: string;
     environment: string;
     other_info: string;
-    codebase_source: CodebaseSource;
-    codebase_paths: string[];
     system: Record<keyof SystemFields, string>;
     stride: StrideModel;
 };
@@ -119,10 +122,8 @@ type MergedContext = ProjectContext & VariantContext;
 type VariantEntry = {
     variant_name: string;
     variant_description: string | null;
-    codebase_path: string | null;
     environment: string | null;
     other_info: string | null;
-    codebase_source: CodebaseSource;
     system: SystemFields;
     stride_model: StrideModel;
     /** Uploaded references by name only; ignored on import. */
@@ -161,7 +162,6 @@ export type {
     ImportResult,
     ContextExport,
     ContextFile,
-    CodebaseSource,
     Rating,
     StrideComponent,
     StrideInteraction,
@@ -175,6 +175,7 @@ export type {
     AiDraftConflict,
     AiContextDraft,
     ImportSource,
+    CodebaseDirectory,
 };
 
 /** Rejected variant save; `fields` maps field paths to validation messages. */
@@ -193,17 +194,6 @@ class ContextSaveError extends Error {
 export { ContextSaveError };
 
 const blankToNull = (value: string): string | null => (value.trim() === '' ? null : value);
-
-/** Several codebase paths travel as one ";"-separated string. */
-const CODEBASE_PATH_SEPARATOR = ';';
-
-export function splitCodebasePaths(value: string | null): string[] {
-    return (value ?? '').split(CODEBASE_PATH_SEPARATOR).map(p => p.trim()).filter(p => p !== '');
-}
-
-export function joinCodebasePaths(paths: string[]): string | null {
-    return blankToNull(paths.map(p => p.trim()).filter(p => p !== '').join(CODEBASE_PATH_SEPARATOR));
-}
 
 type ErrorReply = { error?: string; fields?: Record<string, string> };
 
@@ -285,6 +275,14 @@ class Context {
         return jsonOrThrow<MergedContext>(res, 'Failed to load context');
     }
 
+    static async getDirectory(variantId: string, create = false): Promise<CodebaseDirectory> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/directory`,
+            { mode: 'cors', method: create ? 'POST' : 'GET' }
+        );
+        return jsonOrThrow<CodebaseDirectory>(res, 'Failed to load codebase directory');
+    }
+
     static async getProject(projectId: string): Promise<ProjectContext> {
         const res = await fetch(
             `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/context`,
@@ -311,8 +309,6 @@ class Context {
             variant_description: blankToNull(draft.variant_description),
             environment: blankToNull(draft.environment),
             other_info: blankToNull(draft.other_info),
-            codebase_source: draft.codebase_source,
-            codebase_path: joinCodebasePaths(draft.codebase_paths),
             system: {
                 scope: blankToNull(draft.system.scope),
                 actors: blankToNull(draft.system.actors),

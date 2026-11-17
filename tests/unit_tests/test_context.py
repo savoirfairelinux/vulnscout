@@ -127,13 +127,6 @@ class TestVariantContextModel:
         assert vc.other_info == "New"
         assert vc.environment is None
 
-    def test_upsert_codebase_path(self, app, variant):
-        from src.models.variant_context import VariantContext
-        vc = VariantContext.upsert(variant.id, codebase_path="/home/user/src/proj")
-        assert vc.codebase_path == "/home/user/src/proj"
-        vc = VariantContext.upsert(variant.id, codebase_path=None)
-        assert vc.codebase_path is None
-
     def test_updated_at_none_for_empty_context(self, app, variant):
         from src.models.variant_context import VariantContext
         vc = VariantContext.upsert(variant.id)
@@ -176,13 +169,14 @@ class TestVariantContextModel:
 
     def test_to_dict(self, app, variant):
         from src.models.variant_context import VariantContext
-        vc = VariantContext.upsert(variant.id, environment="E", codebase_path="/src")
+        vc = VariantContext.upsert(variant.id, environment="E")
         d = vc.to_dict()
         assert d["variant_id"] == str(variant.id)
         assert d["environment"] == "E"
         assert d["threat_model"] is None
         assert d["risks"] is None
-        assert d["codebase_path"] == "/src"
+        assert not {"codebase_source", "codebase_path"} & d.keys()
+        assert not {"codebase_source", "codebase_path"} & d["editor"].keys()
         assert d["files"] == []
 
 
@@ -285,11 +279,6 @@ class TestVariantContextController:
         vc = VariantContextController.upsert(str(variant.id), environment=None)
         assert vc.environment is None
 
-    def test_upsert_codebase_path(self, app, variant):
-        from src.controllers.context import VariantContextController
-        vc = VariantContextController.upsert(str(variant.id), codebase_path="/home/user/src")
-        assert vc.codebase_path == "/home/user/src"
-
     def test_get_or_create_creates_row(self, app, variant):
         from src.controllers.context import VariantContextController
         vc = VariantContextController.get_or_create(str(variant.id))
@@ -330,7 +319,7 @@ class TestGetMergedContext:
         from src.models.project_context import ProjectContext
         from src.models.variant_context import VariantContext
         ProjectContext.upsert(project.id, description="proj desc")
-        VariantContext.upsert(variant.id, environment="Linux", codebase_path="/src/repo")
+        VariantContext.upsert(variant.id, environment="Linux")
         resp = client.get(
             f"/api/context?project_id={project.id}&variant_id={variant.id}"
         )
@@ -338,7 +327,7 @@ class TestGetMergedContext:
         data = resp.get_json()
         assert data["description"] == "proj desc"
         assert data["environment"] == "Linux"
-        assert data["codebase_path"] == "/src/repo"
+        assert "codebase_path" not in data
 
     def test_400_when_project_id_missing(self, client, variant):
         resp = client.get(f"/api/context?variant_id={variant.id}")
@@ -446,17 +435,18 @@ class TestPutVariantContext:
         )
         assert resp.get_json()["environment"] is None
 
-    def test_codebase_path_saved_and_cleared(self, client, variant):
+    @pytest.mark.parametrize("editor", [False, True])
+    def test_removed_codebase_fields_are_not_persisted_or_returned(self, client, variant, editor):
+        from src.models.variant_context import VariantContext
         resp = client.put(
             f"/api/variants/{variant.id}/context",
-            json={"codebase_path": "/home/user/src/proj"},
+            json={**(_editor_payload() if editor else {"environment": "Linux"}),
+                  "codebase_source": "paths", "codebase_path": "/home/user/src/proj"},
         )
-        assert resp.get_json()["codebase_path"] == "/home/user/src/proj"
-        resp = client.put(
-            f"/api/variants/{variant.id}/context",
-            json={"codebase_path": None},
-        )
-        assert resp.get_json()["codebase_path"] is None
+        assert resp.status_code == 200
+        assert not {"codebase_source", "codebase_path"} & resp.get_json().keys()
+        assert not {"codebase_source", "codebase_path"} & resp.get_json()["editor"].keys()
+        assert not {"codebase_source", "codebase_path"} & set(VariantContext.__table__.columns.keys())
 
     def test_404_when_variant_not_found(self, client):
         resp = client.put(
@@ -766,13 +756,397 @@ def _editor_payload(**overrides):
         "variant_description": "Gateway",
         "environment": "Linux",
         "other_info": None,
-        "codebase_source": "paths",
-        "codebase_path": "/src/a;/src/b",
         "system": {"scope": "Firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
         "stride": _stride_model(),
     }
     payload.update(overrides)
     return payload
+
+
+class TestCodebaseDirectory:
+
+    @pytest.fixture
+    def directory(self, client, variant, tmp_path, monkeypatch):
+        from pathlib import Path
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        response = client.post(f"/api/variants/{variant.id}/context/directory")
+        assert response.status_code == 200
+        return Path(response.get_json()["path"])
+
+    def _source(self, client, variant, **params):
+        return client.get(f"/api/variants/{variant.id}/context/files/directory/source", query_string=params)
+
+    def _select(self, client, variant):
+        response = client.put(f"/api/variants/{variant.id}/context", json=_editor_payload())
+        assert response.status_code == 200
+        return response.get_json()
+
+    def test_on_demand_provisioning_preserves_draft_fields_and_exposes_directory(
+        self, client, project, variant, tmp_path, monkeypatch,
+    ):
+        from pathlib import Path
+        from src.models.variant_context import VariantContext
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        url = f"/api/variants/{variant.id}/context/directory"
+        assert client.get(url).get_json()["status"] == "not_created"
+        assert list(tmp_path.iterdir()) == []
+        assert VariantContext.get_by_variant(variant.id) is None
+        vc = VariantContext.save_editor(variant.id, _editor_payload())
+        before = vc.to_dict()
+        created = client.post(url)
+        path = Path(created.get_json()["path"])
+        assert path.is_dir() and path.parent == tmp_path
+        assert path.name == "context-TestProject-TestVariant"
+        assert created.get_json()["status"] == "unavailable"
+        assert created.get_json()["file_count"] == 0
+        assert created.get_json()["directory_count"] == 0
+        assert "empty" in created.get_json()["message"]
+        after = vc.to_dict()
+        assert after["updated_at"] != before["updated_at"]
+        assert after["editor"] == {
+            **before["editor"], "updated_at": after["updated_at"],
+        }
+        for field in ("variant_description", "environment", "other_info", "threat_model", "risks"):
+            assert after[field] == before[field]
+        assert after["codebase_directory"] == {"file_id": "directory", "path": str(path)}
+        assert client.post(url).get_json()["path"] == str(path)
+        assert vc.to_dict()["updated_at"] == after["updated_at"]
+        (path / "main.c").write_text("source")
+        assert client.get(url).get_json()["status"] == "ready"
+
+    def test_refreshed_counts_exclude_sensitive_files_and_links(self, client, variant, directory):
+        url = f"/api/variants/{variant.id}/context/directory"
+        (directory / "src").mkdir()
+        (directory / "src" / "empty").mkdir()
+        empty = client.get(url).get_json()
+        assert empty["file_count"] == 0 and empty["directory_count"] == 2
+        (directory / "src" / "main.c").write_text("source")
+        (directory / ".git").mkdir()
+        (directory / ".git" / "config").write_text("excluded")
+        (directory / "secret.txt").write_text("excluded")
+        (directory / "linked-src").symlink_to(directory / "src", target_is_directory=True)
+        (directory / "link.c").symlink_to(directory / "src" / "main.c")
+        first = client.get(url).get_json()
+        assert first["file_count"] == 1 and first["directory_count"] == 2
+        (directory / "README.md").write_text("readme")
+        (directory / "docs").mkdir()
+        refreshed = client.get(url).get_json()
+        assert refreshed["file_count"] == 2 and refreshed["directory_count"] == 3
+
+    def test_directory_is_discovered_from_mcp_without_source_selection(
+        self, client, project, variant, directory,
+    ):
+        from src.models.variant_context import VariantContext
+        from vulnscout_mcp.tools.context import _fmt_merged_context
+        VariantContext.save_editor(variant.id, _editor_payload())
+        (directory / "main.c").write_text("needle\n")
+        status = client.get(f"/api/variants/{variant.id}/context/directory").get_json()
+        assert status["status"] == "ready" and status["file_count"] == 1
+        merged = client.get("/api/context", query_string={"project_id": project.id, "variant_id": variant.id}).get_json()
+        text = _fmt_merged_context(merged)
+        assert "codebase_directory=" in text
+        assert "codebase_source=" not in text and "codebase_path=" not in text
+        assert merged["codebase_directory"] == {"file_id": "directory", "path": str(directory)}
+        assert self._source(client, variant).get_json()["files"] == [{"path": "main.c", "size": 7}]
+        assert self._source(client, variant, operation="read", path="main.c").get_json()["content"] == "needle\n"
+        assert self._source(client, variant, operation="search", query="needle").get_json()["matches"] == [
+            {"path": "main.c", "line": 1, "text": "needle"},
+        ]
+
+    def test_directory_uses_existing_tools_and_preserves_attachments(self, client, project, variant, directory):
+        from io import BytesIO
+        (directory / "main.c").write_text("first\nneedle\nlast\n")
+        uploaded = client.post(f"/api/variants/{variant.id}/context/files",
+                               data={"file": (BytesIO(b"upload"), "upload.c")}).get_json()
+        assert self._source(client, variant).status_code == 200
+        unsaved = client.get("/api/context", query_string={"project_id": project.id, "variant_id": variant.id}).get_json()
+        assert unsaved["threat_model"] is None
+        assert unsaved["codebase_directory"] == {"file_id": "directory", "path": str(directory)}
+        selected = self._select(client, variant)
+        assert selected["files"] == [uploaded]
+        assert selected["codebase_directory"] == {"file_id": "directory", "path": str(directory)}
+        assert selected["editor"]["files"] == [uploaded]
+        merged = client.get("/api/context", query_string={"project_id": project.id, "variant_id": variant.id}).get_json()
+        assert merged["codebase_directory"] == selected["codebase_directory"]
+        assert self._source(client, variant).get_json()["files"] == [{"path": "main.c", "size": 18}]
+        assert self._source(client, variant, operation="read", path="main.c", start_line=2,
+                            max_lines=1).get_json()["content"] == "needle\n"
+        assert self._source(client, variant, operation="search", query="needle").get_json()["matches"] == [
+            {"path": "main.c", "line": 2, "text": "needle"},
+        ]
+        assert self._source(client, variant, operation="read", path="../outside").status_code == 404
+        other = Variant.create("Other", variant.project_id)
+        assert self._source(client, other).status_code == 404
+        updated = client.put(f"/api/variants/{variant.id}/context", json={"environment": "New environment"})
+        assert updated.get_json()["codebase_directory"] == selected["codebase_directory"]
+        assert self._source(client, variant).status_code == 200
+
+    def test_missing_and_unreadable_directory_are_explicit(self, client, variant, directory):
+        self._select(client, variant)
+        assert "empty" in self._source(client, variant).get_json()["error"]
+        directory.rmdir()
+        url = f"/api/variants/{variant.id}/context/directory"
+        assert client.get(url).get_json()["status"] == "missing"
+        assert client.get(url).get_json()["file_count"] is None
+        assert client.get(url).get_json()["directory_count"] is None
+        response = self._source(client, variant)
+        assert response.status_code == 400 and "missing or unreadable" in response.get_json()["error"]
+        assert client.post(url).status_code == 200
+        with patch("src.helpers.codebase_directory.os.scandir", side_effect=PermissionError("denied")):
+            body = client.get(url).get_json()
+            assert body["status"] == "unreadable"
+            assert body["file_count"] is None and body["directory_count"] is None
+            assert self._source(client, variant).status_code == 400
+
+    def test_renames_keep_existing_path(self, client, project, variant, directory):
+        url = f"/api/variants/{variant.id}/context/directory"
+        project.update("Renamed")
+        variant.update("Renamed")
+        assert client.post(url).get_json()["path"] == str(directory)
+
+    @pytest.mark.parametrize("first,second", [
+        (("demo", "board@dev"), ("demo", "board-dev")),
+        (("demo", "x" * 48 + "a"), ("demo", "x" * 48 + "b")),
+        (("a-b", "c"), ("a", "b-c")),
+    ])
+    def test_colliding_directory_names_cannot_share_source(self, client, tmp_path, monkeypatch, first, second):
+        from pathlib import Path
+        from src.models.variant_context import VariantContext
+
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        project = Project.create(first[0])
+        first_variant = Variant.create(first[1], project.id)
+        other_project = project if second[0] == first[0] else Project.create(second[0])
+        other_variant = Variant.create(second[1], other_project.id)
+        created = client.post(f"/api/variants/{first_variant.id}/context/directory")
+        assert created.status_code == 200
+        root = Path(created.get_json()["path"])
+        (root / "main.c").write_text("first variant only")
+        response = client.post(f"/api/variants/{other_variant.id}/context/directory")
+        assert response.status_code == 409
+        assert "already assigned" in response.get_json()["error"]
+        other_context = VariantContext.get_by_variant(other_variant.id)
+        assert other_context.codebase_directory is None and other_context.updated_at is None
+        assert self._source(client, other_variant).status_code == 404
+        assert self._source(client, first_variant, operation="read", path="main.c").get_json()["content"] == (
+            "first variant only"
+        )
+
+    def test_concurrent_directory_claim_preserves_losing_context(self, client, project, variant, tmp_path, monkeypatch):
+        from src.helpers.codebase_directory import provision_directory
+        from src.models.variant_context import VariantContext
+
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        vc = VariantContext.save_editor(variant.id, _editor_payload())
+        before = vc.to_dict()
+        other = Variant.create(f"{variant.name}@", project.id)
+
+        def claim_directory(cache_dir, name):
+            provision_directory(cache_dir, name)
+            winner = VariantContext.get_or_create(other.id)
+            winner.codebase_directory = name
+            _db.session.commit()
+
+        with patch("src.routes.context.provision_directory", side_effect=claim_directory):
+            response = client.post(f"/api/variants/{variant.id}/context/directory")
+        assert response.status_code == 409
+        assert "already assigned" in response.get_json()["error"]
+        assert VariantContext.get_by_variant(variant.id).to_dict() == before
+        assert VariantContext.get_by_variant(other.id).codebase_directory == "context-TestProject-TestVariant"
+        assert self._source(client, variant).status_code == 404
+
+    def test_existing_uuid_directory_is_not_moved_or_renamed(self, client, variant, tmp_path, monkeypatch):
+        from src.helpers.codebase_directory import provision_directory
+        from src.models.variant_context import VariantContext
+
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        name = f"context-TestProject-TestVariant-{variant.id}"
+        provision_directory(str(tmp_path), name)
+        root = tmp_path / name
+        (root / "main.c").write_text("existing mount")
+        vc = VariantContext.get_or_create(variant.id)
+        vc.codebase_directory = name
+        _db.session.commit()
+        response = client.post(f"/api/variants/{variant.id}/context/directory")
+        assert response.status_code == 200 and response.get_json()["path"] == str(root)
+        assert not (tmp_path / "context-TestProject-TestVariant").exists()
+        assert self._source(client, variant, operation="read", path="main.c").get_json()["content"] == "existing mount"
+
+    @pytest.mark.parametrize("delete_project", [False, True])
+    def test_deletion_retains_admin_source_and_recreation_reuses_portable_name(
+        self, client, project, variant, directory, delete_project,
+    ):
+        (directory / "main.c").write_text("keep")
+        original_id = variant.id
+        project_name, variant_name = project.name, variant.name
+        if delete_project:
+            project.delete()
+            project = Project.create(project_name)
+        else:
+            variant.delete()
+        assert client.get(f"/api/variants/{original_id}/context/directory").status_code == 404
+        other = Variant.create(variant_name, project.id)
+        created = client.post(f"/api/variants/{other.id}/context/directory")
+        assert created.status_code == 200 and created.get_json()["path"] == str(directory)
+        assert other.id != original_id
+        assert (directory / "main.c").read_text() == "keep"
+        assert self._source(client, other, operation="read", path="main.c").get_json()["content"] == "keep"
+
+    def test_incomplete_scan_does_not_report_partial_counts(self, client, variant, directory, monkeypatch):
+        from src.helpers import codebase_directory
+        (directory / "src").mkdir()
+        (directory / "src" / "main.c").write_text("source")
+        monkeypatch.setattr(codebase_directory, "MAX_ENTRIES", 1)
+        body = client.get(f"/api/variants/{variant.id}/context/directory").get_json()
+        assert body["status"] == "unavailable"
+        assert "limit" in body["message"]
+        assert body["file_count"] is None and body["directory_count"] is None
+
+    def test_source_response_and_parameter_limits(self, client, variant, directory, monkeypatch):
+        from src.helpers import codebase_reference
+        self._select(client, variant)
+        (directory / "main.c").write_text("needle " + "x" * 1000)
+        monkeypatch.setattr(codebase_reference, "MAX_RESPONSE_BYTES", 400)
+        response = self._source(client, variant, operation="search", query="needle")
+        assert response.status_code == 400 and "64 KB" in response.get_json()["error"]
+        for params in ({"limit": 201}, {"offset": -1}, {"operation": "search", "query": ""},
+                       {"operation": "read", "path": "main.c", "max_lines": 201}, {"operation": "bad"}):
+            assert self._source(client, variant, **params).status_code == 400
+
+    def test_unprovisioned_directory_and_unknown_variants(self, client, variant):
+        body = client.get(f"/api/variants/{variant.id}/context/directory").get_json()
+        assert body["file_count"] is None and body["directory_count"] is None
+        self._select(client, variant)
+        assert self._source(client, variant).status_code == 404
+        assert client.post("/api/variants/bad/context/directory").status_code == 400
+        assert client.post(f"/api/variants/{uuid.uuid4()}/context/directory").status_code == 404
+        assert self._source(client, Variant(id=uuid.uuid4(), name="Missing", project_id=variant.project_id)
+                            ).status_code == 404
+
+    @pytest.mark.parametrize("concurrent_edit", [False, True])
+    def test_failed_provision_preserves_source_and_context_changes(
+        self, client, project, variant, tmp_path, monkeypatch, concurrent_edit,
+    ):
+        from io import BytesIO
+        from src.models.variant_context import VariantContext
+
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        VariantContext.save_editor(variant.id, _editor_payload())
+        uploaded = client.post(f"/api/variants/{variant.id}/context/files", data={
+            "file": (BytesIO(b"working source"), "main.c"),
+        }).get_json()
+        context_url = "/api/context"
+        scope = {"project_id": project.id, "variant_id": variant.id}
+        expected = client.get(context_url, query_string=scope).get_json()
+
+        def fail_provision(cache_dir, name):
+            if concurrent_edit:
+                updated = VariantContext.save_editor(
+                    variant.id, _editor_payload(environment="Concurrent edit"),
+                )
+                expected["environment"] = "Concurrent edit"
+                expected["editor"] = {**expected["editor"], "updated_at": updated.to_dict()["updated_at"]}
+            raise PermissionError("denied")
+
+        url = f"/api/variants/{variant.id}/context/directory"
+        with patch("src.routes.context.provision_directory", side_effect=fail_provision):
+            response = client.post(url)
+        assert response.status_code == 500
+        assert client.get(context_url, query_string=scope).get_json() == expected
+        assert VariantContext.get_by_variant(variant.id).codebase_directory is None
+        assert client.get(url).get_json()["status"] == "not_created"
+        read = client.get(f"/api/variants/{variant.id}/context/files/{uploaded['id']}/source",
+                          query_string={"operation": "read", "path": "main.c"})
+        assert read.status_code == 200 and read.get_json()["content"] == "working source"
+
+    def test_provisioning_errors_are_reported(self, client, variant, tmp_path, monkeypatch):
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        with patch("src.routes.context.provision_directory", side_effect=PermissionError("denied")):
+            response = client.post(f"/api/variants/{variant.id}/context/directory")
+        assert response.status_code == 500
+        assert "ownership and permissions" in response.get_json()["error"]
+
+    def test_context_transfer_does_not_transfer_directory_storage(self, client, project, variant, directory):
+        from src.models.variant_context import VariantContext
+        self._select(client, variant)
+        client.put(f"/api/projects/{project.id}/context", json={"description": "Project"})
+        exported = client.get("/api/context/export", query_string={"variant_ids": str(variant.id)}).get_json()
+        entry = exported["projects"][0]["variants"][0]
+        assert not {"codebase_source", "codebase_path", "codebase_directory"} & entry.keys()
+        other = Variant.create("Other", project.id)
+        entry["variant_name"] = other.name
+        response = client.post("/api/context/import", json=exported)
+        assert response.status_code == 200 and len(response.get_json()["imported"]) == 1
+        vc = VariantContext.get_by_variant(other.id)
+        assert vc.codebase_directory is None
+        assert self._source(client, other).status_code == 404
+        assert directory.is_dir()
+
+    @pytest.mark.parametrize("with_directory", [False, True])
+    def test_directory_migration_preserves_evidence_and_enforces_unique_names(self, with_directory):
+        import importlib
+        import sqlalchemy as sa
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+
+        migration = importlib.import_module("src.migrations.versions.df135a79b246_directory_codebase_context")
+        engine = sa.create_engine("sqlite://")
+        with engine.begin() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.exec_driver_sql(
+                "CREATE TABLE variant_context (id INTEGER PRIMARY KEY, codebase_source TEXT NOT NULL, "
+                "codebase_path TEXT, environment TEXT, updated_at DATETIME)"
+            )
+            if with_directory:
+                connection.exec_driver_sql("ALTER TABLE variant_context ADD COLUMN codebase_directory TEXT")
+            for row in (
+                (1, "paths", "/old"),
+                (2, "paths", "/old"),
+                (3, "references", "/hidden"),
+            ):
+                connection.exec_driver_sql(
+                    "INSERT INTO variant_context (id, codebase_source, codebase_path, environment, updated_at) "
+                    "VALUES (?, ?, ?, 'Linux', '2026-01-01T00:00:00Z')", row,
+                )
+            if with_directory:
+                connection.exec_driver_sql(
+                    "UPDATE variant_context SET codebase_directory = 'context-p-v-uuid' WHERE id = 1"
+                )
+            connection.exec_driver_sql(
+                "CREATE TABLE context_files (id INTEGER PRIMARY KEY, variant_context_id INTEGER "
+                "REFERENCES variant_context(id) ON DELETE CASCADE)"
+            )
+            connection.exec_driver_sql("INSERT INTO context_files VALUES (1, 1)")
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.upgrade()
+                connection.exec_driver_sql(
+                    "UPDATE variant_context SET codebase_directory = 'context-p-v' WHERE id = 2"
+                )
+                before_retry = connection.exec_driver_sql("SELECT * FROM variant_context ORDER BY id").all()
+                migration.upgrade()
+                assert connection.exec_driver_sql("SELECT * FROM variant_context ORDER BY id").all() == before_retry
+                assert not {"codebase_source", "codebase_path"} & {
+                    column["name"] for column in sa.inspect(connection).get_columns("variant_context")
+                }
+                rows = connection.exec_driver_sql("SELECT * FROM variant_context ORDER BY id").mappings().all()
+                assert rows[0]["codebase_directory"] == ("context-p-v-uuid" if with_directory else None)
+                assert {row["environment"] for row in rows} == {"Linux"}
+                assert (rows[0]["updated_at"] == "2026-01-01T00:00:00Z") is with_directory
+                assert rows[1]["updated_at"] != "2026-01-01T00:00:00Z"
+                assert rows[2]["updated_at"] == "2026-01-01T00:00:00Z"
+                assert connection.exec_driver_sql("SELECT * FROM context_files").all() == [(1, 1)]
+                with pytest.raises(sa.exc.IntegrityError), connection.begin_nested():
+                    connection.exec_driver_sql(
+                        "INSERT INTO variant_context (id, codebase_directory) VALUES (4, 'context-p-v')"
+                    )
+                migration.downgrade()
+                restored = connection.exec_driver_sql("SELECT * FROM variant_context ORDER BY id").mappings().all()
+                assert all(row["codebase_path"] is None and row["codebase_source"] == "paths" for row in restored)
+                assert "codebase_directory" not in {
+                    column["name"] for column in sa.inspect(connection).get_columns("variant_context")
+                }
+                assert connection.exec_driver_sql("SELECT * FROM context_files").all() == [(1, 1)]
+        engine.dispose()
 
 
 class TestVariantEditorSave:
@@ -784,8 +1158,7 @@ class TestVariantEditorSave:
         editor = VariantContext.get_by_variant(variant.id).to_dict()["editor"]
         assert vc.updated_at is not None
         assert not {"editor_mode", "free"} & set(editor)
-        assert editor["codebase_source"] == "paths"
-        assert editor["codebase_path"] == "/src/a;/src/b"
+        assert not {"codebase_source", "codebase_path"} & editor.keys()
         assert editor["system"] == payload["system"]
         assert editor["stride"] == payload["stride"]
         assert editor["files"] == []
@@ -794,12 +1167,11 @@ class TestVariantEditorSave:
     def test_editor_save_blank_text_stored_as_none(self, app, variant):
         from src.models.variant_context import VariantContext
         vc = VariantContext.save_editor(variant.id, _editor_payload(
-            variant_description="", environment="  ", codebase_path="",
+            variant_description="", environment="  ",
             system={"scope": "Firmware", "actors": "", "entry_points": None, "trust_boundaries": None},
         ))
         assert vc.variant_description is None
         assert vc.environment is None
-        assert vc.codebase_path is None
         assert vc.system_actors is None
 
     def test_editor_save_requires_threat_model(self, app, variant):
@@ -809,13 +1181,6 @@ class TestVariantEditorSave:
             VariantContext.save_editor(variant.id, _editor_payload(system={}, stride=empty_stride_model()))
         assert exc.value.fields["threat_model"] == "A threat model is required."
         assert VariantContext.get_by_variant(variant.id) is None
-
-    def test_editor_save_rejects_unknown_codebase_source(self, app, variant):
-        from src.helpers.stride_model import StrideValidationError
-        from src.models.variant_context import VariantContext
-        with pytest.raises(StrideValidationError) as exc:
-            VariantContext.save_editor(variant.id, _editor_payload(codebase_source="git"))
-        assert "codebase_source" in exc.value.fields
 
     def test_editor_save_rejects_bad_model(self, app, variant):
         from src.helpers.stride_model import StrideValidationError
@@ -865,36 +1230,19 @@ class TestLegacyWrite:
         from src.models.variant_context import VariantContext
         client.put(f"/api/variants/{variant.id}/context", json=_editor_payload())
         resp = client.put(f"/api/variants/{variant.id}/context",
-                          json={"environment": "Yocto", "codebase_path": "/new", "threat_model": None, "risks": None})
+                          json={"environment": "Yocto", "threat_model": None, "risks": None})
         assert resp.status_code == 200
         vc = VariantContext.get_by_variant(variant.id)
         assert vc.environment == "Yocto"
-        assert vc.codebase_path == "/new"
         assert vc.variant_description is None
         assert vc.stride_model == _stride_model()
         assert "Tampering" in resp.get_json()["threat_model"]
 
-    def test_legacy_write_keeps_hidden_codebase_path_on_references(self, app, variant):
-        from src.models.variant_context import VariantContext
-        VariantContext.save_editor(variant.id, _editor_payload(codebase_source="references", codebase_path="src;lib"))
-        vc = VariantContext.upsert(variant.id, codebase_path=None, environment="x")
-        assert vc.to_dict()["editor"]["codebase_path"] == "src;lib"
-        assert vc.environment == "x"
-        vc = VariantContext.upsert(variant.id, codebase_path="new")
-        assert vc.to_dict()["editor"]["codebase_path"] == "new"
-
     def test_legacy_create_has_no_stride_model(self, app, variant):
         from src.models.variant_context import VariantContext
         vc = VariantContext.upsert(variant.id, environment="x")
-        assert vc.codebase_source == "references"
         assert vc.stride_model is None
         assert vc.agent_threat_model() is None
-
-    def test_legacy_create_with_codebase_path_uses_paths(self, app, variant):
-        from src.models.variant_context import VariantContext
-        vc = VariantContext.upsert(variant.id, codebase_path="/src")
-        assert vc.codebase_source == "paths"
-        assert vc.to_dict()["codebase_path"] == "/src"
 
 
 class TestAgentView:
@@ -906,18 +1254,12 @@ class TestAgentView:
         _db.session.refresh(vc)
         return vc
 
-    def test_agent_view_paths_vs_references(self, app, variant):
+    def test_agent_view_includes_attachments_without_source_selection(self, app, variant):
         from src.models.variant_context import VariantContext
-        VariantContext.save_editor(variant.id, _editor_payload(codebase_source="references"))
+        VariantContext.save_editor(variant.id, _editor_payload())
         vc = self._with_file(variant)
         d = vc.to_dict()
-        assert d["codebase_path"] is None
         assert [f["original_name"] for f in d["files"]] == ["src.zip"]
-        assert d["editor"]["codebase_path"] == "/src/a;/src/b"
-        VariantContext.save_editor(variant.id, _editor_payload(codebase_source="paths"))
-        d = VariantContext.get_by_variant(variant.id).to_dict()
-        assert d["codebase_path"] == "/src/a;/src/b"
-        assert d["files"] == []
         assert [f["original_name"] for f in d["editor"]["files"]] == ["src.zip"]
 
     def test_agent_view_stride_renders(self, app, variant):
@@ -949,7 +1291,7 @@ class TestAgentView:
         resp = client.put(f"/api/variants/{uuid.uuid4()}/context", json=_editor_payload())
         assert resp.status_code == 404
 
-    def test_first_upload_creates_references_row(self, client, project, variant, tmp_path):
+    def test_first_upload_creates_context_row(self, client, project, variant, tmp_path):
         from io import BytesIO
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             resp = client.post(
@@ -958,21 +1300,6 @@ class TestAgentView:
         assert resp.status_code == 201
         data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
         assert [f["id"] for f in data["files"]] == [resp.get_json()["id"]]
-        assert data["codebase_path"] is None
-        assert data["editor"]["codebase_source"] == "references"
-
-    def test_upload_keeps_existing_row_source(self, client, project, variant, tmp_path):
-        from io import BytesIO
-        client.put(f"/api/variants/{variant.id}/context", json={"codebase_path": "/src"})
-        with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
-            resp = client.post(
-                f"/api/variants/{variant.id}/context/files", data={"file": (BytesIO(b"code"), "main.c")},
-            )
-        assert resp.status_code == 201
-        data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
-        assert data["editor"]["codebase_source"] == "paths"
-        assert data["codebase_path"] == "/src"
-        assert data["files"] == []
 
     def test_upload_after_text_only_create_is_visible_to_agents(self, client, project, variant, tmp_path):
         from io import BytesIO
@@ -983,7 +1310,6 @@ class TestAgentView:
             )
         assert resp.status_code == 201
         data = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
-        assert data["editor"]["codebase_source"] == "references"
         assert [f["id"] for f in data["files"]] == [resp.get_json()["id"]]
 
     def test_get_context_default_editor_block(self, client, project, variant):
@@ -991,9 +1317,9 @@ class TestAgentView:
         resp = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}")
         data = resp.get_json()
         assert data["editor"] == default_editor_block()
-        assert data["editor"]["codebase_source"] == "references"
         assert data["threat_model"] is None
-        assert data["codebase_path"] is None
+        assert not {"codebase_source", "codebase_path"} & data.keys()
+        assert not {"codebase_source", "codebase_path"} & data["editor"].keys()
 
     def test_get_context_returns_agent_view_and_editor(self, client, project, variant):
         client.put(f"/api/variants/{variant.id}/context", json=_editor_payload(variant_description="Desc"))
@@ -1002,7 +1328,7 @@ class TestAgentView:
         assert "Tampering" in data["threat_model"]
         assert "Likelihood: High" in data["risks"]
         assert data["editor"]["stride"] == _stride_model()
-        assert {"project_id", "description", "variant_id", "variant_description", "codebase_path",
+        assert {"project_id", "description", "variant_id", "variant_description", "codebase_directory",
                 "environment", "threat_model", "risks", "other_info", "files"} <= set(data)
 # ---------------------------------------------------------------------------
 # AI threat-model drafts
@@ -1068,7 +1394,6 @@ class TestContextDraftRoutes:
             assert get_by_variant(variant_id) is None
             vc = VariantContext.save_editor(variant_id, {
                 **_draft_values(variant_description="Saved", environment="Production", other_info="Keep"),
-                "codebase_source": "paths", "codebase_path": "/saved/source",
             })
             saved.update(vc.to_dict())
             return None
@@ -1111,7 +1436,7 @@ class TestContextDraftRoutes:
     def test_put_rejects_a_stale_base(self, client, variant, tmp_path):
         from src.models.variant_context import VariantContext
 
-        VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values()})
+        VariantContext.save_editor(variant.id, _draft_values())
         saved_at = VariantContext.get_by_variant(variant.id).to_dict()["updated_at"]
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             stale = self._put(client, variant, base=None)
@@ -1123,25 +1448,25 @@ class TestContextDraftRoutes:
     def test_get_rebases_or_reports_conflicts_after_a_save(self, client, variant, tmp_path):
         from src.models.variant_context import VariantContext
 
-        VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values()})
+        VariantContext.save_editor(variant.id, _draft_values())
         base = VariantContext.get_by_variant(variant.id).to_dict()["updated_at"]
         proposal = _draft_values(stride={**_draft_values()["stride"], "components": [
             {"id": "C1", "name": "Web UI", "description": "", "trust_zone": ""},
             {"id": "C2", "name": "Updater", "description": "", "trust_zone": ""}]})
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
             self._put(client, variant, base=base, values=proposal)
-            VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values(
-                system={"scope": "Gateway", "actors": "Admins", "entry_points": None, "trust_boundaries": None})})
+            VariantContext.save_editor(variant.id, _draft_values(
+                system={"scope": "Gateway", "actors": "Admins", "entry_points": None, "trust_boundaries": None}))
             rebased = client.get(self._url(variant)).get_json()
-            VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values(
+            VariantContext.save_editor(variant.id, _draft_values(
                 stride={**_draft_values()["stride"], "components": [
-                    {"id": "C1", "name": "Renamed", "description": "", "trust_zone": ""}]})})
+                    {"id": "C1", "name": "Renamed", "description": "", "trust_zone": ""}]}))
             self._put(client, variant, base=VariantContext.get_by_variant(variant.id).to_dict()["updated_at"],
                       values=_draft_values(stride={**_draft_values()["stride"], "components": [
                           {"id": "C1", "name": "AI name", "description": "", "trust_zone": ""}]}))
-            VariantContext.save_editor(variant.id, {"codebase_source": "references", **_draft_values(
+            VariantContext.save_editor(variant.id, _draft_values(
                 stride={**_draft_values()["stride"], "components": [
-                    {"id": "C1", "name": "Mine", "description": "", "trust_zone": ""}]})})
+                    {"id": "C1", "name": "Mine", "description": "", "trust_zone": ""}]}))
             conflict = client.get(self._url(variant)).get_json()
         assert rebased["status"] == "rebased"
         assert rebased["values"]["system"]["actors"] == "Admins"
@@ -1175,9 +1500,9 @@ class TestContextDraftRoutes:
             *common, {"id": "C2", "name": "Cloud", "description": "", "trust_zone": ""},
         ]))
         with patch("src.routes.context._get_cache_dir", return_value=str(tmp_path)):
-            vc = VariantContext.save_editor(variant.id, {"codebase_source": "references", **base})
+            vc = VariantContext.save_editor(variant.id, base)
             original = self._put(client, variant, base=vc.to_dict()["updated_at"], values=proposal).get_json()
-            VariantContext.save_editor(variant.id, {"codebase_source": "references", **concurrent})
+            VariantContext.save_editor(variant.id, concurrent)
             with patch("src.helpers.context_draft.write_draft", side_effect=OSError("disk full")):
                 assert client.get(self._url(variant)).status_code == 500
             first = client.get(self._url(variant)).get_json()
@@ -1188,12 +1513,12 @@ class TestContextDraftRoutes:
             if second_collision:
                 concurrent["stride"]["components"].append(
                     {"id": "C3", "name": "Another saved component", "description": "", "trust_zone": ""})
-                VariantContext.save_editor(variant.id, {"codebase_source": "references", **concurrent})
+                VariantContext.save_editor(variant.id, concurrent)
                 first = client.get(self._url(variant)).get_json()
                 mapping["C2"] = "C4"
                 assert first["renumbered"] == mapping
             accepted = VariantContext.save_editor(
-                variant.id, {"codebase_source": "references", **first["values"]}).to_dict()
+                variant.id, first["values"]).to_dict()
             with patch("src.helpers.context_draft.delete_draft", side_effect=OSError("cleanup failed")):
                 assert client.delete(self._url(variant), json={"revision": first["revision"]}).status_code == 500
             again = client.get(self._url(variant)).get_json()

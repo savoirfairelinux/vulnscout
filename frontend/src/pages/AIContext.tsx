@@ -6,7 +6,7 @@ import type { Project } from "../handlers/project";
 import type { Variant } from "../handlers/variant";
 import Context, { ContextSaveError } from "../handlers/context";
 import Assessments from "../handlers/assessments";
-import type { AiContextDraft, ContextFile, ImportResult, VariantDraft } from "../handlers/context";
+import type { AiContextDraft, ImportResult, VariantDraft } from "../handlers/context";
 import MessageBanner from "../components/MessageBanner";
 import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
@@ -82,7 +82,6 @@ type AiDraftView =
     | { kind: 'loaded'; key: string; variantId: string; draft: AiContextDraft; applied: VariantDraft }
     | { kind: 'pending' | 'conflict'; key: string; variantId: string; draft: AiContextDraft };
 const EMPTY_VARIANT_DRAFT = emptyDraft();
-const NO_FILES: ContextFile[] = [];
 const sameText = (a: string, b: string) => a === b;
 type BannerType = 'success' | 'error' | 'info';
 
@@ -134,8 +133,6 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const [fieldError, setFieldError] = useState('');
     const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
     const [variantTab, setVariantTab] = useState<VariantTab>('context');
-    // Uploaded references are saved on their own, outside the draft; tagged with the draft key they belong to.
-    const [variantFiles, setVariantFiles] = useState<{ key: string | null; files: ContextFile[] }>({ key: null, files: [] });
     const [announcement, setAnnouncement] = useState('');
     // Which scope the pending save outdates; null when no confirmation is open.
     const [confirmOutdate, setConfirmOutdate] = useState<SaveTarget['kind'] | null>(null);
@@ -193,11 +190,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     );
     const variantDraft = useLoadedDraft<VariantDraft>(
         variantKey,
-        () => Context.get(projectId ?? '', selected?.kind === 'variant' ? selected.id : '').then(ctx => {
-            // A response for an item that is no longer open must not replace the open item's files.
-            if (openKeyRef.current === variantKey) setVariantFiles({ key: variantKey, files: ctx.editor?.files ?? ctx.files ?? [] });
-            return draftFromContext(ctx);
-        }),
+        () => Context.get(projectId ?? '', selected?.kind === 'variant' ? selected.id : '').then(draftFromContext),
         EMPTY_VARIANT_DRAFT, draftsEqual, showLoadError,
     );
     const openKey = projectKey ?? variantKey;
@@ -240,14 +233,12 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         const request = ++draftRequestRef.current;
         let draft: AiContextDraft | null = null;
         let baseline: VariantDraft | null = null;
-        let files: ContextFile[] = [];
         try {
             for (let attempt = 0; attempt < 3; attempt++) {
                 draft = await Context.getAiDraft(variantId);
                 const saved = await Context.get(projectId ?? '', variantId);
                 if (!draft || saved.editor.updated_at === draft.saved_updated_at) {
                     baseline = draftFromContext(saved);
-                    files = saved.editor.files;
                     break;
                 }
                 if (attempt === 2) throw new Error("The saved context keeps changing. Reload the variant to review the AI draft.");
@@ -273,7 +264,6 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                 setAiDraft({ kind: 'pending', key, variantId, draft });
                 return;
             }
-            setVariantFiles({ key, files });
         }
         // A reply with neither values nor a conflict is treated as no draft.
         if (!draft || (!conflict && !applied) || noChange) {
@@ -637,11 +627,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             const source = await Context.get(sourceProjectId, sourceVariantId);
             if (unmountedRef.current || openKeyRef.current !== key) return;
             const copied = draftFromContext(source);
-            const own = variantDraft.draft;
-            // References are not copied, so the target keeps its own codebase source and paths.
-            variantDraft.setDraft(copied.codebase_source === 'references'
-                ? { ...copied, codebase_source: own.codebase_source, codebase_paths: own.codebase_paths }
-                : copied);
+            variantDraft.setDraft(copied);
             setFieldError('');
             setFieldErrors({});
             showBanner(`Copied the context of ${project?.name ?? ''} / ${variant?.name ?? ''}. Review it, then Save changes.`, "info");
@@ -733,13 +719,11 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                                         variantName={openVariant?.name ?? ''}
                                         draft={variantDraft.draft}
                                         onDraftChange={variantDraft.setDraft}
-                                        files={variantFiles.key === variantKey ? variantFiles.files : NO_FILES}
                                         onSave={() => { void requestSave(); }}
                                         saving={busy}
                                         dirty={variantDraft.dirty}
                                         onCopyFrom={openCopyFrom}
                                         fieldErrors={fieldErrors}
-                                        notify={showBanner}
                                         draftGeneration={variantDraft.generation}
                                         tab={variantTab}
                                         onTabChange={setVariantTab}

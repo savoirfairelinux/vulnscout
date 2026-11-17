@@ -308,7 +308,13 @@ setup_user() {
         mkdir -p /builder
         # Source trees under /scan may be bind-mounted from the host in dev mode.
         chown -f "$uid:$gid" /scan
-        chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs /cache
+        chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs
+        # Administrator source directories may be read-only mounts; never traverse or chown them.
+        local cache_dir="${VULNSCOUT_CACHE_DIR:-/cache/vulnscout}"
+        cache_dir="${cache_dir%/}"
+        find /cache -type d -path "$cache_dir/context-*" ! -path "$cache_dir/context-*/*" \
+            ! -name context-files -prune \
+            -o -exec chown -h "$uid:$gid" {} +
     fi
 }
 

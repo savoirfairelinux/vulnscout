@@ -17,6 +17,41 @@ ENTRYPOINT = ROOT / "src" / "entrypoint.sh"
 APP = "--app src.bin.webapp"
 
 
+@pytest.mark.parametrize("trailing_slash", ["", "/"])
+def test_cache_ownership_skips_admin_source_mounts_but_not_uploads(tmp_path, trailing_slash):
+    cache = tmp_path / "cache"
+    root = cache / "vulnscout"
+    source = root / "context-project-variant-uuid"
+    uploads = root / "context-files"
+    source.mkdir(parents=True)
+    uploads.mkdir()
+    (source / "source.c").write_text("source")
+    (uploads / "upload.c").write_text("upload")
+    log = tmp_path / "chown.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    chown = fake_bin / "chown"
+    chown.write_text('#!/bin/bash\nprintf "%s\\n" "$@" >> "$TEST_CHOWN_LOG"\n')
+    chown.chmod(0o755)
+    function = "setup_user() {" + ENTRYPOINT.read_text().split("setup_user() {", 1)[1].split("\n}", 1)[0] + "\n}"
+    script = """
+groupadd() { :; }
+id() { return 0; }
+mkdir() { :; }
+find() { shift; command find "$TEST_CACHE_ROOT" "$@"; }
+""" + function + "\nsetup_user\n"
+    result = subprocess.run(["bash", "-e", "-c", script], capture_output=True, text=True, env={
+        **os.environ, "USER_UID": "1000", "USER_GID": "1000", "VULNSCOUT_ROOTLESS_PODMAN": "false",
+        "VULNSCOUT_CACHE_DIR": str(root) + trailing_slash,
+        "TEST_CACHE_ROOT": str(cache), "TEST_CHOWN_LOG": str(log),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }, timeout=10)
+    assert result.returncode == 0, result.stderr
+    paths = log.read_text().splitlines()
+    assert str(uploads) in paths and str(uploads / "upload.c") in paths
+    assert str(source) not in paths and str(source / "source.c") not in paths
+
+
 def _run(tmp_path, *args, fake_flask=True):
     """Run the entrypoint with a fake flask; return the result and the non-migration flask calls."""
     fake_bin = tmp_path / "bin"

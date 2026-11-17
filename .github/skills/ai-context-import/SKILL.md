@@ -122,8 +122,9 @@ Use the exact labels below; they are the labels on the page.
 | Threat model | **Threats** | **STRIDE category** (required), **Description**, **Targets** (required, at least one component or interaction) |
 | Risks | **Risks** | **Description**, **Threats** (required, at least one), **Likelihood**, **Impact**, **Mitigation**, **Residual risk / decision** |
 
-The **Codebase source** option, codebase paths and uploads are never filled from
-a document. The project description (sidebar item **Project description**) is
+The **Codebase directory** is administrator-managed and is never configured from
+a document. Uploaded attachments must also remain unchanged.
+The project description (sidebar item **Project description**) is
 outside this skill; if the document states the product's purpose, you may
 suggest one at the end, clearly labelled as optional.
 
@@ -337,7 +338,7 @@ for. If you change anything else, show the change and ask again.
    call returned as the next call's `expected_updated_at`.
 3. **Context tab**: `update_variant_context` replaces every text field. Pass
    the current value (from `get_merged_context`) for each field you do not
-   change, including `codebase_path` when the variant uses codebase paths.
+   change: `variant_description`, `environment` and `other_info`.
 4. **Project description**: call `update_project_context` only if the user
    accepted the suggested description.
 5. If a tool returns an error, nothing from that call was saved. Report the
