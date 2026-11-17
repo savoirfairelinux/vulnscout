@@ -1195,6 +1195,12 @@ class TestCodebaseDirectory:
                 (1, "paths", "/old"),
                 (2, "paths", "/old"),
                 (3, "references", "/hidden"),
+                (4, "paths", None),
+                (5, "paths", "   "),
+                (6, "paths", ""),
+                (7, "paths", None),
+                (8, "paths", "   "),
+                (9, "paths", ""),
             ):
                 connection.exec_driver_sql(
                     "INSERT INTO variant_context (id, codebase_source, codebase_path, environment, updated_at) "
@@ -1208,7 +1214,8 @@ class TestCodebaseDirectory:
                 "CREATE TABLE context_files (id INTEGER PRIMARY KEY, variant_context_id INTEGER "
                 "REFERENCES variant_context(id) ON DELETE CASCADE)"
             )
-            connection.exec_driver_sql("INSERT INTO context_files VALUES (1, 1)")
+            files = [(ctx_id, ctx_id) for ctx_id in (1, 3, 4, 5, 6)]
+            connection.exec_driver_sql("INSERT INTO context_files VALUES (?, ?)", files)
             with Operations.context(MigrationContext.configure(connection)):
                 migration.upgrade()
                 connection.exec_driver_sql(
@@ -1224,12 +1231,14 @@ class TestCodebaseDirectory:
                 assert rows[0]["codebase_directory"] == ("context-p-v-uuid" if with_directory else None)
                 assert {row["environment"] for row in rows} == {"Linux"}
                 assert (rows[0]["updated_at"] == "2026-01-01T00:00:00Z") is with_directory
-                assert rows[1]["updated_at"] != "2026-01-01T00:00:00Z"
-                assert rows[2]["updated_at"] == "2026-01-01T00:00:00Z"
-                assert connection.exec_driver_sql("SELECT * FROM context_files").all() == [(1, 1)]
+                assert all(row["updated_at"] != "2026-01-01T00:00:00Z"
+                           for row in rows if row["id"] in (2, 4, 5, 6))
+                assert all(row["updated_at"] == "2026-01-01T00:00:00Z"
+                           for row in rows if row["id"] in (3, 7, 8, 9))
+                assert connection.exec_driver_sql("SELECT * FROM context_files ORDER BY id").all() == files
                 with pytest.raises(sa.exc.IntegrityError), connection.begin_nested():
                     connection.exec_driver_sql(
-                        "INSERT INTO variant_context (id, codebase_directory) VALUES (4, 'context-p-v')"
+                        "INSERT INTO variant_context (id, codebase_directory) VALUES (10, 'context-p-v')"
                     )
                 migration.downgrade()
                 restored = connection.exec_driver_sql("SELECT * FROM variant_context ORDER BY id").mappings().all()
@@ -1237,7 +1246,7 @@ class TestCodebaseDirectory:
                 assert "codebase_directory" not in {
                     column["name"] for column in sa.inspect(connection).get_columns("variant_context")
                 }
-                assert connection.exec_driver_sql("SELECT * FROM context_files").all() == [(1, 1)]
+                assert connection.exec_driver_sql("SELECT * FROM context_files ORDER BY id").all() == files
         engine.dispose()
 
 
