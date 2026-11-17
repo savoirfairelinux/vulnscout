@@ -10,7 +10,7 @@ class CVSS:
     """
 
     def __init__(self, version: str, vector_string: str, author: str,
-                 base_score: float, exploitability_score: float, impact_score: float,
+                 base_score: float | None, exploitability_score: float, impact_score: float,
                  origin: str = "scanner"):
         """Create a new CVSS score with the given parameters."""
         self.version = version
@@ -160,6 +160,10 @@ class CVSS:
 
     def severity(self) -> str:
         """Return the severity of the CVSS score as text."""
+        if self.base_score is None:
+            return "Unknown"
+        if self.base_score == 0:
+            return "None"
         if self.base_score < 4:
             return "Low"
         elif self.base_score < 7:
@@ -168,6 +172,24 @@ class CVSS:
             return "High"
         else:
             return "Critical"
+
+    @staticmethod
+    def summarize(cvss_list: list[dict], fallback_label: str = "unknown") -> dict:
+        """Summarize exactly the selected CVSS entries, using their highest score."""
+        scores = [
+            float(cvss["base_score"])
+            for cvss in cvss_list
+            if isinstance(cvss.get("base_score"), (int, float))
+        ]
+        return {
+            "severity": (
+                CVSS("", "", "unknown", max(scores), 0.0, 0.0).severity().lower()
+                if scores else fallback_label
+            ),
+            "min_score": min(scores) if scores else None,
+            "max_score": max(scores) if scores else None,
+            "cvss": cvss_list,
+        }
 
     def to_dict(self) -> dict:
         """Export the CVSS score as a dictionary."""

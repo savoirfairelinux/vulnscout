@@ -101,6 +101,49 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     expect(vuln.severity.cvss[0].attack_vector).toBe('ADJACENT');
   });
 
+  test('preserves unscored CVSS metadata in compact records', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify([rawVuln({
+      details_loaded: false,
+      severity: {
+        severity: 'high',
+        min_score: 8.1,
+        max_score: 8.1,
+        cvss: [{
+          version: '3.1',
+          base_score: null,
+          vector_string: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H',
+        }],
+      },
+    })]));
+
+    const [vuln] = await Vulnerabilities.list();
+    expect(vuln.severity.cvss).toHaveLength(1);
+    expect(vuln.severity.cvss[0].base_score).toBeNull();
+    expect(vuln.severity.cvss[0].vector_string).toBe('CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
+    expect(vuln.severity.cvss[0].attack_vector).toBe('NETWORK');
+  });
+
+  test('preserves unscored CVSS metadata in detail records', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify(rawVuln({
+      severity: {
+        severity: 'high',
+        min_score: 8.1,
+        max_score: 8.1,
+        cvss: [{
+          version: '3.1',
+          base_score: null,
+          vector_string: 'CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H',
+        }],
+      },
+    })));
+
+    const details = await Vulnerabilities.getDetails('CVE-TEST-1');
+    expect(details?.severity.cvss).toHaveLength(1);
+    expect(details?.severity.cvss[0].base_score).toBeNull();
+    expect(details?.severity.cvss[0].vector_string).toBe('CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H');
+    expect(details?.severity.cvss[0].attack_vector).toBe('LOCAL');
+  });
+
   test('getDetails requests a scoped full vulnerability', async () => {
     fetchMock.mockResponseOnce(JSON.stringify(rawVuln()));
 

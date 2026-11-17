@@ -11,7 +11,7 @@ type CVSS = {
     version: string;
     vector_string: string;
     attack_vector?: string;
-    base_score: number;
+    base_score: number | null;
     exploitability_score: number;
     impact_score: number;
 };
@@ -222,7 +222,7 @@ const isVulnerabilityActive = (vulnerability: Vulnerability): boolean => {
 const asCVSS = (data: any): CVSS | [] => {
     if (typeof data !== "object") return [];
     if (typeof data?.version !== "string") return [];
-    if (typeof data?.base_score !== "number") return [];
+    if (data?.base_score !== null && typeof data?.base_score !== "number") return [];
     let score: CVSS = {
         author: "unknown",
         origin: "scanner",
@@ -231,7 +231,7 @@ const asCVSS = (data: any): CVSS | [] => {
         version: data.version,
         vector_string: "",
         attack_vector: undefined,
-        base_score: Number(data.base_score),
+        base_score: data.base_score,
         exploitability_score: 0,
         impact_score: 0,
     };

@@ -183,7 +183,7 @@ class VulnerabilitiesController:
                             m.version or "",
                             m.vector or "",
                             m.author or "unknown",
-                            float(m.score) if m.score is not None else 0.0,
+                            float(m.score) if m.score is not None else None,
                             0.0,
                             0.0,
                             m.origin or "scanner",

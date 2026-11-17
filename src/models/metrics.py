@@ -133,7 +133,7 @@ class Metrics(Base):
             "vector_string": self.vector or "",
             "author": self.author or "unknown",
             "origin": self.origin or "scanner",
-            "base_score": float(self.score) if self.score is not None else 0.0,
+            "base_score": float(self.score) if self.score is not None else None,
             "exploitability_score": 0.0,
             "impact_score": 0.0,
         }
