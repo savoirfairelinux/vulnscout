@@ -468,7 +468,7 @@ DELETE /api/variants/<variant_id>/context/files/<file_id>
 Upload uses `multipart/form-data` with a required `file` and an optional `description`.
 These legacy APIs remain available, but the AI Context page only exposes server directories.
 Uploaded files belong to one variant and are saved immediately.
-ZIP, TAR and TAR.GZ/TGZ archives are validated before storage and limited to 5,000 entries.
+ZIP, TAR and TAR.GZ/TGZ archives are validated before storage and limited to 500,000 entries.
 Each archive member is capped at 10 MiB, and total expanded archive content is capped at 100 MiB.
 Unsafe paths, duplicate file paths, encrypted ZIP members, links,
 sparse files and special entries are rejected. Archives are never extracted or executed.
@@ -531,7 +531,7 @@ Missing references/members return 404; unavailable stored files return 500 with 
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
 Directory operations exclude hidden/sensitive names, symbolic/hard links and special files. They visit
-at most 5,000 entries, read at most 10 MiB/file and return at most 64 KiB of serialized JSON.
+at most 500,000 entries, read at most 10 MiB/file and return at most 64 KiB of serialized JSON.
 Directory searches have a 100 MiB candidate-file budget; oversized files are skipped and counted alongside
 binary/non-UTF-8 files. Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.
 No shell, extraction or source execution is available.

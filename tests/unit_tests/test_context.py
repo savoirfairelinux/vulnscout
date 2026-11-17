@@ -662,7 +662,7 @@ class TestCodebaseSource:
         assert not list(tmp_path.rglob(file_id))
 
     @pytest.mark.parametrize("parameters", [
-        {"limit": 201}, {"limit": "oops"}, {"offset": -1}, {"operation": "execute"},
+        {"limit": 201}, {"limit": "oops"}, {"offset": -1}, {"offset": 500_001}, {"operation": "execute"},
         {"operation": "read", "path": "repo/main.c", "start_line": 0},
         {"operation": "search"}, {"operation": "search", "query": "x" * 201},
         {"operation": "read", "path": "repo/data.bin"}, {"pattern": "x" * 513},
@@ -674,6 +674,36 @@ class TestCodebaseSource:
         )
         assert response.status_code == 400
         assert response.get_json()["error"]
+
+    @pytest.mark.parametrize("offset", [5001, 499_999, 500_000])
+    def test_listing_accepts_offsets_up_to_entry_limit(self, client, variant, tmp_path, offset):
+        file_id = self._upload(client, variant, tmp_path)
+        response = client.get(
+            f"/api/variants/{variant.id}/context/files/{file_id}/source", query_string={"offset": offset},
+        )
+        assert response.status_code == 200
+        assert response.get_json()["files"] == []
+        assert response.get_json()["next_offset"] is None
+
+    def test_listing_reaches_last_file_at_entry_limit(self, client, variant, tmp_path):
+        file_id = self._upload(client, variant, tmp_path)
+        entries = {f"source-{index:06d}.c": (0, None) for index in range(500_000)}
+
+        def index(reference):
+            reference.entries = entries
+
+        base = f"/api/variants/{variant.id}/context/files/{file_id}/source"
+        with patch("src.helpers.codebase_reference.CodebaseReference._index", index):
+            response = client.get(base, query_string={"offset": 499_799})
+            assert response.status_code == 200
+            page = response.get_json()
+            assert len(page["files"]) == 200
+            assert page["total"] == 500_000
+            assert page["next_offset"] == 499_999
+            response = client.get(base, query_string={"offset": page["next_offset"]})
+            assert response.status_code == 200
+            assert response.get_json()["files"] == [{"path": "source-499999.c", "size": 0}]
+            assert response.get_json()["next_offset"] is None
 
     def test_reference_is_variant_scoped(self, client, variant, project, tmp_path):
         file_id = self._upload(client, variant, tmp_path)

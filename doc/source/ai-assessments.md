@@ -409,7 +409,7 @@ upload is a complete source tree or only selected files. References are saved
 Uploads and deletion mark older pending AI assessments for that variant outdated.
 
 Supported archives are **ZIP, TAR, TAR.GZ and TGZ**. Archives are limited to
-**5,000 entries**, with a **10 MiB maximum per file** and **100 MiB maximum
+**500,000 entries**, with a **10 MiB maximum per file** and **100 MiB maximum
 expanded archive size**. Unsafe paths, duplicate file paths, encrypted ZIP files,
 links, sparse files and special entries are rejected. Archives are read without
 extraction or execution. Only UTF-8 text can be read as source; binary files
@@ -550,7 +550,7 @@ files/directories and names matching `*secret*`, `*credential*`, `*password*`,
 (case-insensitive). This is a filename safeguard, **not secret detection**;
 administrators must remove sensitive content from otherwise eligible files.
 Only UTF-8 source is readable. There is no aggregate directory/upload-size cap,
-but each operation visits at most **5,000 entries** (excluded directories are not
+but each operation visits at most **500,000 entries** (excluded directories are not
 traversed), each read is limited to **10 MiB/file**, listings/reads/searches to
 **64 KiB of serialized response**, pages to **200 files/lines**, and searches to
 **100 MiB of candidate files**, **100 matches**, **500 characters/snippet** and

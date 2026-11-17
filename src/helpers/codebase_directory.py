@@ -107,7 +107,7 @@ class CodebaseDirectory(CodebaseReference):
                 visited[0] += 1
                 if visited[0] > MAX_ENTRIES:
                     raise ValueError(
-                        "Codebase directory exceeds the 5000-entry browsing limit; provide a smaller tree."
+                        f"Codebase directory exceeds the {MAX_ENTRIES}-entry browsing limit; provide a smaller tree."
                     )
                 if _excluded(entry.name):
                     continue

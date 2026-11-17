@@ -22,7 +22,7 @@ from typing import IO
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_EXPANDED_BYTES = 100 * 1024 * 1024
-MAX_ENTRIES = 5000
+MAX_ENTRIES = 500_000
 MAX_RESPONSE_BYTES = 64 * 1024
 ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz")
 PDF_TEXT_LIMIT = 2 * 1024 * 1024
@@ -160,7 +160,7 @@ class CodebaseReference:
             archive = self.stack.enter_context(zipfile.ZipFile(self.stream))
             self.archive = archive
             if len(archive.infolist()) > MAX_ENTRIES:
-                raise ValueError("Archive contains more than 5000 entries.")
+                raise ValueError(f"Archive contains more than {MAX_ENTRIES} entries.")
             for member in archive.infolist():
                 if member.is_dir() and member.filename in (".", "./"):
                     continue
@@ -187,7 +187,7 @@ class CodebaseReference:
             self.archive = tar
             for count, entry in enumerate(tar, 1):
                 if count > MAX_ENTRIES:
-                    raise ValueError("Archive contains more than 5000 entries.")
+                    raise ValueError(f"Archive contains more than {MAX_ENTRIES} entries.")
                 if entry.isdir() and entry.name in (".", "./"):
                     continue
                 _safe_path(entry.name)

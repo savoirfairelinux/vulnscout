@@ -15,7 +15,9 @@ from ..controllers.context import ProjectContextController, VariantContextContro
 from ..extensions import db
 from ..helpers import context_draft
 from ..helpers.datetime_utils import ensure_utc_iso
-from ..helpers.codebase_reference import ARCHIVE_SUFFIXES, MAX_FILE_BYTES, CodebaseReference, validate_reference
+from ..helpers.codebase_reference import (
+    ARCHIVE_SUFFIXES, MAX_ENTRIES, MAX_FILE_BYTES, CodebaseReference, validate_reference,
+)
 from ..helpers.codebase_directory import (
     CodebaseDirectory, EmptyCodebaseDirectory, directory_exists, directory_name, directory_path, provision_directory,
 )
@@ -161,7 +163,9 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
                 stream = stack.enter_context(open(file_path, "rb"))
                 reference = stack.enter_context(CodebaseReference(stream, name))
             if operation == "list":
-                result = reference.list_files(pattern, _integer("offset", 0, 0, 5000), _integer("limit", 200, 1, 200))
+                result = reference.list_files(
+                    pattern, _integer("offset", 0, 0, MAX_ENTRIES), _integer("limit", 200, 1, 200),
+                )
             elif operation == "read":
                 result = reference.read_lines(
                     request.args.get("path", ""),
