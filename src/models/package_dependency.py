@@ -3,14 +3,14 @@
 
 import uuid
 
-from sqlalchemy import ForeignKey, ForeignKeyConstraint, Index
+from sqlalchemy import ForeignKey, ForeignKeyConstraint, Index, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..extensions import Base, db, write_lock
 
 
 class PackageDependency(Base):
-    """Edge stored under the dependent's document; the dependency may sit in another document of the scan."""
+    """One pair per dependent document, with its distinct imported declaration evidence."""
 
     __tablename__ = "package_dependencies"
 
@@ -19,6 +19,7 @@ class PackageDependency(Base):
     dependency_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("packages.id", ondelete="CASCADE"), primary_key=True
     )
+    declarations: Mapped[list[dict[str, str]] | None] = mapped_column(JSON, nullable=True)
 
     __table_args__ = (
         Index("ix_package_dependencies_document_dependency", "sbom_document_id", "dependency_id"),
@@ -31,7 +32,8 @@ class PackageDependency(Base):
 
     @staticmethod
     def replace_for_documents(document_ids: set[uuid.UUID],
-                              rows: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]) -> None:
+                              rows: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]],
+                              declarations: dict | None = None) -> None:
         """Replace document graphs in one write transaction, without a stale read-before-insert."""
         if not document_ids:
             return
@@ -40,7 +42,8 @@ class PackageDependency(Base):
                 PackageDependency.sbom_document_id.in_(document_ids),
             ))
             db.session.add_all(
-                PackageDependency(sbom_document_id=document_id, package_id=source, dependency_id=target)
+                PackageDependency(sbom_document_id=document_id, package_id=source, dependency_id=target,
+                                  declarations=(declarations or {}).get((document_id, source, target)))
                 for document_id, source, target in rows
             )
             db.session.commit()

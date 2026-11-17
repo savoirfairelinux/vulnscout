@@ -8,6 +8,7 @@ from sqlalchemy import CheckConstraint, ForeignKey, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import db, Base
+from .sbom_file import SourceFileEvidence, PackageSourceFile
 
 if typing.TYPE_CHECKING:
     from ..models import SBOMDocument, Package
@@ -29,6 +30,10 @@ class PackageEvidence(typing.TypedDict):
     source_urls: list[str]
     source_revisions: typing.NotRequired[list[str]]
     component_types: typing.NotRequired[list[PackageType]]
+    source_files: typing.NotRequired[list[SourceFileEvidence]]
+    source_file_count: typing.NotRequired[int]
+    compiled_source_file_count: typing.NotRequired[int]
+    compiled_sources_complete: typing.NotRequired[bool]
 
 
 class SBOMPackage(Base):
@@ -46,6 +51,10 @@ class SBOMPackage(Base):
     purl: Mapped[list | None] = mapped_column(JSON)
     source_revisions: Mapped[list | None] = mapped_column(JSON)
     type: Mapped[PackageType] = mapped_column(String(9), default="normal", server_default="normal")
+    compiled_sources_complete: Mapped[bool | None]
+    source_files: Mapped[list["PackageSourceFile"]] = relationship(
+        back_populates="sbom_package", cascade="all, delete-orphan",
+    )
 
     sbom_document: Mapped["SBOMDocument"] = relationship(back_populates="sbom_packages")
     package: Mapped["Package"] = relationship(back_populates="sbom_packages")
@@ -111,16 +120,22 @@ class SBOMPackage(Base):
     @staticmethod
     def evidence_for_documents(
         document_ids: set[uuid.UUID], *, require_recorded_identifiers: bool = False,
+        include_source_files: bool = False, package_ids: set[uuid.UUID] | None = None,
     ) -> dict[uuid.UUID, PackageEvidence]:
         """Aggregate only selected document evidence, never global matching identifiers."""
-        if not document_ids:
+        if not document_ids or package_ids == set():
             return {}
+        filters = [SBOMPackage.sbom_document_id.in_(document_ids)]
+        if package_ids is not None:
+            filters.append(SBOMPackage.package_id.in_(package_ids))
         evidence_sets: dict[uuid.UUID, dict[str, set[str]]] = {}
         component_types: dict[uuid.UUID, set[PackageType]] = {}
-        for package_id, cpe, purl, source_urls, revisions, package_type in db.session.execute(
+        source_completeness: dict[uuid.UUID, list[bool | None]] = {}
+        for package_id, cpe, purl, source_urls, revisions, package_type, complete in db.session.execute(
             db.select(SBOMPackage.package_id, SBOMPackage.cpe, SBOMPackage.purl,
-                      SBOMPackage.source_urls, SBOMPackage.source_revisions, SBOMPackage.type)
-            .where(SBOMPackage.sbom_document_id.in_(document_ids))
+                      SBOMPackage.source_urls, SBOMPackage.source_revisions, SBOMPackage.type,
+                      SBOMPackage.compiled_sources_complete)
+            .where(*filters)
         ):
             if require_recorded_identifiers and (cpe is None or purl is None):
                 raise SBOMReimportRequiredError(SBOM_REIMPORT_REQUIRED)
@@ -132,6 +147,13 @@ class SBOMPackage(Base):
             item["source_urls"].update(source_urls or [])
             item["source_revisions"].update(revisions or [])
             component_types.setdefault(package_id, set()).add(package_type)
+            source_completeness.setdefault(package_id, []).append(complete)
+        source_files = (
+            PackageSourceFile.evidence_for_documents(document_ids, package_ids) if include_source_files else {}
+        )
+        source_counts = (
+            PackageSourceFile.counts_for_documents(document_ids, package_ids) if not include_source_files else {}
+        )
         evidence: dict[uuid.UUID, PackageEvidence] = {}
         for package_id, values in evidence_sets.items():
             result = PackageEvidence(
@@ -142,6 +164,15 @@ class SBOMPackage(Base):
             types = component_types[package_id]
             if types != {"normal"}:
                 result["component_types"] = sorted(types)
+            completeness = source_completeness[package_id]
+            if any(value is not None for value in completeness):
+                if include_source_files:
+                    result["source_files"] = source_files.get(package_id, [])
+                else:
+                    counts = source_counts.get(package_id)
+                    result["source_file_count"] = counts["source_file_count"] if counts else 0
+                    result["compiled_source_file_count"] = counts["compiled_source_file_count"] if counts else 0
+                result["compiled_sources_complete"] = all(value is True for value in completeness)
             evidence[package_id] = result
         return evidence
 

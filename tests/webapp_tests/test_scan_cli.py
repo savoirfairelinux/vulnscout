@@ -360,7 +360,18 @@ def test_history_cache_notices_observations_committed_by_another_process(app, id
 
 
 def test_vulnerability_refresh_does_not_create_scan_steps(app, ids):
-    with patch("src.bin.cmd_process._refresh_source", return_value=True):
+    from src.helpers.refresh_runs import capture_source, finish_source, target_result
+
+    def complete_refresh(ctx):
+        source = ctx.op_id.rsplit(":", 1)[1]
+        with capture_source(ctx.queue_id, source):
+            for identifier in ctx.options["ids"]:
+                target_result(source, identifier)
+            _db.session.commit()
+        finish_source(ctx.queue_id, source)
+
+    jobs = {source: complete_refresh for source in ("nvd", "epss", "ghsa", "euvd")}
+    with patch.dict("src.controllers.refresh_jobs.REFRESH_JOBS", jobs):
         result = app.test_cli_runner().invoke(args=[
             "refresh-vulnerability-data", *_scan_args(ids),
         ])

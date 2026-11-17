@@ -67,8 +67,8 @@ _vulnscout_files() {
 }
 _vulnscout_complete() {
     local cur prev word verb="" i k
-    local data_verbs="add scan match-condition report export import refresh"
-    local all_verbs="add scan match-condition report export import refresh delete list config asset start stop restart update version serve"
+    local data_verbs="add scan match-condition assess review report export import refresh"
+    local all_verbs="add scan match-condition assess review report export import refresh delete list config asset start stop restart update version serve"
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -84,8 +84,12 @@ _vulnscout_complete() {
     done
 
     case "$prev" in
-        -p|--project|-v|--variant|--condition) return 0 ;;
-        --format) mapfile -t COMPREPLY < <(compgen -W "pdf html" -- "$cur"); return 0 ;;
+        -p|--project|-v|--variant|--condition|--cve|--filter|--model|--timeout|--since|--until|--source|--field|--vuln-id|--run-id)
+            return 0 ;;
+        --format)
+            local formats="pdf html"
+            [ "$verb" = export ] && formats="json csv"
+            mapfile -t COMPREPLY < <(compgen -W "$formats" -- "$cur"); return 0 ;;
         --timestamps) mapfile -t COMPREPLY < <(compgen -W "original current" -- "$cur"); return 0 ;;
         --spdx|--cdx|--cve-check|--yocto-vex|--openvex)
             _vulnscout_files "$cur"; return 0 ;;
@@ -108,6 +112,10 @@ _vulnscout_complete() {
             words="$all_verbs" ;;
         add)
             words="--spdx --cdx --cve-check --yocto-vex --openvex --grype" ;;
+        assess)
+            words="--cve --filter --model --timeout --dry-run --json" ;;
+        review)
+            words="--assessment-id --cve --re-review --model --timeout --dry-run --json" ;;
         scan)
             local prefix=""
             if [[ "$cur" == *,* ]]; then
@@ -128,7 +136,13 @@ _vulnscout_complete() {
             _vulnscout_files "$cur"
             return 0 ;;
         export)
-            words="spdx cdx openvex custom-data custom-openvex context --amend" ;;
+            words="spdx cdx openvex custom-data custom-openvex context vulnerability-history refresh-changes --run-id --format --amend"
+            for ((k = i + 1; k < COMP_CWORD; k++)); do
+                if [ "${COMP_WORDS[k]}" = vulnerability-history ]; then
+                    words="--since --until --last-refresh --source --field --vuln-id --format"
+                    break
+                fi
+            done ;;
         import)
             # The kind is the first positional word; --timestamps and -v depend on it.
             local kind="" k
@@ -154,7 +168,7 @@ _vulnscout_complete() {
             fi
             return 0 ;;
         delete)
-            words="scan outdated empty-scans orphaned-vulns --dry-run --yes" ;;
+            words="scan outdated empty-scans orphaned-vulns --dry-run --yes --clear-vulnerability-history" ;;
         list)
             words="projects scans --json" ;;
         config)
@@ -170,7 +184,9 @@ _vulnscout_complete() {
                 mapfile -t COMPREPLY < <(compgen -W "add $globals" -- "$cur")
             fi
             return 0 ;;
-        match-condition|refresh)
+        refresh)
+            words="--run-id" ;;
+        match-condition)
             words="" ;;
     esac
     mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
@@ -190,7 +206,7 @@ if [ "${1:-}" = "completion" ]; then
 fi
 
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.24}"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.25}"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 VULNSCOUT_BUILD_DIR="${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}"
 VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
@@ -249,22 +265,22 @@ PROJECT="default"
 PROJECT_SPECIFIED=false
 VARIANT=""
 VARIANT_SPECIFIED=false
-MATCH_CONDITION=""
+# Every -v given to a command, in order; only 'assess' and 'review' accept several (others use the last, VARIANT).
+VARIANTS=()
 PENDING_ARGS=()
 DEV_MODE=false
+EXEC_ENV=()
 
-VULNSCOUT_LEGACY_REMOVAL_VERSION="v0.25"
-LEGACY_TOKENS=()
 SCOPE_ARGS=()
 
 _show_help() {
     cat <<'EOF'
 VulnScout - Vulnerability Scanner
-Usage: vulnscout [global options] <command> [arguments] [options]
+Usage: vulnscout <command> [arguments] [options] [global options]
        vulnscout <command> --help
 
 Global options (before or after the command):
-    --dev                   Mount local src/ and vulnscout_mcp/; start, restart and serve
+    --dev                   Mount local src/, vulnscout_mcp/ and .github/skills/; start, restart and serve
                             also run the frontend dev server
     -h, --help              Show help for a command, or this overview
     --version               Show the VulnScout version
@@ -273,6 +289,8 @@ Data commands (also accept --project and --variant; see '<command> --help'):
     add                     Add SBOMs and scan results, then process them
     scan                    Run vulnerability scans
     match-condition         Test stored vulnerabilities against a condition
+    assess                  Assess vulnerabilities with the embedded AI agent
+    review                  Review custom assessments with the embedded AI agent
     report                  Generate reports
     export                  Export SBOMs, custom data, assessments or context
     import                  Import custom data, assessments or context
@@ -293,14 +311,14 @@ Container commands:
     serve                   Start the web UI on port 7275
 
 The legacy flag syntax (for example --add-spdx, --perform-scans, --report)
-still works until v0.25 and prints a deprecation warning. See doc/source/vulnscout-script.md for the mapping.
+was removed in v0.25. See doc/source/cli-migration.md for the command equivalents.
 EOF
 }
 
 _show_verb_help() {
     case "$1" in
         add) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] add <input options>
+Usage: vulnscout add [-p <project>] [-v <variant>] <input options>
 
 Add SBOMs and scan results to a variant, then process them.
 Input options (repeatable and combinable; all files form one scan):
@@ -320,7 +338,7 @@ Examples:
 EOF
             ;;
         scan) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] scan [scanner options] [types|all]
+Usage: vulnscout scan [-p <project>] [-v <variant>] [scanner options] [types|all]
 
 Run vulnerability scans. All selected scanners run together as one scan run,
 in the order grype, nvd, osv, sbom-cve-check. Without a selection, all run.
@@ -343,7 +361,7 @@ Examples:
 EOF
             ;;
         match-condition) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] match-condition <expr>
+Usage: vulnscout match-condition [-p <project>] [-v <variant>] <expr>
 
 Test stored vulnerabilities against a condition. Exits 2 if any vulnerability matches.
 Options:
@@ -356,8 +374,60 @@ Examples:
     vulnscout match-condition -p demo -v x86 "epss >= 50%"
 EOF
             ;;
+        assess) cat <<'EOF'
+Usage: vulnscout assess (--cve <id>... | --filter <expr>) [-p <project>] [-v <variant>] [options]
+
+Assess vulnerabilities with the AI provider configured for the web UI Agent.
+Each result is a pending AI assessment that replaces the earlier pending AI
+assessment on the same targets; approved assessments are never changed.
+Options:
+    --cve <id>              Vulnerability to assess (repeatable); not with --filter
+    --filter <expr>         Assess every vulnerability matching a match-condition expression; not with --cve
+    -p, --project <name>    Project (default: "default"); alone, uses every variant
+    -v, --variant <name>    Variant (repeatable); requires --project
+    --model <id>            Model to use instead of AI_MODEL
+    --timeout <seconds>     Limit for each agent turn (default: 600)
+    --dry-run               Show the vulnerabilities and targets without calling the AI
+    --json                  Print the summary as JSON
+Exit codes: 0 every vulnerability assessed (or none matched), 1 error or any vulnerability not fully assessed
+Ctrl-C stops after cancelling the current agent turn and still prints the summary; press it again to stop now.
+To combine specific IDs with other conditions, list them in the filter with "id == <id>".
+
+Examples:
+    vulnscout assess -p demo --filter "pending and cvss >= 9"
+    vulnscout assess -p demo -v x86 --cve CVE-2024-3094 --json
+    vulnscout assess -p demo -v x86 -v arm64 --filter "new and cvss >= 7" --dry-run
+    vulnscout assess -p demo --filter "(id == CVE-2024-3094 or id == CVE-2023-4863) and pending"
+EOF
+            ;;
+        review) cat <<'EOF'
+Usage: vulnscout review -p <project> (--assessment-id <uuid>... | --cve <id>... [-v <variant>]...) [options]
+
+Review custom (user) assessments with the AI provider configured for the web UI Agent.
+Each review is recorded alongside the assessment, one per target; the assessment itself
+is never changed. Assessments from SBOM scans and pending AI suggestions are never reviewed.
+Options:
+    --assessment-id <uuid>  Assessment to review (repeatable); every target in the project; not with --cve
+    --cve <id>              Review the custom assessments of this vulnerability (repeatable); not with --assessment-id
+    -p, --project <name>    Project (required)
+    -v, --variant <name>    Variant (repeatable); only with --cve, default: every variant
+    --re-review             Also review targets whose review is still fresh
+    --model <id>            Model to use instead of AI_MODEL
+    --timeout <seconds>     Limit for each agent turn (default: 600)
+    --dry-run               Show the targets without calling the AI
+    --json                  Print the summary as JSON
+Exit codes: 0 every target reviewed, skipped (fresh) or planned (--dry-run); 1 resolution/usage error or any target
+    changed, no_write, failed, timeout or interrupted
+Ctrl-C stops after cancelling the current agent turn and still prints the summary; press it again to stop now.
+
+Examples:
+    vulnscout review -p demo --assessment-id 3f2b6c1e-0000-4000-8000-000000000001
+    vulnscout review -p demo --cve CVE-2024-3094 --re-review
+    vulnscout review -p demo -v x86 -v arm64 --cve CVE-2024-3094 --dry-run --json
+EOF
+            ;;
         report) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] report <template|path>... [options]
+Usage: vulnscout report [-p <project>] [-v <variant>] <template|path>... [options]
 
 Generate reports from built-in templates or local files.
 Options:
@@ -372,9 +442,15 @@ Examples:
 EOF
             ;;
         export) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] export <kind>... [--amend]
+Usage: vulnscout export <kind>... [-p <project>] [-v <variant>] [--amend]
+       vulnscout export vulnerability-history --since <timestamp> [--until <timestamp>] [--format json|csv]
+       vulnscout export vulnerability-history --last-refresh [--format json|csv]
+       vulnscout export refresh-changes [--project <name>] [--variant <name>] --run-id <id> [--format json|csv]
 
 Kinds: spdx, cdx, openvex, custom-data, custom-openvex, context
+History export writes to stdout; optionally filter with --source, --field or --vuln-id.
+--last-refresh exports, per vulnerability, the changes of its most recent refresh.
+Without -p it exports all history; -p/-v restrict vulnerabilities to the current scope.
 Options:
     -p, --project <name>    Project (default: "default")
     -v, --variant <name>    Variant; without it, every variant of the project
@@ -383,10 +459,11 @@ Options:
 Examples:
     vulnscout export spdx
     vulnscout export -p demo -v x86 cdx custom-openvex
+    vulnscout export vulnerability-history --last-refresh --format csv
 EOF
             ;;
         import) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] import <kind> <path> [options]
+Usage: vulnscout import [-p <project>] [-v <variant>] <kind> <path> [options]
 
 Kinds: custom-data, custom-openvex, context
 Options:
@@ -403,12 +480,13 @@ Examples:
 EOF
             ;;
         refresh) cat <<'EOF'
-Usage: vulnscout [-p <project>] [-v <variant>] refresh
+Usage: vulnscout refresh [-p <project>] [-v <variant>] [--run-id <id>]
 
 Refresh stored vulnerability data, including EPSS.
 Options:
     -p, --project <name>    Project; without it, all projects are refreshed
     -v, --variant <name>    Variant; requires --project
+    --run-id <id>           Unique caller identity for exact-run archival (optional)
 
 Examples:
     vulnscout refresh
@@ -416,7 +494,7 @@ Examples:
 EOF
             ;;
         delete) cat <<'EOF'
-Usage: vulnscout delete <target> [--dry-run] [--yes]
+Usage: vulnscout delete <target> [--dry-run] [--yes] [--clear-vulnerability-history]
 
 Targets:
     scan <id>               A past scan (see 'vulnscout list scans')
@@ -426,9 +504,12 @@ Targets:
 Options:
     --dry-run               Show what would be deleted, delete nothing
     --yes                   Do not ask for confirmation
+    --clear-vulnerability-history
+                            Also clear all vulnerability refresh history (outdated only)
 
 Examples:
     vulnscout delete outdated --dry-run
+    vulnscout delete outdated --clear-vulnerability-history --dry-run
     vulnscout delete scan 12 --yes
 EOF
             ;;
@@ -538,7 +619,60 @@ exec_container() {
         --env "_VULNSCOUT_COLOR_STDOUT=$stdout" \
         --env "_VULNSCOUT_COLOR_STDERR=$stderr" \
         --env "NO_COLOR=${NO_COLOR:-}" --env "TERM=${TERM:-}" \
+        ${EXEC_ENV[@]+"${EXEC_ENV[@]}"} \
         "$CONTAINER_NAME" /scan/src/entrypoint.sh "$@"
+}
+
+# Run an entrypoint command that Ctrl-C, CI cancellation (SIGTERM) or a closed terminal (SIGHUP) can stop.
+# A non-TTY `exec` does not forward signals, and the engine client exits on SIGINT while the command keeps
+# running in the container. So the client runs in its own process group (set -m) and this shell forwards
+# the first signal as SIGINT (clean stop, partial report) and any further one as SIGTERM to the PID that
+# entrypoint.sh publishes for VULNSCOUT_RUN_ID.
+run_interruptible() {
+    local run_id="host-$$-$RANDOM" client status=0 final=0
+    local -a EXEC_ENV=(--env "VULNSCOUT_RUN_ID=$run_id")
+    FORWARDED_SIGNALS=0
+    # Trap before starting the client, which resets it to the default: a signal in between must not
+    # stop only this shell.
+    # shellcheck disable=SC2064  # run_id is fixed for this run
+    trap "forward_container_signal '$run_id'" INT TERM HUP
+    set -m
+    exec_container "$@" &
+    client=$!
+    set +m
+    while :; do
+        wait "$client" && status=0 || status=$?
+        # wait also returns when a trapped signal arrives; keep waiting while the client still runs.
+        kill -0 "$client" 2>/dev/null || break
+    done
+    # A signal can interrupt the last wait just as the client exits: collect the client's own status
+    # (127: the wait above already collected it).
+    wait "$client" 2>/dev/null || final=$?
+    [ "$final" -eq 127 ] || status=$final
+    trap - INT TERM HUP
+    return "$status"
+}
+
+# Forward first, then warn: writing to a closed terminal or a broken stderr must not stop the forwarding.
+# Only a delivered signal counts, so presses before the command publishes its PID do not escalate.
+forward_container_signal() {
+    local signal=INT
+    if [ "$FORWARDED_SIGNALS" -gt 0 ]; then
+        signal=TERM
+    fi
+    # shellcheck disable=SC2016  # expanded by the container shell
+    if ! call_container_engine exec "$CONTAINER_NAME" sh -c \
+        'f="${TMPDIR:-/tmp}/vulnscout-ai-assess-$1.pid"; [ -f "$f" ] && kill -"$2" "$(cat "$f")"' \
+        _ "$1" "$signal" >/dev/null 2>&1; then
+        console_err warning "Not started yet; press Ctrl-C again to stop." || true
+        return 0
+    fi
+    FORWARDED_SIGNALS=$((FORWARDED_SIGNALS + 1))
+    if [ "$signal" = TERM ]; then
+        console_err warning "Stopping now; the report may be lost." || true
+    else
+        console_err warning "Stopping after the current step; press Ctrl-C again to stop now." || true
+    fi
 }
 
 container_has_dev_mount() {
@@ -548,6 +682,9 @@ container_has_dev_mount() {
     grep -qx '/scan/src' <<< "$mounts" || return 1
     if [[ -d "$SCRIPT_DIR/vulnscout_mcp" ]]; then
         grep -qx '/scan/vulnscout_mcp' <<< "$mounts" || return 1
+    fi
+    if [[ -d "$SCRIPT_DIR/.github/skills" ]]; then
+        grep -qx '/scan/.github/skills' <<< "$mounts" || return 1
     fi
 }
 
@@ -646,8 +783,8 @@ validate_scan_types() {
     done
 }
 
-# Print the new-grammar replacement for a legacy action token; return 1 for other tokens.
-legacy_replacement() {
+# Print the command replacing a flag removed in v0.25; return 1 for other tokens.
+removed_flag_replacement() {
     case "$1" in
         --add-spdx|add-spdx) echo "add --spdx <path>" ;;
         --add-cdx|add-cdx) echo "add --cdx <path>" ;;
@@ -688,83 +825,36 @@ legacy_replacement() {
         --stop) echo "stop" ;;
         --restart) echo "restart" ;;
         --update) echo "update" ;;
-        *) return 1 ;;
-    esac
-}
-
-# Legacy-only modifiers: warned about in legacy calls, but they do not select the legacy grammar.
-legacy_modifier_replacement() {
-    case "$1" in
         --use-original-timestamps) echo "import <kind> <path> --timestamps original" ;;
         --use-current-timestamps) echo "import <kind> <path> --timestamps current" ;;
-        amend) echo "export <kind> --amend" ;;
+        amend|--amend) echo "export <kind> --amend" ;;
         *) return 1 ;;
     esac
 }
 
-# Collect legacy tokens into LEGACY_TOKENS; return 0 when the call uses the legacy grammar.
-# Values of -p/--project/-v/--variant are skipped, so "-p list-scans" is not a legacy token.
-find_legacy_tokens() {
-    local is_legacy=1 skip_value=false seen_command=false
-    LEGACY_TOKENS=()
+# Exit 1 when the command token is a removed flag, naming its replacement. Only the first
+# token after the global options is checked: later tokens are command arguments.
+reject_removed_syntax() {
+    local replacement
     while [ $# -gt 0 ]; do
-        if [ "$skip_value" = true ]; then
-            skip_value=false
-        else
-            case "$1" in
-                -p|--project|-v|--variant)
-                    skip_value=true ;;
-                --dev|-h|--help|--version)
-                    ;;
-                start|stop|restart|update|version|serve|add|scan|match-condition|refresh|asset|report|export|import|delete|list)
-                    # A new-grammar verb as first command: the rest are its arguments, never legacy flags.
-                    if [ "$seen_command" = false ]; then
-                        return 1
-                    fi ;;
-                config)
-                    if [ "$seen_command" = false ] && { [ $# -lt 3 ] || case "$2" in -*|get|set|unset|list) true ;; *) false ;; esac; }; then
-                        return 1
-                    fi
-                    seen_command=true
-                    # Legacy "config KEY VALUE" always has a key and a value. "config get|set|unset|list",
-                    # "config --help", "help config" and typos such as "config show" use the new grammar.
-                    if [ $# -ge 3 ]; then
-                        case "$2" in
-                            -*|get|set|unset|list) ;;
-                            *) LEGACY_TOKENS+=("$1"); is_legacy=0 ;;
-                        esac
-                    fi ;;
-                *)
-                    seen_command=true
-                    if legacy_replacement "$1" > /dev/null; then
-                        LEGACY_TOKENS+=("$1"); is_legacy=0
-                    elif legacy_modifier_replacement "$1" > /dev/null; then
-                        LEGACY_TOKENS+=("$1")
-                    fi ;;
-            esac
-        fi
-        shift
-    done
-    return "$is_legacy"
-}
-
-warn_legacy_tokens() {
-    if [ "${VULNSCOUT_NO_DEPRECATION_WARNING:-}" = 1 ]; then
-        return 0
-    fi
-    local token replacement
-    local -A seen=()
-    for token in "${LEGACY_TOKENS[@]}"; do
-        if [ -n "${seen[$token]:-}" ]; then
-            continue
-        fi
-        seen[$token]=1
-        if [ "$token" = config ]; then
-            replacement="config set <key> <value>"
-        elif ! replacement="$(legacy_replacement "$token")"; then
-            replacement="$(legacy_modifier_replacement "$token")"
-        fi
-        console_err warning "deprecated: $token (removed in $VULNSCOUT_LEGACY_REMOVAL_VERSION); use 'vulnscout $replacement'"
+        case "$1" in
+            -p|--project|-v|--variant) shift 2 || return 0 ;;
+            --dev|-h|--help) shift ;;
+            config)
+                # The removed form is "config KEY VALUE"; "config get|set|unset|list" is current.
+                if [ $# -ge 3 ]; then
+                    case "$2" in
+                        -*|get|set|unset|list) ;;
+                        *) die "'config <key> <value>' was removed in v0.25; use 'vulnscout config set <key> <value>'. See doc/source/cli-migration.md." ;;
+                    esac
+                fi
+                return 0 ;;
+            *)
+                if replacement="$(removed_flag_replacement "$1")"; then
+                    die "'$1' was removed in v0.25; use 'vulnscout $replacement'. See doc/source/cli-migration.md."
+                fi
+                return 0 ;;
+        esac
     done
 }
 
@@ -873,6 +963,9 @@ EOF
         vol_args+=(-v "$SCRIPT_DIR/src":/scan/src:Z)
         if [[ -d "$SCRIPT_DIR/vulnscout_mcp" ]]; then
             vol_args+=(-v "$SCRIPT_DIR/vulnscout_mcp":/scan/vulnscout_mcp:Z)
+        fi
+        if [[ -d "$SCRIPT_DIR/.github/skills" ]]; then
+            vol_args+=(-v "$SCRIPT_DIR/.github/skills":/scan/.github/skills:Z)
         fi
         env_args+=(-e DEV_MODE=true)
         console_out info "Dev mode: mounting $SCRIPT_DIR/src into /scan/src"
@@ -1147,14 +1240,133 @@ verb_match_condition() {
     exec_container "${SCOPE_ARGS[@]}" --match-condition "$1"
 }
 
+verb_assess() {
+    local has_cve=false has_filter=false
+    local -a args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cve)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]; then
+                    die "invalid vulnerability ID '$2'."
+                fi
+                args+=(--cve "$2"); has_cve=true; shift 2 ;;
+            --filter)
+                if [ $# -lt 2 ] || [ -z "$2" ]; then
+                    die "--filter requires a non-empty expression."
+                fi
+                if [ "$has_filter" = true ]; then
+                    die "'assess' accepts only one --filter."
+                fi
+                args+=(--filter "$2"); has_filter=true; shift 2 ;;
+            --model)
+                require_value "$1" "$#" "${2:-}"
+                args+=(--model "$2"); shift 2 ;;
+            --timeout)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                    die "--timeout must be a positive number of seconds."
+                fi
+                args+=(--timeout "$2"); shift 2 ;;
+            --dry-run|--json)
+                args+=("$1"); shift ;;
+            *)
+                reject_option assess "$1" ;;
+        esac
+    done
+    if [ "$has_cve" = true ] && [ "$has_filter" = true ]; then
+        die "'assess' needs exactly one of --cve or --filter; to combine them, list the IDs in the filter, e.g. --filter \"(id == CVE-2024-3094 or id == CVE-2023-4863) and pending\"."
+    elif [ "$has_cve" = false ] && [ "$has_filter" = false ]; then
+        die "'assess' needs exactly one of --cve or --filter."
+    fi
+    if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'assess' --variant requires --project."
+    fi
+    local variant
+    local -a variant_args=()
+    for variant in "${VARIANTS[@]}"; do
+        variant_args+=(--variant "$variant")
+    done
+    # Startup messages and the new container ID go to stderr: stdout carries only the report (--json).
+    ensure_running >&2
+    SCOPE_ARGS=()
+    if [ "$PROJECT_SPECIFIED" = true ]; then
+        SCOPE_ARGS+=(--project "$PROJECT")
+    fi
+    # The entrypoint takes a single --variant; ai-assess itself accepts several.
+    run_interruptible "${SCOPE_ARGS[@]}" --ai-assess "${variant_args[@]}" "${args[@]}"
+}
+
+verb_review() {
+    local has_id=false has_cve=false
+    local -a args=()
+    # The implicit "default" project does not count: a review always names its project.
+    if [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'review' requires --project."
+    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --assessment-id)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$ ]]; then
+                    die "invalid assessment ID '$2'."
+                fi
+                args+=(--assessment-id "$2"); has_id=true; shift 2 ;;
+            --cve)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]; then
+                    die "invalid vulnerability ID '$2'."
+                fi
+                args+=(--cve "$2"); has_cve=true; shift 2 ;;
+            --model)
+                require_value "$1" "$#" "${2:-}"
+                args+=(--model "$2"); shift 2 ;;
+            --timeout)
+                require_value "$1" "$#" "${2:-}"
+                if [[ ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+                    die "--timeout must be a positive number of seconds."
+                fi
+                args+=(--timeout "$2"); shift 2 ;;
+            --re-review|--dry-run|--json)
+                args+=("$1"); shift ;;
+            *)
+                reject_option review "$1" ;;
+        esac
+    done
+    if [ "$has_id" = "$has_cve" ]; then
+        die "'review' needs exactly one of --assessment-id or --cve."
+    fi
+    if [ "$has_id" = true ] && [ "$VARIANT_SPECIFIED" = true ]; then
+        die "'review' --variant cannot be used with --assessment-id, which reviews every target in the project."
+    fi
+    local variant
+    local -a variant_args=()
+    for variant in "${VARIANTS[@]}"; do
+        variant_args+=(--variant "$variant")
+    done
+    # Startup messages go to stderr: stdout carries only the report (--json).
+    ensure_running >&2
+    SCOPE_ARGS=(--project "$PROJECT")
+    run_interruptible "${SCOPE_ARGS[@]}" --ai-review "${variant_args[@]}" "${args[@]}"
+}
+
 verb_refresh() {
-    require_no_args refresh "$@"
+    local -a refresh_args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id)
+                require_value "$1" "$#" "${2:-}"
+                refresh_args+=(--refresh-run-id "$2")
+                shift 2 ;;
+            *) reject_option refresh "$1" ;;
+        esac
+    done
     if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
         die "'refresh' --variant requires --project."
     fi
     ensure_running
     set_explicit_scope_args
-    exec_container "${SCOPE_ARGS[@]}" --refresh-vulnerability-data
+    exec_container "${SCOPE_ARGS[@]}" --refresh-vulnerability-data "${refresh_args[@]}"
 }
 
 verb_asset() {
@@ -1236,6 +1448,15 @@ verb_report() {
 }
 
 verb_export() {
+    if [ "${1:-}" = vulnerability-history ]; then
+        shift
+        verb_export_vulnerability_history "$@"
+        return
+    elif [ "${1:-}" = refresh-changes ]; then
+        shift
+        verb_export_refresh_changes "$@"
+        return
+    fi
     local amend=false has_custom=false kind
     local -a kinds=() export_args=()
     while [ $# -gt 0 ]; do
@@ -1275,6 +1496,58 @@ verb_export() {
     ensure_running
     set_project_scope_args
     exec_container "${SCOPE_ARGS[@]}" "${export_args[@]}"
+}
+
+verb_export_vulnerability_history() {
+    local since="" until="" last_refresh=false format="json"
+    local -a args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --last-refresh) last_refresh=true; args+=("$1"); shift ;;
+            --since|--until|--source|--field|--vuln-id|--format)
+                require_value "$1" "$#" "${2:-}"
+                case "$1" in
+                    --since) since="$2" ;;
+                    --until) until="$2" ;;
+                    --format) format="$2" ;;
+                esac
+                args+=("$1" "$2"); shift 2 ;;
+            *) reject_option "export vulnerability-history" "$1" ;;
+        esac
+    done
+    if [ "$last_refresh" = true ]; then
+        [ -z "$since$until" ] || die "'export vulnerability-history' --last-refresh cannot be combined with --since or --until."
+    else
+        [ -n "$since" ] || die "'export vulnerability-history' requires --since or --last-refresh."
+    fi
+    case "$format" in json|csv) ;; *) die "--format must be json or csv." ;; esac
+    if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'export vulnerability-history' --variant requires --project."
+    fi
+    ensure_running >&2
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --export-vulnerability-history "${args[@]}"
+}
+
+verb_export_refresh_changes() {
+    local run_id="" format="json"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id|--format)
+                require_value "$1" "$#" "${2:-}"
+                if [ "$1" = --run-id ]; then run_id="$2"; else format="$2"; fi
+                shift 2 ;;
+            *) reject_option "export refresh-changes" "$1" ;;
+        esac
+    done
+    [ -n "$run_id" ] || die "'export refresh-changes' requires --run-id; latest is never substituted."
+    case "$format" in json|csv) ;; *) die "--format must be json or csv." ;; esac
+    if [ "$VARIANT_SPECIFIED" = true ] && [ "$PROJECT_SPECIFIED" = false ]; then
+        die "'export refresh-changes' --variant requires --project."
+    fi
+    ensure_running >&2
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --export-refresh-changes "$run_id" --refresh-changes-format "$format"
 }
 
 verb_import() {
@@ -1383,6 +1656,11 @@ verb_delete() {
         case "$1" in
             --dry-run) dry_run=true ;;
             --yes) yes=true ;;
+            --clear-vulnerability-history)
+                if [ "$target" != outdated ]; then
+                    die "--clear-vulnerability-history is only valid for 'delete outdated'."
+                fi
+                delete_args=(--clear-vulnerability-history --delete-outdated) ;;
             *) reject_option delete "$1" ;;
         esac
         shift
@@ -1466,7 +1744,7 @@ verb_config() {
                 reject_option "config list" "$2"
             fi
             if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
-                sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET)[A-Za-z0-9_]*)=.+/\1=****/' "$VULNSCOUT_CONFIG_FILE"
+                sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET|AI_AUTH_CREDENTIALS)[A-Za-z0-9_]*)=.+/\1=****/' "$VULNSCOUT_CONFIG_FILE"
             else
                 console_out info "No config file found."
             fi ;;
@@ -1489,7 +1767,7 @@ parse_new() {
                 require_value "$1" "$#" "${2:-}"
                 case "$1" in
                     -p|--project) PROJECT="$2"; PROJECT_SPECIFIED=true ;;
-                    *) VARIANT="$2"; VARIANT_SPECIFIED=true ;;
+                    *) VARIANT="$2"; VARIANT_SPECIFIED=true; VARIANTS+=("$2") ;;
                 esac
                 shift 2 ;;
             --dev)
@@ -1526,6 +1804,8 @@ parse_new() {
         add) verb_add "${rest[@]}" ;;
         scan) verb_scan "${rest[@]}" ;;
         match-condition) verb_match_condition "${rest[@]}" ;;
+        assess) verb_assess "${rest[@]}" ;;
+        review) verb_review "${rest[@]}" ;;
         refresh) verb_refresh "${rest[@]}" ;;
         asset) verb_asset "${rest[@]}" ;;
         report) verb_report "${rest[@]}" ;;
@@ -1541,208 +1821,13 @@ parse_new() {
     esac
 }
 
-parse_legacy() {
-    # Pre-scan args for --dev so it takes effect regardless of position
-    for _arg in "$@"; do
-        [ "$_arg" = "--dev" ] && DEV_MODE=true
-    done
-    local SERVE_REQUESTED=false
-    local REPORT_ARGS=()
-    local EXPORT_ARGS=()
-    local DATA_REQUESTED=""
-    local DATA_ARGS=()
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --dev)
-                DEV_MODE=true; shift ;;
-            -p|--project)
-                PROJECT="$2"; PROJECT_SPECIFIED=true; shift 2 ;;
-            -v|--variant)
-                VARIANT="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
-            --match-condition)
-                MATCH_CONDITION="$2"; shift 2 ;;
-            add-spdx|--add-spdx|add-cve-check|--add-cve-check|add-yocto-vex|--add-yocto-vex|add-openvex|--add-openvex|add-cdx|--add-cdx|add-grype|--add-grype)
-                ensure_running; add_input "${1#--}" "$2"; shift 2 ;;
-            --refresh-vulnerability-data)
-                ensure_running; REFRESH_VULNERABILITY_DATA=true; shift ;;
-            add-asset|--add-asset)
-                ensure_running; add_input add-asset "$2"; shift 2 ;;
-            --perform-scans)
-                if [[ $# -lt 2 || "$2" == --* ]]; then
-                    console_err error "Error: --perform-scans requires a scan type."; exit 1
-                fi
-                validate_scan_types "$2"
-                ensure_running
-                PENDING_ARGS+=(--perform-scans "$2"); shift 2 ;;
-            --perform-grype-scan)
-                ensure_running; PENDING_ARGS+=(--perform-grype-scan); shift ;;
-            --perform-nvd-scan)
-                ensure_running; PENDING_ARGS+=(--perform-nvd-scan); shift ;;
-            --perform-osv-scan)
-                ensure_running; PENDING_ARGS+=(--perform-osv-scan); shift ;;
-            --perform-sbom-cve-check-scan)
-                ensure_running; PENDING_ARGS+=(--perform-sbom-cve-check-scan); shift ;;
-            export-spdx|--export-spdx)
-                ensure_running; EXPORT_ARGS+=(--export-spdx); shift ;;
-            export-cdx|--export-cdx)
-                ensure_running; EXPORT_ARGS+=(--export-cdx); shift ;;
-            export-openvex|--export-openvex)
-                ensure_running; EXPORT_ARGS+=(--export-openvex); shift ;;
-            export-custom-vulnscout-data|--export-custom-vulnscout-data)
-                ensure_running; EXPORT_ARGS+=(--export-custom-vulnscout-data); shift ;;
-            export-custom-openvex-assessments|--export-custom-openvex-assessments)
-                ensure_running; EXPORT_ARGS+=(--export-custom-openvex-assessments); shift ;;
-            amend|--amend)
-                EXPORT_ARGS+=(--amend); shift ;;
-            import-custom-vulnscout-data|--import-custom-vulnscout-data)
-                ensure_running
-                local import_staged
-                import_staged="$(stage_file "$2")"
-                EXPORT_ARGS+=(--import-custom-vulnscout-data "$import_staged")
-                shift 2 ;;
-            import-custom-openvex-assessments|--import-custom-openvex-assessments)
-                ensure_running
-                local import_staged
-                import_staged="$(stage_file "$2")"
-                EXPORT_ARGS+=(--import-custom-openvex-assessments "$import_staged")
-                shift 2 ;;
-            export-context|--export-context)
-                ensure_running; EXPORT_ARGS+=(--export-context); shift ;;
-            import-context|--import-context)
-                ensure_running
-                local import_staged
-                import_staged="$(stage_file "$2")"
-                EXPORT_ARGS+=(--import-context "$import_staged")
-                shift 2 ;;
-            --use-original-timestamps)
-                EXPORT_ARGS+=(--use-original-timestamps); shift ;;
-            --use-current-timestamps)
-                EXPORT_ARGS+=(--use-current-timestamps); shift ;;
-            delete-scan|--delete-scan)
-                ensure_running
-                exec_container --delete-scan "$2"
-                shift 2 ;;
-            delete-outdated|--delete-outdated)
-                ensure_running
-                exec_container --delete-outdated
-                shift ;;
-            delete-empty-scans|--delete-empty-scans)
-                ensure_running
-                exec_container --delete-empty-scans
-                shift ;;
-            delete-orphaned-vulns|--delete-orphaned-vulns|delete-orphaned-vulnerabilities|--delete-orphaned-vulnerabilities)
-                ensure_running
-                exec_container --delete-orphaned-vulns
-                shift ;;
-            serve|--serve)
-                SERVE_REQUESTED=true; shift ;;
-            report|--report)
-                ensure_running
-                local tpl
-                tpl="$(stage_report_template "$2")"
-                REPORT_ARGS+=(--report "$tpl")
-                shift 2 ;;
-            list-projects|--list-projects|list-scans|--list-scans)
-                ensure_running
-                command="${1#--}"
-                if [[ "$DATA_REQUESTED" != "" ]]; then
-                    # Only 1 data request command is allowed at the same time
-                    console_out error "Cannot use $command and $DATA_REQUESTED together"
-                    exit 1
-                fi
-                DATA_REQUESTED="$command"
-                shift ;;
-            --json)
-                DATA_ARGS+=(--json); shift ;;
-            start|--start)
-                do_start
-                if [ "$DEV_MODE" = true ]; then
-                    start_frontend_dev
-                fi
-                shift ;;
-            stop|--stop)
-                call_container_engine rm -f "$CONTAINER_NAME"; shift ;;
-            restart|--restart)
-                call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
-                do_start
-                if [ "$DEV_MODE" = true ]; then
-                    start_frontend_dev
-                fi
-                shift ;;
-            config|--config)
-                config_set "$2" "$3"; shift 3 ;;
-            config-list|--config-list)
-                sed 's/\(API_KEY\|PASSWORD\|SECRET\|AI_AUTH_CREDENTIALS\)=.*/\1=****/' \
-                    "$VULNSCOUT_CONFIG_FILE" 2>/dev/null || console_out info "No config file found."
-                shift ;;
-            config-clear|--config-clear)
-                config_clear "$2"; shift 2 ;;
-            help|--help|-h)
-                show_help; shift ;;
-            version|--version)
-                do_version; shift ;;
-            update|--update)
-                do_update; shift ;;
-            *)
-                console_err error "Unknown command: $1"
-                console_err info "Run 'vulnscout --help' for usage."
-                exit 1 ;;
-        esac
-    done
-
-    # Auto-trigger scan if inputs were staged: one entrypoint call handles move + scan
-    local _exit=0
-    if [ "$SERVE_REQUESTED" = true ]; then
-        ensure_running
-        # Kill any previous Flask process to free port 7275
-        call_container_engine exec "$CONTAINER_NAME" pkill -f 'flask.*run' 2>/dev/null || true
-        sleep 1
-        if [ "$DEV_MODE" = true ]; then
-            start_frontend_dev
-        fi
-        exec_container --project "$PROJECT" --variant "$VARIANT" ${PENDING_ARGS[@]+"${PENDING_ARGS[@]}"} --serve || _exit=$?
-    elif [ ${#PENDING_ARGS[@]} -gt 0 ]; then
-        local -a scan_args=()
-        [ -n "$MATCH_CONDITION" ] && scan_args+=(--match-condition "$MATCH_CONDITION")
-        [ "${REFRESH_VULNERABILITY_DATA:-false}" = true ] && scan_args+=(--refresh-vulnerability-data)
-        local -a scan_scope_args=()
-        [ "$PROJECT_SPECIFIED" = true ] && scan_scope_args+=(--project "$PROJECT")
-        [ "$VARIANT_SPECIFIED" = true ] && scan_scope_args+=(--variant "$VARIANT")
-        exec_container "${scan_scope_args[@]}" "${PENDING_ARGS[@]}" "${scan_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
-    elif [ "${REFRESH_VULNERABILITY_DATA:-false}" = true ]; then
-        local -a refresh_args=(--refresh-vulnerability-data)
-        [ "$PROJECT_SPECIFIED" = true ] && refresh_args=(--project "$PROJECT" "${refresh_args[@]}")
-        [ "$VARIANT_SPECIFIED" = true ] && refresh_args=(--variant "$VARIANT" "${refresh_args[@]}")
-        exec_container "${refresh_args[@]}" || _exit=$?
-    elif [[ "$DATA_REQUESTED" != "" ]]; then
-        exec_container "--$DATA_REQUESTED" "${DATA_ARGS[@]}"
-    elif [ -n "$MATCH_CONDITION" ] || [ ${#REPORT_ARGS[@]} -gt 0 ] || [ ${#EXPORT_ARGS[@]} -gt 0 ]; then
-        # No new inputs but a match-condition, report, or export was given: run against existing DB data
-        ensure_running
-        local -a mc_args=()
-        if [ -n "$MATCH_CONDITION" ]; then
-            [ "$PROJECT_SPECIFIED" = true ] && mc_args+=(--project "$PROJECT")
-        else
-            mc_args+=(--project "$PROJECT")
-        fi
-        [ "$VARIANT_SPECIFIED" = true ] && mc_args+=(--variant "$VARIANT")
-        [ -n "$MATCH_CONDITION" ] && mc_args+=(--match-condition "$MATCH_CONDITION")
-        exec_container "${mc_args[@]}" "${REPORT_ARGS[@]}" "${EXPORT_ARGS[@]}" || _exit=$?
-    fi
-    return $_exit
-}
-
 main() {
     if [ $# -eq 0 ]; then
         show_help
         return 0
     fi
-    if find_legacy_tokens "$@"; then
-        warn_legacy_tokens
-        parse_legacy "$@"
-    else
-        parse_new "$@"
-    fi
+    reject_removed_syntax "$@"
+    parse_new "$@"
 }
 
 main "$@"

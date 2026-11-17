@@ -4,16 +4,21 @@ fetchMock.enableMocks();
 
 jest.setTimeout(15000);
 
-import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { act, fireEvent, render as rtlRender, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import type { RenderOptions } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import React from 'react';
 
-import type { Vulnerability } from "../../src/handlers/vulnerabilities";
+import Vulnerabilities, { type Vulnerability } from "../../src/handlers/vulnerabilities";
 import TableVulnerabilities from '../../src/pages/TableVulnerabilities';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
+
+// RefreshVulnerabilityData links to the Refresh page with client-side navigation.
+const render = (ui: React.ReactElement, options?: RenderOptions) => rtlRender(ui, { wrapper: MemoryRouter, ...options });
 
 class PassiveEventSource {
     static current: PassiveEventSource;
@@ -813,6 +818,7 @@ describe('Vulnerability Table', () => {
     test('select all in table and unselecting', async () => {
         // ARRANGE
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeDisabled();
 
         const user = userEvent.setup();
         const select_all = await screen.getByTitle(/select all/i);
@@ -820,6 +826,7 @@ describe('Vulnerability Table', () => {
 
         await user.click(select_all)
         expect(select_all).toBeChecked();
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeEnabled();
 
         const uniques_selections = await screen.getAllByTitle(/unselect/i);
         expect(uniques_selections.length).toBeGreaterThanOrEqual(1);
@@ -828,6 +835,11 @@ describe('Vulnerability Table', () => {
         await user.click(uniques_selections[0])
 
         expect(select_all).not.toBeChecked();
+
+        await user.click(select_all);
+        await user.click(select_all);
+        expect(screen.queryAllByTitle(/unselect/i)).toHaveLength(0);
+        expect(screen.getByRole('button', { name: 'Assess with AI' })).toBeDisabled();
     })
 
     test('select using ctrl+click and reset selection', async () => {
@@ -1782,8 +1794,10 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
+            'Vulnerabilities are incomplete and need updating. Open the Refresh tab to update them.'
         );
+        expect(screen.getByRole('link', { name: 'Refresh tab' })).toHaveAttribute('href', '/refresh');
+        expect(screen.queryByTestId('refresh-dropdown-toggle')).not.toBeInTheDocument();
     });
 
     test('hides the EU KEV banner after a refresh even when no vulnerability is known-exploited', async () => {
@@ -1824,7 +1838,7 @@ describe('Vulnerability Table', () => {
         render(<TableVulnerabilities vulnerabilities={withEuvdData} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
+            'Vulnerabilities are incomplete and need updating. Open the Refresh tab to update them.'
         );
     });
 
@@ -1835,7 +1849,7 @@ describe('Vulnerability Table', () => {
         const alerts = await screen.findAllByRole('alert');
         expect(alerts).toHaveLength(1);
         expect(alerts[0]).toHaveTextContent(
-            'Vulnerabilities are incomplete and need updating. Use the "Refresh vulnerability data" button to update them.'
+            'Vulnerabilities are incomplete and need updating. Open the Refresh tab to update them.'
         );
     });
 
@@ -3097,147 +3111,6 @@ describe('Data timestamp columns (Fetched / Updated)', () => {
         });
     });
 
-    test('shows NVD completion banner via phase transition (fast-complete path)', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('nvd', 'running', 5, 10);
-            sendRefresh('nvd', 'done', 10, 10);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/NVD refresh complete \(10 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows NVD cancelled banner when phase transitions to cancelled', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('nvd', 'running', 3, 10);
-            sendRefresh('nvd', 'cancelled', 3, 10);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/NVD refresh cancelled \(3\/10 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows EPSS completion banner via phase transition (fast-complete path)', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('epss', 'running', 25, 50);
-            sendRefresh('epss', 'done', 50, 50);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows EPSS cancelled banner when phase transitions to cancelled', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('epss', 'running', 5, 20);
-            sendRefresh('epss', 'cancelled', 5, 20);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/EPSS refresh cancelled \(5\/20 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('does not show EPSS banner on first load when phase is already completed', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('epss', 'done', 50, 50);
-
-            await act(async () => { await Promise.resolve(); });
-
-            expect(screen.queryByText(/EPSS refresh complete/i)).not.toBeInTheDocument();
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('does not show NVD banner on first load when phase is already completed', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('nvd', 'done', 10, 10);
-
-            await act(async () => { await Promise.resolve(); });
-
-            expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows EPSS completion banner when refresh completes between polls (started_at changes)', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('epss', 'running', 25, 50);
-            sendRefresh('epss', 'done', 50, 50, '2026-06-10T10:01:00Z');
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
-
-    test('shows EPSS completion banner for a re-triggered fast refresh (started_at changes)', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('epss', 'running', 10, 50, '2026-06-10T09:00:00Z');
-            sendRefresh('epss', 'done', 50, 50, '2026-06-10T10:01:00Z');
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/EPSS refresh complete \(50 CVEs\)/i)).toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
-    });
 });
 
 describe('Status helper, banner close, package filter, modal navigation, first scan date column', () => {
@@ -3302,6 +3175,27 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         fetchMock.resetMocks();
     });
 
+    test.each(['Exploitable', 'Fixed', 'Pending Assessment'])(
+        'displays all current package statuses and matches the %s filter', async status => {
+            const packages = ['curl@8.5.0', 'libcurl@8.5.0', 'curl-static@8.5.0'];
+            const assessments = ['Exploitable', 'Fixed', 'Pending Assessment'].map((simplified_status, index) => ({
+                id: `assessment-${index}`, vuln_id: vulnerabilities[0].id,
+                packages: [packages[index]], variant_id: 'board', origin: 'custom',
+                status: simplified_status, simplified_status,
+                timestamp: `2026-11-0${index + 1}T12:00:00Z`, responses: [],
+            }));
+            const enriched = Vulnerabilities.enrich_with_assessments([{
+                ...vulnerabilities[0], packages, packages_current: packages,
+                packages_current_by_variant: { board: packages },
+            }], assessments);
+            render(<TableVulnerabilities vulnerabilities={enriched}
+                filterLabel="Status" filterValue={status} preferenceScopeKey={`package-status-${status}`}
+                appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            expect(await screen.findByRole('cell', { name: 'Exploitable, Pending Assessment, Fixed' }))
+                .toBeInTheDocument();
+        }
+    );
+
     test('status summary helper button opens and closes dropdown', async () => {
         render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
         const user = userEvent.setup();
@@ -3315,7 +3209,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
 
         const helpTitle = await screen.findByText('Status Summary');
         expect(helpTitle).toBeInTheDocument();
-        expect(screen.getByText(/Status aggregates all assessment outcomes/i)).toBeInTheDocument();
+        expect(screen.getByText(/Status aggregates the newest assessment for each package and variant/i)).toBeInTheDocument();
 
         // Close via click outside — the dropdown closes via a mousedown listener
         fireEvent.mouseDown(document.body);
@@ -3340,33 +3234,6 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         await waitFor(() => {
             expect(screen.queryByText('Status Summary')).not.toBeInTheDocument();
         });
-    });
-
-    test('banner can be dismissed via close button', async () => {
-        jest.useFakeTimers();
-        try {
-            render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-            sendRefresh('nvd', 'running', 5, 10);
-            sendRefresh('nvd', 'done', 10, 10);
-
-            await act(async () => { await Promise.resolve(); });
-            await act(async () => { jest.advanceTimersByTime(5001); });
-            await act(async () => { await Promise.resolve(); });
-
-            await waitFor(() => {
-                expect(screen.getByText(/NVD refresh complete/i)).toBeInTheDocument();
-            });
-
-            // Dismiss the banner using fireEvent (compatible with fake timers)
-            const closeBtn = screen.getByRole('button', { name: /dismiss/i });
-            await act(async () => { fireEvent.click(closeBtn); });
-
-            await waitFor(() => {
-                expect(screen.queryByText(/NVD refresh complete/i)).not.toBeInTheDocument();
-            });
-        } finally {
-            jest.useRealTimers();
-        }
     });
 
     test('packages filter dropdown reflects active Package filter prop', async () => {
@@ -3567,16 +3434,6 @@ describe('Status helper, banner close, package filter, modal navigation, first s
             expect(html).toMatch(/2025/);
             expect(html).toMatch(/Feb|02|10/);
         });
-    });
-
-    test('updates refresh progress through SSE without polling deleted endpoints', async () => {
-        render(<TableVulnerabilities vulnerabilities={[]} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
-        sendRefresh('nvd', 'running', 1, 10);
-        sendRefresh('nvd', 'running', 5, 10);
-        sendRefresh('nvd', 'done', 10, 10);
-
-        expect(await screen.findByText(/NVD refresh complete/i)).toBeInTheDocument();
-        expect(fetchMock.mock.calls.some(([url]) => /\/api\/(nvd|epss|ghsa|euvd)\/progress/.test(String(url)))).toBe(false);
     });
 
     test('click inside status helper dropdown does not close it (stopPropagation)', async () => {

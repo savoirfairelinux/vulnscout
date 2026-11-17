@@ -4,8 +4,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import pytest
+import uuid
 from unittest.mock import patch
 from src.bin.webapp import create_app
+from src.controllers.job_context import JobContext
+from src.controllers.metrics import MetricsController
+from src.controllers.refresh_jobs import run_nvd_refresh
+from src.extensions import db
+from src.models import Metrics, Vulnerability
 from . import write_demo_files, setup_demo_db
 
 
@@ -51,7 +57,175 @@ def existing_cve_id():
     return "CVE-2020-35492"
 
 
+class TestCvssRefresh:
+
+    @pytest.mark.parametrize("surface", ["nvd-refresh", "refresh", "bulk"])
+    @pytest.mark.parametrize("mode", ["api", "local"])
+    @pytest.mark.parametrize("nvd_count", [0, 1, 2])
+    def test_refresh_preserves_independent_metrics(self, app, client, surface, mode, nvd_count):
+        cve_id = "CVE-2026-106553"
+        vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        cve = {
+            "id": cve_id,
+            "descriptions": [{"lang": "en", "value": "Updated NVD description"}],
+            "metrics": {"cvssMetricV31": [{
+                "type": "Primary",
+                "cvssData": {"baseScore": 9.8, "vectorString": vector, "baseSeverity": "CRITICAL"},
+            }]},
+        }
+        with app.app_context():
+            Vulnerability.create_record(id=cve_id, description="Old description")
+            protected = [
+                Metrics(author="other-provider", origin="scanner", score=7.5),
+                Metrics(author=None, origin=None, score=8.1),
+                Metrics(author="nvd", origin="custom", score=2.2),
+                Metrics(author="nvd", origin="custom", score=1.1,
+                        variant_id=uuid.UUID("22222222-2222-2222-2222-222222222222")),
+                Metrics(author="nvd", origin="scanner", score=3.3,
+                        variant_id=uuid.UUID("22222222-2222-2222-2222-222222222222")),
+                Metrics(author="nvd", version="2.0", score=5.0),
+                Metrics(author="nvd", vulnerability_id="CVE-2020-35492", score=4.2),
+            ]
+            for metric in protected:
+                metric.vulnerability_id = metric.vulnerability_id or cve_id
+                metric.version = metric.version or "3.1"
+                metric.vector = "protected vector"
+            nvd_metrics = [
+                Metrics(vulnerability_id=cve_id, version="3.1", author="nvd",
+                        origin=None if i == 0 else "scanner", score=4 + i, vector="old vector")
+                for i in range(nvd_count)
+            ]
+            db.session.add_all(protected + nvd_metrics)
+            db.session.commit()
+            protected_before = {m.id: MetricsController.serialize(m) for m in protected}
+            nvd_ids = {m.id for m in nvd_metrics}
+            total = db.session.query(Metrics).count() + int(nvd_count == 0)
+
+        with patch("src.routes.vulnerabilities.NVD_DB.api_get_cve",
+                   return_value=(200, {"vulnerabilities": [{"cve": cve}]})), \
+             patch("src.routes.vulnerabilities.get_cve_json", return_value=cve), \
+             patch("src.controllers.refresh_jobs.get_cve_json", return_value=cve), \
+             patch("src.controllers.refresh_jobs._get_scc_engine"), \
+             patch("src.routes.vulnerabilities.EPSS_DB") as epss, \
+             patch("src.routes.vulnerabilities.EUVD_DB") as euvd:
+            epss.return_value.api_get_epss.return_value = {"score": 0.4}
+            euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
+            euvd.return_value.get_mapping.return_value = {"dummy": {}}
+            for attempt in range(2):
+                if surface == "bulk":
+                    with app.app_context():
+                        run_nvd_refresh(JobContext("test:nvd-refresh", {"ids": [cve_id], "mode": mode}))
+                else:
+                    response = client.post(f"/api/vulnerabilities/{cve_id.lower()}/{surface}",
+                                           json={"mode": mode})
+                    assert response.status_code == 200
+                    body = response.get_json()
+                    if surface == "refresh":
+                        assert {source: result["status"] for source, result in body["results"].items()} == {
+                            "nvd": 200, "epss": 200, "euvd": 200,
+                        }
+                        body = body["results"]["nvd"]["body"]
+                    run_id = response.headers["X-Refresh-Run-ID"]
+                    run = client.get(f"/api/refresh-runs/{run_id}").get_json()
+                    assert run["status"] == "complete"
+                    if attempt:
+                        assert not any(change["source"] == "nvd" for change in run["changes"])
+                    severity = body["vulnerabilities"][0]["severity"]
+                    assert severity["max_score"] == pytest.approx(9.8)
+                    assert any(m["author"] == "nvd" and m["base_score"] == pytest.approx(9.8)
+                               and m["vector_string"] == vector for m in severity["cvss"])
+
+                with app.app_context():
+                    assert db.session.query(Metrics).count() == total
+                    for metric_id, before in protected_before.items():
+                        assert MetricsController.serialize(db.session.get(Metrics, metric_id)) == before
+                    refreshed = db.session.scalars(db.select(Metrics).where(
+                        Metrics.vulnerability_id == cve_id, Metrics.version == "3.1",
+                        Metrics.author == "nvd", Metrics.variant_id.is_(None),
+                        db.or_(Metrics.origin.is_(None), Metrics.origin != "custom"),
+                    )).all()
+                    assert len(refreshed) == max(nvd_count, 1)
+                    if nvd_ids:
+                        assert {m.id for m in refreshed} == nvd_ids
+                    assert all(float(m.score) == pytest.approx(9.8) and m.vector == vector for m in refreshed)
+                    record = db.session.get(Vulnerability, cve_id)
+                    assert record.description == "Updated NVD description"
+                    assert record.nvd_fetched_at is not None
+                    assert record.nvd_data_updated_at is not None
+
+    @pytest.mark.parametrize(("details", "expected_score", "expected_vector"), [
+        ({}, None, "old vector"),
+        ({"base_score": 0}, None, "old vector"),
+        ({"cvss_version": "3.1", "cvss_vector": "new vector"}, None, "old vector"),
+        ({"base_score": 0, "cvss_version": "3.1"}, 0, "old vector"),
+        ({"base_score": 0, "cvss_version": "3.1", "cvss_vector": ""}, 0, "old vector"),
+        ({"base_score": 0, "cvss_version": "3.1", "cvss_vector": "new vector"}, 0, "new vector"),
+    ])
+    def test_partial_cvss_data_preserves_missing_fields(
+        self, app, client, existing_cve_id, details, expected_score, expected_vector,
+    ):
+        with app.app_context():
+            metric = Metrics(vulnerability_id=existing_cve_id, version="3.1", author="nvd",
+                             vector="old vector")
+            db.session.add(metric)
+            db.session.commit()
+            metric_id = metric.id
+
+        with patch("src.routes.vulnerabilities.get_cve_json", return_value={"id": existing_cve_id}), \
+             patch("src.routes.vulnerabilities.extract_cve_details", return_value=details):
+            response = client.post(f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh")
+        assert response.status_code == 200
+        with app.app_context():
+            assert db.session.query(Metrics).count() == 1
+            metric = db.session.get(Metrics, metric_id)
+            assert metric.score == expected_score
+            assert metric.vector == expected_vector
+
+
 class TestSingleCveRefreshEndpoint:
+
+    @pytest.mark.parametrize("mode", ["api", "local"])
+    def test_repeated_refresh_keeps_reference_urls_unique(self, app, client, existing_cve_id, mode):
+        from src.extensions import db
+        from src.models.vulnerability import Vulnerability
+
+        nvd_url = f"https://nvd.nist.gov/vuln/detail/{existing_cve_id}"
+        reference = "https://gitlab.freedesktop.org/cairo/cairo/-/issues/415"
+        distinct_reference = reference + "#note_1"
+        expected_urls = [nvd_url, reference, distinct_reference]
+        cve = {
+            "id": existing_cve_id,
+            "references": [
+                {"url": reference, "source": "cve@mitre.org", "tags": ["Issue Tracking"]},
+                {"url": reference, "source": "nvd@nist.gov", "tags": ["Patch"]},
+                {"url": distinct_reference},
+            ],
+        }
+        with app.app_context():
+            rec = db.session.get(Vulnerability, existing_cve_id)
+            # Include a duplicate left by an earlier refresh.
+            rec.links = [nvd_url, reference, reference]
+            db.session.commit()
+
+        with patch("src.routes.vulnerabilities.NVD_DB.api_get_cve",
+                   return_value=(200, {"vulnerabilities": [{"cve": cve}]})), \
+             patch("src.routes.vulnerabilities.get_cve_json", return_value=cve):
+            updated_at = None
+            for _ in range(3):
+                response = client.post(
+                    f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
+                    json={"mode": mode},
+                )
+                assert response.status_code == 200
+                assert response.get_json()["vulnerabilities"][0]["urls"] == expected_urls
+                with app.app_context():
+                    rec = db.session.get(Vulnerability, existing_cve_id)
+                    assert rec.links == expected_urls
+                    if updated_at is None:
+                        updated_at = rec.nvd_data_updated_at
+                        assert updated_at is not None
+                    else:
+                        assert rec.nvd_data_updated_at == updated_at
 
     def test_single_refresh_returns_200_with_vuln_payload(self, client, existing_cve_id):
         """POST /api/vulnerabilities/<id>/nvd-refresh returns 200 + updated vuln dict."""

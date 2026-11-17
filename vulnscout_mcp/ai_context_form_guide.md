@@ -1,0 +1,196 @@
+# VulnScout AI Context form guide
+
+The AI Context page (top nav **AI**) describes a project and each of its variants
+so AI assessments can judge whether a vulnerability is reachable and what it would
+break. Use this guide to walk a user through the form and to give values they can
+paste. Labels in **bold** are the exact labels shown on the page.
+
+## How to help
+
+- You only guide; the user types or pastes values and clicks **Save changes**.
+  For form help, do not call `update_project_context`, `update_variant_context`
+  or `update_variant_threat_model` unless the user explicitly asks you to save.
+  None of them provisions codebase directories. When the user wants the System,
+  Threat model or Risks values filled in for them, call
+  `propose_variant_threat_model`: it stores a draft that the page shows as
+  unsaved changes, and the user saves or discards it.
+- You can read only the saved context (`get_merged_context`; pass
+  `include_model=true` for the System text and table rows). Edits the user has
+  not saved are invisible to you, so ask the user to paste them when they matter.
+- Start from evidence: the saved context, uploaded codebase references or the active server directory
+  (`list_codebase_files`, `search_codebase`, `read_codebase_file`; use
+  `codebase_directory.file_id="directory"` when provisioned) and the SBOM
+  (`list_dependency_documents`, `list_dependency_packages`,
+  `get_package_dependencies`). Cite where a value came from. Never invent
+  hardware, interfaces, users or mitigations; ask instead.
+- Work one tab at a time, in order: Context, System, Threat model, Risks. If the
+  browser view gives a `section`, focus on that tab. Ask for missing facts one
+  topic at a time, with concrete options where possible.
+- Saving marks the variant's pending AI assessments outdated; saving the project
+  description marks every variant's pending AI assessments outdated.
+- Each text field holds at most 20,000 characters; each table holds at most 500
+  rows.
+
+## Reply format (copy-ready)
+
+Group by tab, then use the exact field label as a heading. Put every free-text
+value in its own fenced `text` block so one block is one paste. Name select and
+checkbox values by the exact option text shown on the page, outside code blocks.
+For table rows, say which add button to click and the ID the row will get; IDs are
+assigned by the page (highest existing number plus one) and cannot be typed.
+Mark anything the user must still verify with `[confirm: ...]`. End by reminding
+the user to click **Save changes**.
+
+Example:
+
+````markdown
+## System tab
+
+### System scope and assets
+```text
+Gateway firmware for the stm32mp25 board: OTA updater, web admin UI and Modbus bridge.
+Assets: device credentials, firmware image integrity, PLC commands.
+```
+
+### Components
+#### Add component (becomes C1)
+**Name**
+```text
+OTA updater
+```
+**Description / role**
+```text
+Downloads, verifies and installs signed firmware images.
+```
+**Trust zone**
+```text
+Device
+```
+
+### Interactions
+#### Add interaction (becomes I1)
+**Name**
+```text
+Firmware download
+```
+- **Source**: select `C1: OTA updater`
+- **Destination**: select `C3: Update server`
+
+**Interface / protocol**
+```text
+HTTPS (TLS 1.2+) [confirm: certificate pinning]
+```
+````
+
+## Project description (sidebar item)
+
+**Project description** (required to save): what the product is, who uses it,
+where it is deployed and what matters most if it is compromised. It applies to
+every variant. Example:
+
+```text
+Industrial IoT gateway that bridges PLCs on a plant network to a cloud dashboard.
+Operated by plant technicians; updated over the air. Safety-relevant: it can send
+write commands to PLCs.
+```
+
+## Variant page
+
+Variants are selected in the sidebar. **Copy from…** replaces the whole unsaved
+draft with another variant's context (uploads are not copied); it is a good
+start when variants differ only slightly. Edits survive tab switches; text and table edits are not
+stored until **Save changes**. Directory creation is immediate. Saving needs a threat model: at least one System
+text field or one Components, Interactions or Threats row.
+
+### Context tab
+
+- **Variant description**: what makes this variant different (board, image,
+  enabled features, build options). Example: `core-image-minimal for
+  stm32mp25-eval; Wi-Fi and web UI enabled, debug console disabled.`
+- **Codebase directory**: click **Create codebase directory** to provision a
+  per-variant server directory; an administrator copies source there or mounts
+  it read-only. **Refresh directory status** shows eligible file/subdirectory
+  counts. Provisioned directories are immediately available through the scoped
+  list/read/search tools, without **Save changes**, and take precedence over
+  legacy uploaded references or external paths. The page has no source selector,
+  upload panel or path table. Empty `files` metadata does not mean the directory
+  is empty; use `codebase_directory.file_id="directory"` to inspect it.
+- **Environment**: where and how the device runs: network exposure (internet,
+  LAN, isolated), physical access, who can reach it, hardening (firewall,
+  secure boot, read-only rootfs), runtime (kernel version, init system, users).
+- **Other information**: anything else that affects impact: compliance targets,
+  support period, known accepted risks, disabled kernel or package features.
+
+### System tab
+
+Four text fields, then two tables. Describe the variant as an attacker would see it.
+
+- **System scope and assets**: what is in scope and what must be protected
+  (data, functions, safety).
+- **Actors and access**: who or what interacts with the system and with which
+  privileges (admin, operator, cloud service, anonymous network peer, physical
+  attacker).
+- **Entry points and data flows**: every way input reaches the system (ports,
+  services, APIs, USB, serial console, update channel) and where data goes.
+- **Trust boundaries**: where trust level changes (internet/device, user/root,
+  normal world/secure world, container/host).
+
+**Components** table (**Add component**, IDs C1, C2, …):
+
+- **Name** (required): short name, e.g. `Web admin UI`.
+- **Description / role**: what it does and notable software (package names from
+  the SBOM help assessments match vulnerabilities to components).
+- **Trust zone**: free text, e.g. `Internet`, `LAN`, `Device`, `Secure world`.
+
+**Interactions** table (**Add interaction**, IDs I1, I2, …). Add components first.
+
+- **Name**: e.g. `Admin login`.
+- **Source** and **Destination** (both required, must be different components):
+  selects showing options like `C1: OTA updater`.
+- **Interface / protocol**: e.g. `HTTPS on 443`, `Modbus TCP`, `UART`.
+- **Data / commands**: what crosses the link.
+- **Trust boundary**: the boundary it crosses, if any.
+
+A component or interaction still used by an interaction, threat or risk cannot be
+removed.
+
+### Threat model tab
+
+**Threats** table (**Add threat**, IDs T1, T2, …). Add components or
+interactions first.
+
+- **STRIDE category** (required), one of:
+  - **Spoofing**: can someone pretend to be a user, device or server?
+  - **Tampering**: can data, firmware or configuration be modified?
+  - **Repudiation**: can an action be denied for lack of logs or audit?
+  - **Information disclosure**: can secrets or private data leak?
+  - **Denial of service**: can a function be made unavailable?
+  - **Elevation of privilege**: can someone gain rights they should not have?
+- **Description**: the concrete attack, e.g. `Unsigned image accepted by the OTA
+  updater replaces the firmware.`
+- **Targets** (required, at least one): tick the affected rows, shown as
+  `C1 OTA updater` or `I1 Firmware download`.
+
+Walk each interaction that crosses a trust boundary through all six categories;
+keep threats that are plausible for this variant.
+
+### Risks tab
+
+**Risks** table (**Add risk**). Add threats first. A risk can cover one or more
+threats, and several risks may cover the same threat.
+
+- **Description**: the risk in one line, e.g. `Firmware replaced via OTA.`
+- **Threats** (required, at least one): tick the threats this risk covers,
+  shown as `T1: <first 40 characters of its description>`.
+- **Likelihood** and **Impact**: **Not rated**, **Low**, **Medium** or **High**.
+  Base likelihood on exposure (who can reach the entry point) and impact on the
+  assets at stake.
+- **Mitigation**: controls already in place, e.g. `Images signed with RSA-4096;
+  verified by U-Boot before boot.` State only what exists; mark unverified
+  controls `[confirm: ...]`.
+- **Residual risk / decision**: what remains and whether it is accepted,
+  reduced or transferred, e.g. `Accepted: requires physical access.`
+
+Risks with no rating, mitigation or residual decision are not sent to agents.
+Declared mitigations lower impact in AI assessments but do not by themselves
+prove a vulnerability is not exploitable.

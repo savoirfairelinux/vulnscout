@@ -39,10 +39,9 @@ class TestCompIdsForPackage:
             ["cpe:2.3:a:openssl:openssl:1.1.1:*:*:*:*:*:*:*"],
             [],
         )
-        # The CPE-derived CompId and the bare-name CompId must both be present.
-        assert CompId(name="openssl") in ids
-        # At least two identifiers: vendor-qualified + bare name.
-        assert len(ids) >= 2
+        assert ids == {CompId(
+            part="a", vendor="openssl", name="openssl",
+        )}
 
     def test_empty_cpe_string_skipped(self):
         ids = _comp_ids_for_package("bash", "5.0", ["", "  "], [])
@@ -75,6 +74,20 @@ class TestCompIdsForPackage:
             ["pkg:pypi/requests@2.28.0"],
         )
         assert CompId(name="requests") in ids
+
+    def test_namespaced_purl_preserves_namespace_without_bare_name_fallback(self):
+        ids = _comp_ids_for_package(
+            "common", "1.0", [],
+            ["pkg:maven/com.acme/common@1.0"],
+        )
+        assert ids == {CompId(vendor="com.acme", name="common")}
+
+    def test_purl_suppresses_unrelated_package_name_fallback(self):
+        ids = _comp_ids_for_package(
+            "display-name", "1.0", [],
+            ["pkg:maven/com.acme/common@1.0"],
+        )
+        assert ids == {CompId(vendor="com.acme", name="common")}
 
     def test_empty_purl_skipped(self):
         ids = _comp_ids_for_package("lib", "1.0", [], ["", "  "])
@@ -113,6 +126,13 @@ class TestCompIdsForPackage:
         ids = _comp_ids_for_package("", "1.0", [], [])
         # Empty string name: the `if name:` guard prevents adding a blank id.
         assert len(ids) == 0
+
+    def test_generic_purl_keeps_name_with_slash(self):
+        from src.models.package import Package
+        pkg = Package("Prosys OPC UA SDK Client/Server", "5.4.0-201")
+        pkg.add_fallback_identifiers()
+        ids = _comp_ids_for_package(pkg.name, pkg.version, [], pkg.purl)
+        assert ids == {CompId(name="prosys opc ua sdk client/server")}
 
 
 # ---------------------------------------------------------------------------

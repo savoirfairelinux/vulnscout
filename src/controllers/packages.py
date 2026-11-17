@@ -1,7 +1,11 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import re
 import uuid
+from typing import AbstractSet
+
+from sqlalchemy.orm import joinedload
 
 from ..models import Package, Finding, SBOMDocument, SBOMPackage, PackageDependency, Variant
 from ..models.sbom_package import PackageEvidence
@@ -12,6 +16,11 @@ from ..extensions import db
 from ._base import to_dict_with_fallback
 
 SpdxKey = tuple[str, str]
+DependencyReference = tuple[str, str] | tuple[str, str, str, str]
+
+
+def _dependency_reference(edge: DependencyReference) -> tuple[str, str, str, str]:
+    return (*edge, "", "") if len(edge) == 2 else edge
 
 
 def _spdx_key(ref: str, namespace: str | None, external_documents: dict[str, str]) -> SpdxKey | None:
@@ -29,6 +38,11 @@ def _spdx3_key(ref: str, namespaces: dict[str, str]) -> SpdxKey | None:
     if not separator:
         return None
     return ("", namespaces.get(prefix, f"{prefix}:") + element)
+
+
+def _epoch_base(version: str | None) -> str | None:
+    match = re.fullmatch(r"[0-9]+_([0-9].*)", version or "")
+    return match.group(1) if match else None
 
 
 class PackagesController:
@@ -55,11 +69,16 @@ class PackagesController:
         # (scan_id, namespace, SPDXID) -> (document_id, string_id) for packages read in this session.
         self._spdx_refs: dict[tuple[uuid.UUID, str, str], tuple[uuid.UUID, str]] = {}
         self._spdx_documents: dict[uuid.UUID, uuid.UUID] = {}
-        self._spdx_edges: list[tuple[uuid.UUID, str, str]] = []
-        self._pending_spdx_edges: list[tuple[uuid.UUID, SpdxKey, SpdxKey]] = []
+        self._spdx_edges: list[tuple[uuid.UUID, str, str, str, str, uuid.UUID]] = []
+        self._pending_spdx_edges: list[tuple[uuid.UUID, SpdxKey, SpdxKey, str, str, uuid.UUID]] = []
         self._source_provenance = SPDXSources()
         self._document_evidence: dict[uuid.UUID, dict[str, PackageEvidence]] = {}
         self._export_document_ids: set[uuid.UUID] = set()
+        self._document_packages: dict[tuple, list[Package]] = {}
+        self._document_aliases: dict[str, str] = {}
+        self._document_evidence_aliases: dict[uuid.UUID, dict[str, str]] = {}
+        self._coalesced_bare: dict[str, Package] = {}
+        self._provisional_epoch_metadata: dict[str, tuple[Package, Package]] = {}
 
     def _preload_cache(self) -> None:
         """Bulk-load all packages from the DB into the session caches.
@@ -85,7 +104,7 @@ class PackagesController:
                 for document in SBOMDocument.get_by_scan(scan_id)
             }
             self._export_document_ids = set(document_ids)
-            evidence = SBOMPackage.evidence_for_documents(document_ids)
+            evidence = SBOMPackage.evidence_for_documents(document_ids, package_ids=allowed)
             for pkg in Package.get_all():
                 if allowed is not None and pkg.id not in allowed:
                     continue
@@ -111,6 +130,18 @@ class PackagesController:
     def current_sbom_document(self, doc: SBOMDocument | None) -> None:
         """Set (or clear with ``None``) the SBOM document that subsequent :meth:`add` calls belong to."""
         self._current_sbom_document = doc
+        self._document_packages = {}
+        self._document_aliases = {}
+        self._coalesced_bare = {}
+        self._provisional_epoch_metadata = {}
+        if doc is not None:
+            self._document_evidence_aliases[doc.id] = self._document_aliases
+            for link in db.session.execute(
+                db.select(SBOMPackage).options(joinedload(SBOMPackage.package))
+                .where(SBOMPackage.sbom_document_id == doc.id)
+            ).scalars():
+                pkg = link.package
+                self._document_packages.setdefault((pkg.name, pkg.supplier), []).append(pkg)
         verbose(f"[PackagesController] Now handling SBOM document {repr(doc)}")
 
     # ------------------------------------------------------------------
@@ -119,10 +150,14 @@ class PackagesController:
 
     def get_db_id(self, string_id: str):
         """Return the DB UUID primary key for *string_id*, or ``None``."""
-        return self._db_id_cache.get(string_id)
+        return self._db_id_cache.get(self._document_aliases.get(string_id, string_id))
+
+    def canonical_id(self, string_id: str) -> str:
+        return self._document_aliases.get(string_id, string_id)
 
     def get_or_resolve_db_id(self, string_id: str):
         """Return the DB UUID, falling back to a DB query only if not cached."""
+        string_id = self._document_aliases.get(string_id, string_id)
         uid = self._db_id_cache.get(string_id)
         if uid is not None:
             return uid
@@ -145,6 +180,39 @@ class PackagesController:
             )
             if source in exported and target in exported
         }
+
+    def recorded_files(self) -> list[dict]:
+        """Return distinct file records from active documents, with supported owners."""
+        from sqlalchemy.orm import selectinload
+        from ..models import SBOMFile, SBOMFileBuild
+        from ..models.sbom_file import has_compilation_evidence
+
+        if not self._export_document_ids:
+            return []
+        exported = {package.id: string_id for string_id, package in self._cache.items()}
+        files = db.session.scalars(
+            db.select(SBOMFile).where(SBOMFile.sbom_document_id.in_(self._export_document_ids))
+            .options(selectinload(SBOMFile.package_links),
+                     selectinload(SBOMFile.build_links).selectinload(SBOMFileBuild.build))
+            .order_by(SBOMFile.sbom_document_id, SBOMFile.spdx_id)
+        )
+        return [{
+            "identity": (file.sbom_document_id, file.spdx_id),
+            "path": file.path, "properties": file.properties,
+            "packages": sorted({
+                exported[link.package_id] for link in file.package_links
+                if link.sbom_document_id in self._export_document_ids and link.package_id in exported
+            }),
+            "builds": [{
+                "spdx_id": link.build.spdx_id, "document_id": str(link.build.sbom_document_id),
+                "build_type": link.build.build_type, "parameters": link.build.parameters,
+                "outputs": link.build.outputs,
+                "compiled": has_compilation_evidence([{
+                    "build_type": link.build.build_type, "parameters": link.build.parameters,
+                    "compiled": link.build.compiled,
+                }]),
+            } for link in file.build_links if link.build.sbom_document_id in self._export_document_ids],
+        } for file in files]
 
     def add_dependencies(self, references: dict[str, str], edges: set[tuple[str, str]]) -> None:
         """Persist source -> dependency references belonging to the active document."""
@@ -169,8 +237,9 @@ class PackagesController:
         )
 
     def add_spdx_dependencies(self, namespace: str | None, references: dict[str, str],
-                              external_documents: dict[str, str], edges: set[tuple[str, str]]) -> None:
+                              external_documents: dict[str, str], edges: AbstractSet[DependencyReference]) -> None:
         """Queue the active document's SPDX 2 edges; :meth:`flush_spdx_dependencies` persists them."""
+        references = {ref: self.canonical_id(string_id) for ref, string_id in references.items()}
         document = self._current_sbom_document
         if document is None:
             return
@@ -178,19 +247,22 @@ class PackagesController:
         if namespace:
             for ref, string_id in references.items():
                 self._spdx_refs[(document.scan_id, namespace, ref)] = (document.id, string_id)
-        for source, target in edges:
+        for edge in edges:
+            source, target, kind, scope = _dependency_reference(edge)
             if not source.startswith("DocumentRef-") and not target.startswith("DocumentRef-"):
                 if source in references and target in references:
-                    self._spdx_edges.append((document.id, references[source], references[target]))
+                    self._spdx_edges.append(
+                        (document.id, references[source], references[target], kind, scope, document.id))
                 continue
             source_key = _spdx_key(source, namespace, external_documents)
             target_key = _spdx_key(target, namespace, external_documents)
             if source_key is not None and target_key is not None:
-                self._pending_spdx_edges.append((document.scan_id, source_key, target_key))
+                self._pending_spdx_edges.append((document.scan_id, source_key, target_key, kind, scope, document.id))
 
     def add_spdx3_dependencies(self, references: dict[str, str], namespaces: dict[str, str],
-                               edges: set[tuple[str, str]]) -> None:
+                               edges: AbstractSet[DependencyReference]) -> None:
         """Queue SPDX 3 URI references for resolution across documents of the same scan."""
+        references = {ref: self.canonical_id(string_id) for ref, string_id in references.items()}
         document = self._current_sbom_document
         if document is None:
             return
@@ -199,13 +271,14 @@ class PackagesController:
         for ref, string_id in references.items():
             key = _spdx3_key(ref, namespaces) or (local_namespace, ref)
             self._spdx_refs[(document.scan_id, *key)] = (document.id, string_id)
-        for source, target in edges:
+        for edge in edges:
+            source, target, kind, scope = _dependency_reference(edge)
             if source in references and target in references:
-                self._spdx_edges.append((document.id, references[source], references[target]))
+                self._spdx_edges.append((document.id, references[source], references[target], kind, scope, document.id))
                 continue
             source_key = _spdx3_key(source, namespaces) or (local_namespace, source)
             target_key = _spdx3_key(target, namespaces) or (local_namespace, target)
-            self._pending_spdx_edges.append((document.scan_id, source_key, target_key))
+            self._pending_spdx_edges.append((document.scan_id, source_key, target_key, kind, scope, document.id))
 
     def flush_spdx_dependencies(self) -> None:
         """Replace the edges of every queued document; cross-document ones go to the dependent's document."""
@@ -214,18 +287,31 @@ class PackagesController:
         pending, self._pending_spdx_edges = self._pending_spdx_edges, []
         if not documents:
             return
-        for scan_id, source_key, target_key in pending:
+        for scan_id, source_key, target_key, kind, scope, evidence_document_id in pending:
             source_ref = self._spdx_refs.get((scan_id, *source_key))
             target_ref = self._spdx_refs.get((scan_id, *target_key))
             if source_ref is not None and target_ref is not None:
-                edges.append((source_ref[0], source_ref[1], target_ref[1]))
+                edges.append((source_ref[0], source_ref[1], target_ref[1], kind, scope, evidence_document_id))
         rows: set[tuple[uuid.UUID, uuid.UUID, uuid.UUID]] = set()
-        for document_id, source, target in edges:
+        evidence: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], set[tuple[str, str, str]]] = {}
+        for document_id, source, target, kind, scope, evidence_document_id in edges:
             source_id = self.get_or_resolve_db_id(source)
             target_id = self.get_or_resolve_db_id(target)
             if source_id is not None and target_id is not None and source_id != target_id:
-                rows.add((document_id, source_id, target_id))
-        PackageDependency.replace_for_documents(set(documents), rows)
+                key = (document_id, source_id, target_id)
+                rows.add(key)
+                if kind:
+                    evidence.setdefault(key, set()).add((kind, scope, str(evidence_document_id)))
+        source_names = {str(document_id): name for document_id, name in db.session.execute(
+            db.select(SBOMDocument.id, SBOMDocument.source_name).where(SBOMDocument.id.in_(documents))
+        )}
+        declarations = {
+            key: [{'relationship_type': kind, 'lifecycle_scope': scope, 'source_document_id': source,
+                   'source_name': source_names[source]}
+                  for kind, scope, source in sorted(values)]
+            for key, values in evidence.items()
+        }
+        PackageDependency.replace_for_documents(set(documents), rows, declarations)
 
     def add_spdx_sources(self, namespace: str | None, references: dict[str, str],
                          external_documents: dict[str, str], urls: dict[str, str],
@@ -263,6 +349,7 @@ class PackagesController:
         document = self._current_sbom_document
         if document is not None:
             self._document_evidence.setdefault(document.id, {})
+        references = {ref: self.canonical_id(string_id) for ref, string_id in references.items()}
         self._source_provenance.record(document.scan_id if document else None, references, urls,
                                        derivations, inputs, builds, document.id if document else None)
         if document is None:
@@ -285,14 +372,90 @@ class PackagesController:
         """Resolve companion documents after import; persist provenance through the scan transaction."""
         self._apply_source_provenance()
         for document_id, packages in self._document_evidence.items():
-            by_id = {self.get_or_resolve_db_id(package_id): evidence for package_id, evidence in packages.items()}
+            aliases = self._document_evidence_aliases.get(document_id, {})
+            by_id: dict[uuid.UUID, PackageEvidence] = {}
+            for package_id, evidence in packages.items():
+                canonical_id = aliases.get(package_id, package_id)
+                uid = self._db_id_cache.get(canonical_id)
+                if uid is None:
+                    package = Package.get_by_string_id(canonical_id)
+                    uid = package.id if package is not None else None
+                if uid is None:
+                    continue
+                combined = by_id.setdefault(uid, {"cpe": [], "purl": [], "source_urls": []})
+                combined["cpe"] = sorted(set(combined["cpe"]) | set(evidence["cpe"]))
+                combined["purl"] = sorted(set(combined["purl"]) | set(evidence["purl"]))
+                combined["source_urls"] = sorted(set(combined["source_urls"]) | set(evidence["source_urls"]))
             for link in SBOMPackage.get_by_document(document_id):
                 evidence = by_id.get(link.package_id, {"cpe": [], "purl": [], "source_urls": []})
                 link.cpe = evidence["cpe"]
                 link.purl = evidence["purl"]
                 link.source_urls = evidence["source_urls"]
         self._document_evidence = {}
+        self._document_evidence_aliases = {}
         self._source_provenance = SPDXSources()
+
+    @staticmethod
+    def _merge_metadata(target: Package, source: Package) -> None:
+        for cpe in source.cpe or []:
+            target.add_cpe(cpe)
+        for purl in source.purl or []:
+            target.add_purl(purl)
+        if not target.licences:
+            target.licences = source.licences or ""
+
+    @staticmethod
+    def _copy_metadata(package: Package) -> Package:
+        return Package(
+            package.name or "", package.version or "", list(package.cpe or []),
+            list(package.purl or []), package.licences or "", supplier=package.supplier,
+        )
+
+    def _track_document_package(self, package: Package, replaced: Package | None = None) -> None:
+        doc = self._current_sbom_document
+        assert doc is not None
+        peers = self._document_packages.setdefault((package.name, package.supplier), [])
+        if replaced is not None:
+            old_id = replaced.string_id
+            self._provisional_epoch_metadata[old_id] = (package, self._copy_metadata(package))
+            self._merge_metadata(package, replaced)
+            self._coalesced_bare[old_id] = self._copy_metadata(replaced)
+            link = SBOMPackage.get(doc.id, replaced.id)
+            if link is not None:
+                db.session.delete(link)
+                db.session.flush()
+            peers[:] = [peer for peer in peers if peer is not replaced]
+            self._document_aliases[old_id] = package.string_id
+            if (not SBOMPackage.get_by_package(replaced.id) and not replaced.findings
+                    and not replaced.sbom_observations):
+                self._cache.pop(old_id, None)
+                self._db_id_cache.pop(old_id, None)
+                db.session.delete(replaced)
+        if not any(peer.id == package.id for peer in peers):
+            peers.append(package)
+        base = _epoch_base(package.version)
+        if base is not None and sum(_epoch_base(peer.version) == base for peer in peers) > 1:
+            bare_id = f"{package.name}@{base}"
+            if package.supplier:
+                bare_id += f"::{package.supplier}"
+            self._document_aliases.pop(bare_id, None)
+            bare = self._coalesced_bare.pop(bare_id, None)
+            provisional = self._provisional_epoch_metadata.pop(bare_id, None)
+            if provisional is not None:
+                epoch, metadata = provisional
+                epoch.cpe = list(metadata.cpe or [])
+                epoch.purl = list(metadata.purl or [])
+                epoch.licences = metadata.licences
+            if bare is not None:
+                restored = Package.find_or_create(
+                    bare.name, bare.version, bare.cpe, bare.purl,
+                    bare.licences or "", supplier=bare.supplier,
+                )
+                self._merge_metadata(restored, bare)
+                SBOMPackage.get_or_create(doc.id, restored.id)
+                peers.append(restored)
+                self._cache[bare_id] = restored
+                self._db_id_cache[bare_id] = restored.id
 
     # ------------------------------------------------------------------
     # Core mutators
@@ -311,9 +474,74 @@ class PackagesController:
             evidence["source_urls"] = sorted(set(evidence["source_urls"]) | set(package.source_urls))
             package.source_urls = []
         string_id = package.string_id  # "name@version"
+        replaced = None
+        if self._current_sbom_document is not None:
+            peers = self._document_packages.get((package.name, package.supplier), [])
+            base = _epoch_base(package.version)
+            matches = [] if base is not None and any(
+                _epoch_base(peer.version) == base for peer in peers
+            ) else [pkg for pkg in peers if (
+                (base is not None and pkg.version == base)
+                or (_epoch_base(pkg.version) == package.version)
+            )]
+            if base is None and len(matches) != 1:
+                self._document_aliases.pop(string_id, None)
+            if len(matches) == 1:
+                peer = matches[0]
+                if base is None:
+                    self._provisional_epoch_metadata.setdefault(
+                        string_id, (peer, self._copy_metadata(peer)),
+                    )
+                    self._merge_metadata(peer, package)
+                    bare = self._coalesced_bare.get(string_id)
+                    if bare is None:
+                        self._coalesced_bare[string_id] = package
+                    else:
+                        self._merge_metadata(bare, package)
+                    self._document_aliases[string_id] = peer.string_id
+                    return peer
+                if (
+                    len(peer.sbom_packages) == 1
+                    and not peer.findings
+                    and not peer.sbom_observations
+                    and package.name is not None
+                    and package.version is not None
+                    and not Package.exists(package.name, package.version, package.supplier)
+                ):
+                    old_id = peer.string_id
+                    self._coalesced_bare[old_id] = self._copy_metadata(peer)
+                    peer.version = package.version
+                    epoch_cpes = list(package.cpe or [])
+                    epoch_purls = list(package.purl or [])
+                    if not epoch_cpes and not epoch_purls:
+                        epoch_cpes = [peer.generate_generic_cpe()]
+                        epoch_purls = [peer.generate_generic_purl()]
+                    self._provisional_epoch_metadata[old_id] = (peer, Package(
+                        peer.name or "", peer.version or "", epoch_cpes, epoch_purls,
+                        package.licences or "", supplier=peer.supplier,
+                    ))
+                    self._merge_metadata(peer, package)
+                    if epoch_cpes:
+                        peer.cpe = [epoch_cpes[0], *(cpe for cpe in peer.cpe or [] if cpe != epoch_cpes[0])]
+                    if epoch_purls:
+                        peer.purl = [epoch_purls[0], *(purl for purl in peer.purl or [] if purl != epoch_purls[0])]
+                    self._cache.pop(old_id, None)
+                    self._db_id_cache.pop(old_id, None)
+                    self._cache[string_id] = peer
+                    self._db_id_cache[string_id] = peer.id
+                    self._document_aliases[old_id] = string_id
+                    return peer
+                replaced = peer
         already_persisted = string_id in self._db_id_cache
         if string_id in self._cache:
-            self._cache[string_id].merge(package)
+            if self._current_sbom_document is not None and base is not None:
+                bare_id = f"{package.name}@{base}"
+                if package.supplier:
+                    bare_id += f"::{package.supplier}"
+                provisional = self._provisional_epoch_metadata.get(bare_id)
+                if provisional is not None and provisional[0] is self._cache[string_id]:
+                    self._merge_metadata(provisional[1], package)
+            self._merge_metadata(self._cache[string_id], package)
         else:
             self._cache[string_id] = package
 
@@ -334,7 +562,9 @@ class PackagesController:
                             self._current_sbom_document.id,
                             self._db_id_cache[string_id],
                         )
-                return package
+                if self._current_sbom_document is not None:
+                    self._track_document_package(self._cache[string_id], replaced)
+                return self._cache[string_id]
             else:
                 with db.session.begin_nested():
                     db_pkg = Package.find_or_create(
@@ -352,7 +582,9 @@ class PackagesController:
                     # Link to the current SBOM document if one is active
                     if self._current_sbom_document is not None:
                         SBOMPackage.get_or_create(self._current_sbom_document.id, db_pkg.id)
-                    return db_pkg
+                if self._current_sbom_document is not None:
+                    self._track_document_package(db_pkg, replaced)
+                return db_pkg
         except Exception as e:
             verbose(f"[PackagesController.add {package.string_id!r}] {e}")
             return package  # TODO: better exception handling. Simply logging it is questionnable
@@ -376,6 +608,7 @@ class PackagesController:
 
     def get(self, package_id: str) -> Package | None:
         """Return a package by ``'name@version'`` id from cache or DB."""
+        package_id = self._document_aliases.get(package_id, package_id)
         if package_id in self._cache:
             return self._cache[package_id]
         try:
@@ -384,7 +617,9 @@ class PackagesController:
                 return None  # out of the export scope
             if pkg:
                 if self._scope is not None:
-                    evidence = SBOMPackage.evidence_for_documents(self._scope.active_sbom_document_ids)
+                    evidence = SBOMPackage.evidence_for_documents(
+                        self._scope.active_sbom_document_ids, package_ids={pkg.id},
+                    )
                     pkg = pkg.with_sbom_evidence(**evidence.get(
                         pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[]),
                     ))
@@ -433,6 +668,7 @@ class PackagesController:
 
     def __contains__(self, item) -> bool:
         if isinstance(item, str):
+            item = self._document_aliases.get(item, item)
             if item in self._cache:
                 return True
             try:

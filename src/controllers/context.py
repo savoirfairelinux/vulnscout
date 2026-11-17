@@ -68,7 +68,6 @@ class VariantContextController:
     def upsert(
         variant_id: uuid.UUID | str,
         variant_description: Optional[str] = None,
-        codebase_path: Optional[str] = None,
         environment: Optional[str] = None,
         other_info: Optional[str] = None,
         commit: bool = True,
@@ -78,7 +77,6 @@ class VariantContextController:
         return VariantContext.upsert(
             vid,
             variant_description=variant_description,
-            codebase_path=codebase_path,
             environment=environment,
             other_info=other_info,
             commit=commit,

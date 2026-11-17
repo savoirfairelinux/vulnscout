@@ -19,6 +19,7 @@ import TableVulnerabilities from "./TableVulnerabilities";
 import Metrics from "./Metrics";
 import Exports from "./Exports";
 import ScanHistory from "./ScanHistory";
+import RefreshOverview from "./RefreshOverview";
 import Review from './Review';
 import type { AssessmentMutation } from './Review';
 import Settings from './Settings';
@@ -27,7 +28,7 @@ import AIContext from './AIContext';
 import type { AiContextScope } from './AIContext';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import AgentChat from '../components/AgentChat';
-import { getAgentChatRequest, subscribeAgentQueue } from '../handlers/agentQueue';
+import { getAgentChatRequest, subscribeAgentChatRequest } from '../handlers/agentQueue';
 import { AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
@@ -41,6 +42,7 @@ const tabLabels: Record<string, string> = {
         packages: 'SBOM',
         vulnerabilities: 'Vulnerabilities',
         scans: 'Scans',
+        refresh: 'Refresh',
         review: 'Review',
         exports: 'Export',
         settings: 'Settings',
@@ -55,7 +57,7 @@ const tabLabels: Record<string, string> = {
  */
 type ExplorerNavState = {
     vulnFilter?: {
-        label: "Source" | "Severity" | "Status" | "Package";
+        label: "Source" | "Severity" | "Status" | "Package" | "Vulnerability";
         value: string;
         vulnerabilityIds?: string[];
     };
@@ -115,12 +117,12 @@ function Explorer() {
         { kind: 'project' } | { kind: 'variant'; projectId: string } | { kind: 'error' } | null
     >(null);
     const hadActiveScans = useRef(false);
-    const observedOperationStatuses = useRef(new Map<string, string>());
+    const observedOperationActivity = useRef(new Map<string, boolean>());
     const setupCheckGeneration = useRef(0);
     const loadGeneration = useRef(0);
     const scopeReady = useRef(false);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
-    const agentChatRequest = useSyncExternalStore(subscribeAgentQueue, getAgentChatRequest).nonce;
+    const agentChatRequest = useSyncExternalStore(subscribeAgentChatRequest, getAgentChatRequest).nonce;
 
     // AI actions anywhere in the app open the single agent chat through the queue store.
     useEffect(() => {
@@ -293,8 +295,9 @@ function Explorer() {
     const applyScope = useCallback((projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => {
         const multiActive = !!(variantIds && variantIds.length >= 2);
         const effectiveVariantId = multiActive ? undefined : (compareVariantId || variantId || undefined);
-        // A new scope invalidates any filter the previous page navigated with.
-        navigate(location.pathname, { replace: true, state: null });
+        // A new scope invalidates any filter the previous page navigated with,
+        // but not the URL query (e.g. the exact run identity of /refresh?run=…).
+        navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
         setScopeRevision(revision => revision + 1);
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
@@ -325,7 +328,7 @@ function Explorer() {
             multiActive ? variantIds : undefined,
             multiActive ? (multiOperation || undefined) : undefined,
         );
-    }, [loadData, navigate, location.pathname]);
+    }, [loadData, navigate, location.pathname, location.search]);
 
     // Changing the scope leaves the open AI context item, so unsaved edits are
     // confirmed first; false tells the selector to keep its previous scope.
@@ -376,13 +379,19 @@ function Explorer() {
         currentOperation, currentVariantIds, currentMultiOperation]);
 
     useEffect(() => {
-        const previous = observedOperationStatuses.current;
-        const next = new Map(operationEntries.map(operation => [operation.op_id, operation.status]));
-        const finished = operationEntries.some(operation =>
-            ['scan', 'refresh', 'upload', 'enrichment'].includes(operation.kind)
-            && ['done', 'error', 'cancelled'].includes(operation.status)
-            && previous.get(operation.op_id) !== operation.status);
-        observedOperationStatuses.current = next;
+        const previous = observedOperationActivity.current;
+        const next = new Map<string, boolean>();
+        let finished = false;
+        for (const item of groupQueueItems(operationEntries)) {
+            const steps = item.type === 'run' ? item.steps : [item.operation];
+            if (!steps.some(operation => ['scan', 'refresh', 'upload', 'enrichment'].includes(operation.kind))) continue;
+            const queueId = item.type === 'run' ? item.queueId : item.operation.queue_id;
+            const key = queueId ? `queue:${queueId}` : `operation:${steps[0].op_id}`;
+            const active = isQueueItemActive(item);
+            next.set(key, active);
+            if (!active && previous.get(key) !== false) finished = true;
+        }
+        observedOperationActivity.current = next;
         if (finished && scopeReady.current) handleRefreshComplete();
     }, [operationEntries, handleRefreshComplete]);
 
@@ -516,7 +525,7 @@ function Explorer() {
         return () => { window.requestAnimationFrame(() => { if (previousFocus?.isConnected) previousFocus.focus(); }); };
     }, [agentOpen]);
 
-    // The chat floats beside an open vulnerability; modal overlays shrink to keep it visible.
+    // The chat keeps its place below the navigation and stacks above an open vulnerability's overlay, which shrinks to keep it visible.
     useEffect(() => {
         document.body.classList.toggle('agent-docked', agentDocked);
         return () => document.body.classList.remove('agent-docked');
@@ -723,7 +732,6 @@ function Explorer() {
                         compareOperation={currentOperation}
                         variantIds={currentVariantIds}
                         multiOperation={currentMultiOperation}
-                        onRefreshComplete={handleRefreshComplete}
                         missingEuvdDataBannerDismissed={missingEuvdDataBannerDismissed}
                         onMissingEuvdDataBannerDismissedChange={setMissingEuvdDataBannerDismissed}
                         missingPublishedDateDataBannerDismissed={missingPublishedDateDataBannerDismissed}
@@ -739,6 +747,13 @@ function Explorer() {
                         variantIds={currentVariantIds}
                         onScanComplete={handleScanComplete}
                     />
+                } />
+                <Route path={ROUTES.refresh} element={
+                    <RefreshOverview key={`${currentProjectId}-${currentVariantId}`} projectId={currentProjectId} variantId={currentVariantId}
+                        vulnerabilities={vulns}
+                        baseVariantId={currentBaseVariantId} compareOperation={currentOperation}
+                        variantIds={currentVariantIds} multiOperation={currentMultiOperation}
+                        comparisonScope={!!currentBaseVariantId || (currentVariantIds?.length ?? 0) > 1} dataRevision={dataRevision} />
                 } />
                 <Route path={ROUTES.review} element={
                     <Review variantId={currentVariantId} projectId={currentVariantId ? undefined : currentProjectId} onAssessmentChanged={handleAssessmentChanged} onAgentContextChange={setReviewAgentView} />
@@ -788,7 +803,7 @@ function Explorer() {
                         first?.focus();
                     }
                 }
-            }} className={`fixed inset-0 z-[110] h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentContext.view?.openVulnerabilityId ? 'lg:inset-y-0 lg:right-0 lg:left-auto lg:shadow-2xl' : 'lg:static lg:h-auto'}`}>
+            }} className={`fixed inset-0 z-[110] h-dvh w-full max-w-full border-l border-neutral-200 bg-white outline-none dark:border-neutral-700 dark:bg-neutral-950 lg:relative lg:inset-auto lg:h-auto lg:w-[400px] lg:shrink-0 xl:w-[440px] 2xl:w-[480px] ${agentDocked ? 'lg:shadow-2xl' : 'lg:z-auto'}`}>
                 <AgentChat active={agentOpen} context={agentContext} onClose={() => setAgentOpen(false)} />
             </aside>}
             </div>

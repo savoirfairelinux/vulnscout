@@ -22,3 +22,6 @@ Source of truth: `src/routes.ts`.
 Settings sub-paths are built and parsed by `SETTINGS_PATHS`,
 `settingsProjectPath`, `settingsVariantPath` and `parseSettingsPath`;
 project and variant ids are URI-encoded.
+
+The dependency explorer opens in a popup from the SBOM table's **Dependency** column,
+using the table's project/variant selection and comparison operations. It has no separate route.

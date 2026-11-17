@@ -15,11 +15,13 @@ A small **info icon** next to the search bar opens a quick-reference panel for t
 
 ## Column Visibility
 
-The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency graph](web-dependencies.md); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
+The **Columns** dropdown lets you toggle which columns are displayed. The default set includes Name, Release version, Source revision, Recorded Files, Dependency, Vulnerabilities, Variants, and Sources. The **Dependency** column shows each package's direct dependency (**Deps**) and dependent (**Req by**) counts and opens the [dependency explorer](web-dependencies.md); sort it to list the packages with the highest **Deps** + **Req by** total first, or hide it to skip loading the counts. Additional columns available are:
 
 - **CPE** — Common Platform Enumeration identifiers for the package. These are used by the NVD scanner to match vulnerabilities.
 - **PURL** — Package URL identifiers. These are used by the OSV scanner for more precise ecosystem-level matching.
 - **Remaining Pending Vulnerabilities** — the count of vulnerabilities still awaiting triage for this package.
+
+CPEs and PURLs declared by the SBOM are kept as-is. Only components that declare neither receive a generic `cpe:2.3:a:*:<name>:<version>` CPE and `pkg:generic/<name>@<version>` PURL.
 
 **Release version** shows the release identified from the SBOM, PURL, or CPE.
 **Source revision** shows the Git commit, shortened to 12 characters. Hover either
@@ -29,6 +31,35 @@ A release version and a commit hash describe separate fields, not a conflict.
 
 For version normalisation and source-evidence details, see the
 [SBOM and Scan Reference](sbom-scan-reference.md#release-versions-and-source-revisions).
+
+## Recorded Files
+
+Click anywhere in a **Recorded Files** count cell to open a fullscreen file browser, sized like
+the dependency dialog. Search by path, document, or variant, and combine the
+search with **Build evidence** and **SBOM document** filters. Select a file in
+the list to read its provenance, hashes, properties, and build inputs/outputs.
+On wide screens the list and details scroll independently; narrow screens stack
+them vertically. **Clear filters** restores all records. Long build parameters
+stay collapsed until expanded.
+Technical identifiers and the original parsed data are available in a collapsed
+section at the end of the details. An em dash (**—**) means file evidence has
+not been recorded; reimport the original SPDX SBOMs to populate it. A zero count
+means the imported SBOMs recorded no files for the package.
+
+**Compilation recorded** means a compiler target records the file as an input.
+**Other build input** includes recipe or packaging tasks and does not prove
+compilation. **Listed only** means no associated build task was recorded.
+**Binary / output** identifies explicitly contained SPDX 2 binaries and output
+artifacts; use the corresponding filter to inspect them, including their original
+file types, hashes, and licenses. These associations never count as compiled source
+or enable CVE source exclusion. Reimport older SPDX 2 SBOMs to populate them.
+None of these proves inclusion in the final firmware. The summary distinguishes
+file records from unique compiled source paths. The browser presents the
+recorded evidence without a CVE-matching policy banner; see
+[Recorded files](interactive-mode.md#recorded-files) for how matching uses it.
+
+See [Recorded files](interactive-mode.md#recorded-files) for supported formats,
+scope, and reimport requirements.
 
 ## Zephyr Component Badges
 

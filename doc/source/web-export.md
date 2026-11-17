@@ -1,8 +1,14 @@
 # Export
 
 Use the **Export** page to generate rendered reports and standard SBOM/VEX
-documents. To transfer analyst decisions instead, use
+documents. To export vulnerability field history, use the **Refresh** page.
+To transfer analyst decisions instead, use
 [Review import and export](web-review.md#import-and-export).
+
+SPDX exports include the selected active scans' recorded file metadata and
+supported package/file associations, never file contents or invented hashes.
+See [Recorded files in SPDX exports](exports.md#recorded-files-in-spdx-exports)
+for roundtrip guarantees and build-evidence limitations.
 
 1. **Scope** — choose a project in the navigation bar, then select its variants
    in the wizard. All project variants are initially selected, even when the
@@ -11,12 +17,12 @@ documents. To transfer analyst decisions instead, use
    combined file per template/format across the selected variants, or a separate
    file per variant and template/format. SBOM files are always generated
    separately per variant; they cannot be combined with reports in one request.
-3. **Documents** — enable the desired documents and choose their output
+3. For reports and SBOMs, **Documents** — enable the desired documents and choose their output
    formats. Reports can be filtered to built-in or custom templates.
    **Select visible** and **Clear visible** apply to the current category.
    Click **Download export** to queue the job.
 
-The result is a ZIP archive. Generation and errors appear in the
+For reports and SBOMs, the result is a ZIP archive. Generation and errors appear in the
 [Operation queue](web-operation-queue.md), and the download starts when it is ready.
 Closing the wizard or navigating away does not cancel the queued export.
 After a missed download, reopen the queue to retrieve the retained archive;

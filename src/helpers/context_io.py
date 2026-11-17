@@ -18,11 +18,11 @@ from ..models.project import Project
 from ..models.project_context import ProjectContext
 from ..models.variant import Variant
 from ..models.variant_context import VariantContext, default_editor_block
-from ..helpers.stride_model import SYSTEM_KEYS, StrideValidationError, empty_stride_model
+from ..helpers.stride_model import SYSTEM_KEYS, StrideValidationError, empty_stride_model, upgrade_legacy_risks
 
 # Version of the export file format. Bump the major component only on a
 # breaking change to the entry shape.
-EXPORT_VERSION = "2.0"
+EXPORT_VERSION = "3.0"
 
 
 class ExportedFile(TypedDict):
@@ -35,10 +35,8 @@ class VariantEntry(TypedDict):
     """One exported variant's context (nested under its project)."""
     variant_name: str
     variant_description: Optional[str]
-    codebase_path: Optional[str]
     environment: Optional[str]
     other_info: Optional[str]
-    codebase_source: str
     system: dict
     stride_model: dict
     files: list[ExportedFile]
@@ -59,24 +57,21 @@ class ExportDocument(TypedDict):
 
 
 def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntry:
-    """Build one export entry for a variant (stored values, not the agent rendering)."""
+    """Export structured context, not server paths or rendered threat-model text."""
     if vc is None:
         block = default_editor_block()
         editor: dict = {
-            "codebase_source": block["codebase_source"],
             "system": block["system"],
             "stride_model": block["stride"],
         }
     else:
         editor = {
-            "codebase_source": vc.codebase_source,
             "system": {key: getattr(vc, f"system_{key}") for key in SYSTEM_KEYS},
             "stride_model": vc.stride_model if vc.stride_model is not None else empty_stride_model(),
         }
     return {
         "variant_name": variant.name,
         "variant_description": vc.variant_description if vc else None,
-        "codebase_path": vc.codebase_path if vc else None,
         "environment": vc.environment if vc else None,
         "other_info": vc.other_info if vc else None,
         **editor,  # type: ignore[typeddict-item]
@@ -322,7 +317,8 @@ def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[st
 
 
 def _editor_payload(entry: dict) -> dict:
-    """Map a 2.0 export entry onto the ``save_editor`` payload.
+    """Map an export entry onto the ``save_editor`` payload.
+    2.0 risks (single ``threat_id``) are upgraded to the 2.1 shape.
 
     ``files`` only lists upload names, so it is not imported.
     """
@@ -330,8 +326,6 @@ def _editor_payload(entry: dict) -> dict:
         "variant_description": entry.get('variant_description'),
         "environment": entry.get('environment'),
         "other_info": entry.get('other_info'),
-        "codebase_source": entry.get('codebase_source'),
-        "codebase_path": entry.get('codebase_path'),
         "system": entry.get('system'),
-        "stride": entry.get('stride_model'),
+        "stride": upgrade_legacy_risks(entry.get('stride_model')),
     }

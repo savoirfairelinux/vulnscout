@@ -1405,13 +1405,17 @@ def init_app(app: Flask) -> None:
 
         if flask_request.method == 'GET':
             return jsonify(outdated_data_preview())
-        candidate_ids = _cleanup_candidates(
-            flask_request.get_json(silent=True), "candidate_ids", _is_outdated_candidates
-        )
-        if candidate_ids is None:
+        body = flask_request.get_json(silent=True)
+        candidate_ids = _cleanup_candidates(body, "candidate_ids", _is_outdated_candidates)
+        if candidate_ids is None or not isinstance(body, dict):
             return jsonify({"error": "candidate_ids must be a valid cleanup preview"}), 400
+        clear_history = body.get("clear_vulnerability_history", False)
+        if not isinstance(clear_history, bool):
+            return jsonify({"error": "clear_vulnerability_history must be a boolean"}), 400
         try:
-            return jsonify(cleanup(cast(dict[str, object], candidate_ids)))
+            return jsonify(cleanup(
+                cast(dict[str, object], candidate_ids), clear_vulnerability_history=clear_history,
+            ))
         except ValueError:
             return jsonify({"error": _STALE_CLEANUP_PREVIEW_ERROR}), 409
         except Exception:

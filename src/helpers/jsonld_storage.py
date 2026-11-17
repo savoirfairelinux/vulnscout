@@ -11,8 +11,8 @@ import logging
 import uuid
 
 from packageurl import PackageURL
-from sqlalchemy import delete, insert, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, insert, inspect, select, update
+from sqlalchemy.orm import Session, defer
 
 from ..models import Package, SBOMDocument, SBOMPackage, Scan
 from ..models.assessment import Assessment
@@ -206,7 +206,14 @@ def _merge_finding_references(session: Session, mappings: dict, documents: dict,
 
 def consolidate_jsonld_packages(session: Session) -> bool:
     """Consolidate recorded, unprocessed groups in the caller's transaction."""
-    documents = {document.id: document for document in session.scalars(select(SBOMDocument))}
+    # Historical migrations also call this helper before compiler metadata exists.
+    has_build_targets = 'build_targets' in {
+        column['name'] for column in inspect(session.connection()).get_columns('sbom_documents')
+    }
+    query = select(SBOMDocument)
+    if not has_build_targets:
+        query = query.options(defer(SBOMDocument.build_targets))
+    documents = {document.id: document for document in session.scalars(query)}
     groups_by_scan: dict[uuid.UUID, list[dict]] = defaultdict(list)
     documents_by_scan: dict[uuid.UUID, list[SBOMDocument]] = defaultdict(list)
     for document in documents.values():
@@ -321,6 +328,16 @@ def consolidate_jsonld_packages(session: Session) -> bool:
                     for entry in document.jsonld_groups or []
                 ]
     associations = {(link.sbom_document_id, link.package_id): link for link in links}
+    for scan_id, mapping in mappings.items():
+        for document in documents_by_scan[scan_id]:
+            if has_build_targets and document.build_targets is not None:
+                document.build_targets = [
+                    {**target, "package_ids": sorted({
+                        str(mapping.get(uuid.UUID(package_id), uuid.UUID(package_id)))
+                        for package_id in target["package_ids"]
+                    })}
+                    for target in document.build_targets
+                ]
     for link in links:
         scan_id = documents[link.sbom_document_id].scan_id
         parent_id = mappings.get(scan_id, {}).get(link.package_id)
@@ -342,14 +359,18 @@ def consolidate_jsonld_packages(session: Session) -> bool:
             link.type = metadata["type"]
     session.flush()
     document_ids = {document.id for document in documents.values() if document.scan_id in mappings}
-    edges = set()
-    for document_id, source, dependency in session.execute(select(
+    edges: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], list[dict[str, str]]] = {}
+    for document_id, source, dependency, declarations in session.execute(select(
         PackageDependency.sbom_document_id, PackageDependency.package_id, PackageDependency.dependency_id,
+        PackageDependency.declarations,
     ).where(PackageDependency.sbom_document_id.in_(document_ids))):
         mapping = mappings[documents[document_id].scan_id]
         source, dependency = mapping.get(source, source), mapping.get(dependency, dependency)
         if source != dependency:
-            edges.add((document_id, source, dependency))
+            evidence = edges.setdefault((document_id, source, dependency), [])
+            for declaration in declarations or []:
+                if declaration not in evidence:
+                    evidence.append(declaration)
     session.execute(delete(PackageDependency).where(PackageDependency.sbom_document_id.in_(document_ids)),
                     execution_options={"synchronize_session": False})
     for link in links:
@@ -360,8 +381,9 @@ def consolidate_jsonld_packages(session: Session) -> bool:
             ), execution_options={"synchronize_session": False})
     if edges:
         session.execute(insert(PackageDependency), [
-            {"sbom_document_id": doc, "package_id": source, "dependency_id": dependency}
-            for doc, source, dependency in edges
+            {"sbom_document_id": doc, "package_id": source, "dependency_id": dependency,
+             "declarations": declarations or None}
+            for (doc, source, dependency), declarations in edges.items()
         ])
     _merge_finding_references(session, mappings, documents, original_links)
     for observation in session.scalars(select(SBOMObservation).where(

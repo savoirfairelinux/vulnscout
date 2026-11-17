@@ -128,11 +128,11 @@ def _detect_format(filename: str, data: dict) -> str:
 def _is_archive(filename: str) -> bool:
     """True when *filename* looks like a tar archive (optionally compressed)."""
     lower = filename.lower()
-    return lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.zst"))
+    return lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.zst"))
 
 
 def _extract_spdx_archive(archive_path: str, filename: str) -> list[tuple[str, str]]:
-    """Extract an SPDX archive (.tar / .tar.gz / .tar.zst) and return the
+    """Extract an SPDX archive (.tar / .tar.gz / .tgz / .tar.xz / .tar.zst) and return the
     contained ``*.spdx.json`` and ``*.jsonld`` files as ``(tmp_path, member_name)`` pairs.
     """
     lower = filename.lower()

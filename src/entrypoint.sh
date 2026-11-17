@@ -192,6 +192,10 @@ Commands without --project or --variant:
 
         Refresh vulnerability data:
         --refresh-vulnerability-data    Refresh all projects (optionally limited by --project and --variant)
+        --export-vulnerability-history --since <timestamp> [--until <timestamp>] [--format json|csv]
+        --export-vulnerability-history --last-refresh [--format json|csv]
+                                        Export recorded changes (or each vulnerability's latest refresh)
+                                        to stdout; remaining options go to Flask
 
         Data listing:
         --list-projects                 List all projects and their variants (optionally in JSON format with --json)
@@ -208,6 +212,7 @@ Commands without --project or --variant:
 
 Options used by the host wrapper's subcommands:
         --dry-run                       Preview the --delete-* flag that follows without deleting anything
+        --clear-vulnerability-history   Also clear refresh history with the --delete-outdated flag that follows
         --all-variants                  Custom OpenVEX export/import: do not default --variant to "default"
         --retarget-context              --import-context: import into --project (and --variant) instead of
                                         the names in the file
@@ -245,6 +250,15 @@ Commands with optional --project and --variant (uses "default" project and varia
                          --project without --variant tests all project variants
                          No scope tests the default project/variant
 
+        Assess vulnerabilities with the embedded AI agent (uses the remaining arguments):
+        --ai-assess --cve <id>... | --filter <expr> [--model <id>] [--timeout <seconds>] [--dry-run] [--json]
+                         --project without --variant assesses all project variants
+                         No scope assesses the default project/variant
+
+        Review custom assessments with the embedded AI agent (uses the remaining arguments):
+        --project <name> --ai-review --assessment-id <uuid>... | --cve <id>... [--variant <name>]... [--re-review] [--model <id>] [--timeout <seconds>] [--dry-run] [--json]
+                         --project is required; --variant only with --cve
+
 Commands only requiring --project (uses default project if not specified):
 
         Import or export custom VulnScout data for a project:
@@ -266,6 +280,8 @@ Examples:
     /scan/src/entrypoint.sh --project test --variant x86 --perform-scans grype,nvd
   /scan/src/entrypoint.sh --project test --match-condition "cvss >= 9.0"
   /scan/src/entrypoint.sh --project test --variant x86 --match-condition "cvss >= 9.0"
+  /scan/src/entrypoint.sh --project test --ai-assess --filter "pending and cvss >= 9"
+  /scan/src/entrypoint.sh --project test --ai-review --cve CVE-2024-3094
   /scan/src/entrypoint.sh --serve
   /scan/src/entrypoint.sh --report summary.adoc
   /scan/src/entrypoint.sh --config NVD_API_KEY abc123
@@ -292,12 +308,18 @@ setup_user() {
         mkdir -p /builder
         # Source trees under /scan may be bind-mounted from the host in dev mode.
         chown -f "$uid:$gid" /scan
-        chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs /cache
+        chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs
+        # Administrator source directories may be read-only mounts; never traverse or chown them.
+        local cache_dir="${VULNSCOUT_CACHE_DIR:-/cache/vulnscout}"
+        cache_dir="${cache_dir%/}"
+        find /cache -type d -path "$cache_dir/context-*" ! -path "$cache_dir/context-*/*" \
+            ! -name context-files -prune \
+            -o -exec chown -h "$uid:$gid" {} +
     fi
 }
 
 #######################################
-# Extract a .tar, .tar.gz or .tar.zst file into a given folder
+# Extract a .tar, .tar.gz, .tar.xz or .tar.zst file into a given folder
 #######################################
 extract_tar_file() {
     local file="$1"
@@ -305,6 +327,7 @@ extract_tar_file() {
     case "$file" in
         *.tar)     tar -xf "$file" -C "$folder" ;;
         *.tar.gz)  tar -xzf "$file" -C "$folder" ;;
+        *.tar.xz)  tar -xJf "$file" -C "$folder" ;;
         *.tar.zst)
             unzstd "$file" -o "${file%.zst}" --force
             tar -xf "${file%.zst}" -C "$folder"
@@ -319,8 +342,8 @@ cmd_add_file() {
     local src="$2"
     mkdir -p "$INPUTS_DIR/$type"
 
-    # For SPDX inputs, archives (.tar/.tar.gz/.tar.zst) must be extracted first
-    if [[ "$type" == "spdx" ]] && [[ "$src" == *.tar || "$src" == *.tar.gz || "$src" == *.tar.zst ]]; then
+    # For SPDX inputs, archives (.tar/.tar.gz/.tar.xz/.tar.zst) must be extracted first
+    if [[ "$type" == "spdx" ]] && [[ "$src" == *.tar || "$src" == *.tar.gz || "$src" == *.tar.xz || "$src" == *.tar.zst ]]; then
         local tmp_extract
         tmp_extract=$(mktemp -d)
         console_out info "Extracting SPDX archive: $src"
@@ -524,6 +547,11 @@ cmd_scan() {
             esac
         done
     fi
+    if [[ "$has_inputs" == "true" && "${REFRESH_VULNERABILITY_DATA:-false}" == "true" &&
+          -n "${REFRESH_RUN_ID:-}" ]]; then
+        console_err error "Error: refresh --run-id cannot process pending inputs. Process them with scan before retrying refresh."
+        return 1
+    fi
     (cd "$BASE_DIR" && flask --app src.bin.webapp db upgrade) || return $?
 
     local has_condition=false
@@ -578,11 +606,11 @@ cmd_scan() {
                 _grype_gomemlimit=$(resolve_grype_memlimit)
                 if [[ -n "$_grype_gomemlimit" ]]; then
                     console_out info "Grype memory limit (GOMEMLIMIT): $_grype_gomemlimit"
-                    GOMEMLIMIT="$_grype_gomemlimit" grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
+                    GOMEMLIMIT="$_grype_gomemlimit" grype "sbom:$exported_cdx" -o json > "$grype_out" || {
                         rm -rf "$grype_tmp"; return 1
                     }
                 else
-                    grype --add-cpes-if-none "sbom:$exported_cdx" -o json > "$grype_out" || {
+                    grype "sbom:$exported_cdx" -o json > "$grype_out" || {
                         rm -rf "$grype_tmp"; return 1
                     }
                 fi
@@ -660,6 +688,7 @@ cmd_scan() {
         local -a refresh_args=()
         [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_args+=(--project "$PROJECT_NAME")
         [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_args+=(--variant "$VARIANT_NAME")
+        [[ -n "${REFRESH_RUN_ID:-}" ]] && refresh_args+=(--run-id "$REFRESH_RUN_ID")
         (cd "$BASE_DIR" && flask --app src.bin.webapp refresh-vulnerability-data "${refresh_args[@]}") || _cmd_scan_exit=$?
     elif [[ "${INTERACTIVE_MODE}" == "true" ]] && [[ "$has_inputs" == "false" ]]; then
         set_status "1" "No new input files to merge, skipping"
@@ -845,6 +874,31 @@ cmd_import_context() {
     setup_user
 }
 
+cmd_ai_command() {
+    local command="$1"
+    shift
+    local -a scope_args=()
+    if [[ "$PROJECT_SPECIFIED" == "true" ]]; then scope_args+=(--project "$PROJECT_NAME"); fi
+    if [[ "$VARIANT_SPECIFIED" == "true" ]]; then scope_args+=(--variant "$VARIANT_NAME"); fi
+
+    if [[ -n "${VULNSCOUT_RUN_ID:-}" ]]; then
+        if [[ ! "$VULNSCOUT_RUN_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "Invalid VULNSCOUT_RUN_ID." >&2
+            return 2
+        fi
+        # flask is exec'd below, so this PID is flask's: the host wrapper sends Ctrl-C to it.
+        export VULNSCOUT_AI_ASSESS_PID_FILE="${TMPDIR:-/tmp}/vulnscout-ai-assess-$VULNSCOUT_RUN_ID.pid"
+        echo "$$" > "$VULNSCOUT_AI_ASSESS_PID_FILE"
+    fi
+    # bash delays a trapped signal until the migration finishes, then stops before any AI call.
+    trap 'if [[ -n "${VULNSCOUT_AI_ASSESS_PID_FILE:-}" ]]; then rm -f "$VULNSCOUT_AI_ASSESS_PID_FILE"; fi; exit 130' INT TERM
+
+    cd "$BASE_DIR"
+    # Keep stdout for the command's own output (--json).
+    flask --app src.bin.webapp db upgrade >&2 || return $?
+    exec flask --app src.bin.webapp "$command" "${scope_args[@]}" "$@"
+}
+
 cmd_config_list() {
     if [ -f "$CONFIG_FILE" ]; then
         console_out info "Config ($CONFIG_FILE):"
@@ -905,6 +959,7 @@ cmd_delete_scan() {
 cmd_delete_outdated() {
     local -a args=(delete-outdated)
     if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+    if [[ "$CLEAR_VULNERABILITY_HISTORY" == "true" ]]; then args+=(--clear-vulnerability-history); fi
     flask --app src.bin.webapp "${args[@]}"
 }
 
@@ -1009,6 +1064,7 @@ JSON_OUTPUT=false
 DATA_REQUESTED=""
 IMPORT_CUSTOM_TIMESTAMP_POLICY=""
 DRY_RUN=false
+CLEAR_VULNERABILITY_HISTORY=false
 ALL_VARIANTS=false
 RETARGET_CONTEXT=false
 REPORT_FORMAT=""
@@ -1030,6 +1086,18 @@ while [[ $# -gt 0 ]]; do
             VARIANT_NAME="$2"; VARIANT_SPECIFIED=true; shift 2 ;;
         --json)
             JSON_OUTPUT=true; shift ;;
+        --ai-assess)
+            # Consumes the remaining arguments, like --serve.
+            shift; ai_exit=0; cmd_ai_command ai-assess "$@" || ai_exit=$?; exit "$ai_exit" ;;
+        --ai-review)
+            shift; ai_exit=0; cmd_ai_command ai-review "$@" || ai_exit=$?; exit "$ai_exit" ;;
+        --export-vulnerability-history)
+            shift
+            history_scope=()
+            [[ "$PROJECT_SPECIFIED" == "true" ]] && history_scope+=(--project "$PROJECT_NAME")
+            [[ "$VARIANT_SPECIFIED" == "true" ]] && history_scope+=(--variant "$VARIANT_NAME")
+            cd "$BASE_DIR"
+            exec flask --app src.bin.webapp export-vulnerability-history "${history_scope[@]}" "$@" ;;
         --match-condition)
             if [[ "$SERVE_REQUESTED" == "true" ]]; then
                 console_out error "Error: --serve and --match-condition are incompatible."; exit 1
@@ -1064,8 +1132,16 @@ while [[ $# -gt 0 ]]; do
             request_scans sbom-cve-check; shift ;;
         --refresh-vulnerability-data)
             REFRESH_VULNERABILITY_DATA=true; SCAN_REQUIRED=true; shift ;;
+        --refresh-run-id)
+            REFRESH_RUN_ID="$2"; shift 2 ;;
+        --export-refresh-changes)
+            EXPORT_REFRESH_RUN_ID="$2"; shift 2 ;;
+        --refresh-changes-format)
+            REFRESH_CHANGES_FORMAT="$2"; shift 2 ;;
         --dry-run)
             DRY_RUN=true; shift ;;
+        --clear-vulnerability-history)
+            CLEAR_VULNERABILITY_HISTORY=true; shift ;;
         --all-variants)
             ALL_VARIANTS=true; shift ;;
         --retarget-context)
@@ -1130,6 +1206,14 @@ while [[ $# -gt 0 ]]; do
             console_out error "Unknown command: $1"; console_out info "Run --help for usage."; exit 1 ;;
     esac
 done
+
+if [[ -n "${EXPORT_REFRESH_RUN_ID:-}" ]]; then
+    refresh_export_args=(--run-id "$EXPORT_REFRESH_RUN_ID" --format "${REFRESH_CHANGES_FORMAT:-json}")
+    [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_export_args+=(--project "$PROJECT_NAME")
+    [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_export_args+=(--variant "$VARIANT_NAME")
+    cd "$BASE_DIR"
+    exec flask --app src.bin.webapp export-refresh-changes "${refresh_export_args[@]}"
+fi
 
 if [[ -n "${IMPORT_CUSTOM_TIMESTAMP_POLICY:-}" && -z "${IMPORT_CUSTOM_VULNSCOUT_DATA_FILE:-}" && -z "${IMPORT_CUSTOM_OPENVEX_ASSESSMENTS_FILE:-}" ]]; then
     console_err error "Error: timestamp options require a custom VulnScout or OpenVEX import."

@@ -24,12 +24,12 @@ def _comp_ids_for_package(name: str, version: str, cpes: Iterable[str],
                           purls: Iterable[str]) -> set[CompId]:
     """Build the set of component identifiers used to match a package.
 
-    Identifiers are collected from three sources so that a single package can be
-    matched whichever way an advisory references it:
+    Identifiers are collected from declared CPEs and PURLs so that a package can
+    be matched whichever way an advisory references it:
 
     * every CPE → :meth:`CompId.build_from_cpe` (carries vendor + canonical product)
-    * every PURL package name → ``CompId(name=...)``
-    * the bare package name → ``CompId(name=...)``
+    * every PURL → ``CompId(name=..., vendor=namespace)`` when namespaced
+    * the bare package name → ``CompId(name=...)`` only when no usable identifier exists
     """
     ids: set[CompId] = set()
 
@@ -43,17 +43,23 @@ def _comp_ids_for_package(name: str, version: str, cpes: Iterable[str],
         if cid is not None:
             ids.add(cid)
 
+    has_identifier = bool(ids)
     for purl in purls:
         if not purl:
             continue
         try:
-            pname = PackageURL.from_string(purl).name
+            parsed_purl = PackageURL.from_string(purl)
         except Exception:
-            pname = None
-        if pname:
-            ids.add(CompId(name=pname.lower()))
+            parsed_purl = None
+        if parsed_purl is not None and parsed_purl.name:
+            namespace = parsed_purl.namespace
+            ids.add(CompId(
+                name=parsed_purl.name.lower(),
+                vendor=namespace.lower() if namespace else None,
+            ))
+            has_identifier = True
 
-    if name:
+    if name and not has_identifier:
         ids.add(CompId(name=name.lower()))
 
     return ids
@@ -103,19 +109,20 @@ class VsCompBuild(CompBuild):
     """Wrap a single VulnScout :class:`Package` as an engine ``CompBuild``.
 
     A package maps to exactly one build holding one component, sharing the same
-    version and identifiers (the invariant the engine expects).  Compiled-source
-    refinement (kernel per-file trimming) is intentionally disabled: VulnScout's
-    portable SBOM does not carry recipe source-file lists, so an empty set is
-    returned, which makes the engine fall back to pure version-range evaluation.
+    version and identifiers (the invariant the engine expects). Source paths
+    come only from the selected SBOM's resolved build evidence; unknown or
+    incomplete inventories retain version-range evaluation.
     """
 
     def __init__(self, name: str, version: str, identifiers: set[CompId],
-                 cpes: tuple[str, ...], purls: tuple[str, ...]) -> None:
+                 cpes: tuple[str, ...], purls: tuple[str, ...],
+                 compiled_sources: frozenset[str] = frozenset()) -> None:
         super().__init__()
         self._build_name = name
         self._version = version
         self._identifiers = tuple(sorted(identifiers))
         self._component = VsComponent(name, version, identifiers, cpes, purls)
+        self._compiled_sources = compiled_sources
 
     @property
     def version(self) -> str:
@@ -134,7 +141,7 @@ class VsCompBuild(CompBuild):
         return self._build_name
 
     def _get_compiled_sources(self) -> set[str]:
-        return set()
+        return set(self._compiled_sources)
 
 
 def build_comp_build(pkg) -> VsCompBuild | None:
@@ -152,4 +159,4 @@ def build_comp_build(pkg) -> VsCompBuild | None:
     if not identifiers or not version:
         return None
 
-    return VsCompBuild(name, version, identifiers, cpes, purls)
+    return VsCompBuild(name, version, identifiers, cpes, purls, frozenset(pkg.compiled_sources))

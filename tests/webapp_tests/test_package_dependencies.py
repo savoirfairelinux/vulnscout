@@ -179,6 +179,348 @@ def _import_legacy_components(tmp_path, variant, documents, monkeypatch):
         return _import_grouping_documents(tmp_path, variant, documents)
 
 
+def test_real_zephyr_compiler_metadata_survives_ingestion_and_api(app, tmp_path):
+    sample = Path(__file__).resolve().parents[2] / 'example' / 'zephyr' / 'build.jsonld'
+    data = json.loads(sample.read_text())
+    variant_id, scan_id = _scan(app, tmp_path, 'compiler-sample', data)
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json
+    document = graph['documents'][0]
+    target = next(target for target in document['build_targets'] if target['name'] == 'mbedtls')
+    original = next(node for node in data['@graph']
+                    if node.get('type') == 'build_Build' and node['spdxId'] == target['id'])
+    parameters = {parameter['key']: parameter['value'] for parameter in original['build_parameter']}
+    assert target['package_ids'] == ['mbedtls@']
+    assert target['languages'] == [{
+        'language': 'C', 'flags': [parameters['compile:flags:C']],
+        'defines': [parameters['compile:defines:C']],
+    }]
+    assert '-DMBEDTLS_CONFIG_FILE="config-mbedtls.h"' in target['languages'][0]['defines'][0]
+    kernel = next(target for target in document['build_targets'] if target['name'] == 'kernel')
+    assert kernel['package_ids'] != target['package_ids']
+    assert kernel['languages'][0]['flags'] != target['languages'][0]['flags']
+    assert kernel['languages'][0]['defines'] != target['languages'][0]['defines']
+    db.session.expire_all()
+    stored = SBOMDocument.get_by_scan(scan_id)[0].build_targets
+    assert next(item for item in stored if item['id'] == target['id'])['languages'] == target['languages']
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_companion_build_declarations_preserve_conflicting_compiler_observations(
+        app, tmp_path, monkeypatch, reverse):
+    import httpx
+
+    from vulnscout_mcp.client import VulnScoutClient
+    from vulnscout_mcp.tools.dependencies import _packages_impl, _traverse_impl
+
+    configurations = {
+        'debug.jsonld': ('-O0', '-DDEBUG'),
+        'release.jsonld': ('-O3', '-DNDEBUG'),
+    }
+    documents = {
+        name.removesuffix('.jsonld'): _zephyr_spdx3([
+            {'type': 'build_Build', 'spdxId': 'zephyr:compiler', 'name': 'compiler',
+             'build_parameter': [
+                 {'key': 'compile:flags:C', 'value': flags},
+                 {'key': 'compile:defines:C', 'value': defines},
+             ]},
+            {'type': 'Relationship', 'relationshipType': 'hasOutput',
+             'from': 'zephyr:compiler', 'to': ['zephyr:lib']},
+        ])
+        for name, (flags, defines) in configurations.items()
+    }
+    if reverse:
+        documents = dict(reversed(documents.items()))
+    documents['packages'] = _zephyr_spdx3([
+        {'type': 'software_Package', 'spdxId': f'zephyr:{name}', 'name': name,
+         'software_packageVersion': '1'} for name in ('app', 'lib')
+    ] + [
+        {'type': 'Relationship', 'relationshipType': 'dependsOn',
+         'from': 'zephyr:app', 'to': ['zephyr:lib']},
+    ])
+    project = Project.create('conflicting-compilers')
+    variant = Variant.create('board', project.id)
+    scan = _import_grouping_documents(tmp_path, variant, documents)
+    variant_id = str(variant.id)
+    http = app.test_client()
+    graph = http.get(f'/api/package-dependencies?variant_id={variant_id}').json
+    compiler = http.get(f'/api/package-compiler-metadata?variant_id={variant_id}').json
+    for response in (graph, compiler):
+        targets = {doc['source_name']: doc['build_targets'][0] for doc in response['documents']
+                   if doc['build_targets']}
+        assert targets.keys() == configurations.keys()
+        for name, (flags, defines) in configurations.items():
+            assert targets[name]['id'] == 'https://example.org/zephyr/compiler'
+            assert targets[name]['package_ids'] == ['lib@1']
+            assert targets[name]['languages'] == [
+                {'language': 'C', 'flags': [flags], 'defines': [defines]},
+            ]
+    db.session.expire_all()
+    assert {doc.source_name for doc in SBOMDocument.get_by_scan(scan.id) if doc.build_targets} == set(configurations)
+
+    def get(client, url, *, params):
+        response = http.get(url.removeprefix('http://vulnscout.test'), query_string=params)
+        return httpx.Response(response.status_code, json=response.json)
+
+    monkeypatch.setattr(httpx.Client, 'get', get)
+    client = VulnScoutClient('http://vulnscout.test')
+    packages = json.loads(_packages_impl(client, variant_id, 'lib@1', None, 0, 100))
+    traversal = json.loads(_traverse_impl(client, variant_id, 'app@1', 'dependencies', 0, None, 0, 100))
+    root = json.loads(_traverse_impl(client, variant_id, 'lib@1', 'dependents', 0, None, 0, 100))
+    for package in (packages['items'][0], traversal['items'][0], root['root']):
+        occurrence = package['occurrences'][0]
+        assert occurrence['source_name'] == 'packages.jsonld'
+        targets = {target['source_name']: target for target in occurrence['build_targets']}
+        assert targets.keys() == configurations.keys()
+        for name, (flags, defines) in configurations.items():
+            assert targets[name]['languages'] == [
+                {'language': 'C', 'flags': [flags], 'defines': [defines]},
+            ]
+            assert targets[name]['document_id'] == next(
+                doc['id'] for doc in graph['documents'] if doc['source_name'] == name)
+
+
+def test_real_zephyr_evidence_reaches_mcp_without_flattening_targets(app, tmp_path, monkeypatch):
+    import httpx
+
+    from vulnscout_mcp.client import VulnScoutClient
+    from vulnscout_mcp.tools.dependencies import _packages_impl, _source_files_impl, _traverse_impl
+
+    sample = Path(__file__).resolve().parents[2] / 'example' / 'zephyr' / 'build.jsonld'
+    variant_id, _ = _scan(app, tmp_path, 'mcp-evidence', json.loads(sample.read_text()))
+    variant_id = str(variant_id)
+    http = app.test_client()
+
+    def get(client, url, *, params):
+        response = http.get(url.removeprefix('http://vulnscout.test'), query_string=params)
+        return httpx.Response(response.status_code, json=response.json)
+
+    monkeypatch.setattr(httpx.Client, 'get', get)
+    client = VulnScoutClient('http://vulnscout.test')
+    packages = json.loads(_packages_impl(client, variant_id, 'mbedtls@', None, 0, 100))
+    occurrence = packages['items'][0]['occurrences'][0]
+    target = next(item for item in occurrence['build_targets'] if item['name'] == 'mbedtls')
+    assert target['package_ids'] == ['mbedtls@']
+    assert '-DMBEDTLS_CONFIG_FILE="config-mbedtls.h"' in target['languages'][0]['defines'][0]
+    files = json.loads(_source_files_impl(client, variant_id, 'mbedtls@', 0, 500))
+    assert files['files_recorded'] is True
+    # This build document has compiler targets but lacks the companion file inventory.
+    assert files['source_file_count'] == 0
+    assert files['items'] == []
+    assert files['compiled_sources_complete'] is False
+    dependencies = json.loads(_traverse_impl(client, variant_id, 'mbedtls@', 'dependents', 0, None, 0, 100))
+    assert dependencies['root']['occurrences'][0]['build_targets'] == occurrence['build_targets']
+    assert dependencies['items']
+    assert all(edge['declarations'] for item in dependencies['items']
+               for hop in item['path_edges'] for edge in hop)
+
+
+def test_compiler_endpoint_summary_details_and_empty_values(app, tmp_path):
+    variant_id, scan_id = _scan(app, tmp_path, 'compiler-endpoint', _spdx3())
+    document = SBOMDocument.get_by_scan(scan_id)[0]
+    package = Package.get_by_string_id('app@1.0')
+    document.build_targets = [
+        {'id': 'defines', 'name': 'defines only', 'package_ids': [str(package.id)], 'languages': [
+            {'language': 'C', 'flags': [], 'defines': ['-DQUOTED="value"']},
+        ]},
+        {'id': 'empty', 'name': 'empty', 'package_ids': [str(package.id)], 'languages': [
+            {'language': 'C', 'flags': [], 'defines': []},
+        ]},
+    ]
+    db.session.commit()
+    url = f'/api/package-compiler-metadata?variant_id={variant_id}'
+    statements = []
+
+    def record_statement(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(db.engine, 'before_cursor_execute', record_statement)
+    try:
+        summary = app.test_client().get(url + '&summary=1')
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', record_statement)
+    assert summary.status_code == 200
+    assert summary.json == {'documents': [{
+        'id': str(document.id), 'source_name': 'compiler-endpoint.json', 'format': 'spdx',
+        'variant_id': str(variant_id), 'variant_name': 'compiler-endpoint', 'package_ids': ['app@1.0'],
+    }]}
+    assert not any('package_dependencies' in statement for statement in statements)
+    details = app.test_client().get(url + '&package_id=app@1.0')
+    assert details.status_code == 200
+    assert details.json['documents'][0]['build_targets'] == [{
+        **document.build_targets[0], 'package_ids': ['app@1.0'],
+    }]
+    assert app.test_client().get(url + '&package_id=lib@1.0').json == {'documents': []}
+    document.build_targets = [document.build_targets[1]]
+    db.session.commit()
+    assert app.test_client().get(url + '&summary=1').json == {'documents': []}
+
+
+def test_compiler_endpoint_respects_variant_comparisons_and_validates_scope(app, tmp_path):
+    first, first_scan = _scan(app, tmp_path, 'compiler-alpha', _spdx3())
+    other_data = _spdx3()
+    other_data['@graph'].append({
+        'type': 'software_Package', 'spdxId': 'pkg:extra', 'name': 'extra', 'software_packageVersion': '1.0',
+    })
+    second, second_scan = _scan(app, tmp_path, 'compiler-beta', other_data)
+    for scan_id in (first_scan, second_scan):
+        document = SBOMDocument.get_by_scan(scan_id)[0]
+        names = ['app@1.0'] if scan_id == first_scan else ['app@1.0', 'extra@1.0']
+        document.build_targets = [{
+            'id': 'target', 'name': 'target',
+            'package_ids': [str(Package.get_by_string_id(name).id) for name in names],
+            'languages': [{'language': 'C', 'flags': ['-O2'], 'defines': []}],
+        }]
+    db.session.commit()
+    client = app.test_client()
+    url = '/api/package-compiler-metadata'
+    assert client.get(url).status_code == 400
+    assert client.get(url + '?variant_id=invalid').status_code == 400
+    assert client.get(url + '?variant_ids=,').status_code == 400
+    empty_variant = Variant.create('empty', Project.get_all()[0].id)
+    assert client.get(url + f'?variant_id={empty_variant.id}&summary=1').json == {'documents': []}
+    assert {doc['variant_id'] for doc in client.get(url + f'?variant_id={first}').json['documents']} == {str(first)}
+    union = client.get(url + f'?variant_ids={first},{second}&summary=1').json['documents']
+    assert {doc['variant_id'] for doc in union} == {str(first), str(second)}
+    intersection = client.get(
+        url + f'?variant_ids={first},{second}&operation=intersection&summary=1',
+    ).json['documents']
+    assert all(doc['package_ids'] == ['app@1.0'] for doc in intersection)
+    difference = client.get(
+        url + f'?variant_id={first}&compare_variant_id={second}&operation=difference&summary=1',
+    ).json['documents']
+    assert len(difference) == 1
+    assert difference[0]['variant_id'] == str(second)
+    assert difference[0]['package_ids'] == ['extra@1.0']
+
+
+def test_compiler_metadata_keeps_targets_languages_and_consolidated_ownership(app, tmp_path):
+    documents = _grouping_documents()
+    build = next(node for node in documents['build']['@graph'] if node.get('type') == 'build_Build')
+    build['build_parameter'] = [
+        {'type': 'DictionaryEntry', 'key': 'compile:flags:C', 'value': '-Os  -g'},
+        {'type': 'DictionaryEntry', 'key': 'compile:flags:C', 'value': '-Wall'},
+        {'type': 'DictionaryEntry', 'key': 'compile:defines:C', 'value': '-DCONFIG_FILE="config.h"'},
+        {'type': 'DictionaryEntry', 'key': 'compile:flags:C++', 'value': '-std=c++17'},
+        {'type': 'DictionaryEntry', 'key': 'compile:defines:ASM', 'value': '-DASSEMBLER'},
+        {'key': 'compile:flags:C', 'value': None},
+        {'key': 'compile:flags:', 'value': 'ignored'},
+        {'key': 'other:flags:C', 'value': 'ignored'},
+        None,
+    ]
+    documents['build']['@graph'].extend([
+        {'type': 'build_Build', 'spdxId': 'https://example.org/zephyr/other-build',
+         'name': 'Other target', 'build_parameter': [
+             {'key': 'compile:flags:C', 'value': '-O0'},
+         ]},
+        {'type': 'Relationship', 'relationshipType': 'hasOutput',
+         'from': 'https://example.org/zephyr/other-build', 'to': ['https://example.org/zephyr/mbedtls']},
+        {'type': 'build_Build', 'spdxId': 'https://example.org/zephyr/malformed', 'build_parameter': None},
+    ])
+    project = Project.create('compiler-consolidation')
+    variant = Variant.create('demo', project.id)
+    scan = _import_grouping_documents(tmp_path, variant, documents)
+    assert len(Package.get_all()) == 1
+    response = app.test_client().get(f'/api/package-dependencies?variant_id={variant.id}')
+    assert response.status_code == 200
+    targets = next(doc for doc in response.json['documents'] if doc['source_name'] == 'build.jsonld')['build_targets']
+    assert len(targets) == 2
+    assert all(target['package_ids'] == ['mbedtls@4.1.1'] for target in targets)
+    assert targets[0]['languages'] == [
+        {'language': 'C', 'flags': ['-Os  -g', '-Wall'], 'defines': ['-DCONFIG_FILE="config.h"']},
+        {'language': 'C++', 'flags': ['-std=c++17'], 'defines': []},
+        {'language': 'ASM', 'flags': [], 'defines': ['-DASSEMBLER']},
+    ]
+    assert targets[1]['languages'] == [{'language': 'C', 'flags': ['-O0'], 'defines': []}]
+    # Reimports replace metadata rather than accumulating stale target records.
+    read_inputs(ControllersCache(), scan.id)
+    repeated = app.test_client().get(f'/api/package-dependencies?variant_id={variant.id}').json
+    assert next(doc for doc in repeated['documents'] if doc['source_name'] == 'build.jsonld')['build_targets'] == targets
+    for node in documents['build']['@graph']:
+        node.pop('build_parameter', None)
+    build_document = next(doc for doc in SBOMDocument.get_by_scan(scan.id) if doc.source_name == 'build.jsonld')
+    Path(build_document.path).write_text(json.dumps(documents['build']))
+    read_inputs(ControllersCache(), scan.id)
+    removed = app.test_client().get(f'/api/package-dependencies?variant_id={variant.id}').json
+    assert all(not doc['build_targets'] for doc in removed['documents'])
+
+
+@pytest.mark.parametrize('zephyr', [False, True])
+def test_absent_or_non_zephyr_compiler_metadata_is_empty(app, tmp_path, zephyr):
+    data = _spdx3()
+    if zephyr:
+        data['@graph'].append({'type': 'SoftwareAgent', 'name': 'West SPDX Generator'})
+    else:
+        data['@graph'].append({
+            'type': 'build_Build', 'spdxId': 'build:app',
+            'build_parameter': [{'key': 'compile:flags:C', 'value': '-Os'}],
+        })
+    variant_id, _ = _scan(app, tmp_path, 'no-compiler-metadata', data)
+    response = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}')
+    assert response.status_code == 200
+    assert response.json['documents'][0]['build_targets'] == []
+
+
+def test_real_zephyr_companions_keep_compiler_targets_on_canonical_package(app, tmp_path):
+    directory = Path(__file__).resolve().parents[2] / 'example' / 'zephyr'
+    documents = {path.stem: json.loads(path.read_text()) for path in directory.glob('*.jsonld')}
+    project = Project.create('real-compiler-companions')
+    variant = Variant.create('default', project.id)
+    _import_grouping_documents(tmp_path, variant, documents)
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant.id}').json
+    build = next(doc for doc in graph['documents'] if doc['source_name'] == 'build.jsonld')
+    target = next(target for target in build['build_targets'] if target['name'] == 'mbedtls')
+    assert target['package_ids'] == ['mbedtls@4.1.1']
+    assert any(pkg['id'] == 'mbedtls@4.1.1' for pkg in build['packages'])
+    assert '-DMBEDTLS_CONFIG_FILE="config-mbedtls.h"' in target['languages'][0]['defines'][0]
+    assert not any(doc['build_targets'] for doc in graph['documents'] if doc['source_name'] != 'build.jsonld')
+
+
+def test_compiler_metadata_migration_preserves_documents_and_existing_metadata(app, tmp_path):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    variant_id, _ = _scan(app, tmp_path, 'compiler-migration', _spdx3())
+    migration = import_module('src.migrations.versions.e91a47b28c60_add_zephyr_build_targets')
+    client = app.test_client()
+    before = client.get(f'/api/package-dependencies?variant_id={variant_id}').json
+    db.session.remove()
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            assert 'build_targets' not in {column['name'] for column in inspect(connection).get_columns(
+                'sbom_documents')}
+            migration.upgrade()
+            assert connection.execute(text('SELECT count(*) FROM sbom_documents')).scalar() == 1
+            metadata = '[{"id": "test", "package_ids": [], "languages": []}]'
+            connection.execute(text('UPDATE sbom_documents SET build_targets = :metadata'), {'metadata': metadata})
+            migration.upgrade()
+            assert connection.execute(text('SELECT build_targets FROM sbom_documents')).scalar() == metadata
+    assert client.get(f'/api/package-dependencies?variant_id={variant_id}').json == before
+
+
+def test_historical_consolidation_migration_works_before_compiler_column_exists(app, tmp_path, monkeypatch):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    project = Project.create('legacy-compiler-schema')
+    variant = Variant.create('default', project.id)
+    _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    variant_id = variant.id
+    compiler_migration = import_module('src.migrations.versions.e91a47b28c60_add_zephyr_build_targets')
+    consolidation_migration = import_module('src.migrations.versions.d8f63a29b104_add_scoped_package_types')
+    db.session.remove()
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            compiler_migration.downgrade()
+            consolidation_migration.upgrade()
+            compiler_migration.upgrade()
+    assert len(Package.get_all()) == 1
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json
+    assert all(not document['build_targets'] for document in graph['documents'])
+
+
 def test_canonical_package_keeps_an_unknown_release_separate_from_its_revision(app, tmp_path):
     documents = _grouping_documents()
     documents['upstream']['@graph'][-1]['externalIdentifier'] = []
@@ -1038,12 +1380,10 @@ def test_cli_scanners_use_only_active_variant_identifiers(app, tmp_path, monkeyp
     global_purls, global_cpes = set(component.purl), set(component.cpe)
     revision = ('b' if selected == 'first' else 'c') * 40
     expected_purls = {
-        purls[selected], 'pkg:generic/mbedtls',
-        f'pkg:generic/mbedtls-deps@{revision}', f'pkg:generic/mbedtls-sources@{revision}',
+        purls[selected], 'pkg:generic/mbedtls', f'pkg:generic/mbedtls-sources@{revision}',
     }
     expected_cpes = {
         cpes[selected], 'cpe:2.3:a:*:mbedtls:*:*:*:*:*:*:*:*',
-        f'cpe:2.3:a:*:mbedtls-deps:{revision}:*:*:*:*:*:*:*',
         f'cpe:2.3:a:*:mbedtls-sources:{revision}:*:*:*:*:*:*:*',
     }
     queued, error = resolve_active_packages(variants[selected].id)
@@ -1252,9 +1592,9 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
             *({'type': 'software_Package', 'spdxId': f'zephyr:packages/{name}',
                'name': name, 'software_primaryPurpose': 'library'}
               for name in ('app', 'mbedtls', 'tfpsacrypto')),
-            {'type': 'Relationship', 'relationshipType': 'hasPrerequisite',
+            {'type': 'LifecycleScopedRelationship', 'scope': 'build', 'relationshipType': 'hasPrerequisite',
              'from': 'zephyr:packages/app', 'to': ['zephyr:packages/mbedtls']},
-            {'type': 'Relationship', 'relationshipType': 'hasPrerequisite',
+            {'type': 'LifecycleScopedRelationship', 'scope': 'build', 'relationshipType': 'hasPrerequisite',
              'from': 'zephyr:packages/mbedtls', 'to': ['zephyr:packages/tfpsacrypto']},
             {'type': 'Relationship', 'relationshipType': 'contains',
              'from': 'zephyr:packages/app', 'to': ['zephyr:files/libapp.a']},
@@ -1273,7 +1613,7 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
                     'identifier': release_cpe},
                ] if name == 'mbedtls' else []}
               for name in ('zephyr', 'mbedtls')),
-            {'type': 'Relationship', 'relationshipType': 'dependsOn',
+            {'type': 'LifecycleScopedRelationship', 'scope': 'runtime', 'relationshipType': 'dependsOn',
              'from': 'zephyr:packages/zephyr-deps', 'to': ['zephyr:packages/mbedtls-deps']},
         ]),
         'zephyr': _zephyr_spdx3([
@@ -1311,13 +1651,23 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
     assert {name: len(graph['packages']) for name, graph in graphs.items()} == {
         'app.jsonld': 1, 'build.jsonld': 3, 'modules-deps.jsonld': 2, 'zephyr.jsonld': 1,
     }
-    assert graphs['build.jsonld']['edges'] == [
-        {'package_id': 'app@', 'dependency_id': 'mbedtls@'},
-        {'package_id': 'mbedtls@', 'dependency_id': 'tfpsacrypto@'},
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graphs['build.jsonld']['edges']] == [
+        ('app@', 'mbedtls@'), ('mbedtls@', 'tfpsacrypto@'),
     ]
-    assert graphs['modules-deps.jsonld']['edges'] == [
-        {'package_id': f'zephyr-deps@{revision}', 'dependency_id': 'mbedtls@4.1.1'},
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graphs['modules-deps.jsonld']['edges']] == [
+        (f'zephyr-deps@{revision}', 'mbedtls@4.1.1'),
     ]
+    def assert_declarations(graphs):
+        for name, relationship, scope, count in (
+                ('build.jsonld', 'hasPrerequisite', 'build', 2),
+                ('modules-deps.jsonld', 'dependsOn', 'runtime', 1)):
+            graph = graphs[name]
+            assert [edge['declarations'] for edge in graph['edges']] == [[{
+                'relationship_type': relationship, 'lifecycle_scope': scope,
+                'source_document_id': graph['id'], 'source_name': name,
+            }]] * count
+
+    assert_declarations(graphs)
     module_graph = next(package for package in graphs['modules-deps.jsonld']['packages']
                         if package['name'] == 'mbedtls')
     assert module_graph['version'] == '4.1.1'
@@ -1338,6 +1688,53 @@ def test_zephyr_companion_documents_preserve_versions_and_build_dependencies(app
     with app.app_context():
         read_inputs(ControllersCache(), scan_id)
         assert db.session.query(PackageDependency).count() == 3
+    assert_declarations({document['source_name']: document for document in client.get(
+        f'/api/package-dependencies?variant_id={variant_id}'
+    ).json['documents']})
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_jsonld_consolidation_merges_dependency_declarations(app, tmp_path, monkeypatch, legacy):
+    from src.helpers.jsonld_storage import consolidate_jsonld_packages
+
+    project = Project.create('merged-declarations')
+    variant = Variant.create('demo', project.id)
+    scan = _import_legacy_components(tmp_path, variant, _grouping_documents(), monkeypatch)
+    documents = {document.source_name: document for document in SBOMDocument.get_by_scan(scan.id)}
+    document = documents['sources.jsonld']
+    source = Package.get_by_string_id('mbedtls-sources@' + 'a' * 40)
+    target = Package.get_by_string_id('mbedtls@')
+    crypto = Package.find_or_create('crypto', '1')
+    util = Package.find_or_create('util', '1')
+    for package in (target, crypto, util):
+        SBOMPackage.create(document.id, package.id)
+    build = {'relationship_type': 'dependsOn', 'lifecycle_scope': 'build',
+             'source_document_id': str(document.id), 'source_name': document.source_name}
+    runtime = {**build, 'lifecycle_scope': 'runtime',
+               'source_document_id': str(documents['upstream.jsonld'].id), 'source_name': 'upstream.jsonld'}
+    db.session.add_all([
+        PackageDependency(sbom_document_id=document.id, package_id=source.id, dependency_id=crypto.id,
+                          declarations=None if legacy else [build]),
+        PackageDependency(sbom_document_id=document.id, package_id=target.id, dependency_id=crypto.id,
+                          declarations=[build, runtime]),
+        PackageDependency(sbom_document_id=document.id, package_id=source.id, dependency_id=target.id,
+                          declarations=[build]),
+        PackageDependency(sbom_document_id=document.id, package_id=crypto.id, dependency_id=util.id,
+                          declarations=None if legacy else [runtime]),
+    ])
+    db.session.commit()
+    assert consolidate_jsonld_packages(db.session)
+    db.session.commit()
+    rows = db.session.query(PackageDependency).all()
+    assert len(rows) == 2
+    merged = next(row for row in rows if row.dependency_id == crypto.id)
+    assert merged.package_id == Package.get_by_string_id('mbedtls@4.1.1').id
+    assert len(merged.declarations) == 2
+    assert build in merged.declarations
+    assert runtime in merged.declarations
+    unrelated = next(row for row in rows if row.package_id == crypto.id)
+    assert unrelated.dependency_id == util.id
+    assert unrelated.declarations == (None if legacy else [runtime])
 
 
 @pytest.mark.parametrize('reverse', [False, True])
@@ -1384,7 +1781,13 @@ def test_spdx3_dependencies_resolve_namespaces_and_companion_documents(app, tmp_
     graphs = {document['source_name']: document for document in client.get(
         f'/api/package-dependencies?variant_id={variant_id}'
     ).json['documents']}
-    assert graphs['app.jsonld']['edges'] == [{'package_id': 'app@', 'dependency_id': 'lib@'}]
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graphs['app.jsonld']['edges']] == [('app@', 'lib@')]
+    declarations = graphs['app.jsonld']['edges'][0]['declarations']
+    expected_declarations = {('hasPrerequisite', 'build', 'app.jsonld')}
+    if source_ref != 'app-ref':
+        expected_declarations.add(('dependencyOf', '', 'lib.jsonld'))
+    assert {(item['relationship_type'], item['lifecycle_scope'], item['source_name'])
+            for item in declarations} == expected_declarations
     assert graphs['lib.jsonld']['edges'] == []
 
     for name, document in documents.items():
@@ -1447,6 +1850,124 @@ def _yocto_spdx2(name, packages=(), refs=(), relationships=()):
         'relationships': [{'spdxElementId': source, 'relationshipType': kind, 'relatedSpdxElement': target}
                           for source, kind, target in relationships],
     }
+
+
+@pytest.mark.parametrize('version', ['2', '3'])
+@pytest.mark.parametrize('ignore_parsing_errors', ['false', 'true'])
+def test_dependency_declarations_preserve_types_scopes_and_count_pairs_once(
+        app, tmp_path, monkeypatch, version, ignore_parsing_errors):
+    monkeypatch.setenv('IGNORE_PARSING_ERRORS', ignore_parsing_errors)
+    if version == '2':
+        kinds = ['DEPENDS_ON', 'BUILD_DEPENDENCY_OF', 'RUNTIME_DEPENDENCY_OF', 'OPTIONAL_DEPENDENCY_OF']
+        document = _yocto_spdx2('typed', packages=(('SPDXRef-app', 'app'), ('SPDXRef-lib', 'lib')), relationships=[
+            ('SPDXRef-app', kind, 'SPDXRef-lib') if kind == 'DEPENDS_ON'
+            else ('SPDXRef-lib', kind, 'SPDXRef-app') for kind in kinds
+        ])
+        expected = {('DEPENDS_ON', ''), ('BUILD_DEPENDENCY_OF', 'build'),
+                    ('RUNTIME_DEPENDENCY_OF', 'runtime'), ('OPTIONAL_DEPENDENCY_OF', '')}
+    else:
+        document = _spdx3()
+        document['@graph'] = document['@graph'][:4] + [
+            {'type': 'LifecycleScopedRelationship', 'relationshipType': kind, 'scope': scope,
+             'from': 'pkg:app', 'to': ['pkg:lib']}
+            for kind, scope in [('dependsOn', 'runtime'), ('dependsOn', 'build'),
+                                ('hasPrerequisite', 'test'), ('dependsOn', '')]
+        ]
+        expected = {('dependsOn', 'runtime'), ('dependsOn', 'build'), ('hasPrerequisite', 'test'), ('dependsOn', '')}
+    variant_id, scan_id = _scan(app, tmp_path, 'typed', document)
+    client = app.test_client()
+
+    def graph():
+        return client.get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+
+    first = graph()
+    assert len(first['edges']) == 1
+    declarations = first['edges'][0]['declarations']
+    assert {(item['relationship_type'], item['lifecycle_scope']) for item in declarations} == expected
+    assert {item['source_name'] for item in declarations} == {'typed.json'}
+    assert {item['source_document_id'] for item in declarations} == {first['id']}
+    assert client.get(f'/api/package-dependencies?variant_id={variant_id}&counts=1').json['counts'] == {
+        'app@1.0': {'in': 1, 'out': 0}, 'lib@1.0': {'in': 0, 'out': 1},
+    }
+    read_inputs(ControllersCache(), scan_id)
+    assert graph() == first
+    if version == '2':
+        document['relationships'] = document['relationships'][:1]
+    else:
+        document['@graph'] = document['@graph'][:5]
+    (tmp_path / 'typed.json').write_text(json.dumps(document))
+    read_inputs(ControllersCache(), scan_id)
+    remaining = graph()['edges']
+    assert len(remaining) == 1
+    assert len(remaining[0]['declarations']) == 1
+    assert remaining[0]['declarations'][0]['relationship_type'] == ('DEPENDS_ON' if version == '2' else 'dependsOn')
+
+
+def test_bundled_yocto_keeps_runtime_declaration_and_excludes_build_nodes(app, tmp_path):
+    path = Path(__file__).resolve().parents[2] / 'example/yocto-wrynose-spdx3'
+    document = json.loads((path / 'core-image-minimal-qemux86-64.rootfs.spdx.json').read_text())
+    nodes = {item.get('spdxId'): item for item in document['@graph']}
+    acl = next(item for item in nodes.values() if item.get('name') == 'acl:do_create_spdx:recipe')
+    libtool = next(item for item in nodes.values() if item.get('name') == 'libtool-cross:do_create_spdx:recipe')
+    assert acl['type'] == libtool['type'] == 'build_Build'
+    assert any(item.get('from') == acl['spdxId'] and libtool['spdxId'] in item.get('to', [])
+               and item.get('scope') == 'build' and item.get('relationshipType') == 'dependsOn'
+               for item in document['@graph'])
+    variant_id, _ = _scan(app, tmp_path, 'core-image-minimal-qemux86-64.rootfs.spdx', document)
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+    packages = {package['id']: package['name'] for package in graph['packages']}
+    edge = next(edge for edge in graph['edges']
+                if packages[edge['package_id']] == 'busybox-syslog'
+                and packages[edge['dependency_id']] == 'busybox')
+    assert [(item['relationship_type'], item['lifecycle_scope'], item['source_name'])
+            for item in edge['declarations']] == [
+        ('dependsOn', 'runtime', 'core-image-minimal-qemux86-64.rootfs.spdx.json'),
+    ]
+    assert not any(':do_create_spdx:' in name for name in packages.values())
+
+
+def test_dependency_declaration_migration_preserves_legacy_pairs(app, tmp_path):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    variant_id, _ = _scan(app, tmp_path, 'legacy', _spdx3())
+    migration = import_module('src.migrations.versions.f2b4d6e8a0c1_preserve_dependency_declarations')
+    db.session.remove()
+    with db.engine.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.downgrade()
+            assert 'declarations' not in {column['name'] for column in inspect(connection).get_columns(
+                'package_dependencies')}
+            migration.upgrade()
+        assert connection.execute(text('SELECT count(*) FROM package_dependencies')).scalar() == 3
+    graph = app.test_client().get(f'/api/package-dependencies?variant_id={variant_id}').json['documents'][0]
+    assert len(graph['edges']) == 3
+    for edge in graph['edges']:
+        assert edge['declarations'] == [{
+            'relationship_type': '', 'lifecycle_scope': '', 'source_document_id': graph['id'],
+            'source_name': 'legacy.json',
+        }]
+
+
+def test_dependency_declaration_migration_preserves_existing_declarations(app, tmp_path):
+    from importlib import import_module
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    variant_id, _ = _scan(app, tmp_path, 'existing', _spdx3())
+    client = app.test_client()
+    before = client.get(f'/api/package-dependencies?variant_id={variant_id}').json
+    assert any(edge['declarations'] for graph in before['documents'] for edge in graph['edges'])
+    migration = import_module('src.migrations.versions.f2b4d6e8a0c1_preserve_dependency_declarations')
+    db.session.remove()
+    with db.engine.begin() as connection:
+        stored = connection.execute(text('SELECT * FROM package_dependencies')).all()
+        with Operations.context(MigrationContext.configure(connection)):
+            migration.upgrade()
+            migration.upgrade()
+        assert connection.execute(text('SELECT * FROM package_dependencies')).all() == stored
+    assert client.get(f'/api/package-dependencies?variant_id={variant_id}').json == before
 
 
 def _yocto_archive():
@@ -2023,6 +2544,14 @@ def test_yocto_spdx2_dependencies_resolve_across_documents_of_one_scan(
             for document in documents if document['edges']] == [
         ('first', 'first-recipe-app.spdx.json', 2), ('second', 'second-recipe-app.spdx.json', 2),
     ]
+    for document in documents:
+        for edge in document['edges']:
+            expected = ('BUILD_DEPENDENCY_OF', 'build', 'recipe-app') if edge['dependency_id'] == 'lib@1.0' else (
+                'RUNTIME_DEPENDENCY_OF', 'runtime', 'runtime-app')
+            assert [(item['relationship_type'], item['lifecycle_scope'], item['source_name'])
+                    for item in edge['declarations']] == [
+                (expected[0], expected[1], f"{document['variant_name']}-{expected[2]}.spdx.json"),
+            ]
 
     recipe = _yocto_archive()['recipe-app']
     recipe['relationships'] = []
@@ -2048,9 +2577,14 @@ def _scan_edges(scan_id):
 
 
 def _exported_spdx2_edges(document):
+    from src.views.fast_spdx import spdx2_dependency_edge
+
     names = {package['SPDXID']: package['name'] for package in document['packages']}
-    return sorted((names[relation['spdxElementId']], names[relation['relatedSpdxElement']])
-                  for relation in document['relationships'] if relation['relationshipType'] == 'DEPENDS_ON')
+    return sorted((names[edge[0]], names[edge[1]])
+                  for relation in document['relationships']
+                  if (edge := spdx2_dependency_edge(
+                      relation['spdxElementId'], relation['relationshipType'], relation['relatedSpdxElement'],
+                  )) is not None)
 
 
 def _exported_spdx3_edges(document):
@@ -2099,12 +2633,14 @@ def test_scoped_spdx_export_import_cycles_preserve_cross_document_dependencies(
             exported = json.loads(exporter.output_as_json())
             assert _exported_spdx2_edges(exported) == [('app', 'lib'), ('app', 'util')]
             xml = ElementTree.fromstring(exporter.output_as_xml())
-            assert [relation.findtext('relationshipType') for relation in xml.findall('relationships')].count(
-                'DEPENDS_ON') == 2
+            assert {relation.findtext('relationshipType') for relation in xml.findall('relationships')} >= {
+                'BUILD_DEPENDENCY_OF', 'RUNTIME_DEPENDENCY_OF',
+            }
         else:
             exported = json.loads(SPDX3(controllers).output_as_json())
             assert _exported_spdx3_edges(exported) == [('app', 'lib'), ('app', 'util')]
-            assert len([item for item in exported['@graph'] if item.get('relationshipType') == 'dependsOn']) == 1
+            assert sorted(item['scope'] for item in exported['@graph']
+                          if item.get('type') == 'LifecycleScopedRelationship') == ['build', 'runtime']
         path = tmp_path / f'cycle-{index}.spdx.json'
         path.write_text(json.dumps(exported))
         scan_id = Scan.create('SBOM', variant_id).id
@@ -2298,7 +2834,9 @@ def test_deleting_package_removes_incoming_and_outgoing_edges(app, tmp_path):
     assert counts.json['counts'] == {'app@1.0': {'in': 1, 'out': 0}, 'util@1.0': {'in': 0, 'out': 1}}
     graph = client.get(f'/api/package-dependencies?variant_id={variant_id}')
     assert graph.status_code == 200
-    assert graph.json['documents'][0]['edges'] == [{'package_id': 'app@1.0', 'dependency_id': 'util@1.0'}]
+    assert [(edge['package_id'], edge['dependency_id']) for edge in graph.json['documents'][0]['edges']] == [
+        ('app@1.0', 'util@1.0'),
+    ]
 
 
 def test_documents_without_recorded_dependencies_are_not_reported_as_zero(app, tmp_path):

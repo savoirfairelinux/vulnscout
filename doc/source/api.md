@@ -17,7 +17,7 @@ multipart file controls, collection shapes, explicit success statuses, and
 stream/download media types. Bodyless responses have no content schema.
 Vulnerability, operation, and queue identifiers remain strings rather than being
 inferred as UUIDs from their names. Agent operations describe their localhost
-restrictions, session cookie, optional conversation header, and JSON/NDJSON replies.
+restrictions; they use no cookie or conversation header.
 Schemas remain extensible where responses carry computed enrichment or external
 SBOM/VEX fields. These are documentation contracts, not additional runtime validation.
 Swagger UI loads the canonical *spec URL*, not a separately curated specification;
@@ -49,7 +49,7 @@ GET /api/scan/status
 ```
 
 Returns the progress of the container entrypoint import script. Most API routes return `503` with `{"error":"Scan not finished"}` until import finishes.
-Exceptions are this endpoint, `/api/version`, the four OpenAPI URLs above, `/api/events/stream`, and the independently registered agent blueprint. Agent routes still apply their own access and availability checks.
+Exceptions are this endpoint, `/api/version`, the four OpenAPI URLs above, `/api/events/stream`, `/api/agent/queue/stream`, and the independently registered agent blueprint (`/api/agent`, provider, sign-in, and model routes). The AI queue and conversation routes are gated. Agent routes still apply their own access and availability checks.
 
 **Response:**
 ```json
@@ -339,8 +339,9 @@ Returns the merged project and variant context, including uploaded codebase refe
 and the variant must belong to the selected project.
 
 The agent-facing keys are plain text: `threat_model` and `risks` are rendered from the variant's STRIDE model.
-`codebase_path` is `null` when the codebase source is references, and `files` is `[]` when it is paths. An additive
-`editor` object carries the raw editor data (system and STRIDE data, and both stored codebase values).
+Source access uses `codebase_directory`: `{"file_id": "directory", "path": "<container-path>"}`
+or `null` if not provisioned. There is no source selector or external path setting.
+The `editor` object carries system and STRIDE data, uploaded attachment metadata and the revision timestamp.
 
 ### Get or Update Project Context
 
@@ -361,7 +362,6 @@ Two body shapes are accepted.
 
 **Editor shape** (body contains `stride`) is the full draft saved by the AI Context page:
 `variant_description`, `environment`, `other_info`,
-`codebase_source` (`"paths"` or `"references"`), `codebase_path`,
 `system` (`scope`, `actors`, `entry_points`, `trust_boundaries`) and
 `stride` (`components`, `interactions`, `threats`, `risks`).
 Validation failures return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`
@@ -371,11 +371,23 @@ A blank required STRIDE field reports `is required` (for example
 (`"threats[0].target_ids": "is required"`). A non-empty id that matches no row reports
 `references an unknown id`.
 
-**Legacy shape** (no `stride`) accepts the four text fields `variant_description`, `codebase_path`, `environment`
-and `other_info`. Each is replaced by the sent value (omitted means null). It never changes `codebase_source` or the
-system and STRIDE data; on a variant whose codebase source is references, a null `codebase_path` keeps the stored
-paths. The threat model and risks are read-only here: a non-null `threat_model` or `risks` returns `400` with a
+**Text-only shape** (no `stride`) accepts `variant_description`, `environment`
+and `other_info`. Each is replaced by the sent value (omitted means null). It never changes the
+directory, system or STRIDE data. The threat model and risks are read-only here:
+a non-null `threat_model` or `risks` returns `400` with a
 `fields` entry for each.
+
+### Read an AI Context Draft
+
+```
+GET /api/variants/<variant_id>/context/draft
+```
+
+Returns `200` with the pending AI threat-model draft and its status against the saved context.
+A valid variant without a pending draft returns `204 No Content`, whether or not its context
+has been saved before. This is a normal empty state, unrelated to codebase directory availability.
+Invalid IDs return `400`; unknown variants return `404`; storage failures return `500`.
+Frontend and MCP clients treat only `204` as no draft and surface real errors.
 
 ### Import or Export Context
 
@@ -387,15 +399,18 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-Export format `2.0` carries `codebase_source`, `system` and `stride_model` per variant, alongside the text fields,
+Export format `3.0` carries `system` and `stride_model` per variant, alongside the text fields,
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
-contents are not exported, and import ignores `files`.
-Every entry is imported through the editor path, so it needs a valid `codebase_source` and a non-empty threat model;
+contents are not exported, and import ignores `files`. Directory names,
+mounts and contents are not transferred; provision each destination variant's own directory.
+Every entry is imported through the editor path, so it needs a non-empty threat model;
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
+Files exported as `2.x` still import, but their removed source selector and external paths are discarded.
+For `2.0`, each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
 
 ```json
 {
-  "version": "2.0",
+  "version": "3.0",
   "exported_at": "2026-01-01T12:00:00+00:00",
   "projects": [{
     "project_name": "demo",
@@ -405,8 +420,6 @@ Every entry is imported through the editor path, so it needs a valid `codebase_s
       "variant_description": "text or null",
       "environment": "text or null",
       "other_info": "text or null",
-      "codebase_source": "paths",
-      "codebase_path": "/src/app;/src/lib",
       "system": {"scope": "", "actors": "", "entry_points": "", "trust_boundaries": ""},
       "stride_model": {
         "components": [
@@ -421,7 +434,7 @@ Every entry is imported through the editor path, so it needs a valid `codebase_s
           {"id": "T1", "category": "tampering", "description": "Image swapped", "target_ids": ["I1"]}
         ],
         "risks": [
-          {"threat_id": "T1", "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""}
+          {"id": "R1", "description": "Rogue update", "threat_ids": ["T1"], "likelihood": "high", "impact": "medium", "mitigation": "", "residual": ""}
         ]
       },
       "files": [{"original_name": "updater-src.zip", "description": "text or null"}]
@@ -432,12 +445,13 @@ Every entry is imported through the editor path, so it needs a valid `codebase_s
 
 Rules checked on import, with the same messages as the editor save:
 
-- IDs are `C<n>`, `I<n>` and `T<n>`, unique per table. Interactions refer to components, threats to components or
-  interactions, and risks to threats.
+- IDs are `C<n>`, `I<n>`, `T<n>` and `R<n>`, unique per table. Interactions refer to components, threats to components or
+  interactions, and risks to one or more threats.
 - Required: the project description, a component `name`, an interaction `source_id` and `destination_id` (two different
   components), a threat `category` (`spoofing`, `tampering`, `repudiation`, `information_disclosure`,
-  `denial_of_service` or `elevation_of_privilege`) with at least one non-repeated `target_ids` entry, and a risk
-  `threat_id`. `likelihood` and `impact` are `low`, `medium`, `high` or `null`.
+  `denial_of_service` or `elevation_of_privilege`) with at least one non-repeated `target_ids` entry, and a risk with at
+  least one non-repeated `threat_ids` entry (its `description` is optional). `likelihood` and `impact` are `low`, `medium`,
+  `high` or `null`.
 - The system fields and STRIDE tables together must render a non-empty threat model.
 - At most 500 rows per table and 20,000 characters per text field.
 
@@ -452,9 +466,9 @@ DELETE /api/variants/<variant_id>/context/files/<file_id>
 ```
 
 Upload uses `multipart/form-data` with a required `file` and an optional `description`.
-The AI Context page exposes drag-and-drop and a file picker in a variant's **Context** tab when its codebase source is
-references. Files belong to one variant and are saved immediately.
-ZIP, TAR and TAR.GZ/TGZ archives are validated before storage and limited to 5,000 entries.
+These legacy APIs remain available, but the AI Context page only exposes server directories.
+Uploaded files belong to one variant and are saved immediately.
+ZIP, TAR and TAR.GZ/TGZ archives are validated before storage and limited to 500,000 entries.
 Each archive member is capped at 10 MiB, and total expanded archive content is capped at 100 MiB.
 Unsafe paths, duplicate file paths, encrypted ZIP members, links,
 sparse files and special entries are rejected. Archives are never extracted or executed.
@@ -463,13 +477,47 @@ Context JSON import/export does not include uploaded file contents; export lists
 Upload returns `201` with the file's `id`, `original_name`, and `description`; delete returns an empty `204` response.
 Invalid uploads/UUIDs return `400`, missing variants/references `404`, and upload storage failures `500`.
 
-### Browse Uploaded Source
+### Provision a Codebase Directory
+
+```
+GET /api/variants/<variant_id>/context/directory
+POST /api/variants/<variant_id>/context/directory
+```
+
+`GET` reports availability and automatically registers an existing matching cache directory,
+without creating filesystem paths. Merged-context and directory-source reads perform the same
+discovery, so CI can create and populate the directory without a web interaction or provisioning request.
+`POST` can also create a missing directory on demand. Neither operation saves text fields or
+requires a valid threat model. Initial registration updates the context timestamp,
+marking older pending assessments outdated.
+Both return `200` with
+`{"file_id": "directory", "path": "<container-path-or-null>", "status": "...", "message": "...", "file_count": 0, "directory_count": 0}`.
+Status is `not_created`, `ready`, `missing`, `unreadable` or `unavailable` (for example empty or over budget).
+Counts reflect a complete scan of eligible regular files and subdirectories, excluding the root,
+hidden/sensitive names and linked entries. Empty trees return zero files and their eligible directory count.
+Both counts are `null` when unprovisioned, missing, unreadable or incompletely scanned (including over budget);
+partial totals are never returned. Every `GET`, including the page's **Refresh directory status**, rescans.
+Invalid IDs return `400`, unknown variants `404`, and inspection/provisioning failures `500`.
+New directories are named `context-<sanitized-project>-<sanitized-variant>`, without database IDs;
+existing saved paths are preserved. Requests return `409` if another variant already owns the name,
+including after sanitization or truncation. Automatic discovery also returns `409` when several
+unregistered variants have the same normalized name; rename them or explicitly provision the intended owner.
+No custom path is accepted.
+Recreating the same names reuses any retained directory contents.
+A provisioned directory is discoverable and browsable immediately; no source selection
+or separate editor save is required.
+See [administrator directory setup](ai-assessments.md#administrator-provided-codebase-directories)
+for naming, retention, copying, read-only mounts and permissions.
+
+### Browse Codebase Source
 
 ```
 GET /api/variants/<variant_id>/context/files/<file_id>/source
 ```
 
-The file must belong to that variant. `operation` selects `list` (default), `read` or `search`.
+For an upload, the file UUID must belong to that variant. For the variant's active server directory,
+use the literal `file_id=directory`; unprovisioned directories return `404`.
+`operation` selects `list` (default), `read` or `search`.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
@@ -481,6 +529,12 @@ Every response includes `file_id` and `original_name`. Follow pagination for com
 truncated searches. Binary/non-UTF-8 files return 400 for reads and are counted as skipped in searches.
 Missing references/members return 404; unavailable stored files return 500 with an explicit error.
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
+
+Directory operations exclude hidden/sensitive names, symbolic/hard links and special files. They visit
+at most 500,000 entries, read at most 10 MiB/file and return at most 64 KiB of serialized JSON.
+Directory searches have a 100 MiB candidate-file budget; oversized files are skipped and counted alongside
+binary/non-UTF-8 files. Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.
+No shell, extraction or source execution is available.
 
 ---
 
@@ -529,6 +583,30 @@ GET /api/package-dependencies
 | `counts` | string | `"1"` to return only per-package `in`/`out` totals |
 
 **Response:** `{"documents": [...]}` where each active SBOM document lists its `variant_id`, `variant_name`, `dependencies_recorded`, `packages` and directed `edges` (`package_id` depends on `dependency_id`), or `{"counts": {"name@version": {"in": n, "out": n}}, "unrecorded": ["name@version", ...]}` when `counts=1` (`in`: packages it depends on, `out`: packages that depend on it). `dependencies_recorded` is `false` for documents imported before dependency support, and `unrecorded` lists packages found only in such documents, whose relationships are unknown rather than zero. An edge is listed under the dependent package's document; its dependency may appear in another document of the same scan (SPDX 2 `DocumentRef-` links). Package selection follows the same comparison rules as `GET /api/packages`.
+
+Each document also includes `build_targets` (empty when compiler metadata is
+absent). For West-generated Zephyr SPDX 3 JSON-LD, each entry contains the build's
+SPDX `id`, target `name`, associated public `package_ids`, and `languages`.
+Each language entry contains `language`, `flags`, and `defines`; the latter two
+are arrays of the original strings from `compile:flags:<language>` and
+`compile:defines:<language>`, without splitting arguments or removing quotes.
+Repeated parameter entries remain separate and ordered. Targets, source
+documents, and variants are never flattened into package-wide compiler options.
+Declarations of the same build SPDX ID in different companion documents remain
+separate under their declaring documents, including conflicting flags or defines.
+Only targets associated with packages in the selected scope are returned.
+
+### Package Compiler Metadata
+
+`GET /api/package-compiler-metadata` accepts the same project, variant, and
+comparison scope parameters as package dependencies, but returns no dependency
+graph. Its `documents` contain `id`, `source_name`, `format`, `variant_id`,
+`variant_name`, `package_ids`, and `build_targets` in the format described above.
+Only targets with recorded flags or defines are included. Use `summary=1` to
+omit `build_targets` and retrieve lightweight package availability per document,
+or `package_id=name@version` to retrieve details for a particular package.
+An empty result is `{"documents": []}`. Source format and document names allow
+clients to apply the SBOM table's source filters consistently.
 
 ---
 
@@ -1629,7 +1707,7 @@ then send its **complete** candidate set in the DELETE JSON body. They are not a
 
 | Endpoint | GET response (`200`) | DELETE body |
 |----------|----------------------|-------------|
-| `/api/outdated-data` | `candidate_ids` (`observations`, `assessments`, `package_pairs`), `packages`, `assessments` | `{"candidate_ids": <unchanged candidate_ids object>}` |
+| `/api/outdated-data` | `candidate_ids` (`observations`, `assessments`, `package_pairs`), `packages`, `assessments`, `vulnerability_history_count` | `{"candidate_ids": <unchanged candidate_ids object>, "clear_vulnerability_history": false}` |
 | `/api/empty-scans` | `{"scans":[...]}`; entries have `id`, `description`, `timestamp`, `project`, `variant` | `{"scan_ids":["<every preview scan id>"]}` |
 | `/api/orphaned-vulnerabilities` | `{"vulnerabilities":[{"id":"CVE-2024-1234","assessments":0}]}` | `{"vulnerability_ids":["<every preview vulnerability id>"]}` |
 
@@ -1637,7 +1715,16 @@ Outdated cleanup removes stale observations, package/variant evidence, and asses
 pruning shared rows only when no references remain. Its `package_pairs` are `{"package_id":"uuid","variant_id":"uuid"}` objects.
 The DELETE `200` response contains counts: `assessments_deleted`, `assessment_targets_removed`,
 `observations_deleted`, `sbom_packages_deleted`, `sbom_observations_deleted`, `findings_deleted`,
-`vulnerabilities_deleted`, and `packages_deleted`.
+`vulnerabilities_deleted`, `packages_deleted`, and `vulnerability_history_deleted`.
+
+The optional `clear_vulnerability_history` field defaults to `false` and must be a JSON
+boolean. Set it to `true` to clear all rows in `vulnerability_history` globally, even for
+active vulnerabilities and even when the outdated candidate sets are empty. This is not
+an age-based policy: the preview count is informational and all rows present at deletion
+time are cleared. Current vulnerability values, metrics, and `vuln_refresh` timestamps
+are not reset by this option. Normal outdated cleanup still applies; future refreshes
+can create new history. The `vulnerability_history_deleted` count covers this explicit
+clearing only (zero when omitted), not cascading history cleanup for orphaned CVEs.
 
 Empty scans are non-initial **tool** scans whose complete change statistics are zero;
 DELETE returns `{"scans_deleted":0}` with the actual count.
@@ -1747,6 +1834,203 @@ The registry and replay buffer are process-local, so a restart clears queued and
 
 ---
 
+## Refresh Run Artifacts
+
+Refresh artifacts are durable, exact-run records, not a time-window query over
+field history. Queued refresh groups use the returned `queue_id` as `run_id`.
+Pass `options.project_id` and/or `options.variant_id` in refresh jobs to record
+the initiating scope; deferred jobs additionally record their selected variants.
+Single-CVE refresh responses expose `X-Refresh-Run-ID`. Synchronous CLI refreshes
+print their ID and accept a unique caller-provided `--run-id`. `latest` is
+reserved for the route below and is rejected as a run ID.
+
+```
+GET /api/refresh-runs
+GET /api/refresh-runs/latest
+GET /api/refresh-runs/<run_id>
+GET /api/refresh-runs/<run_id>/export?format=json|csv
+```
+
+All accept optional `project_id`, `variant_id`, `vuln_id`, `source`, `field`,
+`kind=first_enrichment|changed`, and
+`change_type=addition|modification|removal`. Scope uses immutable captured active
+observation/package links, including shared CVEs, and removes other scopes'
+package links. `latest` chooses by scoped target coverage, not by whether any
+fields changed. Empty-target runs match only their captured initiating scope.
+`limit` defaults to 100 (maximum 1000), `offset` to 0; pagination applies to
+changes in detail responses and to runs in list responses. Exports include all
+filtered changes without pagination. Coverage is never truncated or affected
+by source/field/kind/change-type filters.
+
+When no retained run matches, `GET /api/refresh-runs/latest` returns HTTP `200`
+with JSON `null`. Exact-run detail and export requests still return HTTP `404`
+for unavailable, expired or out-of-scope runs; they never substitute another run.
+
+Detail/latest responses have this shape:
+
+```json
+{
+  "run_id": "q-1234",
+  "scope": {"project_id": "…", "variant_id": null},
+  "sources": ["epss"],
+  "source_status": {"epss": "complete"},
+  "started_at": "2026-10-30T12:00:00+00:00",
+  "finished_at": "2026-10-30T12:00:01+00:00",
+  "status": "complete",
+  "coverage": [
+    {"source": "epss", "vuln_id": "CVE-2020-35492", "status": "complete",
+     "error": null, "packages": []}
+  ],
+  "summary": {"total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0},
+  "changes": [
+    {"vuln_id": "CVE-2020-35492", "source": "epss", "field": "epss_score",
+     "before": 0.1, "after": 0.2, "kind": "changed", "change_type": "modification",
+     "changed_at": "2026-10-30T12:00:01+00:00", "packages": []}
+  ],
+  "total": 1, "limit": 100, "offset": 0
+}
+```
+
+Package links contain `package_id`, `package` (supplier-aware string ID), `name`,
+`version`, `variant_id`, and `project_id`. Run lists return
+`{runs: [...], total, limit, offset}`; each run has the detail metadata, `status`
+and `summary` but no `coverage`, `changes`, `total`, `limit` or `offset`, so a
+page only costs work for the runs it contains. Summary counts cover
+the complete filtered change set, not just the current page; changed CVEs include
+first enrichments. A zero-change run with complete coverage is successful.
+`running` means sources remain pending; `incomplete` means some source/target was
+not successfully checked. Coverage statuses are `pending`, `complete`, `failed`,
+`skipped` or `cancelled`; source statuses are `pending`, `complete` or `incomplete`.
+Provider absence is not evidence of a removal.
+
+Snapshots share the originating data-write transaction and store both sides,
+including CVSS vectors under `cvss:<version>:<author>:<metric_id>`. Later refreshes,
+live-data deletion, or field-history pruning cannot change an artifact.
+Unavailable, expired or out-of-scope exact runs return `404`, never another run.
+The default retention window is 90 days; see
+[CLI archival and cleanup](cli-refresh-runs.md).
+
+## Vulnerability History
+
+Every change to a vulnerability's data is recorded, whichever path wrote it: SBOM import, scans, bulk refreshes or single-CVE refreshes. Tracked fields are the description, severity (`status`), published date, attack vector, EPSS score, links, weaknesses, affected CPEs, patch links, the ENISA EUVD fields, and scanner-level CVSS scores, keyed `cvss:<version>:<author>`. User-entered, variant-scoped CVSS scores are not tracked.
+
+Each change stores the value it replaced, when it happened, and its source: `sbom`, `grype`, `osv`, `scc`, `nvd`, `epss`, `ghsa`, or `euvd`. The live value is not duplicated; the API derives the value each change produced. Values already stored when the history table was created get no row until their first change.
+
+### List the Changes of a Vulnerability
+
+```
+GET /api/vulnerabilities/<vuln_id>/history
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `field` | string | Optional. Restrict to one field, e.g. `epss_score` or `cvss:3.1:nvd@nist.gov`. |
+
+**Response:** Changes ordered oldest first. An `old_value` of `null` means the field got its value then, e.g. when the vulnerability was first imported.
+```json
+{
+  "vuln_id": "CVE-2025-21758",
+  "history": [
+    { "field": "epss_score", "old_value": null, "value": 0.13707, "source": "sbom", "changed_at": "2026-09-16T15:05:10+00:00" },
+    { "field": "epss_score", "old_value": 0.13707, "value": 0.14108, "source": "epss", "changed_at": "2026-09-29T20:11:36+00:00" }
+  ]
+}
+```
+
+Returns `404` if the vulnerability does not exist.
+
+### Summarise Recent Changes
+
+```
+GET /api/vulnerabilities/history?since=<iso-8601>&source=nvd,epss
+```
+
+Counts changes recorded at or after `since`, optionally restricted to comma-separated sources.
+This legacy time-window endpoint is not an exact refresh-run artifact and can
+include concurrent writers; use `/api/refresh-runs/<run_id>` for attribution.
+
+**Response:**
+```json
+{ "since": "2026-09-29T20:11:45+00:00", "total": 171, "vulnerabilities": 171, "fields": { "epss_score": 171 } }
+```
+
+Returns `400` if `since` is missing or is not an ISO 8601 timestamp.
+
+### Export Changes as JSON or CSV
+
+```
+GET /api/vulnerabilities/history/export?since=<iso-8601>&until=<iso-8601>&format=json
+GET /api/vulnerabilities/history/export?last_refresh=true&format=csv
+```
+
+Exports the existing field history, either within a time window or from each
+vulnerability's latest refresh run.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `since` | string | Required unless `last_refresh` is set. Include changes at or after this ISO 8601 timestamp. |
+| `until` | string | Optional. Exclude changes at or after this timestamp; must be later than `since`. |
+| `last_refresh` | boolean | Optional (`true`, `1` or `yes`). For each vulnerability, export the changes of the most recent refresh run that updated it. Cannot be combined with `since` or `until`. |
+| `source` | string | Optional. Comma-separated or repeated sources, e.g. `nvd,epss`. |
+| `field` | string | Optional. Restrict to one tracked field. |
+| `vuln_id` | string | Optional. Restrict to one vulnerability; case-insensitive. |
+| `format` | string | `json` (default) or `csv`. |
+| `project_id` | UUID | Optional. Restrict to vulnerabilities in the project's current active SBOM scope. |
+| `variant_id` | UUID | Optional, repeated. Restrict to selected variants of `project_id`; requires that project. |
+
+Timestamps without a timezone are interpreted as UTC. The interval is
+`[since, until)`; omitting `until` includes every recorded change since `since`.
+With `last_refresh`, a refresh run is the queued refresh (or CLI/single
+vulnerability refresh) that recorded the changes, identified by the history
+rows' `queue_id` and `refresh:<source>` operation. Filters apply before the
+latest run is picked, so `source=epss` returns each vulnerability's latest EPSS
+refresh changes. Refreshes recorded by the CLI or single-vulnerability refresh
+endpoints before this option existed carry no run identifier and are skipped.
+Without scope parameters, the export includes global history. With `project_id`
+only, it includes all of that project's variants; repeated `variant_id` parameters
+select a subset. Invalid UUIDs and variants outside the project return `400`; an
+unknown project returns `404`. An empty current scope produces an empty export,
+not global history. Scope reflects current active SBOM membership, not membership
+at the time of each change.
+JSON contains `since`, `until` (both `null` with `last_refresh`), `last_refresh`,
+`total`, and a `history` array:
+
+```json
+{
+  "since": "2026-10-01T00:00:00+00:00",
+  "until": "2026-10-02T00:00:00+00:00",
+  "last_refresh": false,
+  "total": 1,
+  "history": [
+    {
+      "vuln_id": "CVE-2025-21758",
+      "field": "epss_score",
+      "old_value": 0.13707,
+      "value": 0.14108,
+      "source": "epss",
+      "changed_at": "2026-10-01T12:00:00+00:00"
+    }
+  ]
+}
+```
+
+Rows are chronological, with the history row ID breaking timestamp ties.
+Resulting values are reconstructed from subsequent history or the live value,
+including subsequent changes outside the selected window or from other sources.
+CSV has columns `vuln_id`, `changed_at`, `source`, `field`, `old_value`, `value`.
+The value cells are JSON-encoded, multiline text is quoted, and formula-like
+cells are escaped for spreadsheet use. An empty export is valid: an empty JSON
+history or a CSV header only.
+
+Returns `400` for missing/invalid timestamps, an invalid interval, `last_refresh`
+combined with `since`/`until`, or an
+unsupported format. History exports describe **recorded changes**, not provider
+coverage or execution success. Overlapping refreshes, scans and imports can
+contribute changes in the same interval. Deleting a vulnerability and its history
+also removes it from future exports; archive exported files when needed.
+
+---
+
 ## Scan Sources
 
 `POST /api/operations` accepts `scan` jobs for `grype`, `nvd`, `osv`, and `scc` (sbom-cve-check). Each scan takes one or more `variant_ids`. The Grype job exports CycloneDX, runs Grype, merges the results and processes findings. NVD scans use the local advisory database by default; set `options.mode` to `"api"` to query NVD by CPE. OSV scans query every package PURL. SCC scans match packages against the local NVD-FKIE and CVEList databases. Progress and errors arrive as operation events, not separate per-scanner status responses.
@@ -1787,21 +2071,22 @@ Follow the returned `op_id` in `GET /api/events/stream` (or `GET /api/operations
 
 The required project/variant must exist and the variant must belong to the project (`404` for missing entities, `400` for mismatches).
 Optional `format` overrides SBOM format detection. Multiple files/companion SPDX archive members form one scan.
+SPDX archives may use `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, or `.tar.zst` and must contain
+`.spdx.json` or `.jsonld` documents.
 Omitting `refresh_sources` defaults to EPSS; send `none` alone for no refresh. Unknown refresh sources return `400`.
 
 ---
 
 ## Agent Chat
 
-Agent routes use the `vulnscout_agent` cookie to retain a browser conversation; preserve cookies between calls.
-An optional `X-Agent-Thread` UUID selects an independent thread sharing root credentials and the response lock
-(at most 20 child threads). Conversations expire after one hour of inactivity.
+The agent connection is process-wide: provider credentials, device sign-in state, and the selected model are
+shared by every local client. Agent routes set no cookie and need no conversation header.
 Responses use `Cache-Control: no-store`; credentials are never included in status responses.
 
 All agent operations require a localhost host name and a trusted local client connection;
-non-GET browser requests with an `Origin` must match the server origin (`403` otherwise).
-Malformed thread IDs return `400`. The bootstrap import gate does not apply, but individual operations can still
-fail when the provider, Copilot SDK, MCP server, or database scope is unavailable.
+browser requests with an `Origin`, reads included, must match the server origin (`403` otherwise).
+The bootstrap import gate does not apply to the routes of this section (it does to the AI queue routes below),
+but individual operations can still fail when the provider, Copilot SDK, MCP server, or database scope is unavailable.
 Agent POSTs return `200` on success, not `201`.
 
 ### Read Agent Status
@@ -1813,7 +2098,7 @@ GET /api/agent
 Returns `200` with `authenticated`, nullable `login`, `configured` (bundled MCP server file exists),
 `device_login`, `token_connected`, nullable `provider`, nullable `config_error`, `messages` (role/content objects),
 `model`, and `usage` (`cost`, `input_tokens`, `output_tokens`, each nullable).
-Provider authentication/configuration and conversation history are scoped to the cookie/root thread.
+`messages` and `usage` are those of the main conversation of the {ref}`AI queue <api-ai-queue>`.
 
 ### Connect or Disconnect a Provider
 
@@ -1841,9 +2126,12 @@ Hosted providers require a nonblank `api_key`; local providers do not.
 Hosted URLs require HTTPS; local URLs require HTTP and an allowed loopback/container host. URLs cannot include credentials, query strings, or fragments.
 
 POST uses the supplied model or discovers the provider's model list; supplying a model does not itself probe the provider.
-DELETE clears the provider. Both clear prior conversation threads and persist configuration to `config.env`.
+DELETE clears the provider. Both reset the AI conversations and persist configuration to `config.env`.
+A connection change is refused while an AI request runs; it fails the waiting requests of conversations that have
+history (`connection_changed`), and the other waiting requests run with the new connection.
 **Response:** `200` with `{"provider":"local","model":"my-local-model"}` (DELETE uses null provider and resets the model).
-Errors: `400` invalid configuration or model discovery failure, `409` agent already responding,
+Errors: `400` invalid configuration or model discovery failure, `409` another connection change in progress or
+an AI request still running (`"The agent is already responding."`),
 `500` persistence failure, `503` failure clearing the previous stored conversation.
 
 ### GitHub Device Sign-In and Sign-Out
@@ -1856,19 +2144,20 @@ DELETE /api/agent/auth
 
 No request bodies are needed. POST auth starts GitHub device sign-in and returns `200` with
 `user_code`, HTTPS `verification_uri`, and polling `interval` in seconds. Complete sign-in at that URI.
-POST poll uses the cookie's stored device code; wait at least the returned interval between calls.
+POST poll uses the device code stored by the server; wait at least the returned interval between calls.
 
 **Poll responses:** `200` with `{"status":"pending","interval":5}` while waiting (the interval can increase),
 or `{"status":"connected","authenticated":true,"login":"account-name"}` on verified Copilot access.
 `410` means the device code is missing/expired; start again.
 `401` means sign-in was denied/failed or the account has no Copilot access;
 `503` means GitHub/Copilot verification is unavailable; `500` means credentials could not be persisted.
-Starting sign-in can also return `503`.
+Starting sign-in can also return `503`. Poll returns `409` while an AI request runs (the device code is kept).
 
-DELETE signs out, clears provider/device credentials and all threads, and returns
+DELETE signs out, clears provider/device credentials and the stored agent session, and returns
 `200` with `{"authenticated":false,"cleanup_error":null}`.
 A remote-session cleanup error may be reported in `cleanup_error` despite successful local sign-out;
-persistence failure returns `500`. Successful sign-in persists credentials and resets prior threads.
+persistence failure returns `500`, and `409` means an AI request is still running.
+Successful sign-in persists credentials, resets the AI conversations, and resumes a paused AI queue.
 
 ### List or Select Models
 
@@ -1879,62 +2168,99 @@ POST /api/agent/model
 
 GET returns `200` with `{"models":[{"id":"model-id","name":"Model name"}]}` for the current provider/Copilot account.
 POST accepts `{"model":"model-id"}`; the string must be at most 100 characters, contain no control characters,
-and identify an available model. It persists `AI_MODEL` and returns `200` with `{"model":"model-id"}`.
+and identify an available model. It persists `AI_MODEL`, resumes a paused AI queue, and returns `200` with
+`{"model":"model-id"}`. The running AI request keeps its model; waiting requests keep the model they were queued with,
+except those queued before a provider or token was configured, which take the model selected when they start.
 Errors: `400` invalid configuration/model, `503` unavailable Copilot model lookup;
-POST additionally returns `409` while the agent is responding or `500` if persistence fails.
+POST additionally returns `500` if persistence fails.
 
-### Reset a Conversation
-
-```
-DELETE /api/agent/conversation
-```
-
-Deletes the selected thread's stored session, messages, and usage without signing out.
-With `X-Agent-Thread`, only that child thread is removed.
-Returns `200` with `{"messages":[],"usage":{"cost":null,"input_tokens":null,"output_tokens":null}}`,
-or `503` if deleting the stored session fails.
-
-### Send a Message
+(api-ai-queue)=
+### AI Queue
 
 ```
-POST /api/agent/messages
+GET /api/agent/queue
+GET /api/agent/queue/stream
+POST /api/agent/queue
+DELETE /api/agent/queue
+GET /api/agent/queue/requests/<request_id>
+DELETE /api/agent/queue/requests/<request_id>
+POST /api/agent/queue/requests/<request_id>/stop
+POST /api/agent/queue/requests/<request_id>/retry
+GET /api/agent/conversations/<conversation_id>
+DELETE /api/agent/conversations/<conversation_id>
+DELETE /api/agent/conversations
+POST /api/agent/conversations/main/reset
 ```
+
+The server runs AI requests (assess and review actions, chat messages) from one process-wide queue shared by
+every local client, the web UI and the CLI. Actions and messages run on two lanes, one request at a time per lane;
+the requests of one conversation run in order. These routes have the same localhost/origin checks and
+`Cache-Control: no-store` as the other agent routes, but return `503` until the import finishes, except the stream.
+The queue is process-local: a restart forgets it.
+
+POST queues actions:
 
 ```json
 {
-  "message": "Summarize the selected variant's pending assessments.",
-  "context": {
-    "page": "review",
-    "projectId": "11111111-1111-1111-1111-111111111111",
-    "variantId": "22222222-2222-2222-2222-222222222222"
-  }
+  "conversation": "per-action",
+  "source": "web",
+  "actions": [
+    { "kind": "assess", "vuln_id": "CVE-2024-1234", "key": "assess:CVE-2024-1234" },
+    { "kind": "review", "assessment_id": "<assessment-uuid>", "variant_id": "<variant-uuid>" }
+  ],
+  "model": "model-id",
+  "timeout": 900,
+  "context": { "page": "vulnerabilities" },
+  "require_ready": false
 }
 ```
 
-`message` is required, nonblank, and at most 8000 characters. Optional `model` defaults to the conversation model
-(nonempty string, at most 100 characters). Optional `context` describes browser selection, not trusted project facts.
-Its `page` must be `metrics`, `packages`, `vulnerabilities`, `scans`, `review`, `exports`, `settings`, `ai`, or `unknown`.
-Optional scope strings `projectId`, `variantId`, `baseVariantId`, `compareOperation`, `multiOperation` are at most 100 characters;
-`variantIds` permits at most 1000 strings of that length. Selected variant UUIDs must belong to the selected project.
-With no context/project on non-AI pages, the agent scope spans all projects.
-AI-page scope instead uses `view.selectedProjectId` and `view.selectedVariantId`, with no project selection yielding no project scope.
+Assess and review actions go to `per-action` (one new conversation per action key); a message
+(`{"kind":"message","text":"..."}`, at most 8000 characters) goes to `main` or to an existing conversation ID.
+`source` (at most 100 characters) names the client. `actions` lists 1 to 500 actions; each may set a `key`
+(at most 500 characters, derived from the action otherwise) and its own `context`. Assess actions take an optional
+`targets` list of `{variant_id, package}` pairs (the active targets in scope otherwise); `vuln_id` is uppercased.
+Review actions take optional `variant_id` and `finding_ids` restrictions, and an optional `fingerprint` of the
+assessment content (the CLI pins it at selection, so an assessment edited while the review waits fails as changed;
+the content is pinned when the turn starts otherwise). `model` pins the model; without it, a request takes the
+configured model, when queued if a provider or GitHub token is configured and when it starts otherwise (its
+`model` is `null` until then). Retrying it or changing the connection resolves it again. `timeout` (1 to 3600
+seconds) defaults to the action's default. The call is atomic: an invalid action queues nothing.
 
-Optional `context.view` accepts UI selection metadata:
+**Response:** `202` with `{"requests":[{"id":"...","key":"...","conversation_id":"..."}],"skipped":[{"key":"...","request_id":"...","request_ids":["..."]}]}`.
+Actions whose key is already queued, running, or failed are skipped, except a review whose key is held only by
+failed requests pinned to another `fingerprint`: those leave the queue (still found by ID) and the review is
+queued afresh. A skipped action reports the request holding its key and `request_ids`, every request of that
+action (its finished batches included) in batch order. Errors: `400` invalid body or action,
+`404` unknown conversation, `409` archived conversation, and with `require_ready`, `409` with
+`{"code":"no_ai_config"|"invalid_config"|"github_signed_out","error":"..."}` when no request could run now.
 
-- Strings up to 200 characters: `openVulnerabilityId`, `search`, `section`, `selectedProjectId`, `selectedProjectName`,
-  `selectedVariantId`, `selectedVariantName`, `openScanId`, `exportType`, `exportMode`, `exportCategory`, `refreshMode`.
-- Arrays of up to 100 strings (each up to 200 characters): `visibleVulnerabilityIds`, `selectedVulnerabilityIds`,
-  `visiblePackageIds`, `visibleScanIds`, `matchingVariantIds`, `selectedVariantIds`, `selectedExportKeys`,
-  `enabledExportDocuments`, `selectedScanTypes`, `selectedRefreshTypes`.
-- Integers from 0 to 1,000,000: `visibleCount`, `selectionCount`.
-- Booleans: `hideEmptyScans`, `excludeKernel`, `excludeNative`.
+`GET /api/agent/queue` returns `{epoch, seq, paused, requests, history, conversations, connection_revision}`. `requests` lists the
+waiting (`queued` with a `position`, or `failed`) and `running` requests; `history` the last 50 finished ones;
+`conversations` their summaries (`id`, `title`, `kind`, `profile`, `archived`, `created_at`, `last_used`,
+`message_count`, `usage`, `live`). `paused` is null or `{code, reason}` when requests wait for a working
+connection; signing in, changing the provider, or selecting a model resumes the queue. `connection_revision`
+changes whenever the agent connection or selected model changes, so clients reload their sign-in state and models.
+`GET /api/agent/queue/requests/<id>` returns one request with its full `result`, while it is active or among the
+last 1000 finished ones (`404` otherwise). Request statuses are `queued`, `running`, `failed`, `done`, and `cancelled`;
+`error_code` tells why one failed or was cancelled (for example `timeout`, `mcp`, `skills`, `unavailable_model`,
+`connection_changed`, `stopped`, or `removed`).
 
-**Default response:** `200` JSON with `reply`, `model`, and accumulated `usage`.
-Set the exact header `Accept: application/x-ndjson` for a `200` newline-delimited JSON stream instead.
-Stream event `type` values include `status`, `heartbeat`, `delta`, `tool_start`, `tool_end`, and terminal
-`done` (with `reply`, `model`, `usage`) or `error` (with `error` message).
-Once streaming starts, failures are events rather than changed HTTP statuses.
+`DELETE /api/agent/queue` removes the waiting requests and returns `{"removed": <count>}`. For one request, DELETE
+returns `{"status":"removed"}` (`409` while it runs); stop returns `{"status":"stopping"}` for a running request
+(it ends `cancelled`, keeping what it saved) or `{"status":"removed"}` for a waiting one; retry queues a failed
+request again and returns `{"status":"queued"}` (`409` otherwise). Unknown requests return `404`.
 
-Before streaming/JSON processing, invalid messages/configuration/context return `400`,
-concurrent responses return `409`, and a missing bundled MCP server returns `503`.
-For nonstreaming requests, unavailable model selection returns `400` and provider/agent execution failures return `503`.
+`GET /api/agent/conversations/<id>` returns a conversation summary with its `messages` (`main` is the chat
+conversation). DELETE deletes a finished action conversation and returns `{"deleted":1}` (`409` for `main` or while
+it has requests); `DELETE /api/agent/conversations` deletes every action conversation without requests and returns
+`{"deleted": <count>}`. `POST /api/agent/conversations/main/reset` starts the main conversation afresh, keeping its
+waiting messages, and returns it (`409` while one of its messages runs).
+
+`GET /api/agent/queue/stream` returns `text/event-stream`, like the operation event stream: a `snapshot` (the queue
+snapshot) first, then `queue` (`requests`, `history`, `conversations`, `paused`, `connection_revision`), `request_progress`
+(`request_id`, `conversation_id`, `live` with the partial reply, tool activity, and progress text, at most 10 per
+second), `conversation` (one conversation summary), `agent_write` (`tool`, `request_id`, `conversation_id` when a
+request saved an assessment or review), `heartbeat`, and `bye`. Reconnect with the `<epoch>:<seq>`
+`Last-Event-ID` to replay the last 64 events; otherwise a new snapshot is sent. Both streams share the
+`VULNSCOUT_SSE_MAX_STREAMS` limit (`503` above it). The stream is available before the import finishes.

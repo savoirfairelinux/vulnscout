@@ -20,6 +20,7 @@ from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
 from ..helpers.env_vars import get_bool_env
+from ..helpers.history_source import current_history_operation, history_source
 from ..extensions import batch_session, db as _db
 import click
 from ._console import Command, echo, print_message, verbose, warn
@@ -112,6 +113,14 @@ def refresh_vulnerability_sources(
         )
     ]
     failed_sources: list[str] = []
+    from ..helpers.refresh_runs import capture_source, create_run, finish_source
+    run_id = create_run({
+        source: [identifier for identifier in selected_vulnerability_ids
+                 if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")
+                 and identifier in all_vulnerabilities]
+        for source in applicable_sources
+    }, run_id=current_history_operation()[0])
+    click.echo(f"Refresh run: {run_id}")
     try:
         for step, source in enumerate(applicable_sources, start=1):
             prefix = "GHSA-" if source == "ghsa" else "CVE-"
@@ -124,14 +133,54 @@ def refresh_vulnerability_sources(
             if on_source_start is not None:
                 on_source_start(label, step, len(applicable_sources))
             try:
-                if not _refresh_source(controllers, source):
+                with capture_source(run_id, source):
+                    completed = _refresh_source(controllers, source)
+                if not completed:
                     failed_sources.append(label)
+                finish_source(run_id, source, error=None if completed else "Source refresh failed")
             except Exception as exc:
+                _db.session.rollback()
+                finish_source(run_id, source, error="Source refresh failed")
                 failed_sources.append(label)
                 verbose(f"{label} enrichment failed: {exc}")
     finally:
         vuln_ctrl.vulnerabilities = all_vulnerabilities
     return failed_sources
+
+
+def newest_assessment(assessments):
+    """The most recent of *assessments*, or ``None``."""
+    newest = None
+    for assessment in assessments:
+        if newest is None or _ts_key(newest.timestamp) < _ts_key(assessment.timestamp):
+            newest = assessment
+    return newest
+
+
+def condition_data(vuln_id: str, vuln, assessment) -> dict:
+    """Match-condition variables of *vuln* when *assessment* is its newest assessment (``None``: unassessed)."""
+    data = {
+        "id": vuln_id,
+        "cvss": vuln.severity_max_score or vuln.severity_min_score or False,
+        "cvss_min": vuln.severity_min_score or vuln.severity_max_score or False,
+        "epss": vuln.epss["score"] or False,
+        "effort": False if vuln.effort["likely"] is None else vuln.effort["likely"].total_seconds,
+        "effort_min": False if vuln.effort["optimistic"] is None else vuln.effort["optimistic"].total_seconds,
+        "effort_max": False if vuln.effort["pessimistic"] is None else vuln.effort["pessimistic"].total_seconds,
+        "known_exploitable": bool(vuln.euvd_known_exploited),
+        "fixed": False,
+        "ignored": False,
+        "affected": False,
+        "pending": True,
+        "new": True
+    }
+    if assessment:
+        data["fixed"] = assessment.status in ["fixed", "resolved", "resolved_with_pedigree"]
+        data["ignored"] = assessment.status in ["not_affected", "false_positive"]
+        data["affected"] = assessment.status in ["affected", "exploitable"]
+        data["pending"] = assessment.status in ["under_investigation", "in_triage"]
+        data["new"] = False
+    return data
 
 
 def evaluate_condition(
@@ -143,32 +192,7 @@ def evaluate_condition(
     parser = ConditionParser()
     failed_vulns = []
     for (vuln_id, vuln) in vulnerabilitiesCtrl.vulnerabilities.items():
-        data = {
-            "id": vuln_id,
-            "cvss": vuln.severity_max_score or vuln.severity_min_score or False,
-            "cvss_min": vuln.severity_min_score or vuln.severity_max_score or False,
-            "epss": vuln.epss["score"] or False,
-            "effort": False if vuln.effort["likely"] is None else vuln.effort["likely"].total_seconds,
-            "effort_min": False if vuln.effort["optimistic"] is None else vuln.effort["optimistic"].total_seconds,
-            "effort_max": False if vuln.effort["pessimistic"] is None else vuln.effort["pessimistic"].total_seconds,
-            "known_exploitable": bool(vuln.euvd_known_exploited),
-            "fixed": False,
-            "ignored": False,
-            "affected": False,
-            "pending": True,
-            "new": True
-        }
-
-        last_assessment = None
-        for assessment in assessmentsCtrl.gets_by_vuln(vuln_id):
-            if last_assessment is None or _ts_key(last_assessment.timestamp) < _ts_key(assessment.timestamp):
-                last_assessment = assessment
-        if last_assessment:
-            data["fixed"] = last_assessment.status in ["fixed", "resolved", "resolved_with_pedigree"]
-            data["ignored"] = last_assessment.status in ["not_affected", "false_positive"]
-            data["affected"] = last_assessment.status in ["affected", "exploitable"]
-            data["pending"] = last_assessment.status in ["under_investigation", "in_triage"]
-            data["new"] = False
+        data = condition_data(vuln_id, vuln, newest_assessment(assessmentsCtrl.gets_by_vuln(vuln_id)))
         if parser.evaluate(condition, data):
             failed_vulns.append(vuln_id)
             # Keep this message on stdout for CI consumers.
@@ -176,6 +200,7 @@ def evaluate_condition(
     return failed_vulns
 
 
+@history_source("sbom")
 def read_inputs(controllers: ControllersCache, scan_id=None):
     """Parse all SBOM documents registered in the DB.
 
@@ -194,12 +219,19 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     templates = Templates(controllers)
 
     use_fastspdx = get_bool_env('IGNORE_PARSING_ERRORS', False)
+    from ..helpers.sbom_files import record_source_files, spdx2_file_graph
+    from ..helpers.export_evidence import read_evidence, restore_evidence, evidence_file_graph
+    from ..helpers.cyclonedx_files import record_cyclonedx_files
+
     if use_fastspdx:
         verbose("merger_ci: Using FastSPDX parser")
 
     pkgCtrl: PackagesController = controllers.packages
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
     jsonld_documents = []
+    file_documents = []
+    evidence_documents = []
+    cdx_file_documents = []
     detached_cdx_documents: list[SBOMDocument] = []
     detached_cdx_refs: dict[SBOMDocument, dict[str, str]] = {}
 
@@ -215,6 +247,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             # scan.sh via the --spdx / --cdx / --openvex / --yocto-cve / --yocto-vex / --grype
             # options) and fall back to content-sniffing only when it is absent.
             fmt = doc.format  # 'spdx', 'cdx', 'openvex', 'yocto_cve_check', 'yocto_vex', 'grype', or None
+            doc.build_targets = None
 
             if fmt == "spdx" or (
                 fmt is None and (
@@ -223,6 +256,10 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             ):
                 if fastspdx3.could_parse_spdx(data):
                     fastspdx3.parse_from_dict(data)
+                    file_documents.append(
+                        (doc, data, dict(fastspdx3._document_refs),
+                         fastspdx3._namespace_map(data.get('@graph', [])))
+                    )
                     if is_zephyr_jsonld(data):
                         jsonld_documents.append(
                             (doc, data, dict(fastspdx3._document_refs),
@@ -232,9 +269,13 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                         doc.jsonld_groups = None
                 elif use_fastspdx:
                     fastspdx.parse_from_dict(data)
+                    file_graph, references = spdx2_file_graph(doc, data, fastspdx._document_refs)
+                    file_documents.append((doc, file_graph, references, {}))
                 else:
                     spdx.load_from_file(doc.path)
                     spdx.parse_and_merge()
+                    file_graph, references = spdx2_file_graph(doc, data, spdx._document_refs)
+                    file_documents.append((doc, file_graph, references, {}))
             elif fmt == "cdx" or (
                 fmt is None and (
                     data.get("bomFormat") == "CycloneDX"
@@ -251,6 +292,9 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 document_cdx.load_from_dict(data)
                 if document_cdx is cdx:
                     cdx.merge_components_into_controller()
+                    cdx_file_documents.append(
+                        (doc, data, dict(cdx._document_refs), dict(cdx._file_package_aliases))
+                    )
                     pkgCtrl.add_dependencies(cdx._document_refs, cdx._dependency_edges)
                     if (getattr(cdx, "sbom", None) is not None
                             and any(affect.ref.startswith("urn:cdx:") and affect.ref not in cdx.bom_link_refs
@@ -284,10 +328,24 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             elif fmt == "yocto_cve_check" or (fmt is None and "package" in data and "matches" not in data):
                 yocto.load_from_dict(data)
             elif fmt == "grype" or (fmt is None and "matches" in data):
-                grype.load_from_dict(data)
+                _db.session.flush()
+                with history_source("grype"):
+                    grype.load_from_dict(data)
+                    _db.session.flush()
             else:
                 print_message(f"Warning: unknown format for {doc.path}, skipping", role="warning")
                 continue
+            if (evidence := read_evidence(data)) is not None:
+                if data.get("bomFormat") == "CycloneDX":
+                    references = dict(document_cdx._document_refs)
+                    file_documents.append((doc, evidence_file_graph(evidence), references, {}))
+                elif fastspdx3.could_parse_spdx(data):
+                    references = dict(fastspdx3._document_refs)
+                elif "spdxVersion" in data:
+                    references = dict(fastspdx._document_refs if use_fastspdx else spdx._document_refs)
+                else:
+                    references = {}
+                evidence_documents.append((doc, evidence, references))
             doc.dependencies_recorded = True
         except FileNotFoundError:
             pass  # File was already merged into the DB and cleaned up — expected.
@@ -345,8 +403,15 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                     assessment.packages = stored.packages
             for package_id in assessment.packages:
                 assessCtrl._by_vuln_pkg.setdefault((assessment.vuln_id, package_id), []).append(key)
+    for document, evidence, references in evidence_documents:
+        restore_evidence(document, evidence, references)
+    for current_scan_id in {document.scan_id for document, *_ in file_documents}:
+        record_source_files([entry for entry in file_documents if entry[0].scan_id == current_scan_id])
+    for entry in cdx_file_documents:
+        record_cyclonedx_files(*entry)
     _db.session.commit()
 
+    _db.session.flush()
     return {
         "cdx": cdx,
         "templates": templates
@@ -446,10 +511,14 @@ def process_command(
 @click.command("refresh-vulnerability-data", cls=Command)
 @click.option("--project", "project_name", default=None, help="Refresh vulnerabilities in this project only.")
 @click.option("--variant", "variant_name", default=None, help="Refresh vulnerabilities in this project variant only.")
+@click.option("--run-id", default=None, help="Unique caller-supplied identity for this refresh (never reused).")
 @with_appcontext
-def refresh_vulnerability_data_command(project_name: str | None, variant_name: str | None) -> None:
+def refresh_vulnerability_data_command(project_name: str | None, variant_name: str | None,
+                                       run_id: str | None = None) -> None:
     """Refresh vulnerability data already stored in the database."""
     scope = None
+    project = None
+    variant = None
     if variant_name and not project_name:
         raise click.UsageError("--variant requires --project.")
     if project_name:
@@ -463,17 +532,31 @@ def refresh_vulnerability_data_command(project_name: str | None, variant_name: s
             scope = compute_export_scope(project_id=project.id)
 
     controllers = ControllersCache(scope=scope)
-    failed_sources = refresh_vulnerability_sources(
-        controllers,
-        controllers.vulnerabilities.vulnerabilities,
-        on_source_start=lambda label, step, total: echo(
-            f"Refreshing {label} data (step {step} of {total})...", role="info"
-        ),
-    )
-    if failed_sources:
-        unique_failed = list(dict.fromkeys(failed_sources))
+    from ..controllers.refresh_jobs import REFRESH_JOBS
+    from ..controllers.job_context import JobContext
+    from ..helpers.refresh_runs import create_run, source_statuses
+    identifiers = list(controllers.vulnerabilities.vulnerabilities)
+    targets = {source: [identifier for identifier in identifiers
+                        if identifier.startswith("GHSA-" if source == "ghsa" else "CVE-")]
+               for source in ("nvd", "epss", "ghsa", "euvd")}
+    try:
+        run_id = create_run(targets, run_id=run_id, scope={
+            "project_id": str(project.id) if project is not None else None,
+            "variant_id": str(variant.id) if variant is not None else None,
+        })
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Refresh run: {run_id}")
+    errors = []
+    for source, ids in targets.items():
+        echo(f"Refreshing {source.upper()} data...", role="info")
+        try:
+            REFRESH_JOBS[source](JobContext(f"cli-refresh:{source}", {"ids": ids, "mode": "local"}, run_id))
+        except Exception as exc:
+            errors.append(f"{source}: {exc}")
+    if errors or any(value != "complete" for value in source_statuses(run_id).values()):
         raise click.ClickException(
-            f"{', '.join(unique_failed)} vulnerability-data refresh failed."
+            f"Refresh run {run_id} is incomplete. " + "; ".join(errors)
         )
     echo("Vulnerability data refresh complete.", role="success")
 

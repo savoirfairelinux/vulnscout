@@ -26,6 +26,10 @@ requires confirmation. Export important review data before deleting it.
 
 ## SBOM Imports
 
+Upload individual SBOM files or SPDX archives (`.tar`, `.tar.gz`, `.tgz`,
+`.tar.xz`, `.tar.zst`) containing `.spdx.json` or `.jsonld` companion documents.
+All companion documents in an archive are imported together into the selected variant.
+
 SBOM uploads on a variant page default to **Complete refresh**. After parsing,
 VulnScout refreshes NVD, EPSS, GHSA, and ENISA EUVD metadata for vulnerabilities
 encountered in the import. This can make external provider requests and lengthen
@@ -52,6 +56,13 @@ selector does not restrict their scope. Outdated-data cleanup removes redundant
 historical records, empty-scan cleanup removes scans with no retained data, and
 orphan cleanup removes vulnerabilities no longer referenced by projects or
 variants, including their assessments.
+
+The outdated-data confirmation also offers an unchecked **Also clear all vulnerability
+refresh history** option with a row count. Selecting it permanently clears all previous
+vulnerability field values globally, not just outdated vulnerabilities or older dates.
+Current values and refresh timestamps remain intact, and future refreshes can record
+new history. Leave it unchecked to preserve history. The option resets when the dialog
+is reopened and can be used even if no outdated data exists.
 
 Review the listed records before confirming permanent deletion. If data changes
 after the preview and the server rejects the stale plan, analyze again rather

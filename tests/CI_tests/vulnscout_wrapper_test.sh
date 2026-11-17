@@ -28,10 +28,44 @@ case "$1" in
         ;;
     exec)
         log_call "$@"
+        if [ -n "${VULNSCOUT_TEST_ASSESS_BLOCK:-}" ]; then
+            case " $* " in
+                *" --ai-assess "*|*" --ai-review "*)
+                    # A running assessment: "started" stands for its PID file (published once the
+                    # optional gate opens); it reports and exits 1 after the expected forwarded signals.
+                    if [ -n "${VULNSCOUT_TEST_ASSESS_GATE:-}" ]; then
+                        for _ in $(seq 100); do
+                            [ -f "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-gate" ] && break
+                            sleep 0.1
+                        done
+                    fi
+                    : > "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-started"
+                    for _ in $(seq 100); do
+                        forwarded=$(cat "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-forwarded" 2>/dev/null || true)
+                        if [ "$(grep -c . <<< "$forwarded")" -ge "${VULNSCOUT_TEST_ASSESS_SIGNALS:-1}" ]; then
+                            echo REPORT; exit 1
+                        fi
+                        sleep 0.1
+                    done
+                    echo "no signal forwarded" >&2; exit 3 ;;
+                *" sh -c "*)
+                    # Like the container: nothing to signal before the PID file exists.
+                    [ -f "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-started" ] || exit 1
+                    echo "${*: -2}" >> "$VULNSCOUT_TEST_ASSESS_BLOCK/assess-forwarded" ;;
+            esac
+        fi
+        case " $* " in
+            *" --ai-assess "*" --json "*|*" --ai-review "*" --json "*) echo '{"results": []}' ;;
+        esac
         exit "${VULNSCOUT_TEST_EXEC_EXIT:-0}"
         ;;
-    rm|run|pull)
+    rm|pull)
         log_call "$@"
+        ;;
+    run)
+        log_call "$@"
+        # Like 'run -d': the new container's ID on stdout.
+        [ "${2:-}" != -d ] || echo 0123456789ab
         ;;
     inspect)
         log_call "$@"
@@ -126,134 +160,26 @@ expect_fail() {
 }
 
 
-"$ROOT_DIR/vulnscout" --refresh-vulnerability-data
-grep -q -- '/scan/src/entrypoint.sh --refresh-vulnerability-data' "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --project cli --refresh-vulnerability-data
-grep -q -- '/scan/src/entrypoint.sh --project cli --refresh-vulnerability-data' "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --project cli --variant default --refresh-vulnerability-data
-grep -q -- '/scan/src/entrypoint.sh --variant default --project cli --refresh-vulnerability-data' "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --match-condition affected
-grep -q -- '/scan/src/entrypoint.sh --match-condition affected' "$VULNSCOUT_TEST_LOG"
-if grep -q -- '--project\|--variant' "$VULNSCOUT_TEST_LOG"; then
-    echo "Default scope was forwarded as explicit scope." >&2
-    exit 1
-fi
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --project cli --match-condition affected
-grep -q -- '/scan/src/entrypoint.sh --project cli --match-condition affected' "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --project cli --variant release --match-condition affected
-grep -q -- '/scan/src/entrypoint.sh --project cli --variant release --match-condition affected' "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --report summary.adoc
-grep -q -- '/scan/src/entrypoint.sh --project default --report summary.adoc' "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --project cli --report summary.adoc
-grep -q -- '/scan/src/entrypoint.sh --project cli --report summary.adoc' "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --project cli --variant release --report summary.adoc
-grep -q -- '/scan/src/entrypoint.sh --project cli --variant release --report summary.adoc' "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --project cli --add-spdx "$SBOM" --match-condition affected
-grep -q -- '--project cli --add-spdx /tmp/vulnscout_stage_input.spdx.json --match-condition affected' \
-    "$VULNSCOUT_TEST_LOG"
-if grep -q -- '--variant' "$VULNSCOUT_TEST_LOG"; then
-    echo "Default variant was forwarded as an explicit variant." >&2
-    exit 1
-fi
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --project cli --variant default \
-    --add-spdx "$SBOM" --refresh-vulnerability-data
-grep -q -- \
-    '--project cli --variant default --add-spdx /tmp/vulnscout_stage_input.spdx.json --refresh-vulnerability-data' \
-    "$VULNSCOUT_TEST_LOG"
-
-: > "$VULNSCOUT_TEST_LOG"
-"$ROOT_DIR/vulnscout" --add-spdx "$SBOM"
-if grep -q -- '--refresh-vulnerability-data' "$VULNSCOUT_TEST_LOG"; then
-    echo "Refresh flag was propagated when absent." >&2
-    exit 1
-fi
-
-export VULNSCOUT_TEST_EXEC_EXIT=7
-if "$ROOT_DIR/vulnscout" --add-spdx "$SBOM" --refresh-vulnerability-data; then
-    echo "Container execution failure was not propagated." >&2
-    exit 1
-else
-    status=$?
-fi
-if [[ "$status" -ne 7 ]]; then
-    echo "Expected exit 7, got $status." >&2
-    exit 1
-fi
-
-unset VULNSCOUT_TEST_EXEC_EXIT
 DATA="$TEST_DIR/data.json"
 printf '{}\n' > "$DATA"
 
-# --- Legacy grammar: deprecation warnings ---
-run_ok --refresh-vulnerability-data
-assert_stderr "deprecated: --refresh-vulnerability-data (removed in v0.25); use 'vulnscout refresh'"
-
-run_ok --add-spdx "$SBOM" --add-spdx "$SBOM"
-assert_stderr "deprecated: --add-spdx (removed in v0.25); use 'vulnscout add --spdx <path>'"
-if [ "$(grep -c 'deprecated: --add-spdx' "$TEST_DIR/stderr")" -ne 1 ]; then
-    echo "A repeated legacy token must warn once." >&2
+# --- Removed legacy grammar: exit 1 naming the replacement, no entrypoint call ---
+expect_fail "'--add-spdx' was removed in v0.25; use 'vulnscout add --spdx <path>'" --add-spdx "$SBOM"
+assert_stderr "doc/source/cli-migration.md"
+expect_fail "'--refresh-vulnerability-data' was removed in v0.25; use 'vulnscout refresh'" \
+    --refresh-vulnerability-data
+expect_fail "'--report' was removed in v0.25; use 'vulnscout report <template>'" \
+    --project cli --variant x86 --report summary.adoc
+expect_fail "'list-scans' was removed in v0.25; use 'vulnscout list scans'" list-scans
+expect_fail "'--use-current-timestamps' was removed in v0.25" --use-current-timestamps
+expect_fail "'--start' was removed in v0.25; use 'vulnscout start'" --dev --start
+refute_log "run -d"
+expect_fail "'config <key> <value>' was removed in v0.25; use 'vulnscout config set <key> <value>'" \
+    config LEGACY_KEY legacy-value
+if grep -q '^LEGACY_KEY=' "$VULNSCOUT_BUILD_DIR/cache/config.env" 2>/dev/null; then
+    echo "A removed config call must not write the config file." >&2
     exit 1
 fi
-
-export VULNSCOUT_NO_DEPRECATION_WARNING=1
-run_ok --refresh-vulnerability-data
-unset VULNSCOUT_NO_DEPRECATION_WARNING
-refute_stderr "deprecated:"
-
-run_ok --import-custom-vulnscout-data "$DATA" --use-current-timestamps
-assert_stderr "deprecated: --use-current-timestamps (removed in v0.25); use 'vulnscout import <kind> <path> --timestamps current'"
-assert_log "--project default --import-custom-vulnscout-data /tmp/vulnscout_stage_data.json --use-current-timestamps"
-
-run_ok config LEGACY_KEY legacy-value
-assert_stderr "deprecated: config (removed in v0.25); use 'vulnscout config set <key> <value>'"
-grep -qx 'LEGACY_KEY=legacy-value' "$VULNSCOUT_BUILD_DIR/cache/config.env"
-
-# Review focus 1 (legacy side): a -p value equal to a legacy token is a value, not a token.
-run_ok -p list-scans --refresh-vulnerability-data
-assert_log "/scan/src/entrypoint.sh --project list-scans --refresh-vulnerability-data"
-refute_stderr "deprecated: list-scans"
-
-# -p / -v are accepted in legacy calls.
-run_ok -p cli -v x86 --refresh-vulnerability-data
-assert_log "/scan/src/entrypoint.sh --variant x86 --project cli --refresh-vulnerability-data"
-
-# The --perform-scans capability probe is gone (D10).
-run_ok --perform-scans nvd,osv
-assert_log "/scan/src/entrypoint.sh --perform-scans nvd\,osv"
-refute_log "--help"
-
-run_ok --perform-nvd-scan
-assert_stderr "use 'vulnscout scan nvd'"
-assert_log "/scan/src/entrypoint.sh --perform-nvd-scan"
-
-# Legacy custom OpenVEX export keeps the entrypoint's "default" variant.
-run_ok --export-custom-openvex-assessments
-assert_log "/scan/src/entrypoint.sh --project default --export-custom-openvex-assessments"
-refute_log "--all-variants"
-
-# Legacy delete never prompts.
-run_ok --delete-outdated
-assert_log "/scan/src/entrypoint.sh --delete-outdated"
 
 # Undocumented spellings are dropped (D4).
 for dropped in perform-grype-scan perform-nvd-scan perform-osv-scan perform-sbom-cve-check-scan \
@@ -265,14 +191,13 @@ done
 run_ok --help
 assert_stdout "Run vulnerability scans"
 refute_stdout "Examples:"
-assert_stdout "still works until v0.25"
-refute_stderr "deprecated:"
+assert_stdout "was removed in v0.25"
 
 run_ok
-assert_stdout "Usage: vulnscout [global options] <command>"
+assert_stdout "Usage: vulnscout <command> [arguments] [options] [global options]"
 
 run_ok scan --help
-assert_stdout "Usage: vulnscout [-p <project>] [-v <variant>] scan [scanner options] [types|all]"
+assert_stdout "Usage: vulnscout scan [-p <project>] [-v <variant>] [scanner options] [types|all]"
 assert_stdout "vulnscout scan --grype --osv --sbom-cve-check"
 assert_stdout "Examples:"
 if [ -s "$VULNSCOUT_TEST_LOG" ]; then
@@ -323,7 +248,7 @@ expect_fail "--variant requires a value." scan --variant --dev
 # --- add ---
 run_ok add -p demo -v x86 --spdx "$SBOM" --cve-check "$DATA"
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --add-spdx /tmp/vulnscout_stage_input.spdx.json --add-cve-check /tmp/vulnscout_stage_data.json"
-refute_stderr "deprecated:"
+refute_stderr "was removed"
 
 run_ok add --spdx "$SBOM" --spdx "$SBOM" --dev
 assert_log "/scan/src/entrypoint.sh --add-spdx /tmp/vulnscout_stage_input.spdx.json --add-spdx /tmp/vulnscout_stage_input.spdx.json"
@@ -405,6 +330,154 @@ expect_fail "'match-condition' needs exactly one condition expression" match-con
 expect_fail "'match-condition' needs exactly one condition expression" match-condition a b
 expect_fail "match-condition requires a non-empty condition" match-condition ""
 
+# --- assess ---
+run_ok assess --cve CVE-2024-3094 --cve CVE-2023-4863
+assert_log "/scan/src/entrypoint.sh --ai-assess --cve CVE-2024-3094 --cve CVE-2023-4863"
+refute_log "--project"
+
+run_ok assess -p demo -v x86 --filter "pending and cvss >= 9" --model gpt-5 --timeout 30 --dry-run --json
+assert_log '/scan/src/entrypoint.sh --project demo --ai-assess --variant x86 --filter pending\ and\ cvss\ \>=\ 9 --model gpt-5 --timeout 30 --dry-run --json'
+
+run_ok assess -p demo -v x86 --cve CVE-1 -v arm64 -v x86
+assert_log "/scan/src/entrypoint.sh --project demo --ai-assess --variant x86 --variant arm64 --variant x86 --cve CVE-1"
+
+# With the container stopped, startup output must not corrupt the --json report on stdout.
+# A fresh cache directory also covers the "Created default config" message.
+export VULNSCOUT_TEST_NOT_RUNNING=1 VULNSCOUT_CACHE_DIR="$TEST_DIR/stopped-cache"
+run_ok assess --cve CVE-2024-3094 --json
+unset VULNSCOUT_TEST_NOT_RUNNING VULNSCOUT_CACHE_DIR
+assert_log "run -d"
+assert_log "/scan/src/entrypoint.sh --ai-assess --cve CVE-2024-3094 --json"
+if [ "$(cat "$TEST_DIR/stdout")" != '{"results": []}' ]; then
+    echo "Expected only the JSON report on stdout:" >&2
+    cat "$TEST_DIR/stdout" >&2
+    exit 1
+fi
+assert_stderr "Container not running, starting..."
+assert_stderr "0123456789ab"
+
+expect_fail "'assess' needs exactly one of --cve or --filter." assess
+expect_fail "'assess' needs exactly one of --cve or --filter; to combine them, list the IDs in the filter" assess --cve CVE-1 --filter pending
+expect_fail "'assess' accepts only one --filter." assess --filter pending --filter new
+expect_fail "--filter requires a non-empty expression." assess --filter ""
+expect_fail "invalid vulnerability ID 'bad id'." assess --cve "bad id"
+expect_fail "--timeout must be a positive number of seconds." assess --cve CVE-1 --timeout 0
+expect_fail "'assess' --variant requires --project." assess -v x86 --cve CVE-1
+expect_fail "'assess' does not accept option --force." assess --cve CVE-1 --force
+
+# --- assess: Ctrl-C / CI cancel / hangup reach the command in the container ---
+# start_assess [stderr path]: run $START_VERB_ARGS in its own process group, like a foreground job in a terminal.
+START_VERB_ARGS=(assess --cve CVE-2024-3094)
+start_assess() {
+    reset_log
+    rm -f "$TEST_DIR"/assess-*
+    set -m
+    VULNSCOUT_TEST_ASSESS_BLOCK="$TEST_DIR" "$ROOT_DIR/vulnscout" "${START_VERB_ARGS[@]}" --json \
+        < /dev/null > "$TEST_DIR/stdout" 2> "${1:-$TEST_DIR/stderr}" &
+    wrapper=$!
+    set +m
+}
+
+wait_until() {
+    for _ in $(seq 100); do "$@" && return 0; sleep 0.1; done
+    echo "timed out waiting for: $*" >&2
+    exit 1
+}
+
+forwarded_count() { [ "$(grep -c . "$TEST_DIR/assess-forwarded" 2>/dev/null)" -ge "$1" ]; }
+
+# signal_job <signal>: what the terminal (Ctrl-C), a CI runner or a hangup sends to the job.
+signal_job() { kill "-$1" -- "-$wrapper"; }
+
+# finish_assess <label> <forwarded signal>...: the container's report, exit 1, and the signals
+# forwarded in order to the run ID that the client passed to the container.
+finish_assess() {
+    local label="$1" status=0 run_id expected
+    shift
+    wait "$wrapper" || status=$?
+    run_id=$(grep -o 'VULNSCOUT_RUN_ID=host-[0-9]*-[0-9]*' "$VULNSCOUT_TEST_LOG" | head -n 1)
+    run_id="${run_id#*=}"
+    expected=$(printf "$run_id %s\n" "$@")
+    if [ "$status" -ne 1 ] || ! grep -qx REPORT "$TEST_DIR/stdout" || [ -z "$run_id" ] ||
+        [ "$(cat "$TEST_DIR/assess-forwarded")" != "$expected" ]; then
+        echo "$label: expected the container's report, exit 1 and forwarded '$*', got $status" >&2
+        cat "$TEST_DIR/stdout" "$TEST_DIR/assess-forwarded" "$VULNSCOUT_TEST_LOG" >&2
+        exit 1
+    fi
+    assert_log "vulnscout-ai-assess-"
+}
+
+for signal in INT TERM HUP; do
+    start_assess
+    wait_until test -f "$TEST_DIR/assess-started"
+    signal_job "$signal"
+    finish_assess "SIG$signal" INT
+done
+
+# A second Ctrl-C stops now (SIGTERM).
+export VULNSCOUT_TEST_ASSESS_SIGNALS=2
+start_assess
+wait_until test -f "$TEST_DIR/assess-started"
+signal_job INT
+wait_until forwarded_count 1
+signal_job INT
+finish_assess "second Ctrl-C" INT TERM
+unset VULNSCOUT_TEST_ASSESS_SIGNALS
+
+# A Ctrl-C before the assessment publishes its PID reaches nothing and does not count as the first one.
+export VULNSCOUT_TEST_ASSESS_GATE=1
+start_assess
+wait_until grep -qF -- "--ai-assess" "$VULNSCOUT_TEST_LOG"
+signal_job INT
+wait_until grep -qF -- " sh -c " "$VULNSCOUT_TEST_LOG"
+: > "$TEST_DIR/assess-gate"
+wait_until test -f "$TEST_DIR/assess-started"
+signal_job INT
+finish_assess "Ctrl-C before start" INT
+unset VULNSCOUT_TEST_ASSESS_GATE
+
+# A broken stderr (closed terminal, full disk) must not stop the forwarding.
+start_assess /dev/full
+wait_until test -f "$TEST_DIR/assess-started"
+signal_job HUP
+finish_assess "SIGHUP with broken stderr" INT
+
+# 'review' reuses the same PID file and signal forwarding.
+START_VERB_ARGS=(review -p demo --cve CVE-2024-3094)
+start_assess
+wait_until test -f "$TEST_DIR/assess-started"
+signal_job INT
+finish_assess "review Ctrl-C" INT
+assert_log "--ai-review"
+START_VERB_ARGS=(assess --cve CVE-2024-3094)
+
+# --- review ---
+UUID1=3f2b6c1e-0000-4000-8000-000000000001
+UUID2=3f2b6c1e-0000-4000-8000-000000000002
+run_ok review -p demo --assessment-id "$UUID1" --assessment-id "$UUID2"
+assert_log "/scan/src/entrypoint.sh --project demo --ai-review --assessment-id $UUID1 --assessment-id $UUID2"
+
+run_ok review -p demo -v x86 -v arm64 --cve CVE-2024-3094 --re-review --model gpt-5 --timeout 30 --dry-run --json
+assert_log "/scan/src/entrypoint.sh --project demo --ai-review --variant x86 --variant arm64 --cve CVE-2024-3094 --re-review --model gpt-5 --timeout 30 --dry-run --json"
+if [ "$(cat "$TEST_DIR/stdout")" != '{"results": []}' ]; then
+    echo "Expected only the JSON report on stdout:" >&2
+    cat "$TEST_DIR/stdout" >&2
+    exit 1
+fi
+
+expect_fail "'review' requires --project." review --cve CVE-1
+expect_fail "'review' requires --project." review --assessment-id "$UUID1"
+expect_fail "'review' requires --project." review -v x86 --cve CVE-1
+expect_fail "'review' requires --project." review --assessment-id nope
+expect_fail "'review' requires --project." review --cve "bad id"
+expect_fail "'review' needs exactly one of --assessment-id or --cve." review -p demo
+expect_fail "'review' needs exactly one of --assessment-id or --cve." review -p demo --cve CVE-1 --assessment-id "$UUID1"
+expect_fail "'review' --variant cannot be used with --assessment-id, which reviews every target in the project." review -p demo -v x86 --assessment-id "$UUID1"
+expect_fail "invalid assessment ID 'nope'." review -p demo --assessment-id nope
+expect_fail "invalid vulnerability ID 'bad id'." review -p demo --cve "bad id"
+expect_fail "--timeout must be a positive number of seconds." review -p demo --cve CVE-1 --timeout 0
+expect_fail "'review' does not accept option --filter." review -p demo --cve CVE-1 --filter x
+
 # --- refresh ---
 run_ok refresh
 assert_log "/scan/src/entrypoint.sh --refresh-vulnerability-data"
@@ -413,14 +486,14 @@ refute_log "--project"
 run_ok refresh -v x86 -p demo
 assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --refresh-vulnerability-data"
 
-# Review focus 1 (new grammar): a -p value equal to a legacy token does not select the legacy grammar.
+# A -p value equal to a removed flag is a value, not a command.
 run_ok refresh -p list-scans
 assert_log "/scan/src/entrypoint.sh --project list-scans --refresh-vulnerability-data"
-refute_stderr "deprecated:"
+refute_stderr "was removed"
 
-# A value equal to a legacy flag is an argument of the new grammar, never a legacy action.
+# A value equal to a removed flag is a command argument.
 run_ok config set MY_VALUE --stop
-refute_stderr "deprecated:"
+refute_stderr "was removed"
 grep -qx 'MY_VALUE=--stop' "$VULNSCOUT_BUILD_DIR/cache/config.env"
 refute_log "rm"
 
@@ -612,9 +685,10 @@ if [ "$(cat "$TEST_DIR/stdout")" != "secret-value" ]; then
     exit 1
 fi
 
+run_ok config set PLAIN_KEY plain-value
 run_ok config list
 assert_stdout "NVD_API_KEY=****"
-assert_stdout "LEGACY_KEY=legacy-value"
+assert_stdout "PLAIN_KEY=plain-value"
 if grep -qF "secret-value" "$TEST_DIR/stdout"; then
     echo "config list must mask secret values." >&2
     exit 1

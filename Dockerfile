@@ -32,12 +32,14 @@ RUN apk add --no-cache \
     git \
     gcompat \
     icu \
+    poppler-utils \
     python3 \
     py3-pip \
     ruby \
     shadow \
     sudo \
     unzip \
+    xz \
     zstd \
     postgresql-client \
     libpq-dev \
@@ -63,12 +65,13 @@ RUN pip3 install --no-cache-dir -r requirements/base.txt --break-system-packages
 RUN mkdir -p src
 COPY src ./src
 COPY vulnscout_mcp ./vulnscout_mcp
+COPY .github/skills ./.github/skills
 RUN chmod +x src/entrypoint.sh
 COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
-ARG VULNSCOUT_VERSION=v0.24
+ARG VULNSCOUT_VERSION=v0.25
 ENV VULNSCOUT_VERSION=${VULNSCOUT_VERSION}
 
 LABEL org.opencontainers.image.title="VulnScout"

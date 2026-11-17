@@ -47,7 +47,7 @@ def test_fresh_database_reaches_the_evidence_schema_and_can_use_its_links(app):
     _upgrade(app)
     assert db.session.execute(text("SELECT version_num FROM alembic_version")).scalar() == HEAD_REVISION
     inspector = inspect(db.engine)
-    for table in ("packages", "sbom_packages"):
+    for table in ("packages", "sbom_packages", "variant_context", "context_files"):
         assert {column["name"] for column in inspector.get_columns(table)} == set(
             db.metadata.tables[table].columns.keys()
         )

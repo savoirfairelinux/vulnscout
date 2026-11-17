@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 from decimal import Decimal
+import json
 from ..models.package import Package
 from ..models.vulnerability import Vulnerability
 from ..models.cvss import CVSS
 from ..models.assessment import Assessment
 from ..controllers import ControllersCache, PackagesController, VulnerabilitiesController, AssessmentsController
 from ..helpers.datetime_utils import normalize_timestamp_for_sort
+from ..helpers.export_evidence import export_evidence, EVIDENCE_PROPERTY
+from cyclonedx.model import Property
+from ..helpers.cyclonedx_files import has_recorded_files
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.bom_ref import BomRef
 from cyclonedx.model.dependency import Dependency
@@ -40,6 +44,8 @@ class CycloneDx:
         self.ref_dict: dict[str, str] = {}
         self.bom_link_refs: dict[str, str] = {}
         self._document_refs: dict[str, str] = {}
+        self._file_package_aliases: dict[str, str] = {}
+        self._raw_data: dict = {}
         self._dependency_edges: set[tuple[str, str]] = set()
         self._component_refs: dict[str, BomRef] = {}
 
@@ -49,6 +55,7 @@ class CycloneDx:
         "high": cyclonedx.model.vulnerability.VulnerabilitySeverity.HIGH,
         "critical": cyclonedx.model.vulnerability.VulnerabilitySeverity.CRITICAL,
         "info": cyclonedx.model.vulnerability.VulnerabilitySeverity.INFO,
+        "none": cyclonedx.model.vulnerability.VulnerabilitySeverity.NONE,
     }
 
     _VEX_STATUS_MAP = {
@@ -134,6 +141,7 @@ class CycloneDx:
 
     def load_from_dict(self, cyclonedx: dict):
         """Read data from CycloneDx json parsed format."""
+        self._raw_data = cyclonedx
         self._dependency_edges = set()
         try:
             cyclonedx = self.clean_sbom(cyclonedx)
@@ -152,12 +160,15 @@ class CycloneDx:
         """Yield top-level components, nested software packages, and the root when it is a package in the graph."""
         root = self.sbom.metadata.component
         if root is not None:
-            if root.type in self._ROOT_PACKAGE_TYPES and any(
-                    root.bom_ref.value in edge for edge in self._dependency_edges):
+            if root.type in self._ROOT_PACKAGE_TYPES and (
+                any(root.bom_ref.value in edge for edge in self._dependency_edges)
+                or has_recorded_files((self._raw_data.get("metadata") or {}).get("component") or {})
+            ):
                 yield root
             yield from self._nested_packages(root.components)
         for component in self.sbom.components:
-            yield component
+            if component.type != ComponentType.FILE:
+                yield component
             yield from self._nested_packages(component.components)
 
     def _nested_packages(self, components: Iterable[Component]) -> Iterator[Component]:
@@ -169,17 +180,18 @@ class CycloneDx:
         Merge components from SBOM into controller.
         """
         self._document_refs = {}
+        self._file_package_aliases = {}
         if "sbom" not in self.__dict__ or not self.sbom:
             return
 
+        component_refs = []
         for component in self._inventory_components():
             package = Package(component.name, component.version or "", [], [])
             if component.purl:
                 package.add_purl(str(component.purl))
             if component.cpe:
                 package.add_cpe(component.cpe)
-            package.generate_generic_cpe()
-            package.generate_generic_purl()
+            package.add_fallback_identifiers()
 
             if component.bom_ref.value:
                 self.ref_dict[component.bom_ref.value] = package.string_id
@@ -187,8 +199,20 @@ class CycloneDx:
                 bom_link = f"urn:cdx:{self.sbom.serial_number}/{self.sbom.version}#{component.bom_ref.value}"
                 self.bom_link_refs[bom_link] = package.string_id
                 self._document_refs[component.bom_ref.value] = package.string_id
+                component_refs.append(component.bom_ref.value)
 
             self.packagesCtrl.add(package)
+            self._file_package_aliases[package.string_id] = self.packagesCtrl.canonical_id(package.string_id)
+
+        for bom_ref in component_refs:
+            canonical_id = self.packagesCtrl.canonical_id(self.ref_dict[bom_ref])
+            self.ref_dict[bom_ref] = canonical_id
+            self._document_refs[bom_ref] = canonical_id
+            bom_link = f"urn:cdx:{self.sbom.serial_number}/{self.sbom.version}#{bom_ref}"
+            self.bom_link_refs[bom_link] = canonical_id
+        self._file_package_aliases = {
+            string_id: self.packagesCtrl.canonical_id(string_id) for string_id in self._file_package_aliases
+        }
 
     def merge_vulnerabilities_into_controller(self):
         """
@@ -331,18 +355,19 @@ class CycloneDx:
         """
         self._component_refs = {}
         for pkg in self.packagesCtrl:
-            if len(pkg.cpe) < 1:
+            if not pkg.cpe and not pkg.purl:
                 pkg.generate_generic_cpe()
-            if len(pkg.purl) < 1:
+            if not pkg.purl:
                 pkg.generate_generic_purl()
-            group = pkg.cpe[0].split(":")[3]
+            cpe = pkg.cpe[0] if pkg.cpe else None
+            group = cpe.split(":")[3] if cpe else None
             cmp = Component(
                 type=cyclonedx.model.component.ComponentType.LIBRARY,
                 name=pkg.name,
                 version=pkg.version,
                 bom_ref=pkg.purl[0],
                 group=group if group != '*' else None,
-                cpe=pkg.cpe[0],
+                cpe=cpe,
                 purl=PackageURL.from_string(pkg.purl[0]),
             )
             self.sbom.components.add(cmp)
@@ -396,7 +421,7 @@ class CycloneDx:
                     cyclonedx.model.vulnerability.VulnerabilityRating(
                         method=CycloneDx.cvss_to_rating_method(cvss),
                         vector=cvss.vector_string,
-                        score=Decimal(str(cvss.base_score)),
+                        score=Decimal(str(cvss.base_score)) if cvss.base_score is not None else None,
                         source=cyclonedx.model.vulnerability.VulnerabilitySource(
                             name=cvss.author,
                         ),
@@ -477,6 +502,18 @@ class CycloneDx:
         self.sbom.components = []
         self.register_components()
         self.register_dependencies()
+        properties = [
+            prop for prop in self.sbom.metadata.properties if prop.name != EVIDENCE_PROPERTY
+        ]
+        references = {}
+        for sid, ref in self._component_refs.items():
+            assert ref.value is not None
+            references[sid] = ref.value
+        properties.append(Property(
+            name=EVIDENCE_PROPERTY,
+            value=json.dumps(export_evidence(self.packagesCtrl, references, include_files=True), sort_keys=True),
+        ))
+        self.sbom.metadata.properties = properties
         self.sbom.vulnerabilities = []
         self.register_vulnerabilities()
 

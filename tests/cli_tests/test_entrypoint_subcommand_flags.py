@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Additive entrypoint flags used by the host wrapper's subcommands."""
 
+import io
 import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
+import tarfile
 
 import pytest
 
@@ -13,13 +17,49 @@ ENTRYPOINT = ROOT / "src" / "entrypoint.sh"
 APP = "--app src.bin.webapp"
 
 
-def _run(tmp_path, *args):
+@pytest.mark.parametrize("trailing_slash", ["", "/"])
+def test_cache_ownership_skips_admin_source_mounts_but_not_uploads(tmp_path, trailing_slash):
+    cache = tmp_path / "cache"
+    root = cache / "vulnscout"
+    source = root / "context-project-variant-uuid"
+    uploads = root / "context-files"
+    source.mkdir(parents=True)
+    uploads.mkdir()
+    (source / "source.c").write_text("source")
+    (uploads / "upload.c").write_text("upload")
+    log = tmp_path / "chown.log"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    chown = fake_bin / "chown"
+    chown.write_text('#!/bin/bash\nprintf "%s\\n" "$@" >> "$TEST_CHOWN_LOG"\n')
+    chown.chmod(0o755)
+    function = "setup_user() {" + ENTRYPOINT.read_text().split("setup_user() {", 1)[1].split("\n}", 1)[0] + "\n}"
+    script = """
+groupadd() { :; }
+id() { return 0; }
+mkdir() { :; }
+find() { shift; command find "$TEST_CACHE_ROOT" "$@"; }
+""" + function + "\nsetup_user\n"
+    result = subprocess.run(["bash", "-e", "-c", script], capture_output=True, text=True, env={
+        **os.environ, "USER_UID": "1000", "USER_GID": "1000", "VULNSCOUT_ROOTLESS_PODMAN": "false",
+        "VULNSCOUT_CACHE_DIR": str(root) + trailing_slash,
+        "TEST_CACHE_ROOT": str(cache), "TEST_CHOWN_LOG": str(log),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }, timeout=10)
+    assert result.returncode == 0, result.stderr
+    paths = log.read_text().splitlines()
+    assert str(uploads) in paths and str(uploads / "upload.c") in paths
+    assert str(source) not in paths and str(source / "source.c") not in paths
+
+
+def _run(tmp_path, *args, fake_flask=True):
     """Run the entrypoint with a fake flask; return the result and the non-migration flask calls."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
-    flask = fake_bin / "flask"
-    flask.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_FLASK_LOG"\n')
-    flask.chmod(0o755)
+    if fake_flask:
+        flask = fake_bin / "flask"
+        flask.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_FLASK_LOG"\n')
+        flask.chmod(0o755)
     log = tmp_path / "flask.log"
     log.write_text("")
     env = {key: value for key, value in os.environ.items()
@@ -57,6 +97,17 @@ def test_delete_without_dry_run_is_unchanged(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert calls == [f"{APP} delete-outdated"]
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_history_selection_is_forwarded_to_outdated_cleanup(tmp_path, dry_run):
+    args = ["--clear-vulnerability-history", "--delete-outdated"]
+    if dry_run:
+        args.insert(0, "--dry-run")
+    result, calls = _run(tmp_path, *args)
+    assert result.returncode == 0, result.stderr
+    options = " --dry-run" if dry_run else ""
+    assert calls == [f"{APP} delete-outdated{options} --clear-vulnerability-history"]
 
 
 @pytest.mark.parametrize(("args", "scope"), [
@@ -114,4 +165,177 @@ def test_report_format_rejects_unknown_values(tmp_path, args):
 
     assert result.returncode == 1
     assert "--report-format must be pdf or html" in result.stderr
+    assert calls == []
+
+
+@pytest.mark.parametrize(("args", "expected"), [
+    (["--ai-assess", "--cve", "CVE-2024-0001"], "ai-assess --cve CVE-2024-0001"),
+    (["--project", "demo", "--variant", "x86", "--ai-assess", "--filter", "pending", "--timeout", "30",
+      "--model", "gpt-5", "--dry-run", "--json"],
+     "ai-assess --project demo --variant x86 --filter pending --timeout 30 --model gpt-5 --dry-run --json"),
+])
+def test_ai_assess_is_forwarded(tmp_path, args, expected):
+    result, calls = _run(tmp_path, *args)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [f"{APP} {expected}"]
+
+
+def test_ai_assess_publishes_the_flask_pid_for_ctrl_c(tmp_path, monkeypatch):
+    """The host wrapper forwards Ctrl-C to the PID in this file; it must be flask's own PID."""
+    flask = tmp_path / "bin" / "flask"
+    flask.parent.mkdir()
+    flask.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_FLASK_LOG"\n'
+        'if [[ "$*" == *ai-assess* ]]; then\n'
+        '  echo "$$ $(cat "$VULNSCOUT_AI_ASSESS_PID_FILE")" > "$TEST_FLASK_LOG.pid"\nfi\n'
+    )
+    flask.chmod(0o755)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("VULNSCOUT_RUN_ID", "host-1-2")
+
+    result, calls = _run(tmp_path, "--ai-assess", "--cve", "CVE-2024-0001", fake_flask=False)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [f"{APP} ai-assess --cve CVE-2024-0001"]
+    flask_pid, recorded_pid = (tmp_path / "flask.log.pid").read_text().split()
+    assert flask_pid == recorded_pid
+    assert (tmp_path / "vulnscout-ai-assess-host-1-2.pid").exists()  # removed by flask itself, not faked here
+
+
+def test_ai_assess_rejects_an_unsafe_run_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("VULNSCOUT_RUN_ID", "../escape")
+    result, calls = _run(tmp_path, "--ai-assess", "--cve", "CVE-2024-0001")
+    assert result.returncode == 2
+    assert "Invalid VULNSCOUT_RUN_ID." in result.stderr
+    assert calls == []
+
+
+def _spdx_archive(tmp_path, name, suffix, documents):
+    archive = tmp_path / f"{name}{suffix}"
+    modes = {".tar": "w", ".tar.gz": "w:gz", ".tar.xz": "w:xz", ".tar.zst": "w"}
+    source = archive.with_suffix("") if suffix == ".tar.zst" else archive
+    with tarfile.open(source, modes[suffix]) as bundle:
+        for filename, content in documents.items():
+            member = tarfile.TarInfo(f"nested/{filename}")
+            member.size = len(content)
+            bundle.addfile(member, io.BytesIO(content))
+    if suffix == ".tar.zst":
+        if not shutil.which("zstd") or not shutil.which("unzstd"):
+            pytest.skip("zstd and unzstd are required for SPDX Zstandard archive tests")
+        subprocess.run(["zstd", "-q", str(source), "-o", str(archive)], check=True)
+        source.unlink()
+    return archive
+
+
+@pytest.mark.parametrize("suffix", [".tar", ".tar.gz", ".tar.xz", ".tar.zst"])
+def test_spdx_archives_extract_json_and_jsonld(tmp_path, monkeypatch, suffix):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    documents = {
+        "recipe.spdx.json": b'{"spdxVersion":"SPDX-2.2","relationships":[]}',
+        "image.jsonld": b'{"@context":"https://spdx.org/rdf/3.0.1/spdx-context.jsonld"}',
+    }
+    archive = _spdx_archive(tmp_path, "image", suffix, documents)
+
+    result, calls = _run(tmp_path, "--add-spdx", str(archive), "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "Warning:" not in result.stdout + result.stderr
+    assert calls == []
+    inputs = tmp_path / "inputs" / "spdx"
+    assert {path.name: path.read_bytes() for path in inputs.iterdir()} == documents
+    assert archive.exists()
+
+
+def test_spdx_xz_import_after_another_variant(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    # Do not remove staged files belonging to other invocations on the host.
+    rm = fake_bin / "rm"
+    rm.write_text(
+        '#!/bin/bash\n'
+        'if [[ "$*" == "-f /tmp/vulnscout_stage_"* ]]; then exit 0; fi\n'
+        'exec /bin/rm "$@"\n'
+    )
+    rm.chmod(0o755)
+
+    for variant, suffix in [("first", ".tar.zst"), ("second", ".tar.xz")]:
+        archive = _spdx_archive(
+            tmp_path, variant, suffix,
+            {f"{variant}.spdx.json": b'{"spdxVersion":"SPDX-2.2","relationships":[]}'},
+        )
+        cve_check = tmp_path / f"{variant}.scouted.json"
+        cve_check.write_text("{}")
+
+        result, calls = _run(
+            tmp_path, "--project", "scarthgap", "--variant", variant,
+            "--add-spdx", str(archive), "--add-cve-check", str(cve_check),
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "Warning:" not in result.stdout + result.stderr
+        assert calls == [
+            shlex.join([
+                "--app", "src.bin.webapp", "merge", "--project", "scarthgap", "--variant", variant,
+                "--spdx", str(tmp_path / "inputs" / "spdx" / f"{variant}.spdx.json"),
+                "--yocto-cve", str(tmp_path / "inputs" / "yocto_cve_check" / cve_check.name),
+            ]),
+            f"{APP} process",
+        ]
+        assert list((tmp_path / "inputs" / "spdx").iterdir()) == []
+
+
+def test_spdx_xz_extraction_failure_stops_import(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    archive = tmp_path / "invalid.tar.xz"
+    archive.write_bytes(b"not an XZ archive")
+
+    result, calls = _run(tmp_path, "--add-spdx", str(archive))
+
+    assert result.returncode != 0
+    assert result.stderr
+
+
+@pytest.mark.parametrize(("args", "expected"), [
+    (["--ai-review", "--assessment-id", "3f2b6c1e-0000-4000-8000-000000000001"],
+     "ai-review --assessment-id 3f2b6c1e-0000-4000-8000-000000000001"),
+    (["--project", "demo", "--ai-review", "--variant", "x86", "--cve", "CVE-2024-0001", "--re-review",
+      "--timeout", "30", "--model", "gpt-5", "--dry-run", "--json"],
+     "ai-review --project demo --variant x86 --cve CVE-2024-0001 --re-review --timeout 30 --model gpt-5 "
+     "--dry-run --json"),
+])
+def test_ai_review_is_forwarded(tmp_path, args, expected):
+    result, calls = _run(tmp_path, *args)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [f"{APP} {expected}"]
+
+
+def test_ai_review_publishes_the_flask_pid_for_ctrl_c(tmp_path, monkeypatch):
+    flask = tmp_path / "bin" / "flask"
+    flask.parent.mkdir()
+    flask.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >> "$TEST_FLASK_LOG"\n'
+        'if [[ "$*" == *ai-review* ]]; then\n'
+        '  echo "$$ $(cat "$VULNSCOUT_AI_ASSESS_PID_FILE")" > "$TEST_FLASK_LOG.pid"\nfi\n'
+    )
+    flask.chmod(0o755)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("VULNSCOUT_RUN_ID", "host-1-2")
+
+    result, calls = _run(tmp_path, "--ai-review", "--cve", "CVE-2024-0001", fake_flask=False)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [f"{APP} ai-review --cve CVE-2024-0001"]
+    flask_pid, recorded_pid = (tmp_path / "flask.log.pid").read_text().split()
+    assert flask_pid == recorded_pid
+    assert (tmp_path / "vulnscout-ai-assess-host-1-2.pid").exists()
+
+
+def test_ai_review_rejects_an_unsafe_run_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("VULNSCOUT_RUN_ID", "../escape")
+    result, calls = _run(tmp_path, "--ai-review", "--cve", "CVE-2024-0001")
+    assert result.returncode == 2
+    assert "Invalid VULNSCOUT_RUN_ID." in result.stderr
     assert calls == []

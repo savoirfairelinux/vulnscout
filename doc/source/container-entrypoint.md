@@ -34,6 +34,16 @@ JSON listings, generated completion scripts, captured run IDs, configuration
 values, status files, and exported SBOMs/reports are never colorized. Third-party
 tools retain their own output behavior.
 
+Flask application and Werkzeug server logs use the same terminal detection and
+opt-outs. Debug messages are dim gray, information is cyan, warnings are yellow,
+errors are red, and critical messages are bold red. Werkzeug's existing
+HTTP-status highlighting is retained in terminals and stripped from plain
+output. Log levels, message text, and tracebacks are unchanged. Explicit logging
+handlers configured by a deployment take precedence over these defaults.
+The default console handler skips records covered at their level by a handler
+on a descendant logger, such as `src.bin.webapp`, including handlers added after
+console logging is initialized. Other application loggers retain console output.
+
 ## Container Lifecycle
 
 When the container starts with no arguments, it enters **daemon mode** — it stays alive and waits for commands sent via `docker exec` (or `podman exec`). This is the mode used by the `./vulnscout` host wrapper.
@@ -65,7 +75,7 @@ docker run -d --name vulnscout \
   -v "$(pwd)/.vulnscout-container/outputs:/scan/outputs:Z" \
   -v "$(pwd)/.vulnscout-container/config:/etc/vulnscout:Z" \
   -v "$(pwd)/example:/imports:ro,Z" \
-  docker.io/sflinux/vulnscout:v0.24 daemon
+  docker.io/sflinux/vulnscout:v0.25 daemon
 
 docker exec vulnscout /scan/src/entrypoint.sh \
   --project demo --variant x86 \
@@ -121,7 +131,7 @@ SQLite cache.
 
 | Flag | Description |
 |------|-------------|
-| `--add-spdx <path>` | Add SPDX 2/3 JSON (`*.spdx.json`), SPDX 3 JSON-LD (`*.jsonld`), or a `.tar`, `.tar.gz`, `.tar.zst` archive containing those files |
+| `--add-spdx <path>` | Add SPDX 2/3 JSON (`*.spdx.json`), SPDX 3 JSON-LD (`*.jsonld`), or a `.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst` archive containing those files |
 | `--add-cve-check <path>` | Add a Yocto CVE check file (`*.json`) |
 | `--add-yocto-vex <path>` | Add a Yocto VEX file from `vex.bbclass` (`*.json`) |
 | `--add-openvex <path>` | Add an OpenVEX file; name must match `*openvex*.json` |
@@ -155,6 +165,8 @@ The previous `--perform-grype-scan`, `--perform-nvd-scan`, `--perform-osv-scan`,
 | `--import-custom-openvex-assessments <path>` | Import an OpenVEX `.json` file into the selected `--variant` |
 | `--use-current-timestamps` | With either custom import, use the current system time |
 | `--match-condition <expr>` | Exit with code 2 if expression matches stored data for any in-scope vulnerability; it does not refresh EPSS. A project without a variant includes all its variants. Incompatible with `--serve` |
+| `--ai-assess <options>` | Run `flask ai-assess` with the remaining arguments (`--cve <id>`… or `--filter <expr>`, not both; `--variant <name>`… to select several variants, `--model`, `--timeout`, `--dry-run`, `--json`) on the `--project`/`--variant` scope. Must come after `--project`/`--variant`. Exits 1 unless every selected vulnerability is `assessed` or `planned`. With `VULNSCOUT_RUN_ID` set (by the host wrapper), it writes its PID to `$TMPDIR/vulnscout-ai-assess-<id>.pid` so that Ctrl-C can be forwarded to it |
+| `--ai-review <options>` | Run `flask ai-review` with the remaining arguments (`--assessment-id <uuid>`… or `--cve <id>`…, not both; `--variant <name>`… with `--cve` only, `--re-review`, `--model`, `--timeout`, `--dry-run`, `--json`) on the `--project` scope, which is required. Must come after `--project`/`--variant`. Exits 1 on a resolution or usage error, when any target has a failing outcome (`changed`, `no_write`, `failed`, `timeout`, `interrupted`), or when the run is interrupted; exits 0 when every target is reviewed, skipped (fresh) or planned (`--dry-run`) and the run was not interrupted. Uses the same `VULNSCOUT_RUN_ID` PID file as `--ai-assess` |
 | `--export-context` | Export selected project/variant AI context to `/scan/outputs/context-export.json` |
 | `--import-context <path>` | Import context into existing scopes named in the file; use `--retarget-context` to override the destination |
 | `--add-asset <path>` | Stage a report image (`png`, `jpg`, `jpeg`, `gif`, `svg`, `webp`) in `/cache/vulnscout/templates/assets/` |

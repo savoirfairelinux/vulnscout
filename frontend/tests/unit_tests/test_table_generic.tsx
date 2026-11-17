@@ -462,6 +462,63 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
       expect(last.map(r => r.value)).toEqual(Array.from({ length: N }, (_v, i) => N - 1 - i));
     });
   }, 10000);
+
+  test('pins the selection column, keeps actions at full width and renders no footer row', () => {
+    const layoutColumns = [
+      { id: 'select-checkbox', header: 'Pick', cell: () => <input type="checkbox" aria-label="pick" />, size: 40 },
+      ...columns.map(column => ({ ...column, footer: () => 'Total: 2' })),
+      { id: 'actions', header: 'Actions', cell: () => <button>Edit</button>, size: 90 },
+    ];
+    const { container } = render(
+      <TableGeneric columns={layoutColumns} data={DATA.slice(0, 2)} tableHeight="auto" hasPagination={false} />
+    );
+
+    const pinnedHeader = screen.getByRole('columnheader', { name: /Pick/ });
+    expect(pinnedHeader).toHaveClass('sticky', 'left-0', 'flex-none', 'bg-slate-700');
+    expect(pinnedHeader).not.toHaveClass('relative');
+    const pinnedCell = screen.getAllByRole('checkbox', { name: 'pick' })[0].closest('td');
+    expect(pinnedCell).toHaveClass('sticky', 'left-0', 'flex-none', 'bg-inherit');
+    const actionsCell = screen.getAllByRole('button', { name: 'Edit' })[0].closest('td');
+    expect(actionsCell).toHaveClass('sticky', 'right-0', 'flex-none', 'bg-inherit');
+    expect(screen.getByRole('columnheader', { name: /Actions/ })).toHaveClass('sticky', 'right-0');
+    expect(screen.getByRole('columnheader', { name: /ID/ })).toHaveClass('flex-auto');
+    expect(screen.getByRole('columnheader', { name: /ID/ }).firstElementChild).toHaveClass('whitespace-nowrap', 'w-max');
+    expect(container.querySelector('table')).toHaveStyle({ minWidth: '330px' });
+    expect(container.querySelector('tfoot')).toBeNull();
+    expect(screen.queryByText('Total: 2')).toBeNull();
+
+    const scroller = container.querySelector('table')!.parentElement!;
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 200 });
+    Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: 330 });
+    const hasShadow = (cell: Element | null) => /\bshadow-\[/.test(cell?.className ?? '');
+    scroller.scrollLeft = 0;
+    fireEvent.scroll(scroller);
+    expect(hasShadow(pinnedCell)).toBe(false);
+    expect(hasShadow(actionsCell)).toBe(true);
+    scroller.scrollLeft = 130;
+    fireEvent.scroll(scroller);
+    expect(hasShadow(pinnedCell)).toBe(true);
+    expect(hasShadow(actionsCell)).toBe(false);
+  });
+
+  test('widens a column to fit its header on one line', () => {
+    const widthSpy = jest.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const width = this.classList.contains('w-max') && this.textContent === 'A long header title' ? 200 : 0;
+      return { width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    try {
+      render(
+        <TableGeneric
+          columns={[{ accessorKey: 'value', header: 'A long header title', cell: (info: any) => info.getValue(), size: 80, enableSorting: false }]}
+          data={DATA.slice(0, 1)} tableHeight="auto" hasPagination={false}
+        />
+      );
+      expect(screen.getByRole('columnheader', { name: 'A long header title' })).toHaveStyle({ width: '200px', minWidth: '200px' });
+      expect(screen.getByRole('cell', { name: '0' })).toHaveStyle({ width: '200px' });
+    } finally {
+      widthSpy.mockRestore();
+    }
+  });
 });
 
 describe('TableGeneric only:<regex> operator (forAllValues)', () => {

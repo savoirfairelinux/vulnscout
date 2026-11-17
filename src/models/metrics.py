@@ -21,11 +21,12 @@ class Metrics(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     vulnerability_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.id"), index=True)
-    variant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("variants.id"), index=True)
-    version: Mapped[str | None] = mapped_column()
-    score: Mapped[Decimal | None] = mapped_column()
-    vector: Mapped[str | None] = mapped_column(Text)
-    author: Mapped[str | None] = mapped_column()
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("variants.id"), index=True, active_history=True)
+    version: Mapped[str | None] = mapped_column(active_history=True)
+    # ``active_history`` lets the ``vulnerability_history`` listener see the old score.
+    score: Mapped[Decimal | None] = mapped_column(active_history=True)
+    vector: Mapped[str | None] = mapped_column(Text, active_history=True)
+    author: Mapped[str | None] = mapped_column(active_history=True)
     origin: Mapped[str | None] = mapped_column()
 
     vulnerability: Mapped["Vulnerability"] = relationship(back_populates="metrics")
@@ -132,7 +133,7 @@ class Metrics(Base):
             "vector_string": self.vector or "",
             "author": self.author or "unknown",
             "origin": self.origin or "scanner",
-            "base_score": float(self.score) if self.score is not None else 0.0,
+            "base_score": float(self.score) if self.score is not None else None,
             "exploitability_score": 0.0,
             "impact_score": 0.0,
         }

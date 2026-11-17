@@ -90,7 +90,7 @@ function CodebaseReferences({ variantId, initialFiles, disabled, notify }: Reado
                 <HelpPopover ariaLabel="Codebase references help" role="tooltip" buttonClassName="text-sky-300 hover:text-sky-100" surfaceClassName="w-[360px] p-3">
                     Upload source files or ZIP, TAR, TAR.GZ/TGZ archives for the embedded Agent and external MCP clients.
                     References are saved immediately for this variant, separately from the context form.
-                    Archives are limited to 5,000 entries. Binary files cannot be read as source.
+                    Archives are limited to 500,000 entries. Binary files cannot be read as source.
                     Upload only code you are permitted to share with your selected AI provider; exclude secrets.
                 </HelpPopover>
             </div>

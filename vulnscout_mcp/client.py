@@ -9,9 +9,14 @@ class VulnScoutError(Exception):
     pass
 
 
+class VulnScoutConflict(VulnScoutError):
+    """Raised on HTTP 409: the resource changed since it was read."""
+
+
 class VulnScoutClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
+        self.import_revisions: dict[str, str] = {}
 
     def write_assessment(self, vuln_id: str, payload: dict) -> dict:
         """POST /api/vulnerabilities/<vuln_id>/assessments.
@@ -128,6 +133,29 @@ class VulnScoutClient:
                 if any(not all(isinstance(edge[key], str) for key in ("package_id", "dependency_id"))
                        for edge in doc["edges"]):
                     raise ValueError
+                targets = doc.get("build_targets", [])
+                if not isinstance(targets, list):
+                    raise ValueError
+                for target in targets:
+                    if (not all(isinstance(target[key], str) for key in ("id", "name"))
+                            or not isinstance(target["package_ids"], list)
+                            or not all(isinstance(value, str) for value in target["package_ids"])
+                            or not isinstance(target["languages"], list)):
+                        raise ValueError
+                    for language in target["languages"]:
+                        if (not isinstance(language["language"], str)
+                                or any(not isinstance(language[key], list)
+                                       or not all(isinstance(value, str) for value in language[key])
+                                       for key in ("flags", "defines"))):
+                            raise ValueError
+                for edge in doc["edges"]:
+                    declarations = edge.get("declarations", [])
+                    if not isinstance(declarations, list) or any(
+                        not all(isinstance(declaration[key], str) for key in (
+                            "relationship_type", "lifecycle_scope", "source_document_id", "source_name",
+                        )) for declaration in declarations
+                    ):
+                        raise ValueError
         except (ValueError, TypeError, KeyError) as exc:
             raise VulnScoutError("Invalid dependency graph response for the requested variant.") from exc
         return graph
@@ -151,6 +179,52 @@ class VulnScoutClient:
                 error_msg = response.text
             raise VulnScoutError(error_msg)
         return response.json()
+
+    def get_package_source_files(self, variant_id: str, package_id: str) -> dict:
+        """Read active, variant-scoped recorded files using the exact public package ID."""
+        if not variant_id or not package_id:
+            raise VulnScoutError("A variant scope and exact package ID are required.")
+        try:
+            with httpx.Client(timeout=30) as http:
+                response = http.get(f"{self.base_url}/api/packages", params={
+                    "variant_id": variant_id, "package_id": package_id, "include_source_files": "true",
+                })
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if not response.is_success:
+            try:
+                message = response.json().get("error", response.text)
+            except (ValueError, AttributeError):
+                message = response.text
+            raise VulnScoutError(message)
+        try:
+            rows = response.json()
+            if not isinstance(rows, list):
+                raise ValueError
+            if not rows:
+                raise VulnScoutError("Package not found in the selected variant; use its exact package ID.")
+            if len(rows) != 1 or rows[0]["id"] != package_id:
+                raise ValueError
+            package = rows[0]
+            files = package["source_files"]
+            if files is not None and not isinstance(files, list):
+                raise ValueError
+            for file in files or []:
+                if (file["variant_id"] != variant_id
+                        or not all(isinstance(file[key], str) for key in (
+                            "spdx_id", "path", "document_id", "document_name", "scan_id", "variant_name",
+                        ))
+                        or not isinstance(file["properties"], dict) or not isinstance(file["builds"], list)):
+                    raise ValueError
+            count = package["source_file_count"]
+            if (count is not None and (type(count) is not int or count < 0)
+                    or type(package["compiled_source_file_count"]) is not int
+                    or package["compiled_source_file_count"] < 0
+                    or not isinstance(package["compiled_sources_complete"], bool)):
+                raise ValueError
+        except (ValueError, TypeError, KeyError) as exc:
+            raise VulnScoutError("Invalid recorded file evidence response for the requested variant/package.") from exc
+        return package
 
     def get_project_context(self, project_id: str) -> dict:
         """GET /api/projects/<project_id>/context."""
@@ -184,6 +258,50 @@ class VulnScoutClient:
                 error_msg = response.text
             raise VulnScoutError(error_msg)
         return response.json()
+
+    def _send(self, method: str, url: str, **kwargs) -> httpx.Response:
+        try:
+            with httpx.Client(timeout=30) as http:
+                response = http.request(method, url, **kwargs)
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if response.is_success:
+            return response
+        try:
+            error_msg = response.json().get("error", response.text)
+        except ValueError:
+            error_msg = response.text
+        if response.status_code == 409:
+            raise VulnScoutConflict(error_msg)
+        raise VulnScoutError(error_msg)
+
+    def _variant_context_url(self, variant_id: str, suffix: str) -> str:
+        return f"{self.base_url}/api/variants/{quote(variant_id, safe='')}/context/{suffix}"
+
+    def get_context_draft(self, variant_id: str) -> Optional[dict]:
+        """GET the variant's pending AI draft; None when there is none."""
+        response = self._send("GET", self._variant_context_url(variant_id, "draft"))
+        return None if response.status_code == 204 else response.json()
+
+    def put_context_draft(self, variant_id: str, body: dict) -> dict:
+        """PUT an AI draft for review; raises VulnScoutConflict when the saved context moved."""
+        if variant_id in self.import_revisions:
+            body = {**body, "import_revision": self.import_revisions[variant_id]}
+        response = self._send("PUT", self._variant_context_url(variant_id, "draft"), json=body)
+        return response.json()
+
+    def get_import_source(self, variant_id: str, params: dict, *, new_import: bool = False) -> dict:
+        """List, read or search the document uploaded for an AI draft."""
+        if not new_import and variant_id in self.import_revisions:
+            params = {**params, "revision": self.import_revisions[variant_id]}
+        response = self._send("GET", self._variant_context_url(variant_id, "import-source/source"), params=params)
+        source = response.json()
+        if new_import:
+            self.import_revisions[variant_id] = source["revision"]
+        revision = self.import_revisions.setdefault(variant_id, source["revision"])
+        if revision != source["revision"]:
+            raise VulnScoutConflict("The import source changed. Start a new import.")
+        return source
 
     def update_project_context(self, project_id: str, description: str | None) -> dict:
         """PUT /api/projects/<project_id>/context."""
@@ -418,6 +536,24 @@ class ScopedVulnScoutClient(VulnScoutClient):
         super().__init__(base_url)
         self.project_ids = frozenset(scope["project_ids"])
         self.variant_ids = frozenset(scope["variant_ids"])
+        self.import_revisions = dict(scope.get("import_revisions") or {})
+        self._fixed_import_variants = frozenset(self.import_revisions)
+        # CLI assessment turns may only write their selected (vulnerability, variant, package) targets.
+        self.write_targets = frozenset(
+            (target["vuln_id"], target["variant_id"], target["package"]) for target in scope["write_targets"]
+        ) if "write_targets" in scope else None
+        # CLI review turns may only review their listed (assessment, variant, package|finding) targets.
+        self.review_targets = frozenset(
+            self._review_key(t["assessment_id"], t["variant_id"], kind, t.get(kind_field))
+            for t in scope["review_targets"]
+            for kind, kind_field in (("package", "package"), ("finding", "finding_id"))
+            if t.get(kind_field)
+        ) if "review_targets" in scope else None
+
+    @staticmethod
+    def _review_key(assessment_id: str, variant_id: Optional[str], kind: str, value: str) -> tuple:
+        return (str(assessment_id).lower(), str(variant_id).lower(), kind,
+                str(value) if kind == "package" else str(value).lower())
 
     def _project(self, project_id: str) -> None:
         if project_id not in self.project_ids:
@@ -468,9 +604,27 @@ class ScopedVulnScoutClient(VulnScoutClient):
         self._variant(variant_id)
         return super().get_codebase_source(variant_id, file_id, params)
 
+    def get_context_draft(self, variant_id: str) -> Optional[dict]:
+        self._variant(variant_id)
+        return super().get_context_draft(variant_id)
+
+    def put_context_draft(self, variant_id: str, body: dict) -> dict:
+        self._variant(variant_id)
+        return super().put_context_draft(variant_id, body)
+
+    def get_import_source(self, variant_id: str, params: dict, *, new_import: bool = False) -> dict:
+        self._variant(variant_id)
+        if new_import and variant_id in self._fixed_import_variants:
+            raise VulnScoutError("A queued import cannot switch documents. Start a new import from the AI Context page.")
+        return super().get_import_source(variant_id, params, new_import=new_import)
+
     def get_dependency_graph(self, variant_id: str) -> dict:
         self._variant(variant_id)
         return super().get_dependency_graph(variant_id)
+
+    def get_package_source_files(self, variant_id: str, package_id: str) -> dict:
+        self._variant(variant_id)
+        return super().get_package_source_files(variant_id, package_id)
 
     def update_project_context(self, project_id: str, description: str | None) -> dict:
         self._project(project_id)
@@ -503,6 +657,14 @@ class ScopedVulnScoutClient(VulnScoutClient):
             raise VulnScoutError("Assessment targets require a scoped variant.")
         for variant_id in ids:
             self._variant(variant_id)
+        if self.write_targets is not None:
+            if targets:
+                pairs = [(target.get("package"), target.get("variant_id")) for target in targets]
+            else:
+                pairs = [(package, variant_id) for package in payload.get("packages") or [] for variant_id in ids]
+            if not pairs or any((vuln_id, variant_id, package) not in self.write_targets
+                                for package, variant_id in pairs):
+                raise VulnScoutError("Assessment target is outside the targets of this assessment run.")
         result = super().write_assessment(vuln_id, {**payload, "ai_generated": True})
         if "assessment" in result:
             result["assessment"] = self._assessment(result["assessment"])
@@ -581,5 +743,11 @@ class ScopedVulnScoutClient(VulnScoutClient):
 
     def write_assessment_review(self, assessment_id: str, payload: dict) -> dict:
         self._variant(payload.get("variant_id"))
+        if self.review_targets is not None:
+            variant_id = payload.get("variant_id")
+            keys = [self._review_key(assessment_id, variant_id, kind, payload[field])
+                    for kind, field in (("package", "package"), ("finding", "finding_id")) if payload.get(field)]
+            if not any(key in self.review_targets for key in keys):
+                raise VulnScoutError("Review target is outside the targets of this review run.")
         self.get_assessment(assessment_id)
         return super().write_assessment_review(assessment_id, payload)

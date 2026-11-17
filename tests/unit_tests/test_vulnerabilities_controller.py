@@ -316,6 +316,28 @@ class TestPreloadCacheScoped:
 # ---------------------------------------------------------------------------
 
 class TestPreloadCacheMetrics:
+    @pytest.mark.parametrize("scores, expected_score", [
+        ([None], None),
+        ([None, 7.8], 7.8),
+    ])
+    def test_preload_preserves_missing_scores(self, app, db_vuln, scores, expected_score):
+        from src.models.metrics import Metrics
+        from src.controllers.vulnerabilities import VulnerabilitiesController
+        from src.controllers.packages import PackagesController
+
+        db_vuln.status = "high"
+        db_vuln.severity_label = "high"
+        for score in scores:
+            Metrics.create(vulnerability_id=db_vuln.id, version="3.1", score=score)
+
+        controller = VulnerabilitiesController(PackagesController())
+        severity = controller.to_dict()[db_vuln.id]["severity"]
+
+        assert severity["severity"] == "high"
+        assert severity["min_score"] == expected_score
+        assert severity["max_score"] == expected_score
+        assert [cvss["base_score"] for cvss in severity["cvss"]] == scores
+
     def test_existing_metrics_populate_seen_set(self, app, db_vuln):
         """Lines 181-182: metrics rows already in DB are added to MetricsModel._seen
         so that from_cvss skips the SELECT for existing entries."""

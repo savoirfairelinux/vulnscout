@@ -27,6 +27,28 @@ When an orphaned vulnerability is removed, its exclusive metrics and refresh met
 removed as well. Vulnerabilities and package records that are still referenced by current
 or other-variant data are preserved.
 
+### Clearing vulnerability refresh history
+
+Refresh history is retained by default. In the **Analyze outdated data** confirmation,
+optionally select **Also clear all vulnerability refresh history**. The displayed row
+count is informational; confirming removes **all** rows then present in
+`vulnerability_history`, across every project and variant, including currently active
+vulnerabilities. There is no age cutoff, and deletion cannot be undone. Back up history
+first if you need previous field values.
+
+The same opt-in option is available on the existing outdated-data CLI cleanup:
+
+```bash
+./vulnscout delete outdated --clear-vulnerability-history --dry-run
+./vulnscout delete outdated --clear-vulnerability-history --yes
+```
+
+It works even when no outdated package records or assessments exist. The dry run reports
+the number of history rows without deleting anything. This option does not reset current
+vulnerability values, metrics, scans, assessments, or the `vuln_refresh` timestamps used
+to schedule enrichment. Normal outdated-data cleanup still runs as described above.
+Future refreshes can record new history normally.
+
 Empty-scan cleanup preserves each variant's initial scan and removes later scans only when
 the scan-history diff contains no package, finding, CVE, or assessment changes. Orphaned-CVE
 cleanup removes vulnerabilities with no scan evidence in any variant, together with their

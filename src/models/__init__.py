@@ -8,6 +8,7 @@ from .scan import Scan
 from .sbom_document import SBOMDocument
 from .package import Package
 from .sbom_package import SBOMPackage
+from .sbom_file import SBOMFile, SBOMBuild, SBOMFileBuild, PackageSourceFile
 from .package_dependency import PackageDependency
 from .vulnerability import Vulnerability
 from .finding import Finding
@@ -20,6 +21,10 @@ from .cvss import CVSS
 from .sbom_observation import SBOMObservation
 from .iso8601_duration import Iso8601Duration
 from .vuln_refresh import VulnRefresh
+from .refresh_run import (
+    RefreshRun, RefreshRunScope, RefreshRunSource, RefreshTarget, RefreshTargetLink, RefreshChange,
+)
+from .vulnerability_history import VulnerabilityHistory
 from .project_context import ProjectContext
 from .variant_context import VariantContext, ContextFile
 from .assessment_review import AssessmentReview

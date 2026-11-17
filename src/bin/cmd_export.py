@@ -24,6 +24,64 @@ import uuid
 from flask.cli import with_appcontext
 
 
+@click.command("export-vulnerability-history", cls=Command)
+@click.option("--since", default=None, help="Include changes at or after this ISO 8601 timestamp.")
+@click.option("--until", default=None, help="Exclude changes at or after this ISO 8601 timestamp.")
+@click.option("--last-refresh", is_flag=True,
+              help="Per vulnerability, export the changes of its most recent refresh run.")
+@click.option("--source", multiple=True, help="Restrict sources (repeatable or comma-separated).")
+@click.option("--field", default=None, help="Restrict to one tracked field.")
+@click.option("--vuln-id", default=None, help="Restrict to one vulnerability.")
+@click.option("--format", "format_", type=click.Choice(["json", "csv"]), default="json")
+@click.option("--output", type=click.Path(dir_okay=False), default="-", help="Output file, or - for stdout.")
+@click.option("--project", "-p", default=None)
+@click.option("--variant", "-v", default=None)
+@with_appcontext
+def export_vulnerability_history_command(
+    since: str | None, until: str | None, last_refresh: bool, source: tuple[str, ...], field: str | None,
+    vuln_id: str | None, format_: str, output: str, project: str | None, variant: str | None,
+) -> None:
+    """Export recorded vulnerability changes as JSON or CSV."""
+    from ..helpers.vulnerability_history_export import (
+        history_export, history_scope_vulnerability_ids, serialize_history_export,
+    )
+
+    if last_refresh and (since is not None or until is not None):
+        raise click.UsageError("--last-refresh cannot be combined with --since or --until.")
+    if not last_refresh and since is None:
+        raise click.UsageError("Either --since or --last-refresh is required.")
+    if project is not None and not project.strip():
+        raise click.UsageError("--project must not be empty.")
+    if variant is not None and not variant.strip():
+        raise click.UsageError("--variant must not be empty.")
+    if variant is not None and project is None:
+        raise click.UsageError("--variant requires --project.")
+    scope = None
+    if project is not None:
+        project_obj = ProjectController.get_by_name(project)
+        if project_obj is None:
+            raise click.ClickException(f"project not found: {project}")
+        if variant is not None:
+            variant_obj = DBVariant.get_by_name_and_project(variant, project_obj.id)
+            if variant_obj is None:
+                raise click.ClickException(f"variant not found: {variant}")
+            scope = compute_export_scope(variant_id=variant_obj.id)
+        else:
+            scope = compute_export_scope(project_id=project_obj.id)
+    identifiers = history_scope_vulnerability_ids(scope) if scope is not None else None
+    try:
+        data = history_export(since, until, sources=source, field=field, vuln_id=vuln_id,
+                              vulnerability_ids=identifiers, last_refresh=last_refresh)
+        body = serialize_history_export(data, format_)
+        if output == "-":
+            click.echo(body, nl=False)
+        else:
+            with click.open_file(output, "w", encoding="utf-8", atomic=True) as handle:
+                handle.write(body)
+    except (ValueError, OSError) as exc:
+        raise click.ClickException(f"History export failed: {exc}") from exc
+
+
 @click.command("export", cls=Command)
 @click.option("--format", "export_format", default="spdx3",
               type=click.Choice(["spdx2", "spdx3", "cdx14", "cdx15", "cdx16", "openvex"], case_sensitive=False),

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, overload
 from uuid import UUID
 
-from ..models import Assessment as DBAssessment, Package, Finding, SBOMDocument, SBOMPackage
+from ..models import Assessment as DBAssessment, Package, Finding
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
 from ..extensions import db, batch_session
@@ -1306,13 +1306,7 @@ def init_app(app: Flask) -> None:
         query project_id uuid optional Restrict the result to one project.
         response 200 VariantActivePackages Active packages by variant.
         """
-        from ..models.observation import Observation
-        from ..models.scan import Scan
-        from ..models.variant import Variant as DBVariant
-        from ..helpers.active_scans import (
-            active_sbom_scan_ids_for_variant,
-            active_package_ids_for_scans,
-        )
+        from ..helpers.active_targets import variant_active_packages
 
         project_uuid: UUID | None = None
         project_id = request.args.get('project_id')
@@ -1320,64 +1314,7 @@ def init_app(app: Flask) -> None:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
-
-        findings = Finding.get_by_vulnerability(vuln_id)
-        # package_id -> string_id for the packages affected by this vulnerability
-        pkg_string_by_id: dict[UUID, str] = {}
-        for f in findings:
-            if f.package_id and f.package:
-                pkg_string_by_id[f.package_id] = f.package.string_id
-
-        # Distinct variants and findings for this vuln
-        # (Finding -> Observation -> Scan -> Variant).
-        seen_variant_ids: set[UUID] = set()
-        variant_ids: list[UUID] = []
-        finding_ids_by_variant: dict[UUID, set[UUID]] = {}
-        for finding in findings:
-            for obs in Observation.get_by_finding(finding.id):
-                scan = db.session.get(Scan, obs.scan_id)
-                if scan is None:
-                    continue
-                if project_uuid is not None:
-                    variant = db.session.get(DBVariant, scan.variant_id)
-                    if variant is None or variant.project_id != project_uuid:
-                        continue
-                finding_ids_by_variant.setdefault(scan.variant_id, set()).add(finding.id)
-                if scan.variant_id not in seen_variant_ids:
-                    seen_variant_ids.add(scan.variant_id)
-                    variant_ids.append(scan.variant_id)
-
-        result: list[dict[str, Any]] = []
-        vuln_pkg_ids = set(pkg_string_by_id.keys())
-        for vid in variant_ids:
-            active_scan_ids = active_sbom_scan_ids_for_variant(vid)
-            active_ids = active_package_ids_for_scans(active_scan_ids, restrict_to_package_ids=vuln_pkg_ids)
-            active_packages = [sid for pid, sid in pkg_string_by_id.items() if pid in active_ids]
-            active_identities = set(db.session.execute(
-                db.select(Package.name, Package.version)
-                .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                .where(SBOMDocument.scan_id.in_(active_scan_ids))
-                .distinct()
-            ).all()) if active_scan_ids else set()
-            variant_findings: list[dict[str, str | bool]] = []
-            for finding in findings:
-                if finding.id not in finding_ids_by_variant.get(vid, set()) or finding.package is None:
-                    continue
-                variant_findings.append({
-                    "finding_id": str(finding.id),
-                    "package": finding.package.string_id,
-                    "outdated": (finding.package.name, finding.package.version) not in active_identities,
-                })
-            result.append({
-                "variant_id": str(vid),
-                "active_packages": active_packages,
-                "findings": sorted(
-                    variant_findings,
-                    key=lambda item: (str(item.get("package", "")), str(item.get("finding_id", ""))),
-                ),
-            })
-        return result, 200
+        return variant_active_packages(vuln_id, project_uuid), 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str) -> ResponseReturnValue:

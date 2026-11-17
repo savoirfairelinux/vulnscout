@@ -115,7 +115,7 @@ describe('OperationQueueModal', () => {
         expect(screen.queryByRole('dialog', { name: 'Operation queue' })).not.toBeInTheDocument();
     });
 
-    it('renders each vulnerability refresh source as an independent collapse', () => {
+    it('keeps legacy refresh operations without a batch ID independent', () => {
         const { stream } = renderModal();
         stream.send('snapshot', {
             seq: 1,
@@ -139,6 +139,43 @@ describe('OperationQueueModal', () => {
         fireEvent.click(nvdCollapse);
         expect(nvdCollapse).toHaveAttribute('aria-expanded', 'true');
         expect(epssCollapse).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('shows an accepted refresh batch immediately and keeps its provider steps together', async () => {
+        const epss = operation({
+            op_id: 'refresh:epss', kind: 'refresh', source: 'epss', label: 'EPSS refresh',
+            queue_id: 'q-refresh', position: 1,
+        });
+        const euvd = operation({
+            op_id: 'refresh:euvd', kind: 'refresh', source: 'euvd', label: 'ENISA EUVD refresh',
+            queue_id: 'q-refresh', position: 2,
+        });
+        jest.spyOn(global, 'fetch').mockResolvedValue({
+            status: 202,
+            json: async () => ({ queue_id: 'q-refresh', operations: [epss, euvd] }),
+        } as Response);
+        const { stream } = renderModal();
+        stream.send('snapshot', { seq: 1, operations: [] });
+
+        await act(async () => {
+            await Operations.enqueue([
+                Operations.refreshJob('epss', ['CVE-2024-1111']),
+                Operations.refreshJob('euvd', ['CVE-2024-1111']),
+            ]);
+        });
+
+        expect(screen.queryByText('No operations to display.')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /^Vulnerability data refresh queued \(0 of 2 steps\)/ }));
+        expect(screen.getByRole('button', { name: /^EPSS refresh.*queued/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^ENISA EUVD refresh.*queued/ })).toBeInTheDocument();
+        stream.send('operation', { ...epss, status: 'done' });
+        stream.send('operation', { ...euvd, status: 'running' });
+        expect(screen.getByRole('button', { name: /^Vulnerability data refresh in progress \(1 of 2 steps\)/ }))
+            .toHaveAttribute('aria-expanded', 'true');
+        stream.send('operation', { ...euvd, status: 'done' });
+        expect(screen.getAllByRole('button', { name: /^Vulnerability data refresh / })).toHaveLength(1);
+        expect(screen.getByRole('button', { name: /^Vulnerability data refresh complete \(2 of 2 steps\)/ }))
+            .toBeInTheDocument();
     });
 
     it('dismisses finished operations through the operation API', () => {
@@ -226,6 +263,67 @@ describe('OperationQueueModal', () => {
             status: status === 'running' ? 'queued' : status, created_at: '2026-08-19T10:00:02+00:00',
         }),
     ];
+
+    const refreshBatch = (scope: Operation['scope'] = { project_id: 'project-1', variant_id: null }) => [
+        operation({
+            op_id: 'refresh:epss', kind: 'refresh', source: 'epss', label: 'EPSS refresh',
+            queue_id: 'q-refresh', position: 1, scope, status: 'running',
+            progress: { current: 1, total: 4, message: 'Updating scores' },
+        }),
+        operation({
+            op_id: 'refresh:euvd', kind: 'refresh', source: 'euvd', label: 'ENISA EUVD refresh',
+            queue_id: 'q-refresh', position: 2, scope,
+        }),
+    ];
+
+    it('keeps one expandable refresh task as its EPSS and EUVD steps arrive', () => {
+        const { stream } = renderModal();
+        const [epss, euvd] = refreshBatch();
+        stream.send('operation', epss);
+        const parent = screen.getByRole('button', { name: /vulnerability data refresh in progress \(0 of 1 steps\)/i });
+        expect(parent).toHaveAttribute('aria-expanded', 'false');
+        expect(screen.queryByRole('button', { name: /^EPSS refresh/ })).not.toBeInTheDocument();
+
+        fireEvent.click(parent);
+        stream.send('operation', euvd);
+        const expanded = screen.getByRole('button', { name: /vulnerability data refresh in progress \(0 of 2 steps\)/i });
+        expect(expanded).toHaveAttribute('aria-expanded', 'true');
+        expect(screen.getByRole('button', { name: /^EPSS refresh/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^ENISA EUVD refresh/ })).toBeInTheDocument();
+    });
+
+    it.each([
+        ['global', { project_id: null, variant_id: null }],
+        ['project', { project_id: 'project-1', variant_id: null }],
+        ['variant', { project_id: 'project-1', variant_id: 'variant-1' }],
+    ])('labels a %s refresh batch without requiring scan-specific variant names', (_name, scope) => {
+        const { stream } = renderModal();
+        stream.send('snapshot', { seq: 1, operations: refreshBatch(scope) });
+        expect(screen.getByRole('button', { name: /vulnerability data refresh in progress \(0 of 2 steps\)/i }))
+            .toBeInTheDocument();
+        expect(screen.getByText(/EPSS refresh: Updating scores/)).toBeInTheDocument();
+        expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+    });
+
+    it('cancels a refresh batch or an individual provider and dismisses settled steps together', () => {
+        const cancelQueue = jest.spyOn(Operations, 'cancelQueue').mockResolvedValue(true);
+        const cancel = jest.spyOn(Operations, 'cancel').mockResolvedValue(true);
+        const dismiss = jest.spyOn(Operations, 'dismiss').mockResolvedValue(true);
+        const { stream } = renderModal();
+        const steps = refreshBatch();
+        stream.send('snapshot', { seq: 1, operations: steps });
+        fireEvent.click(screen.getByRole('button', { name: /vulnerability data refresh in progress/i }));
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel EPSS refresh – EPSS refresh' }));
+        expect(cancel).toHaveBeenCalledWith('refresh:epss');
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel Vulnerability data refresh' }));
+        expect(cancelQueue).toHaveBeenCalledTimes(1);
+        expect(cancelQueue).toHaveBeenCalledWith('q-refresh');
+        expect(screen.queryByRole('button', { name: /Cancel/ })).not.toBeInTheDocument();
+
+        steps.forEach(step => stream.send('operation', { ...step, status: 'cancelled' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Close Vulnerability data refresh' }));
+        expect(dismiss.mock.calls.map(([opId]) => opId)).toEqual(['refresh:epss', 'refresh:euvd']);
+    });
 
     it('collapses a multi-step batch into one run entry', () => {
         const { stream } = renderModal();

@@ -12,6 +12,7 @@ import {
   faTrash,
   faXmark,
   faPenToSquare,
+  faPen,
   faBug,
   faChevronDown,
   faChevronRight,
@@ -32,6 +33,7 @@ import ScansHandler from "../handlers/scans";
 import type { EmptyScanPreview, OrphanedVulnerabilityPreview, OutdatedDataPreview } from "../handlers/scans";
 import ConfirmationModal from "../components/ConfirmationModal";
 import InlineAddInput from "../components/InlineAddInput";
+import InlineRenameInput from "../components/InlineRenameInput";
 import MessageBanner from "../components/MessageBanner";
 import ModalShell from "../components/ModalShell";
 import Transfer from "./Transfer";
@@ -172,6 +174,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
 
   // ---- Global data maintenance ----
   const [confirmDeleteOutdatedData, setConfirmDeleteOutdatedData] = useState(false);
+  const [clearVulnerabilityHistory, setClearVulnerabilityHistory] = useState(false);
   const [outdatedDataPreview, setOutdatedDataPreview] = useState<OutdatedDataPreview | null>(null);
   const [loadingOutdatedDataPreview, setLoadingOutdatedDataPreview] = useState(false);
   const [deletingOutdatedData, setDeletingOutdatedData] = useState(false);
@@ -353,6 +356,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   };
 
   const openDeleteOutdatedDataConfirmation = async () => {
+    setClearVulnerabilityHistory(false);
     setConfirmDeleteOutdatedData(true);
     setOutdatedDataPreview(null);
     setOutdatedDataMessage(null);
@@ -377,22 +381,26 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   };
 
   const handleDeleteOutdatedData = async () => {
+    if (loadingOutdatedDataPreview || !outdatedDataPreview) return;
     setConfirmDeleteOutdatedData(false);
     setDeletingOutdatedData(true);
     setOutdatedDataMessage(null);
     onLoadingMessage?.("Deleting outdated data...");
     let refreshStarted = false;
     try {
-      const result = await ScansHandler.deleteOutdatedData(outdatedDataPreview?.candidate_ids ?? {
-        observations: [], assessments: [], package_pairs: [],
-      });
+      const result = await ScansHandler.deleteOutdatedData(outdatedDataPreview.candidate_ids, clearVulnerabilityHistory);
       if (unmountedRef.current) return;
       if (!result.ok) {
         setOutdatedDataMessage({ text: result.error ?? "Failed to delete outdated data.", type: "error" });
         return;
       }
       setOutdatedDataPreview(null);
-      setOutdatedDataMessage({ text: "Outdated data removed from every project and variant.", type: "success" });
+      setOutdatedDataMessage({
+        text: clearVulnerabilityHistory
+          ? `Outdated data removed from every project and variant. ${result.summary?.vulnerability_history_deleted ?? 0} vulnerability history rows cleared.`
+          : "Outdated data removed from every project and variant.",
+        type: "success",
+      });
       onDataChanged?.("Removing outdated data...");
       refreshStarted = Boolean(onDataChanged);
     } catch {
@@ -465,30 +473,18 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   };
 
   // ---- Manage Projects ----
-  const [renameProjectName, setRenameProjectName] = useState<string>("");
-  const [renameProjectBusy, setRenameProjectBusy] = useState(false);
-  const [renameProjectMsg, setRenameProjectMsg] = useState<FeedbackMsg>(null);
+  // Sidebar item being renamed in place: "project:<id>" or "variant:<id>".
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [deleteProjectBusy, setDeleteProjectBusy] = useState(false);
   const [deleteProjectMsg, setDeleteProjectMsg] = useState<FeedbackMsg>(null);
 
-  const handleRenameProject = async () => {
-    const targetId = selectedProjectId;
-    if (!targetId || !renameProjectName.trim()) return;
-    setRenameProjectBusy(true);
-    setRenameProjectMsg(null);
-    try {
-      const updated = await Projects.rename(targetId, renameProjectName.trim());
-      loadProjects();
-      onDataChanged?.("Renaming project...");
-      if (routeIdsRef.current.projectId !== targetId) return;
-      setRenameProjectName(updated.name);
-      setRenameProjectMsg({ text: "Project renamed.", type: "success" });
-    } catch (e: any) {
-      if (routeIdsRef.current.projectId === targetId) setRenameProjectMsg({ text: e.message, type: "error" });
-    } finally {
-      setRenameProjectBusy(false);
-    }
+  // Rejects on failure so the inline input stays open with the error.
+  const renameProject = async (projectId: string, name: string) => {
+    const updated = await Projects.rename(projectId, name);
+    setProjects((current) => current.map((p) => (p.id === updated.id ? { ...p, name: updated.name } : p)));
+    loadProjects();
+    onDataChanged?.("Renaming project...");
   };
 
   // Only Projects.create failures reject: a failed list reload must not make
@@ -538,9 +534,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   };
 
   // ---- Manage Variants ----
-  const [renameVariantName, setRenameVariantName] = useState<string>("");
-  const [renameVariantBusy, setRenameVariantBusy] = useState(false);
-  const [renameVariantMsg, setRenameVariantMsg] = useState<FeedbackMsg>(null);
   const [pendingDeleteVariant, setPendingDeleteVariant] =
     useState<{ projectId: string; id: string; name: string } | null>(null);
   const [deleteVariantBusy, setDeleteVariantBusy] = useState(false);
@@ -557,25 +550,15 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
       .catch(() => {});
   }, []);
 
-  const handleRenameVariant = async () => {
-    const targetProjectId = selectedProjectId;
-    const targetId = selectedVariantId;
-    if (!targetId || !renameVariantName.trim()) return;
-    const isStillSelected = () => routeIdsRef.current.variantId === targetId;
-    setRenameVariantBusy(true);
-    setRenameVariantMsg(null);
-    try {
-      const updated = await Variants.rename(targetId, renameVariantName.trim());
-      reloadProjectVariants(targetProjectId);
-      onDataChanged?.("Renaming variant...");
-      if (!isStillSelected()) return;
-      setRenameVariantName(updated.name);
-      setRenameVariantMsg({ text: "Variant renamed.", type: "success" });
-    } catch (e: any) {
-      if (isStillSelected()) setRenameVariantMsg({ text: e.message, type: "error" });
-    } finally {
-      setRenameVariantBusy(false);
-    }
+  // Rejects on failure so the inline input stays open with the error.
+  const renameVariant = async (projectId: string, variantId: string, name: string) => {
+    const updated = await Variants.rename(variantId, name);
+    setProjectVariants((prev) => ({
+      ...prev,
+      [projectId]: (prev[projectId] ?? []).map((v) => (v.id === updated.id ? { ...v, name: updated.name } : v)),
+    }));
+    reloadProjectVariants(projectId);
+    onDataChanged?.("Renaming variant...");
   };
 
   // Only Variants.create failures reject; see createProject.
@@ -704,9 +687,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   }
 
   useEffect(() => {
-    setRenameProjectMsg(null);
     setDeleteProjectMsg(null);
-    setRenameVariantMsg(null);
     setDeleteVariantMsg(null);
     setImportFiles([]);
     setImportMsg(null);
@@ -733,14 +714,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
       );
     }
   }, [location.key]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    setRenameProjectName(contextProject?.name ?? "");
-  }, [contextProject?.id, contextProject?.name]);
-
-  useEffect(() => {
-    setRenameVariantName(contextVariant?.name ?? "");
-  }, [contextVariant?.id, contextVariant?.name]);
 
   // ---- Styles ----
   const inputClass =
@@ -788,6 +761,8 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   const sidebarItemClass = (active: boolean) => `flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
     active ? "bg-sky-900 text-white" : "text-slate-300 hover:bg-slate-700 hover:text-white"
   }`;
+  const sidebarRenameButtonClass =
+    "mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-xs text-slate-400 opacity-0 transition-opacity hover:text-sky-300 focus-visible:opacity-100 group-hover:opacity-100";
 
   return (
     <div className="w-full">
@@ -838,7 +813,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
 
                 return (
                   <div key={project.id}>
-                    <div className={`flex items-center rounded-md ${isSelected ? "bg-sky-900" : "hover:bg-slate-700"}`}>
+                    <div className={`group flex items-center rounded-md ${isSelected ? "bg-sky-900" : "hover:bg-slate-700"}`}>
                       <button
                         type="button"
                         onClick={() => toggleProject(project.id)}
@@ -848,37 +823,87 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
                       >
                         <FontAwesomeIcon icon={isExpanded ? faChevronDown : faChevronRight} className="text-xs" aria-hidden="true" />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => navigate(settingsProjectPath(project.id))}
-                        aria-current={isSelected ? "page" : undefined}
-                        className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-3 text-left text-sm text-slate-200"
-                      >
-                        <FontAwesomeIcon icon={faFolder} className="text-sky-400" aria-hidden="true" />
-                        <span className="truncate">{project.name}</span>
-                        <span className="ml-auto rounded-full bg-slate-700 px-2 py-0.5 text-xs text-sky-200">{variants.length}</span>
-                      </button>
+                      {renamingKey === `project:${project.id}` ? (
+                        <InlineRenameInput
+                          initialName={project.name}
+                          onSubmit={(name) => renameProject(project.id, name)}
+                          onClose={() => setRenamingKey(null)}
+                          inputAriaLabel={`Rename project ${project.name}`}
+                          submitAriaLabel="Save project name"
+                          className="min-w-0 flex-1 py-1 pr-1"
+                        />
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => navigate(settingsProjectPath(project.id))}
+                            onDoubleClick={() => setRenamingKey(`project:${project.id}`)}
+                            aria-current={isSelected ? "page" : undefined}
+                            className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 text-left text-sm text-slate-200"
+                          >
+                            <FontAwesomeIcon icon={faFolder} className="text-sky-400" aria-hidden="true" />
+                            <span className="truncate">{project.name}</span>
+                            <span className="ml-auto rounded-full bg-slate-700 px-2 py-0.5 text-xs text-sky-200">{variants.length}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRenamingKey(`project:${project.id}`)}
+                            className={sidebarRenameButtonClass}
+                            aria-label={`Rename project ${project.name}`}
+                            title="Rename project"
+                          >
+                            <FontAwesomeIcon icon={faPen} aria-hidden="true" />
+                          </button>
+                        </>
+                      )}
                     </div>
                     {isExpanded && (
                       <div className="ml-4 border-l border-slate-700 pl-2">
                         {variants.map((variant) => {
                           const isVariantSelected =
                             route.kind === "variant" && selectedProjectId === project.id && selectedVariantId === variant.id;
+                          if (renamingKey === `variant:${variant.id}`) {
+                            return (
+                              <InlineRenameInput
+                                key={variant.id}
+                                initialName={variant.name}
+                                onSubmit={(name) => renameVariant(project.id, variant.id, name)}
+                                onClose={() => setRenamingKey(null)}
+                                inputAriaLabel={`Rename variant ${variant.name}`}
+                                submitAriaLabel="Save variant name"
+                                className="mt-1 px-1"
+                              />
+                            );
+                          }
                           return (
-                          <button
-                            type="button"
+                          <div
                             key={variant.id}
-                            onClick={() => navigate(settingsVariantPath(project.id, variant.id))}
-                            aria-current={isVariantSelected ? "page" : undefined}
-                            className={`mt-1 flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm transition-colors ${
+                            className={`group mt-1 flex items-center rounded-md transition-colors ${
                               isVariantSelected
                                 ? "bg-violet-950 text-white"
                                 : "text-slate-400 hover:bg-slate-700 hover:text-white"
                             }`}
                           >
-                            <span className="h-2 w-2 rounded-full bg-violet-400" aria-hidden="true" />
-                            <span className="truncate">{variant.name}</span>
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => navigate(settingsVariantPath(project.id, variant.id))}
+                              onDoubleClick={() => setRenamingKey(`variant:${variant.id}`)}
+                              aria-current={isVariantSelected ? "page" : undefined}
+                              className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 pr-1 text-left text-sm"
+                            >
+                              <span className="h-2 w-2 shrink-0 rounded-full bg-violet-400" aria-hidden="true" />
+                              <span className="truncate">{variant.name}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRenamingKey(`variant:${variant.id}`)}
+                              className={sidebarRenameButtonClass}
+                              aria-label={`Rename variant ${variant.name}`}
+                              title="Rename variant"
+                            >
+                              <FontAwesomeIcon icon={faPen} aria-hidden="true" />
+                            </button>
+                          </div>
                           );
                         })}
                         <InlineAddInput
@@ -1347,54 +1372,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
           </div>
         </section>
 
-        {/* ======== Rename Project ======== */}
-        <section aria-labelledby="settings-heading-project-rename">
-          <div className={cardHeader}>
-            <FontAwesomeIcon icon={faPenToSquare} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-project-rename" className="text-xl font-bold text-white">Rename Project</h2>
-          </div>
-          <div className={cardBody + " space-y-4"}>
-            <div className="space-y-2">
-              <label htmlFor="rename-project-name" className="block text-sm text-zinc-300 font-semibold">New name</label>
-              <div className="flex gap-2">
-                <input
-                  id="rename-project-name"
-                  type="text"
-                  value={renameProjectName}
-                  onChange={(e) => { setRenameProjectName(e.target.value); setRenameProjectMsg(null); }}
-                  placeholder="Enter new name"
-                  className={inputClass + " flex-1"}
-                  aria-required="true"
-                  onKeyDown={(e) => e.key === "Enter" && handleRenameProject()}
-                />
-                <button
-                  onClick={handleRenameProject}
-                  disabled={renameProjectBusy || !renameProjectName.trim() || renameProjectName.trim() === contextProject.name}
-                  className={btnPrimary}
-                  aria-busy={renameProjectBusy}
-                >
-                  {renameProjectBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                  ) : (
-                    <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
-                  )}
-                  Rename
-                </button>
-              </div>
-            </div>
-
-            {/* -- Feedback -- */}
-            {renameProjectMsg && (
-              <MessageBanner
-                type={renameProjectMsg.type}
-                message={renameProjectMsg.text}
-                isVisible={true}
-                onClose={() => setRenameProjectMsg(null)}
-              />
-            )}
-          </div>
-        </section>
-
         {/* ======== Danger Zone ======== */}
         <section aria-labelledby="settings-heading-project-delete">
           <div className={dangerCardHeader}>
@@ -1478,7 +1455,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
               <div className={inputClass}>
                 <FileInputButton
                   key={importFiles.length}
-                  accept=".json,.jsonld,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.zst"
+                  accept=".json,.jsonld,.spdx,.cdx,.xml,.tar,.tar.gz,.tgz,.tar.xz,.tar.zst"
                   onChange={(e) => handleFileSelected(importFiles.length, e.target.files?.[0] ?? null)}
                   disabled={importBusy}
                   aria-labelledby="sbom-files-label"
@@ -1490,7 +1467,7 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
               <p className="text-xs text-zinc-400">
                 Accepts JSON SBOMs (SPDX, CycloneDX, OpenVEX, Grype, Yocto), SPDX 3 JSON-LD
                 (<code>.jsonld</code>), or tar archives
-                (<code>.tar</code>, <code>.tar.gz</code>, <code>.tgz</code>, <code>.tar.zst</code>)
+                (<code>.tar</code>, <code>.tar.gz</code>, <code>.tgz</code>, <code>.tar.xz</code>, <code>.tar.zst</code>)
                 containing SPDX 2 JSON or SPDX 3 JSON-LD companion documents.
               </p>
             </div>
@@ -1580,58 +1557,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
           </div>
         </section>
 
-        {/* ======== Rename Variant ======== */}
-        <section aria-labelledby="settings-heading-variant-rename">
-          <div className={cardHeader}>
-            <FontAwesomeIcon icon={faPenToSquare} className="text-cyan-400" aria-hidden="true" />
-            <h2 id="settings-heading-variant-rename" className="text-xl font-bold text-white">Rename Variant</h2>
-          </div>
-          <div className={cardBody + " space-y-4"}>
-            <div className="space-y-2">
-              <label htmlFor="rename-variant-name" className="block text-sm text-zinc-300 font-semibold">New name</label>
-              <div className="flex gap-2">
-                <input
-                  id="rename-variant-name"
-                  type="text"
-                  value={renameVariantName}
-                  onChange={(e) => { setRenameVariantName(e.target.value); setRenameVariantMsg(null); }}
-                  placeholder="Enter new name"
-                  className={inputClass + " flex-1"}
-                  aria-required="true"
-                  onKeyDown={(e) => e.key === "Enter" && handleRenameVariant()}
-                />
-                <button
-                  onClick={handleRenameVariant}
-                  disabled={
-                    renameVariantBusy ||
-                    !renameVariantName.trim() ||
-                    renameVariantName.trim() === contextVariant?.name
-                  }
-                  className={btnPrimary}
-                  aria-busy={renameVariantBusy}
-                >
-                  {renameVariantBusy ? (
-                    <FontAwesomeIcon icon={faSpinner} spin className="mr-1" aria-hidden="true" />
-                  ) : (
-                    <FontAwesomeIcon icon={faCheck} className="mr-1" aria-hidden="true" />
-                  )}
-                  Rename
-                </button>
-              </div>
-            </div>
-
-            {/* -- Feedback -- */}
-            {renameVariantMsg && (
-              <MessageBanner
-                type={renameVariantMsg.type}
-                message={renameVariantMsg.text}
-                isVisible={true}
-                onClose={() => setRenameVariantMsg(null)}
-              />
-            )}
-          </div>
-        </section>
-
         </>
         )}
         </>
@@ -1709,7 +1634,26 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
         showTitleIcon={true}
         onConfirm={handleDeleteOutdatedData}
         onCancel={() => { setConfirmDeleteOutdatedData(false); setOutdatedDataPreview(null); }}
-      />
+      >
+        <p className="text-sm text-zinc-400">
+          {loadingOutdatedDataPreview ? "Loading deletion plan..." : outdatedDataPreview
+            ? `Delete ${outdatedDataPreview.packages.length} outdated package records and ${outdatedDataPreview.assessments.length} outdated assessments?`
+            : "No outdated data was found."}
+        </p>
+        <label className="mt-4 flex items-start gap-2 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={clearVulnerabilityHistory}
+            onChange={(event) => setClearVulnerabilityHistory(event.target.checked)}
+            disabled={loadingOutdatedDataPreview}
+          />
+          <span>
+            Also clear all vulnerability refresh history ({outdatedDataPreview?.vulnerability_history_count ?? 0} rows).
+            This permanently removes previous field values across every project and variant, including current
+            vulnerabilities. Current values and refresh timestamps are preserved. New refreshes can record history again.
+          </span>
+        </label>
+      </ConfirmationModal>
     </div>
   );
 }

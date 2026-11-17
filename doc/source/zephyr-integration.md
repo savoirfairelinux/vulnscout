@@ -4,6 +4,24 @@ VulnScout can be integrated into a Zephyr build workflow using
 **zephyr-west-vulnscout**, a West extension that generates SPDX 3 SBOMs and
 imports them into VulnScout for vulnerability analysis.
 
+## Inspecting compiler metadata
+
+After importing West SPDX 3 JSON-LD files (including `build.jsonld`), enable the
+**Compiler Flags** column in the SBOM Packages table (off by default). Click
+**View** for a package to open **Compiler flags and defines**, independently of
+dependency details. Each build target is displayed separately, with its SPDX ID,
+SBOM source, variant, and language. The source and variant filters also apply to
+this metadata. Targets are associated with packages through explicit SPDX
+`hasOutput` and package `contains` relationships, not by matching package names.
+
+The original `compile:flags:<language>` and `compile:defines:<language>` values
+are preserved verbatim, including order and quoting. These are SBOM declarations,
+not evidence that a flag was effective or a function was used at runtime.
+Packages without recorded flags or defines in the selected scope show `-` in the
+column; this does not mean they were built without flags. The column choice is
+remembered. Reimport existing scans to record compiler metadata; database upgrades
+do not reconstruct it from previously imported files.
+
 ## zephyr-west-vulnscout
 
 The extension provides `west vulnscout` for SBOM generation and import,

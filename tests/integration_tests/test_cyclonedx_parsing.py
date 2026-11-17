@@ -574,6 +574,34 @@ def test_parse_components_json(cdx_parser):
     assert "pkg:generic/gnu/binutils@2.38" in binutils
 
 
+def test_parse_components_keeps_declared_identifiers_only(cdx_parser):
+    maven_purl = "pkg:maven/com.prosysopc.ua/prosys-opc-ua-sdk-client-server@5.4.0-201"
+    cdx_parser.load_from_dict({
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
+        "version": 1,
+        "components": [
+            {"type": "library", "name": "Prosys OPC UA SDK Client/Server", "version": "5.4.0-201",
+             "purl": maven_purl},
+            {"type": "library", "name": "cairo", "version": "1.16.0",
+             "cpe": "cpe:2.3:a:cairographics:cairo:1.16.0:*:*:*:*:*:*:*"},
+            {"type": "library", "name": "Vendor Tool/Plugin", "version": "2.0"},
+        ],
+    })
+    cdx_parser.parse_and_merge()
+
+    prosys = cdx_parser.packagesCtrl.get("Prosys OPC UA SDK Client/Server@5.4.0-201")
+    assert prosys.cpe == []
+    assert prosys.purl == [maven_purl]
+    cairo = cdx_parser.packagesCtrl.get("cairo@1.16.0")
+    assert cairo.cpe == ["cpe:2.3:a:cairographics:cairo:1.16.0:*:*:*:*:*:*:*"]
+    assert cairo.purl == []
+    tool = cdx_parser.packagesCtrl.get("Vendor Tool/Plugin@2.0")
+    assert tool.cpe == ["cpe:2.3:a:*:Vendor Tool/Plugin:2.0:*:*:*:*:*:*:*"]
+    assert tool.purl == ["pkg:generic/Vendor%20Tool%2FPlugin@2.0"]
+
+
 def test_parse_vulnerabilities_json(cdx_parser):
     from unittest.mock import MagicMock
     cdx_parser.vulnerabilitiesCtrl.record_sbom_observation = MagicMock()

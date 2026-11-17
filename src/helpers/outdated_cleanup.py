@@ -38,6 +38,7 @@ from ..models.time_estimate import TimeEstimate
 from ..models.variant import Variant
 from ..models.vuln_refresh import VulnRefresh
 from ..models.vulnerability import Vulnerability
+from ..models.vulnerability_history import VulnerabilityHistory
 from .assessment_staleness import annotate_assessments_outdated
 
 PackageIdentity = tuple[str | None, str | None]
@@ -289,6 +290,9 @@ def outdated_data_preview() -> dict[str, object]:
         )
     ]
     return {
+        "vulnerability_history_count": db.session.scalar(
+            db.select(db.func.count()).select_from(VulnerabilityHistory)
+        ),
         "candidate_ids": {
             "observations": sorted(str(observation_id) for observation_id in stale_observations),
             "assessments": sorted(str(assessment["uuid"]) for assessment in assessments),
@@ -432,9 +436,10 @@ def remove_target(assessment_id: uuid.UUID, variant_id: uuid.UUID, finding_id: u
 def _delete_orphaned_vulnerabilities(vulnerability_ids: set[str]) -> int:
     """Delete vulnerability aggregates with no remaining package evidence.
 
-    Dependent ``Metrics`` and ``VulnRefresh`` rows are removed first: bulk
-    ``DELETE`` bypasses the ORM's ``delete-orphan`` cascade, so the child rows
-    must be cleared explicitly to avoid leaving orphans behind.
+    Dependent ``Metrics``, ``VulnRefresh`` and ``VulnerabilityHistory`` rows
+    are removed first: bulk ``DELETE`` bypasses the ORM's ``delete-orphan``
+    cascade, so the child rows must be cleared explicitly to avoid leaving
+    orphans behind.
     """
     if not vulnerability_ids:
         return 0
@@ -448,6 +453,7 @@ def _delete_orphaned_vulnerabilities(vulnerability_ids: set[str]) -> int:
         ).scalars())
     _delete_in_chunks(Metrics, Metrics.vulnerability_id, ids)
     _delete_in_chunks(VulnRefresh, VulnRefresh.vuln_id, ids)
+    _delete_in_chunks(VulnerabilityHistory, VulnerabilityHistory.vuln_id, ids)
     _delete_in_chunks(Vulnerability, Vulnerability.id, ids)
     return len(ids)
 
@@ -540,12 +546,16 @@ def _split_outdated_by_target(
     return fully_stale, partial
 
 
-def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict[str, int]:
+def delete_outdated_data(
+    candidate_ids: dict[str, object] | None = None, *, clear_vulnerability_history: bool = False,
+) -> dict[str, int]:
     """Delete every package observation and custom assessment marked outdated.
 
     The predicates deliberately mirror ``/api/packages?outdated_only=true``
     and ``annotate_assessments_outdated``.  Shared records are retained until
     no scan, assessment, or SBOM relation references them.
+    Refresh history is cleared globally only when explicitly requested; current
+    vulnerability values and refresh timestamps are not reset by this option.
     """
     with write_lock():
         active_identities = _active_identities_by_variant()
@@ -566,6 +576,11 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
         }
         if candidate_ids is not None and candidate_ids != current_candidates:
             raise ValueError(_STALE_PREVIEW_MESSAGE)
+        history_deleted = 0
+        if clear_vulnerability_history:
+            history_deleted = cast(
+                CursorResult, db.session.execute(db.delete(VulnerabilityHistory))
+            ).rowcount
         outdated_finding_ids = {
             finding_id
             for assessment in outdated_assessments
@@ -601,6 +616,7 @@ def delete_outdated_data(candidate_ids: dict[str, object] | None = None) -> dict
     invalidate_scan_list_cache()
 
     return {
+        "vulnerability_history_deleted": history_deleted,
         "assessments_deleted": len(fully_stale_ids),
         "assessment_targets_removed": targets_removed,
         "observations_deleted": len(stale_observation_ids),
@@ -758,6 +774,7 @@ def delete_orphaned_vulnerabilities(candidate_ids: list[str] | None = None) -> d
         _delete_in_chunks(Finding, Finding.id, finding_ids)
         _delete_in_chunks(Metrics, Metrics.vulnerability_id, vulnerability_ids)
         _delete_in_chunks(VulnRefresh, VulnRefresh.vuln_id, vulnerability_ids)
+        _delete_in_chunks(VulnerabilityHistory, VulnerabilityHistory.vuln_id, vulnerability_ids)
         _delete_in_chunks(Vulnerability, Vulnerability.id, vulnerability_ids)
         db.session.commit()
 

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import io
-import os
 import re
 import sys
 from typing import IO, Any, Literal
@@ -13,20 +12,12 @@ from typing import IO, Any, Literal
 import click
 
 from ..helpers.env_vars import get_bool_env
+from ..helpers.console import color_enabled
 
 Role = Literal["info", "success", "warning", "error"]
 COLORS: dict[Role, str] = {
     "info": "cyan", "success": "green", "warning": "yellow", "error": "red",
 }
-
-
-def color_enabled(*, err: bool = False) -> bool:
-    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
-        return False
-    hint = os.environ.get("_VULNSCOUT_COLOR_STDERR" if err else "_VULNSCOUT_COLOR_STDOUT")
-    if hint in ("0", "1"):
-        return hint == "1"
-    return (sys.stderr if err else sys.stdout).isatty()
 
 
 def style(message: str, role: Role = "info", *, bold: bool = False) -> str:

@@ -82,7 +82,7 @@ def test_completion_verb_is_hidden(tmp_path, completion_script):
 
 def test_top_level_offers_all_verbs(completion_script):
     out = complete(completion_script, ["vulnscout", ""])
-    for verb in ("add", "scan", "match-condition", "report", "export", "import",
+    for verb in ("add", "scan", "match-condition", "assess", "review", "report", "export", "import",
                  "refresh", "delete", "list", "config", "asset", "start", "stop",
                  "restart", "update", "version", "serve"):
         assert verb in out
@@ -129,10 +129,27 @@ def test_scan_scanner_flags(tmp_path, completion_script):
 
 def test_fixed_values(completion_script):
     assert set(complete(completion_script, ["vulnscout", "report", "--format", ""])) == {"pdf", "html"}
+    assert set(complete(
+        completion_script, ["vulnscout", "export", "vulnerability-history", "--format", ""],
+    )) == {"json", "csv"}
     assert set(complete(completion_script, ["vulnscout", "import", "custom-data", "--timestamps", ""])) == {"original", "current"}
     assert set(complete(completion_script, ["vulnscout", "delete", ""])) >= {"scan", "outdated", "empty-scans", "orphaned-vulns", "--dry-run", "--yes"}
     assert set(complete(completion_script, ["vulnscout", "config", ""])) >= {"get", "set", "unset", "list"}
     assert set(complete(completion_script, ["vulnscout", "list", ""])) >= {"projects", "scans", "--json"}
+
+
+@pytest.mark.parametrize("flag", ["--since", "--until", "--source", "--field", "--vuln-id"])
+def test_history_export_completion(completion_script, flag):
+    assert "vulnerability-history" in complete(completion_script, ["vulnscout", "export", ""])
+    assert flag in complete(completion_script, ["vulnscout", "export", "vulnerability-history", "-"])
+    assert not any(complete(completion_script, ["vulnscout", "export", "vulnerability-history", flag, ""]))
+
+
+def test_history_export_completes_options_after_last_refresh(completion_script):
+    assert "--last-refresh" in complete(completion_script, ["vulnscout", "export", "vulnerability-history", "-"])
+    assert "--format" in complete(
+        completion_script, ["vulnscout", "export", "vulnerability-history", "--last-refresh", "-"],
+    )
 
 
 def test_completion_matches_help(tmp_path, completion_script):
@@ -183,3 +200,18 @@ def test_file_candidates_enable_filename_handling(tmp_path, completion_script):
     nested = complete(completion_script, ["vulnscout", "import", "context", "nested dir/"],
                       cwd=tmp_path, compopt_log=log)
     assert nested == ["nested dir/a b.json"]
+
+
+def test_assess_flags(completion_script):
+    out = complete(completion_script, ["vulnscout", "assess", "-"])
+    for flag in ("--cve", "--filter", "--model", "--timeout", "--dry-run", "--json", "-p", "--variant"):
+        assert flag in out
+    assert "--spdx" not in out
+
+
+def test_review_flags(completion_script):
+    out = complete(completion_script, ["vulnscout", "review", "-"])
+    for flag in ("--assessment-id", "--cve", "--re-review", "--model", "--timeout", "--dry-run", "--json",
+                 "-p", "--variant"):
+        assert flag in out
+    assert "--filter" not in out

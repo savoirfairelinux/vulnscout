@@ -6,7 +6,11 @@ from ..models import Metrics
 
 
 def apply_cvss_update(rec, details: dict, db) -> None:
-    """Upsert the CVSS Metrics row for *rec* from NVD *details* (in-place, no commit).
+    """Refresh global NVD CVSS metrics for the returned version (no commit).
+
+    Ingestion can retain several scores for a version. Update every matching
+    NVD row, leaving other providers, custom overrides and scoped rows intact.
+    Create an NVD row when none exists.
 
     *db* must be the SQLAlchemy extension instance (passed in to keep this module
     free of Flask extension imports at load time).
@@ -21,12 +25,16 @@ def apply_cvss_update(rec, details: dict, db) -> None:
             Metrics.vulnerability_id == rec.id,
             Metrics.version == cvss_version,
             Metrics.variant_id.is_(None),
+            Metrics.author == "nvd",
+            db.or_(Metrics.origin.is_(None), Metrics.origin != "custom"),
         )
-    ).scalars().first()
-    if existing is not None:
-        if float(existing.score or 0) != float(base_score) or existing.vector != cvss_vector:
-            existing.score = base_score
-            existing.vector = cvss_vector or existing.vector
+    ).scalars().all()
+    if existing:
+        for metric in existing:
+            if metric.score is None or float(metric.score) != float(base_score):
+                metric.score = base_score
+            if cvss_vector:
+                metric.vector = cvss_vector
     else:
         db.session.add(Metrics(
             vulnerability_id=rec.id,
@@ -34,6 +42,7 @@ def apply_cvss_update(rec, details: dict, db) -> None:
             score=base_score,
             vector=cvss_vector or "",
             author="nvd",
+            origin="scanner",
         ))
 
 

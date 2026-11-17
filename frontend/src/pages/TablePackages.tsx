@@ -17,17 +17,20 @@ import { useLocalStorageState } from '../handlers/localStorage';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
 import type { AgentViewContext } from '../types/agent';
-import { listDependencyCounts } from '../handlers/dependencies';
-import type { DependencyCounts } from '../handlers/dependencies';
+import { filterCompilerDocuments, listCompilerMetadata, listDependencyCounts } from '../handlers/dependencies';
+import type { CompilerDocument, DependencyCounts } from '../handlers/dependencies';
 import SourceRevision from '../components/SourceRevision';
 import { releaseVersion, versionEvidenceTitle } from '../helpers/packageVersions';
 
 const DependencyModal = lazy(() => import('../components/DependencyModal'));
+const SourceFileModal = lazy(() => import('../components/SourceFileModal'));
+const CompilerMetadataModal = lazy(() => import('../components/CompilerMetadataModal'));
 
 type PackageRow = Package & {
     versionMetadataSearch: string;
     dependencyCount?: { in: number; out: number };
     dependenciesUnrecorded?: boolean;
+    hasCompilerMetadata?: boolean;
 };
 
 type Props = {
@@ -97,6 +100,11 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const [dependencyCounts, setDependencyCounts] = useState<DependencyCounts | null>(null);
     const [dependencyError, setDependencyError] = useState(false);
     const [selectedDependencyPackage, setSelectedDependencyPackage] = useState<string | null>(null);
+    const [selectedSourcePackage, setSelectedSourcePackage] = useState<string | null>(null);
+    const [compilerDocuments, setCompilerDocuments] = useState<CompilerDocument[] | null>(null);
+    const [compilerError, setCompilerError] = useState(false);
+    const [compilerRetry, setCompilerRetry] = useState(0);
+    const [selectedCompilerPackage, setSelectedCompilerPackage] = useState<string | null>(null);
     const tableRef = useRef<HTMLDivElement>(null); // ref to table container to allow adjustment of filter box height
     const searchInputRef = useRef<HTMLInputElement>(null);
     const shortcutButtonRef = useRef<HTMLButtonElement>(null);
@@ -161,7 +169,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const hasSupplierInfo = useMemo(() => packages.some(pkg => !!pkg.supplier), [packages]);
 
     const defaultVisibleColumns = useMemo(() => {
-        const cols = ['Name', 'Release version', 'Source revision', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
+        const cols = ['Name', 'Release version', 'Source revision', 'Recorded Files', 'Dependency', 'Vulnerabilities', 'Variants', 'Sources'];
         if (hasSupplierInfo) cols.splice(cols.indexOf('Vulnerabilities'), 0, 'Supplier');
         return cols;
     }, [hasSupplierInfo]);
@@ -183,8 +191,33 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         setDependencyColumnDefaulted(true);
         setVisibleColumns(columns => columns.includes('Dependency') ? columns : [...columns, 'Dependency']);
     }, [dependencyColumnDefaulted, setDependencyColumnDefaulted, setVisibleColumns]);
+    const [sourceFilesColumnDefaulted, setSourceFilesColumnDefaulted] = useLocalStorageState(`${preferenceKey}.sourceFilesColumnDefaulted`, false);
+    useEffect(() => {
+        if (!sourceFilesColumnDefaulted) setSourceFilesColumnDefaulted(true);
+        setVisibleColumns(columns => {
+            const renamed = columns.includes('Source Files')
+                ? columns.map(column => column === 'Source Files' ? 'Recorded Files' : column) : columns;
+            return sourceFilesColumnDefaulted || renamed.includes('Recorded Files')
+                ? renamed : [...renamed, 'Recorded Files'];
+        });
+    }, [sourceFilesColumnDefaulted, setSourceFilesColumnDefaulted, setVisibleColumns]);
     const variantIdsKey = variantIds?.join(',');
     const showDependencyColumn = visibleColumns.includes('Dependency');
+    const showCompilerColumn = visibleColumns.includes('Compiler Flags');
+    useEffect(() => {
+        if (!showCompilerColumn) return;
+        let cancelled = false;
+        setCompilerDocuments(null);
+        setCompilerError(false);
+        listCompilerMetadata(true, variantId, projectId, variantIdsKey?.split(','), compareVariantId, operation)
+            .then(documents => { if (!cancelled) setCompilerDocuments(documents); })
+            .catch(() => { if (!cancelled) setCompilerError(true); });
+        return () => { cancelled = true; };
+    }, [showCompilerColumn, variantId, projectId, variantIdsKey, compareVariantId, operation, dataRevision, compilerRetry]);
+    const compilerPackages = useMemo(() => new Set(
+        filterCompilerDocuments(compilerDocuments ?? [], selectedSources, selectedSbomDocs)
+            .flatMap(document => document.package_ids)
+    ), [compilerDocuments, selectedSources, selectedSbomDocs]);
     useEffect(() => {
         if (!showDependencyColumn) return;
         let cancelled = false;
@@ -295,6 +328,8 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         'version': 'Release version',
         'source_revision': 'Source revision',
         'dependencies': 'Dependency',
+        'source_files': 'Recorded Files',
+        'compiler_flags': 'Compiler Flags',
         'cpe': 'CPE',
         'purl': 'PURL',
         'supplier': 'Supplier',
@@ -326,7 +361,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                         )}
                     </div>
                 ),
-                footer: info => <div className="flex items-center justify-center h-full">{`Total: ${info.table.getRowCount()}`}</div>,
                 size: 300
             }),
             columnHelper.accessor(row => releaseVersion(row) ?? '', {
@@ -348,27 +382,77 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 </div>,
                 size: 180
             }),
+            columnHelper.accessor(row => row.source_file_count ?? -1, {
+                id: 'source_files',
+                header: () => <div className="flex items-center justify-center">Recorded Files</div>,
+                HintText: <p>
+                    File records associated with this component in the imported SBOMs.
+                    May include source code, patches, licenses, configuration files, and SPDX 2 binaries/outputs;
+                    not necessarily a complete source inventory.
+                </p>,
+                HintAriaLabel: 'Recorded files helper',
+                cell: info => {
+                    const pkg = info.row.original;
+                    if (pkg.outdated) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400">Not in active scan</div>;
+                    if (pkg.source_file_count == null) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-500"
+                        title="Reimport the original SPDX SBOMs to record file evidence">—</div>;
+                    return <button type="button" onClick={() => setSelectedSourcePackage(pkg.id)}
+                        aria-label={`View recorded files for ${pkg.name}`}
+                        className="h-full w-full p-4 text-cyan-300 hover:bg-slate-700 hover:underline">
+                        {pkg.source_file_count}
+                    </button>;
+                },
+                size: 140,
+            }),
             columnHelper.accessor(row => (row.dependencyCount?.in ?? 0) + (row.dependencyCount?.out ?? 0), {
                 id: 'dependencies',
                 header: () => <div className="flex items-center justify-center">Dependency</div>,
                 cell: info => {
                     const counts = info.row.original.dependencyCount;
-                    // Dependency data covers active scans only, so historical rows have no graph to open.
+                    // Dependency data covers active scans only.
                     if (info.row.original.outdated) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
                         title="Dependencies are only available for packages of active scans">Not in active scan</div>;
                     if (info.row.original.dependenciesUnrecorded) return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
                         title="Its SBOM was imported before dependency support; import it again to record relationships">Not recorded</div>;
+                    const countText = counts ? `Deps: ${counts.in} / Req by: ${counts.out}` : 'Loading…';
+                    const countTitle = "Deps: direct dependencies of this package. Req by: packages that directly depend on this package.";
+                    if (dependencyError || !counts || (counts.in === 0 && counts.out === 0)) {
+                        return <div className="flex items-center justify-center h-full p-4 text-center text-neutral-400"
+                            title={countTitle}>{dependencyError ? 'Unavailable' : countText}</div>;
+                    }
                     return <button type="button"
-                        className="flex items-center justify-center gap-2 w-full h-full p-4 text-center cursor-pointer hover:bg-slate-700 hover:text-blue-300 transition-colors"
+                        className="flex flex-col items-center justify-center gap-1 w-full h-full p-4 text-center text-cyan-300 hover:bg-slate-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 focus-visible:-outline-offset-2"
+                        // Keep virtualized row focus management from taking focus off this action.
+                        onFocus={event => event.stopPropagation()}
                         onClick={() => setSelectedDependencyPackage(info.row.original.id)}
-                        title="Deps: direct dependencies of this package. Req by: packages that directly depend on this package."
-                        aria-label={`View dependency graph for ${info.row.original.name}`}>
-                        <FontAwesomeIcon icon={faDiagramProject} />
-                        {dependencyError ? 'Unavailable' : counts ? `Deps: ${counts.in} / Req by: ${counts.out}` : 'Loading…'}
+                        title={countTitle}
+                        aria-label={`Explore dependencies for ${info.row.original.name}`}>
+                        <span className="flex items-center gap-2"><FontAwesomeIcon icon={faDiagramProject} />Explore</span>
+                        <span className="text-xs">{countText}</span>
                     </button>;
                 },
                 sortDescFirst: true,
                 size: 160,
+            }),
+            columnHelper.accessor(row => row.hasCompilerMetadata ? 1 : 0, {
+                id: 'compiler_flags',
+                header: () => <div className="flex items-center justify-center">Compiler Flags</div>,
+                cell: info => {
+                    if (info.row.original.outdated) return <div className="p-4 text-center text-neutral-400"
+                        title="Compiler metadata is only available for active scans">-</div>;
+                    if (compilerError) return <button type="button" className="w-full p-4 text-amber-300"
+                        title="Unable to load compiler flags and defines. Click to retry."
+                        onClick={() => setCompilerRetry(value => value + 1)}>Retry</button>;
+                    if (!compilerDocuments) return <div role="status" className="p-4 text-center">Loading...</div>;
+                    if (!info.getValue()) return <div className="p-4 text-center text-neutral-400"
+                        title="No compiler flags or defines recorded for the selected scope">-</div>;
+                    return <button type="button" className="w-full h-full p-4 text-cyan-300 hover:bg-slate-700"
+                        title="Compiler flags and defines"
+                        aria-label={`View compiler flags and defines for ${info.row.original.name}`}
+                        onClick={() => setSelectedCompilerPackage(info.row.original.id)}>View</button>;
+                },
+                sortDescFirst: true,
+                size: 140,
             }),
             columnHelper.accessor('cpe', {
                 id: 'cpe',
@@ -563,11 +647,10 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     </div>
                 ),
                 enableSorting: false,
-                minSize: 10,
-                size: 10
+                size: 200
             })
         ]
-    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError]);
+    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError, compilerError, compilerDocuments]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -609,17 +692,28 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const tableRows = useMemo<PackageRow[]>(() => {
         const unrecorded = new Set(dependencyCounts?.unrecorded);
         return filteredPackages.map(pkg => {
-            const row = { ...pkg, versionMetadataSearch:
+            const row = { ...pkg, hasCompilerMetadata: !pkg.outdated && compilerPackages.has(pkg.id), versionMetadataSearch:
                 `${pkg.id} ${pkg.source_revision ?? ''} ${versionEvidenceTitle(pkg)}` };
             if (!showDependencyColumn || !dependencyCounts || pkg.outdated) return row;
             const counts = dependencyCounts.counts[pkg.id];
             if (!counts && unrecorded.has(pkg.id)) return { ...row, dependenciesUnrecorded: true };
             return { ...row, dependencyCount: counts ?? { in: 0, out: 0 } };
         });
-    }, [filteredPackages, showDependencyColumn, dependencyCounts]);
+    }, [filteredPackages, showDependencyColumn, dependencyCounts, compilerPackages]);
 
     return (<>
-        {selectedDependencyPackage && <Suspense fallback={<div role="status">Loading dependency graph…</div>}>
+        {selectedSourcePackage && <Suspense fallback={<div role="status">Loading recorded files...</div>}>
+            <SourceFileModal variantId={variantId} projectId={projectId} variantIds={variantIds}
+                compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
+                packageId={selectedSourcePackage} onClose={() => setSelectedSourcePackage(null)} />
+        </Suspense>}
+        {selectedCompilerPackage && <Suspense fallback={<div role="status">Loading compiler flags and defines...</div>}>
+            <CompilerMetadataModal variantId={variantId} projectId={projectId} variantIds={variantIds}
+                compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
+                packageId={selectedCompilerPackage} sources={selectedSources} sbomDocuments={selectedSbomDocs}
+                onClose={() => setSelectedCompilerPackage(null)} />
+        </Suspense>}
+        {selectedDependencyPackage && <Suspense fallback={<div role="status">Loading dependency explorer…</div>}>
             <DependencyModal variantId={variantId} projectId={projectId} variantIds={variantIds}
                 compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
                 packageId={selectedDependencyPackage} onClose={() => setSelectedDependencyPackage(null)} />
@@ -648,7 +742,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                         onClose={() => setOutdatedLoadError('')}
                     />
                 )}
-        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2">
+        <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <ExplicitSearchInput
                 id="package-search"
                 ref={searchInputRef}
@@ -738,7 +832,9 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                     'Name',
                     'Release version',
                     'Source revision',
+                    'Recorded Files',
                     'Dependency',
+                    'Compiler Flags',
                     'CPE',
                     'PURL',
                     'Supplier',

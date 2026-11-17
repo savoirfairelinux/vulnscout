@@ -22,8 +22,14 @@ The **Columns** dropdown lets you toggle which columns are displayed. The defaul
 VulnScout provides several filter categories, each accessible from a dedicated dropdown in the toolbar:
 
 - **Source**: restrict the table to vulnerabilities found by a specific scanner or import source (Yocto, Grype, CycloneDX, SPDX3, OpenVEX, or Local User Data).
-- **Severity**: select one or more severity levels (Critical, High, Medium, Low, None). You can also switch to a continuous **score-based** filter using a range slider, which filters by the underlying CVSS max score rather than the categorical label.
+- **Severity**: select one or more severity levels (Critical, High, Medium, Low, None). When CVSS scores are available, the severity label is derived from the highest score in the selected scope, consistently with reports. A stored label is used only when no CVSS score is available. You can also switch to a continuous **score-based** filter using a range slider, which filters by the underlying CVSS max score rather than the categorical label.
 - **Status**: filter by triage status: Pending Assessment, Exploitable, Not affected, or Fixed.
+  The column lists all distinct current package statuses, comma-separated, using
+  the newest assessment for each package/variant target in the selected scope.
+  Historical assessments superseded for the same target do not contribute;
+  updating one package does not hide another package's status. Status filters
+  match any listed status, and a vulnerability remains active while any current
+  target is active.
 - **Published Date**: filter vulnerabilities by their NVD publication date. The dropdown supports exact-date matching, before/after comparisons, date ranges, and a "within the last N days" shorthand. This filter becomes active once the NVD sync has completed.
 - **More Filters**: groups less common filters together:
   - **EPSS Range**: a percentage-based range slider that narrows the list to vulnerabilities whose Exploit Prediction Scoring System score falls within the specified band.
@@ -42,9 +48,9 @@ does not justify **Not affected**.
 
 ## Refreshing Vulnerability Data
 
-The vulnerabilities table also exposes a **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the vulnerabilities in the current scope.
+Open the **Refresh** tab to use the **Refresh Vulnerability Data** dropdown. Unlike the scanners on the Scan History page — which discover *which* CVEs affect your packages — these refreshers **enrich the vulnerabilities you already have** with up-to-date metadata pulled directly from upstream databases. The refresh operates on the vulnerabilities in the current scope.
 
-The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. The selected sources are submitted together to the **Operation queue** and run in NVD, EPSS, GHSA, EUVD order on the server's pipeline lane. A progress banner below the toolbar shows the current source and count; each queued or running refresh can be cancelled individually. Closing the page does not stop the work, and another tab can see its progress in the same queue. See [Operation Queue](web-operation-queue.md) for recovery and cancellation behavior.
+The dropdown defaults to **Complete refresh**, which updates every available source for the current scope. Choose **Custom refresh** to select the sources to update. The selected sources are submitted together to the **Operation queue** and run in NVD, EPSS, GHSA, EUVD order on the server's pipeline lane. The Refresh tab shows live provider progress and completion messages; each queued or running refresh can be cancelled individually. Closing the page does not stop the work, and another tab can see its progress in the same queue. See [Operation Queue](web-operation-queue.md) for recovery and cancellation behavior.
 
 The available sources are:
 
@@ -52,6 +58,10 @@ The available sources are:
 - **EPSS** — updates the Exploit Prediction Scoring System probability for CVEs in the current scope, feeding the EPSS column and filter.
 - **GHSA** — refreshes the publication date of GitHub Security Advisory (`GHSA-…`) identifiers in the current scope via the GitHub Advisory API.
 - **ENISA EUVD** — annotates CVEs in the current scope from the European Union Vulnerability Database (see below). This option is only available when the scope contains at least one CVE identifier.
+
+Inspect persisted run results in the [Refresh view](web-refresh.md), including
+field-level changes, source coverage, first enrichment and incomplete runs.
+Viewing results does not acknowledge changes or clear indicators.
 
 ## ENISA EUVD Enrichment
 

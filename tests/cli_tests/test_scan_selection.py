@@ -121,24 +121,29 @@ def scanner_environment(tmp_path):
         server.server_close()
 
 
-@pytest.mark.parametrize("script", [ENTRYPOINT, WRAPPER], ids=["entrypoint", "wrapper"])
+INVALID_SCAN_TYPES = [
+    ("unknown", "unknown scan type 'unknown'"),
+    ("nvd,unknown", "unknown scan type 'unknown'"),
+    ("nvd,", "requires scan types"),
+    (",nvd", "requires scan types"),
+    ("nvd,,osv", "requires scan types"),
+]
+
+
 @pytest.mark.parametrize(
-    ("args", "message"),
+    ("command", "message"),
     [
-        (["--perform-scans"], "requires a scan type"),
-        (["--perform-scans", "--refresh-vulnerability-data"], "requires a scan type"),
-        (["--perform-scans", "unknown"], "unknown scan type 'unknown'"),
-        (["--perform-scans", "nvd,unknown"], "unknown scan type 'unknown'"),
-        (["--perform-scans", "nvd,"], "requires scan types"),
-        (["--perform-scans", ",nvd"], "requires scan types"),
-        (["--perform-scans", "nvd,,osv"], "requires scan types"),
+        ([str(ENTRYPOINT), "--perform-scans"], "requires a scan type"),
+        ([str(ENTRYPOINT), "--perform-scans", "--refresh-vulnerability-data"], "requires a scan type"),
+        *(([str(ENTRYPOINT), "--perform-scans", types], message) for types, message in INVALID_SCAN_TYPES),
+        *(([str(WRAPPER), "scan", types], message) for types, message in INVALID_SCAN_TYPES),
     ],
 )
-def test_rejects_invalid_scan_selection(script, args, message):
-    if script == WRAPPER and not (shutil.which("podman") or shutil.which("docker")):
+def test_rejects_invalid_scan_selection(command, message):
+    if command[0] == str(WRAPPER) and not (shutil.which("podman") or shutil.which("docker")):
         pytest.skip("host wrapper requires a container engine executable")
 
-    result = subprocess.run(["bash", str(script), *args], cwd=ROOT, capture_output=True, text=True)
+    result = subprocess.run(["bash", *command], cwd=ROOT, capture_output=True, text=True)
 
     assert result.returncode == 1
     assert message in result.stderr
@@ -291,7 +296,7 @@ def test_entrypoint_runs_selected_scanners_on_active_sbom(tmp_path, args, scanne
         assert "Scan complete" in result.stdout
     if "all" in args:
         grype_args = json.loads(Path(env["TEST_GRYPE_LOG"]).read_text())
-        assert "--add-cpes-if-none" in grype_args
+        assert "--add-cpes-if-none" not in grype_args
         assert result.stdout.index("Merging Grype results") < result.stdout.index("Running NVD scan")
         assert result.stdout.index("Running OSV scan") < result.stdout.index("Running sbom-cve-check scan")
 

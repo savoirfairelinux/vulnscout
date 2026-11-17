@@ -14,7 +14,7 @@ type Props = {
     disabled?: boolean;
 };
 
-const REMOVE_HINT = 'Remove its risks first.';
+const REMOVE_HINT = 'Untick it from its risks first.';
 
 function TargetList({ draft, threat, index, errors, disabled, onChange }: Readonly<{
     draft: VariantDraft; threat: StrideThreat; index: number; errors: Record<string, string>;
@@ -29,13 +29,16 @@ function TargetList({ draft, threat, index, errors, disabled, onChange }: Readon
             <fieldset {...describeField(path, errors)}>
                 <legend className="sr-only">{`Threat ${threat.id} targets`}</legend>
                 {options.length === 0 && <p className={HELP}>Add components or interactions first.</p>}
-                {options.map(option => (
-                    <label key={option.id} className="flex items-center gap-1.5 text-sm text-zinc-200">
-                        <input type="checkbox" checked={threat.target_ids.includes(option.id)} disabled={disabled}
-                            onChange={e => toggle(option.id, e.target.checked)} />
-                        {`${option.id} ${option.name}`.trim()}
-                    </label>
-                ))}
+                {/* About ten targets before the list scrolls. */}
+                <div className="max-h-[13rem] overflow-y-auto pr-1">
+                    {options.map(option => (
+                        <label key={option.id} className="flex items-center gap-1.5 text-sm text-zinc-200">
+                            <input type="checkbox" checked={threat.target_ids.includes(option.id)} disabled={disabled}
+                                onChange={e => toggle(option.id, e.target.checked)} />
+                            {`${option.id} ${option.name}`.trim()}
+                        </label>
+                    ))}
+                </div>
             </fieldset>
             <FieldErrorText path={path} errors={errors} />
         </td>
@@ -69,7 +72,7 @@ function ThreatRow({ draft, threat, index, errors, disabled, onEdit, onRemove }:
             <TargetList draft={draft} threat={threat} index={index} errors={errors} disabled={disabled}
                 onChange={ids => onEdit(index, { target_ids: ids })} />
             <RemoveButton noun="threat" id={threat.id} hintId={`ai-variant-threats-${index}-blocked`}
-                blocked={draft.stride.risks.some(r => r.threat_id === threat.id)} hint={REMOVE_HINT}
+                blocked={draft.stride.risks.some(r => r.threat_ids.includes(threat.id))} hint={REMOVE_HINT}
                 disabled={disabled} onClick={() => onRemove(index)} />
         </tr>
     );

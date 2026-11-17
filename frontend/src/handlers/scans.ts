@@ -216,6 +216,7 @@ type ScanImportResponse =
 export type { ScanImportEntry, ScanImportResult, ScanImportResponse };
 
 type OutdatedDataPreview = {
+    vulnerability_history_count?: number;
     candidate_ids: {
         observations: string[];
         assessments: string[];
@@ -356,10 +357,15 @@ class ScansHandler {
         return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
     }
 
-    static async deleteOutdatedData(candidateIds: OutdatedDataPreview["candidate_ids"]): Promise<{ ok: boolean; error?: string; summary?: Record<string, number> }> {
+    static async deleteOutdatedData(
+        candidateIds: OutdatedDataPreview["candidate_ids"], clearVulnerabilityHistory = false,
+    ): Promise<{ ok: boolean; error?: string; summary?: Record<string, number> }> {
         const response = await fetch(
             import.meta.env.VITE_API_URL + '/api/outdated-data',
-            { method: 'DELETE', mode: 'cors', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidate_ids: candidateIds }) }
+            {
+                method: 'DELETE', mode: 'cors', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ candidate_ids: candidateIds, clear_vulnerability_history: clearVulnerabilityHistory }),
+            }
         );
         const data = await response.json().catch(() => ({}));
         if (response.ok) return { ok: true, summary: data };

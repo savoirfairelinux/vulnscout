@@ -14,6 +14,7 @@
 #   cmd_assessments.py — custom VulnScout JSON and OpenVEX import/export commands
 #   cmd_scans.py       — ``flask list-projects``, ``flask list-scans``, cleanup commands
 #   cmd_vuln_scan.py   — ``flask nvd-scan`` and ``flask osv-scan``
+#   cmd_ai_assess.py   — ``flask ai-assess``
 
 from ..controllers import ControllersCache
 from ._common import DEFAULT_VARIANT_NAME  # noqa: F401 — intentional re-export
@@ -28,7 +29,8 @@ from .cmd_process import (  # noqa: F401 — intentional re-exports for callers
     read_inputs,
     _ts_key,
 )
-from .cmd_export import export_command, report_command
+from .cmd_export import export_command, report_command, export_vulnerability_history_command
+from .cmd_refresh_runs import export_refresh_changes_command, prune_refresh_runs_command
 from .cmd_assessments import (
     export_custom_openvex_assessments_command,
     export_custom_vulnscout_data_command,
@@ -48,6 +50,8 @@ from .cmd_scans import (
     delete_scan_command,
 )
 from .cmd_vuln_scan import nvd_scan_command, osv_scan_command, sbom_cve_check_scan_command, new_scan_run_id_command
+from .cmd_ai_assess import ai_assess_command
+from .cmd_ai_review import ai_review_command
 
 
 def init_app(app) -> None:
@@ -55,8 +59,11 @@ def init_app(app) -> None:
     app.cli.add_command(create_project_context)
     app.cli.add_command(process_command)
     app.cli.add_command(refresh_vulnerability_data_command)
+    app.cli.add_command(export_refresh_changes_command)
+    app.cli.add_command(prune_refresh_runs_command)
     app.cli.add_command(report_command)
     app.cli.add_command(export_command)
+    app.cli.add_command(export_vulnerability_history_command)
     app.cli.add_command(export_custom_vulnscout_data_command)
     app.cli.add_command(import_custom_vulnscout_data_command)
     app.cli.add_command(export_custom_openvex_assessments_command)
@@ -73,6 +80,8 @@ def init_app(app) -> None:
     app.cli.add_command(osv_scan_command)
     app.cli.add_command(sbom_cve_check_scan_command)
     app.cli.add_command(new_scan_run_id_command)
+    app.cli.add_command(ai_assess_command)
+    app.cli.add_command(ai_review_command)
 
 
 def main() -> ControllersCache:

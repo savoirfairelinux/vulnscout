@@ -29,6 +29,7 @@ from typing import Callable, Deque, Dict, List, Optional
 
 from flask import Flask
 
+from ..helpers.history_source import history_operation, history_source
 from .job_context import CancelledError, JobContext, OperationError
 from .operation_registry import (
     LANE_EXPORT,
@@ -159,6 +160,11 @@ class OperationQueue:
             pending = lane.take_pending(op_id)
             if pending is not None:
                 pending.ctx.request_cancel()
+                if operation.get("kind") == "refresh" and operation.get("queue_id") and self._app:
+                    from ..helpers.refresh_runs import finish_source
+                    with self._app.app_context():
+                        finish_source(operation["queue_id"], operation["source"], "cancelled",
+                                      "Cancelled before start")
                 registry.update(
                     op_id,
                     status=STATUS_CANCELLED,
@@ -188,6 +194,12 @@ class OperationQueue:
     def _execute(self, job: _Job) -> None:
         try:
             if job.ctx.is_cancelled():
+                operation = registry.get(job.op_id) or {}
+                if operation.get("kind") == "refresh" and operation.get("queue_id") and self._app:
+                    from ..helpers.refresh_runs import finish_source
+                    with self._app.app_context():
+                        finish_source(operation["queue_id"], operation["source"], "cancelled",
+                                      "Cancelled before start")
                 registry.update(
                     job.op_id,
                     status=STATUS_CANCELLED,
@@ -205,9 +217,17 @@ class OperationQueue:
 
     def _run_body(self, job: _Job) -> None:
         assert self._app is not None, "OperationQueue.init_app() was never called"
+        operation = registry.get(job.op_id) or {}
         try:
-            with self._app.app_context():
-                job.runner(job.ctx)
+            with self._app.app_context(), history_source(operation.get("source")), history_operation(
+                operation.get("queue_id"), job.op_id
+            ):
+                if operation.get("kind") == "refresh":
+                    from ..helpers.refresh_runs import tracked_refresh
+                    job.ctx.queue_id = operation.get("queue_id") or job.ctx.queue_id
+                    tracked_refresh(operation["source"])(job.runner)(job.ctx)
+                else:
+                    job.runner(job.ctx)
         except CancelledError:
             job.ctx.flush()
             registry.update(

@@ -380,6 +380,7 @@ class TestOutdatedFlag:
         }]
         assert uuid.UUID(preview["candidate_ids"]["package_pairs"][0]["package_id"])
         assert {key: value for key, value in preview.items() if key != "candidate_ids"} == {
+            "vulnerability_history_count": 2,
             "packages": [{
                 "package": "firefox@1.0",
                 "project": "test",
