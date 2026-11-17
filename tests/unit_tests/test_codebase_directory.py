@@ -130,6 +130,32 @@ def test_directory_limits_binary_and_encoding_errors(tree, monkeypatch):
             pass
 
 
+@pytest.mark.parametrize("count", [500_000, 500_001])
+def test_directory_entry_count_boundary(tree, monkeypatch, count):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    import stat
+
+    cache, name, _ = tree
+    info = SimpleNamespace(st_mode=stat.S_IFREG, st_nlink=1, st_size=0)
+
+    @contextmanager
+    def scandir(_fd):
+        yield (SimpleNamespace(name=f"source-{index:06d}.c", stat=lambda **kwargs: info) for index in range(count))
+
+    monkeypatch.setattr(module.os, "scandir", scandir)
+    if count > 500_000:
+        with pytest.raises(ValueError, match="500000-entry browsing limit"):
+            with CodebaseDirectory(str(cache), name):
+                pass
+    else:
+        with CodebaseDirectory(str(cache), name) as reference:
+            assert len(reference.entries) == count
+            assert reference.list_files(offset=499_999) == {
+                "files": [{"path": "source-499999.c", "size": 0}], "total": count, "next_offset": None,
+            }
+
+
 def test_search_budget_handles_files_growing_after_index(tree, monkeypatch):
     cache, name, root = tree
     (root / "z.c").write_text("x")

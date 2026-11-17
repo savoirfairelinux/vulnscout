@@ -170,12 +170,13 @@ def test_empty_archive_rejected():
         validate_reference(zip_source([]), "s.zip")
 
 
-def test_archive_entry_member_and_expansion_limits(monkeypatch):
+@pytest.mark.parametrize("archive_type", ["zip", "tar"])
+def test_archive_entry_limit_error_uses_configured_limit(monkeypatch, archive_type):
     import src.helpers.codebase_reference as module
     monkeypatch.setattr(module, "MAX_ENTRIES", 1)
-    with pytest.raises(ValueError, match="5000"):
-        validate_reference(zip_source([("a", b"x"), ("b", b"x")]), "s.zip")
-    monkeypatch.setattr(module, "MAX_ENTRIES", 5000)
+    source = zip_source if archive_type == "zip" else tar_source
+    with pytest.raises(ValueError, match="more than 1 entries"):
+        validate_reference(source([("a", b"x"), ("b", b"x")]), f"s.{archive_type}")
 
 
 def test_large_plain_files_remain_readable_without_archive_limits(monkeypatch):
@@ -198,12 +199,34 @@ def test_large_archive_members_are_rejected():
 
 
 def test_real_archive_entry_count_boundary():
-    entries = [(f"source-{index}.c", b"") for index in range(5000)]
-    with CodebaseReference(zip_source(entries), "at-limit.zip") as reference:
-        assert len(reference.entries) == 5000
-    entries.append(("extra.c", b""))
-    with pytest.raises(ValueError, match="5000"):
-        validate_reference(zip_source(entries), "over-limit.zip")
+    source = zip_source((f"source-{index:06d}.c", b"") for index in range(500_000))
+    with CodebaseReference(source, "at-limit.zip") as reference:
+        assert len(reference.entries) == 500_000
+        assert reference.list_files(offset=499_999) == {
+            "files": [{"path": "source-499999.c", "size": 0}], "total": 500_000, "next_offset": None,
+        }
+    with zipfile.ZipFile(source, "a") as archive:
+        archive.writestr("extra.c", b"")
+    with pytest.raises(ValueError, match="more than 500000 entries"):
+        validate_reference(source, "over-limit.zip")
+
+
+@pytest.mark.parametrize("count", [500_000, 500_001])
+def test_tar_entry_count_boundary(monkeypatch, count):
+    from unittest.mock import MagicMock
+
+    # Stream metadata to exercise the real threshold without a 256 MB TAR fixture.
+    archive = MagicMock()
+    archive.__enter__.return_value = archive
+    archive.__iter__.side_effect = lambda: (tarfile.TarInfo(f"source-{index}.c") for index in range(count))
+    monkeypatch.setattr(tarfile, "open", lambda **kwargs: archive)
+    if count > 500_000:
+        with pytest.raises(ValueError, match="more than 500000 entries"):
+            with CodebaseReference(BytesIO(), "over-limit.tar"):
+                pass
+    else:
+        with CodebaseReference(BytesIO(), "at-limit.tar") as reference:
+            assert len(reference.entries) == count
 
 
 def test_zip_checksum_failure_is_rejected():
