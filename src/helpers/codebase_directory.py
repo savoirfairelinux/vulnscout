@@ -63,12 +63,18 @@ def provision_directory(cache_dir: str, name: str) -> None:
     directory_path(cache_dir, name)
     os.makedirs(cache_dir, mode=0o750, exist_ok=True)
     with _open_directory(cache_dir) as cache_fd:
+        created = False
         try:
             os.mkdir(name, mode=0o750, dir_fd=cache_fd)
+            created = True
         except FileExistsError:
             pass
-        with _open_directory(name, cache_fd):
-            pass
+        with _open_directory(name, cache_fd) as directory_fd:
+            if created and os.geteuid() == 0:
+                # setup_user maps the cache owner to the host user, including rootless Podman.
+                # Only inherit it for new folders; existing source trees may be read-only mounts.
+                owner = os.fstat(cache_fd)
+                os.fchown(directory_fd, owner.st_uid, owner.st_gid)
 
 
 def _excluded(name: str) -> bool:
