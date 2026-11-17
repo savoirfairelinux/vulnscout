@@ -13,7 +13,8 @@ from src.models.variant import Variant
 
 
 @pytest.fixture()
-def app():
+def app(tmp_path, monkeypatch):
+    monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path / "cache"))
     os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     try:
         application = create_app()
@@ -781,6 +782,97 @@ class TestCodebaseDirectory:
         assert response.status_code == 200
         return response.get_json()
 
+    @pytest.mark.parametrize("first_read", ["merged", "status", "source"])
+    @pytest.mark.parametrize("saved_context", [False, True])
+    def test_ci_directory_is_discovered_without_provisioning(
+        self, client, project, variant, tmp_path, monkeypatch, first_read, saved_context,
+    ):
+        from src.models.variant_context import VariantContext
+
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        before = VariantContext.save_editor(variant.id, _editor_payload()).to_dict() if saved_context else None
+        directory = tmp_path / "context-TestProject-TestVariant"
+        directory.mkdir()
+        (directory / "main.c").write_text("first\nneedle\n")
+        metadata = {"file_id": "directory", "path": str(directory)}
+        merged_url = f"/api/context?project_id={project.id}&variant_id={variant.id}"
+        status_url = f"/api/variants/{variant.id}/context/directory"
+        urls = {"merged": merged_url, "status": status_url,
+                "source": f"/api/variants/{variant.id}/context/files/directory/source"}
+
+        with patch("src.routes.context.provision_directory", side_effect=AssertionError("Must not create paths")):
+            response = client.get(urls[first_read])
+            assert response.status_code == 200
+            vc = VariantContext.get_by_variant(variant.id)
+            assert vc.codebase_directory == directory.name and vc.updated_at is not None
+            after = vc.to_dict()
+            if before is not None:
+                assert after == {
+                    **before, "codebase_directory": metadata, "updated_at": after["updated_at"],
+                    "editor": {**before["editor"], "updated_at": after["updated_at"]},
+                }
+            assert client.get(merged_url).get_json()["codebase_directory"] == metadata
+            status = client.get(status_url).get_json()
+            assert status["status"] == "ready" and status["file_count"] == 1
+            assert self._source(client, variant).get_json()["files"] == [{"path": "main.c", "size": 13}]
+            assert self._source(client, variant, operation="read", path="main.c").get_json()["content"] == "first\nneedle\n"
+            assert self._source(client, variant, operation="search", query="needle").get_json()["matches"] == [
+                {"path": "main.c", "line": 2, "text": "needle"},
+            ]
+            assert vc.to_dict()["updated_at"] == after["updated_at"]
+
+    def test_discovery_does_not_create_cache_or_context_when_directory_is_absent(
+        self, client, project, variant, tmp_path, monkeypatch,
+    ):
+        from src.models.variant_context import VariantContext
+
+        cache = tmp_path / "absent"
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(cache))
+        merged = client.get("/api/context", query_string={"project_id": project.id, "variant_id": variant.id})
+        assert merged.status_code == 200 and merged.get_json()["codebase_directory"] is None
+        assert client.get(f"/api/variants/{variant.id}/context/directory").get_json()["status"] == "not_created"
+        assert self._source(client, variant).status_code == 404
+        assert not cache.exists()
+        assert VariantContext.get_by_variant(variant.id) is None
+
+    @pytest.mark.parametrize("kind", ["symlink", "file"])
+    def test_discovery_rejects_unsafe_directory_roots(self, client, project, variant, tmp_path, monkeypatch, kind):
+        from src.models.variant_context import VariantContext
+
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        root = tmp_path / "context-TestProject-TestVariant"
+        if kind == "symlink":
+            outside = tmp_path / "outside"
+            outside.mkdir()
+            (outside / "main.c").write_text("private")
+            root.symlink_to(outside, target_is_directory=True)
+        else:
+            root.write_text("not a directory")
+        response = client.get("/api/context", query_string={"project_id": project.id, "variant_id": variant.id})
+        assert response.status_code == 500
+        assert "error" in response.get_json()
+        assert self._source(client, variant).status_code == 500
+        assert VariantContext.get_by_variant(variant.id) is None
+
+    def test_discovery_rejects_ambiguous_names_until_explicitly_claimed(
+        self, client, project, variant, tmp_path, monkeypatch,
+    ):
+        from src.models.variant_context import VariantContext
+
+        monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+        other = Variant.create(variant.name + "@", project.id)
+        root = tmp_path / "context-TestProject-TestVariant"
+        root.mkdir()
+        (root / "main.c").write_text("ambiguous")
+        for candidate in (variant, other):
+            response = client.get("/api/context", query_string={"project_id": project.id, "variant_id": candidate.id})
+            assert response.status_code == 409
+            assert self._source(client, candidate).status_code == 409
+            assert VariantContext.get_by_variant(candidate.id) is None
+        assert client.post(f"/api/variants/{variant.id}/context/directory").status_code == 200
+        assert self._source(client, variant).status_code == 200
+        assert self._source(client, other).status_code == 409
+
     def test_on_demand_provisioning_preserves_draft_fields_and_exposes_directory(
         self, client, project, variant, tmp_path, monkeypatch,
     ):
@@ -927,7 +1019,7 @@ class TestCodebaseDirectory:
         assert "already assigned" in response.get_json()["error"]
         other_context = VariantContext.get_by_variant(other_variant.id)
         assert other_context.codebase_directory is None and other_context.updated_at is None
-        assert self._source(client, other_variant).status_code == 404
+        assert self._source(client, other_variant).status_code == 409
         assert self._source(client, first_variant, operation="read", path="main.c").get_json()["content"] == (
             "first variant only"
         )
@@ -953,7 +1045,7 @@ class TestCodebaseDirectory:
         assert "already assigned" in response.get_json()["error"]
         assert VariantContext.get_by_variant(variant.id).to_dict() == before
         assert VariantContext.get_by_variant(other.id).codebase_directory == "context-TestProject-TestVariant"
-        assert self._source(client, variant).status_code == 404
+        assert self._source(client, variant).status_code == 409
 
     def test_existing_uuid_directory_is_not_moved_or_renamed(self, client, variant, tmp_path, monkeypatch):
         from src.helpers.codebase_directory import provision_directory

@@ -997,9 +997,8 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
             agent_client.get_codebase_source(other_id, other_file_id, {"operation": "list"})
         with pytest.raises(VulnScoutError, match="File not found"):
             agent_client.get_codebase_source(chosen_id, other_file_id, {"operation": "list"})
-        provisioned = client.post(f"/api/variants/{chosen_id}/context/directory")
-        assert provisioned.status_code == 200
-        directory = Path(provisioned.get_json()["path"])
+        directory = tmp_path / "context-Project-A-Chosen"
+        directory.mkdir()
         (directory / "source.c").write_text("first\nvulnerable_call();\n")
         context = agent_client.get_merged_context(project_id, chosen_id)
         assert context["files"][0]["id"] == file_id

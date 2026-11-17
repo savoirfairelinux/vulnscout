@@ -416,11 +416,12 @@ def register_tools(server, client: VulnScoutClient) -> None:
         file_id="directory". Pass that ID to list_codebase_files,
         read_codebase_file, and search_codebase to inspect source through
         the bounded API, never direct filesystem access.
-        No separate context save or source selection is required.
+        Matching cache directories created by CI are discovered automatically.
+        No UI provisioning, separate context save or source selection is required.
         Empty files only means no uploaded attachments;
         always check codebase_directory before concluding source is unavailable.
-        A null codebase_directory means it has not been provisioned; report the
-        missing evidence instead of falling back to local paths.
+        A null codebase_directory means no saved or matching directory was found;
+        report the missing evidence instead of falling back to local paths.
 
         threat_model and risks are read-only plain-text renderings of the
         variant's STRIDE model, edited in the AI Context page (None when
