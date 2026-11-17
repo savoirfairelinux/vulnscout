@@ -117,7 +117,7 @@ python vulnscout_mcp/server.py
 | `find_project_id`              | Resolve a project name to its UUID                                   |
 | `find_variant_id`              | Resolve a project/variant name pair to a variant UUID                |
 | `list_variants`                | List all variants across every project (id, name, project_id)        |
-| `get_merged_context`           | Get the merged project + variant context: `codebase_directory` (`file_id="directory"` and server path), environment, other info, attachment metadata, and the threat model and risks rendered as text from the variant's STRIDE model (`C#` components, `I#` interactions, `T#` threats). With `include_model=true`, also the editable System text and STRIDE rows as JSON with their IDs |
+| `get_merged_context`           | Get the merged project + variant context: `codebase_directory` (`file_id="directory"` and server path), environment, other info, attachment metadata, and the threat model and risks rendered as text from the variant's STRIDE model (`C#` components, `I#` interactions, `T#` threats). Responses are paginated in 12 KiB UTF-8 pages; follow `next_offset` until `null` and concatenate page contents before analysis. With `include_model=true`, also the editable System text and STRIDE rows as JSON with their IDs |
 | `list_dependency_documents`    | Paginate active SBOM sources and relationship-recording coverage for a variant |
 | `list_dependency_packages`     | Search/paginate the complete SBOM inventory, including isolated packages and per-document version evidence |
 | `get_package_dependencies`     | Traverse direct/transitive dependencies or reverse dependents with paths and source provenance |
