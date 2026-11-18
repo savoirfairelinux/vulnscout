@@ -37,6 +37,8 @@ class RefreshRunScope(Base):
     )
     project_id: Mapped[str | None] = mapped_column(String(36))
     variant_id: Mapped[str | None] = mapped_column(String(36))
+    # NULL applies to every source of the run.
+    source: Mapped[str | None] = mapped_column(String(16))
 
 
 class RefreshRunSource(Base):

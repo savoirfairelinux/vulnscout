@@ -77,8 +77,10 @@ def test_container_entrypoint_forwards_exact_id_format_and_scope(wrapper):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == '{"exact":true}\n'
+    calls = log.read_text().splitlines()
+    assert calls[0] == "--app src.bin.webapp db upgrade"
     assert "--app src.bin.webapp export-refresh-changes --run-id exact --format csv --project demo --variant x86" in (
-        log.read_text()
+        calls[1]
     )
 
 

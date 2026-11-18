@@ -34,12 +34,28 @@ def _link_filter(params: dict) -> list:
     return [getattr(RefreshTargetLink, key) == params[key] for key in SCOPE_KEYS if params.get(key)]
 
 
+def _initiated_in_scope(run_id, source, params: dict) -> ColumnElement[bool]:
+    """A run started from another project must not leak through CVEs shared with the selected one.
+
+    Each source is matched against the scopes that initiated it; runs without
+    scope rows are global.
+    """
+    applicable = [RefreshRunScope.run_id == run_id,
+                  or_(RefreshRunScope.source.is_(None), RefreshRunScope.source == source)]
+    matching = [or_(getattr(RefreshRunScope, key) == params[key], getattr(RefreshRunScope, key).is_(None))
+                for key in SCOPE_KEYS if params.get(key)]
+    # Correlate with the enclosing run/target/change rows explicitly, as this is nested two levels deep.
+    scopes = exists().where(*applicable).correlate(RefreshRun, RefreshTarget, RefreshChange)
+    return or_(~scopes, exists().where(*applicable, *matching).correlate(RefreshRun, RefreshTarget, RefreshChange))
+
+
 def _target_filter(run_id, params: dict) -> list:
     conditions = [RefreshTarget.run_id == run_id]
     if params.get("vuln_id"):
         conditions.append(RefreshTarget.vuln_id == params["vuln_id"].upper())
     if _scoped(params):
         conditions.append(exists().where(RefreshTargetLink.target_id == RefreshTarget.id, *_link_filter(params)))
+        conditions.append(_initiated_in_scope(run_id, RefreshTarget.source, params))
     return conditions
 
 
@@ -50,6 +66,7 @@ def _change_filter(run_id: str, params: dict) -> list:
     if _scoped(params):
         conditions.append(exists().where(RefreshTargetLink.target_id == RefreshChange.target_id,
                                          *_link_filter(params)))
+        conditions.append(_initiated_in_scope(run_id, RefreshChange.source, params))
     conditions += [getattr(RefreshChange, key) == params[key] for key in CHANGE_FILTERS if params.get(key)]
     return conditions
 
@@ -89,9 +106,46 @@ def _links_by_target(target_ids: list[int], params: dict) -> dict[int, list[dict
     return links
 
 
-def metadata(run: RefreshRun, params: dict) -> dict:
-    """Run metadata and summary computed in the database, without change bodies or coverage."""
-    source_status = source_statuses(run.run_id)
+def _scope_rows(run_ids: list[str]) -> dict[str, list[RefreshRunScope]]:
+    rows: dict[str, list[RefreshRunScope]] = {run_id: [] for run_id in run_ids}
+    for row in db.session.scalars(select(RefreshRunScope).where(RefreshRunScope.run_id.in_(run_ids))):
+        rows[row.run_id].append(row)
+    return rows
+
+
+def _scoped_sources(rows: list[RefreshRunScope], source_status: dict[str, str], params: dict) -> list[str]:
+    """Sources initiated from the requested scope; mirrors ``_initiated_in_scope``."""
+    if not _scoped(params):
+        return list(source_status)
+
+    def matches(row: RefreshRunScope) -> bool:
+        return all(getattr(row, key) in (params[key], None) for key in SCOPE_KEYS if params.get(key))
+
+    return [source for source in source_status
+            if not (applicable := [row for row in rows if row.source in (None, source)])
+            or any(matches(row) for row in applicable)]
+
+
+def _scoped_scope(run: RefreshRun, sources: list[str]) -> dict:
+    scope = {key: value for key, value in run.scope.items() if key != "refresh_type"}
+    by_source = scope.get("source_scopes")
+    if by_source:
+        scope["source_scopes"] = {source: item for source, item in by_source.items() if source in sources}
+        scope["variants"] = [variant for item in scope["source_scopes"].values()
+                             for variant in item.get("variants", [])]
+    return scope
+
+
+def metadata(run: RefreshRun, params: dict, scope_rows: list[RefreshRunScope] | None = None) -> dict:
+    """Run metadata and summary computed in the database, without change bodies or coverage.
+
+    ``scope_rows`` lets list callers load the scope rows of a whole page at once.
+    """
+    all_status = source_statuses(run.run_id)
+    if scope_rows is None:
+        scope_rows = _scope_rows([run.run_id])[run.run_id] if _scoped(params) else []
+    visible = _scoped_sources(scope_rows, all_status, params)
+    source_status = {source: all_status[source] for source in visible}
     total, changed, first = db.session.execute(
         select(func.count(), func.count(RefreshChange.vuln_id.distinct()),
                func.coalesce(func.sum(case((RefreshChange.kind == "first_enrichment", 1), else_=0)), 0))
@@ -111,7 +165,7 @@ def metadata(run: RefreshRun, params: dict) -> dict:
             value == "complete" for value in source_status.values()
         ) else "incomplete"
     return {
-        "run_id": run.run_id, "scope": {key: value for key, value in run.scope.items() if key != "refresh_type"},
+        "run_id": run.run_id, "scope": _scoped_scope(run, visible),
         "refresh_type": run.scope.get("refresh_type", "unknown"),
         "sources": list(source_status),
         "source_status": source_status,
@@ -203,7 +257,9 @@ def init_app(app):
         if params.get("hide_individual") == "true":
             query = query.where(func.coalesce(RefreshRun.scope["refresh_type"].as_string(), "unknown") != "individual")
         total = db.session.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
-        runs = [metadata(run, params) for run in db.session.scalars(query.limit(limit).offset(offset))]
+        page = db.session.scalars(query.limit(limit).offset(offset)).all()
+        rows = _scope_rows([run.run_id for run in page]) if _scoped(params) else {}
+        runs = [metadata(run, params, rows.get(run.run_id, [])) for run in page]
         return jsonify({"runs": runs, "total": total, "limit": limit, "offset": offset})
 
     @app.get("/api/refresh-runs/latest", endpoint="get_latest_refresh_run")

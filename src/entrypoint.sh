@@ -1212,6 +1212,8 @@ if [[ -n "${EXPORT_REFRESH_RUN_ID:-}" ]]; then
     [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_export_args+=(--project "$PROJECT_NAME")
     [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_export_args+=(--variant "$VARIANT_NAME")
     cd "$BASE_DIR"
+    # Keep stdout for the exported JSON/CSV.
+    flask --app src.bin.webapp db upgrade >&2 || exit $?
     exec flask --app src.bin.webapp export-refresh-changes "${refresh_export_args[@]}"
 fi
 
