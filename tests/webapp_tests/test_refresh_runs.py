@@ -333,9 +333,12 @@ def test_shared_cve_visibility_is_captured_and_package_links_are_scope_filtered(
         db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
         db.session.commit()
         other_id = str(project.id)
-        run = create_run({"epss": [CVE]}, scope={"project_id": PROJECT, "variant_id": None})
+        run = create_run({"epss": [CVE]})
         _change(run, 0.7)
         finish_source(run, "epss")
+        scoped = create_run({"epss": [CVE]}, scope={"project_id": PROJECT, "variant_id": None})
+        _change(scoped, 0.6)
+        finish_source(scoped, "epss")
         # Removing the live association must not change the retained artifact.
         db.session.delete(scan)
         db.session.commit()
@@ -345,6 +348,74 @@ def test_shared_cve_visibility_is_captured_and_package_links_are_scope_filtered(
     assert all(package["project_id"] == other_id for package in data["coverage"][0]["packages"])
     assert client.get(f"/api/refresh-runs/{run}", query_string={"project_id": str(uuid.uuid4())}).status_code == 404
     assert client.get("/api/refresh-runs/latest", query_string={"project_id": other_id}).get_json()["run_id"] == run
+    # A run started from another project is not listed even when it shares a CVE.
+    listed = client.get("/api/refresh-runs", query_string={"project_id": other_id}).get_json()["runs"]
+    assert [item["run_id"] for item in listed] == [run]
+    assert client.get(f"/api/refresh-runs/{scoped}", query_string={"project_id": other_id}).status_code == 404
+    listed = client.get("/api/refresh-runs", query_string={"project_id": PROJECT}).get_json()["runs"]
+    assert {item["run_id"] for item in listed} == {run, scoped}
+
+
+def test_mixed_batch_sources_are_visible_only_in_their_initiating_project(app, client):
+    with app.app_context():
+        project = Project(id=uuid.uuid4(), name="other")
+        variant = Variant(id=uuid.uuid4(), name="other", project_id=project.id)
+        scan = Scan(id=uuid.uuid4(), variant_id=variant.id, scan_type="sbom")
+        finding = db.session.scalar(db.select(Finding).where(Finding.vulnerability_id == CVE))
+        db.session.add_all([project, variant, scan])
+        db.session.flush()
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+        other_id = str(project.id)
+        scope = {"project_id": None, "variant_id": None, "variants": [], "source_scopes": {
+            "euvd": {"project_id": PROJECT, "variant_id": None},
+            "epss": {"project_id": other_id, "variant_id": None},
+        }}
+        run = create_run({"euvd": [CVE], "epss": [CVE]}, scope=scope)
+        for source in ("euvd", "epss"):
+            with capture_source(run, source):
+                target_result(source, CVE)
+            finish_source(run, source)
+    for project_id, source in ((PROJECT, "euvd"), (other_id, "epss")):
+        listed = client.get("/api/refresh-runs", query_string={"project_id": project_id}).get_json()["runs"]
+        assert [item["run_id"] for item in listed] == [run]
+        data = client.get(f"/api/refresh-runs/{run}", query_string={"project_id": project_id}).get_json()
+        assert [entry["source"] for entry in data["coverage"]] == [source]
+        assert client.get(f"/api/refresh-runs/{run}/export",
+                          query_string={"project_id": project_id}).status_code == 200
+    assert client.get("/api/refresh-runs", query_string={"project_id": str(uuid.uuid4())}).get_json()["runs"] == []
+    unscoped = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert set(unscoped["source_status"]) == {"euvd", "epss"}
+
+
+def test_mixed_batch_metadata_and_status_follow_the_initiating_provider(app, client):
+    with app.app_context():
+        other_id = str(uuid.uuid4())
+        scope = {"project_id": None, "variant_id": None, "variants": [], "source_scopes": {
+            "euvd": {"project_id": PROJECT, "variant_id": None},
+            "epss": {"project_id": other_id, "variant_id": None},
+        }}
+        run = create_run({"euvd": [CVE], "epss": [CVE]}, scope=scope)
+        with capture_source(run, "euvd"):
+            target_result("euvd", CVE)
+        finish_source(run, "euvd")
+    pending = client.get(f"/api/refresh-runs/{run}", query_string={"project_id": PROJECT}).get_json()
+    assert (pending["status"], pending["finished_at"]) == ("running", None)
+    assert pending["source_status"] == {"euvd": "complete"}
+    with app.app_context():
+        with capture_source(run, "epss"):
+            target_result("epss", CVE, "failed", "HTTP 500")
+        finish_source(run, "epss", "failed", "HTTP 500")
+    listed = client.get("/api/refresh-runs", query_string={"project_id": PROJECT}).get_json()["runs"][0]
+    detail = client.get(f"/api/refresh-runs/{run}", query_string={"project_id": PROJECT}).get_json()
+    exported = client.get(f"/api/refresh-runs/{run}/export", query_string={"project_id": PROJECT}).get_json()
+    for data in (listed, detail, exported):
+        assert data["sources"] == ["euvd"]
+        assert data["source_status"] == {"euvd": "complete"}
+        assert data["scope"]["source_scopes"] == {"euvd": {"project_id": PROJECT, "variant_id": None}}
+        assert other_id not in json.dumps(data)
+    assert detail["status"] == "complete"
+    assert client.get(f"/api/refresh-runs/{run}").get_json()["status"] == "incomplete"
 
 
 def test_first_enrichment_cvss_identity_and_pagination_filters(app, client):

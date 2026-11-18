@@ -23,9 +23,14 @@ Scope options belong **after** the command. Without `-p`, refresh covers all
 stored vulnerabilities; with only `-p`, it covers that project's active scope.
 `-v` requires `-p`, and an empty `-p`/`-v` value is rejected rather than
 treated as "all". Export scope names are resolved to project/variant IDs and
-filter the captured package links, not today's mutable findings. A shared CVE's
-global metadata change is visible in each captured scope that observed it, but
-an export filtered to one scope never exposes other scopes' package links.
+filter the captured package links, not today's mutable findings. A run started
+without a project or variant is global: a shared CVE's change is visible in each
+captured scope that observed it. A run started from a project or variant is
+visible only in the scope that initiated it (per provider for mixed batches),
+even when another project shares one of its CVEs. Requesting such a run from
+another scope returns 404, and `export refresh-changes` for it fails, despite
+captured package links in that scope. An export filtered to one scope never
+exposes other scopes' package links.
 
 Captured refreshes also remain available through
 `export vulnerability-history --last-refresh`. That export selects each

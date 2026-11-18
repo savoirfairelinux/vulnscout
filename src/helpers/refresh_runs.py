@@ -213,9 +213,13 @@ def create_run(targets: dict[str, list[str]], *, run_id: str | None = None,
         last_seen_at=now,
     ))
     db.session.flush()
-    pairs = {(entry.get("project_id"), entry.get("variant_id")) for entry in [scope, *scope.get("variants", [])]}
-    db.session.add_all(RefreshRunScope(run_id=run_id, project_id=project_id, variant_id=variant_id)
-                       for project_id, variant_id in sorted(pairs, key=str) if project_id or variant_id)
+    by_source = scope.get("source_scopes")
+    scope_entries = [(source, item) for source, item in by_source.items()] if by_source else [(None, scope)]
+    for source, item in scope_entries:
+        pairs = {(entry.get("project_id"), entry.get("variant_id")) for entry in [item, *item.get("variants", [])]}
+        db.session.add_all(
+            RefreshRunScope(run_id=run_id, project_id=project_id, variant_id=variant_id, source=source)
+            for project_id, variant_id in sorted(pairs, key=str) if project_id or variant_id)
     db.session.add_all(RefreshRunSource(run_id=run_id, source=source, position=position, status="pending")
                        for position, source in enumerate(targets, 1))
     db.session.flush()
