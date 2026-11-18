@@ -468,6 +468,23 @@ describe('Refresh overview', () => {
         show();
         expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load run list');
         expect(screen.queryByText('Loading refresh runs…')).not.toBeInTheDocument();
+        list.mockResolvedValue({ runs: [], total: 0, limit: 20, offset: 0 });
+        latest.mockResolvedValue(null);
+        await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        expect(await screen.findByText(/No refresh has been recorded/)).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    test('retries a failed latest-run request without changing the scope', async () => {
+        list.mockResolvedValue({ runs: [], total: 0, limit: 20, offset: 0 });
+        latest.mockRejectedValueOnce(new Error('HTTP 503')).mockResolvedValue(null);
+        show();
+        expect(await screen.findByRole('alert')).toHaveTextContent('HTTP 503');
+        await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        expect(await screen.findByText(/No refresh has been recorded/)).toBeInTheDocument();
+        expect(latest).toHaveBeenCalledTimes(2);
+        expect(latest.mock.calls[1][0]).toEqual(latest.mock.calls[0][0]);
+        expect(list).toHaveBeenCalledTimes(1);
     });
 
     test('never broadens unsupported comparison scopes into project requests', () => {
