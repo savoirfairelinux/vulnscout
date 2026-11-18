@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsRotate, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
+import { faArrowsRotate, faEyeSlash, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
 import RefreshRuns from '../handlers/refreshRuns';
 import type { RefreshChange, RefreshCoverage, RefreshFilters, RefreshRun, RefreshRunList } from '../handlers/refreshRuns';
 import { describeChange, fieldLabel, formatHistoryValue, sourceLabel } from '../handlers/vulnerabilityHistory';
@@ -170,6 +170,17 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                 <FontAwesomeIcon icon={faArrowsRotate} />
                 Reload results
             </button>}
+            {!comparisonScope && <button type="button" aria-pressed={hideIndividual}
+                className={`py-1 px-2 rounded flex items-center gap-1 text-sm font-semibold transition-colors text-white ${hideIndividual ? 'bg-emerald-700' : 'bg-sky-900 hover:bg-sky-950'}`}
+                title={hideIndividual ? 'Individual refreshes hidden' : 'Individual refreshes visible'}
+                onClick={() => {
+                    setListOffset(0);
+                    setHideIndividual(value => !value);
+                }}>
+                <FontAwesomeIcon icon={faEyeSlash} />
+                Hide individual refreshes
+                {hideIndividual && <span className="ml-1 bg-emerald-900 px-1 rounded text-xs">✓</span>}
+            </button>}
         </>} toolbarActions={!comparisonScope && <RefreshHistoryExport projectId={projectId} />} />;
 
     if (comparisonScope) return <section className="w-full px-6 py-6 space-y-3 text-gray-800 dark:text-neutral-200" aria-label="Refresh changes">
@@ -180,14 +191,6 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
     return <section className="w-full px-6 py-6 space-y-5 text-gray-800 dark:text-neutral-200" aria-label="Refresh changes">
         {refreshControls}
         <div className="space-y-2">
-            <h2 className="font-bold">Refresh runs</h2>
-            <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={hideIndividual} onChange={event => {
-                    setListOffset(0);
-                    setHideIndividual(event.target.checked);
-                }} />
-                Hide individual refreshes
-            </label>
             {listError && <p role="alert">{listError}</p>}
             {!runList && !listError && <p role="status">Loading refresh runs…</p>}
             {runList && <ul className="relative" aria-label="Refresh runs">
