@@ -138,7 +138,7 @@ describe('Refresh overview', () => {
         expect(entry).toHaveTextContent('1 vulnerabilities refreshed');
         expect(entry).toHaveTextContent('0 vulnerabilities changed');
         expect(entry).toHaveTextContent('0 field changes');
-        await userEvent.click(screen.getByRole('checkbox', { name: 'Hide individual refreshes' }));
+        await userEvent.click(screen.getByRole('button', { name: /Hide individual refreshes/ }));
         await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({
             hide_individual: true, offset: 0, project_id: 'project-a', variant_id: 'variant-a',
         }), expect.any(AbortSignal)));
