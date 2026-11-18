@@ -84,7 +84,6 @@ describe('Refresh overview', () => {
         expect(screen.getByRole('heading', { name: 'Refresh History' })).toBeInTheDocument();
         const toolbar = screen.getByRole('heading', { name: 'Refresh History' }).closest('header');
         expect(toolbar).toContainElement(screen.getByTestId('refresh-dropdown-toggle'));
-        expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Reload results' }));
         const historyExport = screen.getByRole('button', { name: 'Export vulnerability history' });
         expect(toolbar).toContainElement(historyExport);
         expect(historyExport).toHaveClass('bg-green-700', 'hover:bg-green-600', 'border-green-500');

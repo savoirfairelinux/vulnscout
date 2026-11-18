@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsRotate, faEyeSlash, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
+import { faEyeSlash, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
 import RefreshRuns from '../handlers/refreshRuns';
 import type { RefreshChange, RefreshCoverage, RefreshFilters, RefreshRun, RefreshRunList } from '../handlers/refreshRuns';
 import { describeChange, fieldLabel, formatHistoryValue, sourceLabel } from '../handlers/vulnerabilityHistory';
@@ -165,11 +165,6 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
         getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation)}
         onRefreshComplete={onRefreshComplete} toolbar={<>
             <h1 className="text-lg font-bold">Refresh History</h1>
-            {!comparisonScope && <button type="button" className="py-1 px-2 rounded flex items-center gap-1 text-sm font-semibold bg-sky-900 hover:bg-sky-950 transition-colors"
-                onClick={() => setReload(value => value + 1)}>
-                <FontAwesomeIcon icon={faArrowsRotate} />
-                Reload results
-            </button>}
             {!comparisonScope && <button type="button" aria-pressed={hideIndividual}
                 className={`py-1 px-2 rounded flex items-center gap-1 text-sm font-semibold transition-colors text-white ${hideIndividual ? 'bg-emerald-700' : 'bg-sky-900 hover:bg-sky-950'}`}
                 title={hideIndividual ? 'Individual refreshes hidden' : 'Individual refreshes visible'}
