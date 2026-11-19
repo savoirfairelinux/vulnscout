@@ -27,6 +27,12 @@ class FastSPDX3:
         'security_VexUnderInvestigationVulnAssessmentRelationship',
     }
 
+    # statusNotes written by Yocto's SPDX 3 export for Unpatched (untriaged) CVEs
+    YOCTO_UNTRIAGED_NOTES = {'no-version-ranges', 'version-in-range'}
+    # Tools (createdUsing) that generate Yocto's SPDX 3 VEX relationships,
+    # optionally suffixed with a version such as oe-spdx-creator_1_0
+    YOCTO_TOOL_RE = re.compile(r'^(?:sbom-cve-check|oe-spdx-creator)(?:_\d+)*$')
+
     # Map from SPDX VEX justification types to internal representation
     JUSTIFICATION_MAP = {
         "vulnerableCodeNotPresent": "vulnerable_code_not_present",
@@ -55,6 +61,8 @@ class FastSPDX3:
         self.uri_to_package: Dict[str, str] = {}
         self._document_refs: Dict[str, str] = {}
         self.uri_to_vulnerability: Dict[str, str] = {}
+        self._tool_names: Dict[str, str] = {}
+        self._yocto_creation_infos: set = set()
 
     @staticmethod
     def find_spdx_version(spdx: Dict[str, Any]) -> Optional[str]:
@@ -562,6 +570,7 @@ class FastSPDX3:
         # filtered to the current variant, so that the deduplication check below is
         # variant-scoped and does not treat another variant's assessments as matches.
         self.assessmentsCtrl.warm_packages(self.uri_to_package.values())
+        self._index_creation_infos(graph)
 
         for rel in graph:
             if not isinstance(rel, dict):
@@ -584,6 +593,46 @@ class FastSPDX3:
                         break
                 if not found:
                     self.assessmentsCtrl.add(assessment)
+
+    def _index_creation_infos(self, graph: List[Any]) -> None:
+        """Record which CreationInfo elements reference a Yocto tool in createdUsing."""
+        self._tool_names = {
+            e['spdxId']: e['name'] for e in graph
+            if isinstance(e, dict) and e.get('type') == 'Tool'
+            and isinstance(e.get('spdxId'), str) and isinstance(e.get('name'), str)
+        }
+        self._yocto_creation_infos = {
+            e['@id'] for e in graph
+            if isinstance(e, dict) and e.get('type') == 'CreationInfo'
+            and isinstance(e.get('@id'), str) and self._created_by_yocto_tool(e)
+        }
+
+    def _created_by_yocto_tool(self, creation_info: Any) -> bool:
+        """True when a CreationInfo (inline or by reference) lists a Yocto tool."""
+        if isinstance(creation_info, str):
+            return creation_info in self._yocto_creation_infos
+        if not isinstance(creation_info, dict):
+            return False
+        tools = creation_info.get('createdUsing')
+        if not isinstance(tools, list):
+            return False
+        for tool in tools:
+            if isinstance(tool, dict):
+                name = tool.get('name')
+            else:
+                name = self._tool_names.get(tool) if isinstance(tool, str) else None
+            if isinstance(name, str) and self.YOCTO_TOOL_RE.match(name):
+                return True
+        return False
+
+    def _is_yocto_untriaged(self, element: Dict[str, Any]) -> bool:
+        notes = element.get('security_statusNotes')
+        return (
+            element.get('relationshipType') == 'affects'
+            and isinstance(notes, str)
+            and notes in self.YOCTO_UNTRIAGED_NOTES
+            and self._created_by_yocto_tool(element.get('creationInfo'))
+        )
 
     def _parse_vex_relationship(self, element: Dict[str, Any]) -> Optional[Assessment]:
         """
@@ -614,10 +663,14 @@ class FastSPDX3:
         if relationship_type == 'doesNotAffect':
             assessment.set_status('not_affected')
         elif relationship_type == 'affects':
-            # Standard affected VEX requires an actionStatement. Yocto omits
-            # it for untriaged Unpatched CVEs, which must stay pending.
+            # Yocto reports untriaged Unpatched CVEs as "affects" with a generated
+            # actionStatement and a version-matching status note; these must stay
+            # pending. The note alone is free text, so also require the relationship
+            # to be created by a Yocto tool. Other producers omit the actionStatement
+            # for the same case.
+            has_action = isinstance(element.get('security_actionStatement'), str)
             assessment.set_status(
-                'affected' if isinstance(element.get('security_actionStatement'), str) else 'under_investigation'
+                'affected' if has_action and not self._is_yocto_untriaged(element) else 'under_investigation'
             )
         elif relationship_type == "fixedIn":
             assessment.set_status('fixed')

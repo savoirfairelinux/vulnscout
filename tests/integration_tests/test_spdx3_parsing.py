@@ -262,6 +262,149 @@ def test_parse_assessments(spdx3_parser):
     assert "This vulnerability has been fixed in this package" in fixed.impact_statement
 
 
+def _affects_relationship(cve, **extra):
+    return {
+        "type": "security_VexAffectedVulnAssessmentRelationship",
+        "spdxId": f"http://spdx.org/spdxdocs/x/vex-affected/{cve}",
+        "from": f"http://spdx.org/spdxdocs/x/vulnerability/{cve}",
+        "to": ["http://spdx.org/spdxdocs/x/package/kernel"],
+        "relationshipType": "affects",
+        **extra,
+    }
+
+
+def test_yocto_unpatched_affects_stays_pending(spdx3_parser):
+    """Yocto unpatched CVEs carry a generated actionStatement but are untriaged."""
+    spdx3_parser.parse_from_dict({
+        "@context": "https://spdx.org/rdf/3.0.1/spdx-context.jsonld",
+        "@graph": [
+            {
+                "type": "Tool",
+                "spdxId": "http://spdx.org/spdxdocs/x/tool/sbom-cve-check",
+                "name": "sbom-cve-check",
+            },
+            {
+                "type": "CreationInfo",
+                "@id": "_:yocto",
+                "createdUsing": ["http://spdx.org/spdxdocs/x/tool/sbom-cve-check"],
+            },
+            {
+                "type": "CreationInfo",
+                "@id": "_:other",
+                "createdUsing": ["http://spdx.org/spdxdocs/x/tool/other-tool"],
+            },
+            {
+                "type": "Tool",
+                "spdxId": "http://spdx.org/spdxdocs/x/tool/sbom-cve-check-reviewer",
+                "name": "sbom-cve-check-reviewer",
+            },
+            {
+                "type": "CreationInfo",
+                "@id": "_:lookalike",
+                "createdUsing": ["http://spdx.org/spdxdocs/x/tool/sbom-cve-check-reviewer"],
+            },
+            {
+                "type": "CreationInfo",
+                "@id": "_:inline",
+                "createdUsing": [{"type": "Tool", "name": "oe-spdx-creator_1_0"}],
+            },
+            {
+                "type": "CreationInfo",
+                "@id": "_:external",
+                "createdUsing": ["https://example.com/other/tool/sbom-cve-check"],
+            },
+            {
+                "type": "CreationInfo",
+                "@id": "_:malformed",
+                "createdUsing": [{"type": "Tool", "spdxId": ["x"]}, 42],
+            },
+            {
+                "type": "software_Package",
+                "spdxId": "http://spdx.org/spdxdocs/x/package/kernel",
+                "name": "linux",
+                "software_packageVersion": "6.8.0",
+            },
+            _affects_relationship(
+                "CVE-2023-0009",
+                security_actionStatement="Upgrade to 1.4",
+                security_statusNotes="version-in-range",
+                creationInfo="_:external",
+            ),
+            _affects_relationship(
+                "CVE-2023-0010",
+                security_actionStatement="Upgrade to 1.4",
+                security_statusNotes="version-in-range",
+                creationInfo="_:malformed",
+            ),
+            _affects_relationship(
+                "CVE-2023-0007",
+                security_actionStatement="Upgrade to 1.4",
+                security_statusNotes="version-in-range",
+                creationInfo="_:lookalike",
+            ),
+            _affects_relationship(
+                "CVE-2023-0008",
+                security_actionStatement="Check package version",
+                security_statusNotes="no-version-ranges",
+                creationInfo="_:inline",
+            ),
+            _affects_relationship(
+                "CVE-2023-0001",
+                security_actionStatement="Check package version",
+                security_statusNotes="no-version-ranges",
+                creationInfo="_:yocto",
+            ),
+            _affects_relationship(
+                "CVE-2023-0002",
+                security_actionStatement="Needs backporting (fixed from 6.7)",
+                security_statusNotes="version-in-range",
+                creationInfo="_:yocto",
+            ),
+            _affects_relationship(
+                "CVE-2023-0003",
+                security_actionStatement="Upgrade to 1.4",
+                security_statusNotes="Confirmed by maintainers",
+            ),
+            _affects_relationship(
+                "CVE-2023-0004",
+                security_actionStatement="",
+                security_statusNotes="version-in-range",
+                security_vexVersion="1.0.0",
+            ),
+            _affects_relationship(
+                "CVE-2023-0006",
+                security_actionStatement="Upgrade to 1.4",
+                security_statusNotes="version-in-range",
+                security_actionStatementTime="2011-04-05T23:00:00Z",
+                creationInfo="_:other",
+            ),
+            _affects_relationship(
+                "CVE-2023-0005",
+                security_actionStatement="Upgrade to 1.4",
+                security_statusNotes=["version-in-range"],
+            ),
+        ],
+    })
+
+    ctrl = spdx3_parser.assessmentsCtrl
+    assert ctrl.gets_by_vuln("CVE-2023-0001")[0].status == "under_investigation"
+    assert ctrl.gets_by_vuln("CVE-2023-0002")[0].status == "under_investigation"
+    assert ctrl.gets_by_vuln("CVE-2023-0003")[0].status == "affected"
+    # Third-party verdict with Yocto-like note and timestamp but another producer
+    assert ctrl.gets_by_vuln("CVE-2023-0006")[0].status == "affected"
+    # Tool names are matched exactly, not by prefix
+    assert ctrl.gets_by_vuln("CVE-2023-0007")[0].status == "affected"
+    # Unresolved external tool URIs and malformed tool entries are not Yocto
+    assert ctrl.gets_by_vuln("CVE-2023-0009")[0].status == "affected"
+    assert ctrl.gets_by_vuln("CVE-2023-0010")[0].status == "affected"
+    # Inline Tool objects and versioned producer ids are recognised
+    assert ctrl.gets_by_vuln("CVE-2023-0008")[0].status == "under_investigation"
+    # VulnScout's own exported verdict reusing a Yocto-like note stays affected
+    assert ctrl.gets_by_vuln("CVE-2023-0004")[0].status == "affected"
+    # Non-string notes are ignored instead of raising
+    assert ctrl.gets_by_vuln("CVE-2023-0005")[0].status == "affected"
+
+
 def test_extract_vulnerabilities(spdx3_parser):
     """Test extracting vulnerabilities"""
 
