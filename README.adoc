@@ -73,7 +73,7 @@ cd vulnscout
 ./vulnscout serve
 ----
 
-The launcher uses `docker.io/sflinux/vulnscout:v0.25` by default.
+The launcher uses `docker.io/sflinux/vulnscout:v0.25.1` by default.
 It pulls the image if needed, starts the container, and imports the
 supplied packages and findings.
 Import alone does not request additional scans or a complete metadata refresh.
