@@ -144,6 +144,41 @@ def _config(text):
     Path(os.environ["VULNSCOUT_CONFIG"]).write_text(text)
 
 
+@pytest.mark.parametrize("explicit", [False, True])
+def test_queued_model_options_are_snapshotted_and_reach_sdk_for_each_turn(env, monkeypatch, explicit):
+    from src.routes import agent
+    from .test_agent_chat import _assess_sdk
+    from .test_agent_model_options import _model
+
+    _config("AI_PROVIDER=github\nAI_AUTH_CREDENTIALS=gho_test\nAI_MODEL=model\n"
+            "AI_CONTEXT_TIER=long_context\nAI_REASONING_EFFORT=high\n")
+    captured, _ = _assess_sdk(monkeypatch, models=(_model(),))
+
+    async def signed_in(token):
+        return {"authenticated": True}
+
+    async def runner(call):
+        return await agent._reply(call.session, call.prompt, call.path, call.model, call.scope)
+
+    monkeypatch.setattr(agent, "_token_status", signed_in)
+    monkeypatch.setattr(env.q, "_runner", runner)
+    monkeypatch.setattr(aq, "agent_queue", env.q)
+    [first], _ = env.q.enqueue("main", "web", [_message()], **({"model": "model"} if explicit else {}))
+    assert env.q.get_request(first["id"])["model_options"] == {
+        "context_tier": "long_context", "reasoning_effort": "high",
+    }
+    # Changing the toolbar affects only later requests, including when both are waiting.
+    client = env.app.test_client()
+    assert client.post("/api/agent/model", json={"model": "model"}).status_code == 200
+    [second], _ = env.q.enqueue("main", "web", [_message("later")])
+    assert env.q.run_once("chat") == first["id"]
+    assert captured["context_tier"] == "long_context" and captured["reasoning_effort"] == "high"
+    captured.clear()
+    assert env.q.run_once("chat") == second["id"]
+    assert captured["context_tier"] == "default" and "reasoning_effort" not in captured
+    assert captured["resumed"] == "assess-session"
+
+
 # ---------------------------------------------------------------- scheduling
 
 

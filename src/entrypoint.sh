@@ -77,10 +77,10 @@ DEV_MODE="${DEV_MODE:-false}"
 
 # Load config file if present
 if [ -f "$CONFIG_FILE" ]; then
-    unset AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL
+    unset AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL AI_CONTEXT_TIER AI_REASONING_EFFORT
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
-    export AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL
+    export AI_PROVIDER AI_AUTH_CREDENTIALS AI_MODEL AI_BASE_URL AI_CONTEXT_TIER AI_REASONING_EFFORT
 fi
 
 # Preserve console eligibility through internal pipes, but never style data outputs.
@@ -1212,6 +1212,8 @@ if [[ -n "${EXPORT_REFRESH_RUN_ID:-}" ]]; then
     [[ "$PROJECT_SPECIFIED" == "true" ]] && refresh_export_args+=(--project "$PROJECT_NAME")
     [[ "$VARIANT_SPECIFIED" == "true" ]] && refresh_export_args+=(--variant "$VARIANT_NAME")
     cd "$BASE_DIR"
+    # Keep stdout for the exported JSON/CSV.
+    flask --app src.bin.webapp db upgrade >&2 || exit $?
     exec flask --app src.bin.webapp export-refresh-changes "${refresh_export_args[@]}"
 fi
 

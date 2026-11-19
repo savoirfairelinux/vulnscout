@@ -562,6 +562,9 @@ SCHEMAS: dict[str, Any] = {
         "authenticated": _BOOL, "login": _TEXT, "configured": _BOOL, "device_login": _BOOL,
         "token_connected": _BOOL, "provider": _TEXT, "config_error": _TEXT,
         "model": _STRING, "usage": _ref("AgentUsage"),
+        "context_tier": {"type": "string", "enum": ["default", "long_context"]},
+        "reasoning_effort": {"type": "string", "nullable": True,
+                             "enum": ["low", "medium", "high", "xhigh", "max", None]},
         "messages": _array(_object({
             "role": {"type": "string", "enum": ["user", "assistant"]}, "content": _STRING,
         }, ("role", "content"))),
@@ -576,10 +579,26 @@ SCHEMAS: dict[str, Any] = {
     )),
     "AgentProviderStatus": _object({"provider": _TEXT, "model": _STRING}, ("provider", "model")),
     "AgentModels": _object({
-        "models": _array(_object({"id": _STRING, "name": _STRING}, ("id", "name"))),
+        "models": _array(_object({
+            "id": _STRING, "name": _STRING,
+            "context_tiers": _array({"type": "string", "enum": ["default", "long_context"]}),
+            "reasoning_efforts": _array({"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]}),
+            "default_reasoning_effort": _STRING,
+        }, ("id", "name"))),
     }, ("models",)),
-    "AgentModelRequest": _object({"model": {"type": "string", "maxLength": 100}}, ("model",)),
-    "AgentModelStatus": _object({"model": _STRING}, ("model",)),
+    "AgentModelRequest": _object({
+        "model": {"type": "string", "maxLength": 100},
+        "context_tier": {"type": "string", "enum": ["default", "long_context"], "default": "default"},
+        "reasoning_effort": {"type": "string", "nullable": True,
+                             "enum": ["low", "medium", "high", "xhigh", "max", None]},
+    }, ("model",), description=(
+        "Options are validated against Copilot model capabilities; omitted options reset defaults."
+    )),
+    "AgentModelStatus": _object({
+        "model": _STRING, "context_tier": {"type": "string", "enum": ["default", "long_context"]},
+        "reasoning_effort": {"type": "string", "nullable": True,
+                             "enum": ["low", "medium", "high", "xhigh", "max", None]},
+    }, ("model", "context_tier", "reasoning_effort")),
     "AgentDeviceLogin": _object({
         "user_code": _STRING, "verification_uri": {"type": "string", "format": "uri"}, "interval": _INT,
     }, ("user_code", "verification_uri", "interval")),
@@ -648,6 +667,10 @@ SCHEMAS: dict[str, Any] = {
         "kind": {"type": "string", "enum": ["assess", "review", "message", "context-import"]},
         "lane": {"type": "string", "enum": ["action", "chat"]}, "conversation_id": _STRING, "source": _STRING,
         "title": _STRING, "detail": _STRING, "model": _STRING, "import_revision": _TEXT,
+        "model_options": {"type": "object", "nullable": True, "properties": {
+            "context_tier": {"type": "string", "enum": ["default", "long_context"]},
+            "reasoning_effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]},
+        }},
         "status": {"type": "string", "enum": ["queued", "running", "done", "failed", "cancelled"]},
         "error": _TEXT, "error_code": _TEXT, "position": {**_INT, "nullable": True},
         "created_at": {"type": "number"}, "started_at": _NUMBER, "finished_at": _NUMBER,

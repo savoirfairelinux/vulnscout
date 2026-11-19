@@ -57,6 +57,15 @@ refers to the container itself. Use a reachable container gateway or a configure
 
 Use the plug button to reopen connector setup. The provider is shared across
 the main and action conversations, but their messages remain separate.
+For GitHub Copilot, **Context** selects the default tier (≤272K input, subject to
+the model's limit) or **Copilot Long context** (>272K input) where Copilot advertises
+support. Long context may increase usage charges. **Thinking** appears only when
+Copilot advertises supported reasoning levels for the selected model; **Model
+default** leaves reasoning to Copilot. These settings are saved with the model,
+apply to chat, assessments, reviews and CLI turns, and are reset when choosing
+another model or **Use model defaults**. Other connectors do not expose these
+Copilot-specific controls.
+
 The **Model** selector stays visible in both conversation and **Conversations**
 views and is disabled while any request is running. Switching models preserves
 the current conversation. Each request keeps the model selected when it was
@@ -331,6 +340,10 @@ tables, with the `C#`, `I#`, `T#` and `R#` IDs kept; risks that have no rating,
 mitigation or residual decision are left out of `risks`.
 `get_merged_context` exposes `codebase_directory` with its
 server path and `file_id="directory"`, used with the same MCP browsing tools.
+Merged context responses are limited to 12 KiB of UTF-8 content per tool call
+to avoid Copilot's large-tool-output file offloading. Continue with the returned
+`next_offset` until it is `null`, concatenating pages in order before analyzing
+or assessing a variant. Offsets count characters, not bytes.
 The MCP `update_variant_context` tool cannot change the
 threat model, risks or directory. `get_merged_context` with
 `include_model=true` and `update_variant_threat_model` read and edit the System

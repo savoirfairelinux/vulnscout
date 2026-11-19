@@ -84,7 +84,6 @@ describe('Refresh overview', () => {
         expect(screen.getByRole('heading', { name: 'Refresh History' })).toBeInTheDocument();
         const toolbar = screen.getByRole('heading', { name: 'Refresh History' }).closest('header');
         expect(toolbar).toContainElement(screen.getByTestId('refresh-dropdown-toggle'));
-        expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Reload results' }));
         const historyExport = screen.getByRole('button', { name: 'Export vulnerability history' });
         expect(toolbar).toContainElement(historyExport);
         expect(historyExport).toHaveClass('bg-green-700', 'hover:bg-green-600', 'border-green-500');
@@ -138,7 +137,7 @@ describe('Refresh overview', () => {
         expect(entry).toHaveTextContent('1 vulnerabilities refreshed');
         expect(entry).toHaveTextContent('0 vulnerabilities changed');
         expect(entry).toHaveTextContent('0 field changes');
-        await userEvent.click(screen.getByRole('checkbox', { name: 'Hide individual refreshes' }));
+        await userEvent.click(screen.getByRole('button', { name: /Hide individual refreshes/ }));
         await waitFor(() => expect(list).toHaveBeenLastCalledWith(expect.objectContaining({
             hide_individual: true, offset: 0, project_id: 'project-a', variant_id: 'variant-a',
         }), expect.any(AbortSignal)));
@@ -469,6 +468,23 @@ describe('Refresh overview', () => {
         show();
         expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load run list');
         expect(screen.queryByText('Loading refresh runs…')).not.toBeInTheDocument();
+        list.mockResolvedValue({ runs: [], total: 0, limit: 20, offset: 0 });
+        latest.mockResolvedValue(null);
+        await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        expect(await screen.findByText(/No refresh has been recorded/)).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    test('retries a failed latest-run request without changing the scope', async () => {
+        list.mockResolvedValue({ runs: [], total: 0, limit: 20, offset: 0 });
+        latest.mockRejectedValueOnce(new Error('HTTP 503')).mockResolvedValue(null);
+        show();
+        expect(await screen.findByRole('alert')).toHaveTextContent('HTTP 503');
+        await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        expect(await screen.findByText(/No refresh has been recorded/)).toBeInTheDocument();
+        expect(latest).toHaveBeenCalledTimes(2);
+        expect(latest.mock.calls[1][0]).toEqual(latest.mock.calls[0][0]);
+        expect(list).toHaveBeenCalledTimes(1);
     });
 
     test('never broadens unsupported comparison scopes into project requests', () => {

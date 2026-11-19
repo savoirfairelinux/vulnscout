@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faArrowsRotate, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
+import { faEyeSlash, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
 import RefreshRuns from '../handlers/refreshRuns';
 import type { RefreshChange, RefreshCoverage, RefreshFilters, RefreshRun, RefreshRunList } from '../handlers/refreshRuns';
 import { describeChange, fieldLabel, formatHistoryValue, sourceLabel } from '../handlers/vulnerabilityHistory';
@@ -71,6 +71,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
     const [params, setParams] = useSearchParams();
     const runId = params.get('run') || undefined;
     const [reload, setReload] = useState(0);
+    const [listReload, setListReload] = useState(0);
     const [run, setRun] = useState<RefreshRun | null>(null);
     const [page, setPage] = useState<RefreshRun | null>(null);
     const [runList, setRunList] = useState<RefreshRunList | null>(null);
@@ -121,7 +122,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
             .then(result => { if (!controller.signal.aborted) setRunList(result); })
             .catch(reason => { if (!controller.signal.aborted) setListError(String(reason)); });
         return () => controller.abort();
-    }, [projectId, variantId, listOffset, reload, dataRevision, comparisonScope, hideIndividual]);
+    }, [projectId, variantId, listOffset, listReload, dataRevision, comparisonScope, hideIndividual]);
 
     useEffect(() => {
         if (!run || run.run_id !== runId || comparisonScope) return;
@@ -160,15 +161,28 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
         `px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${section === tab
             ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-gray-400 hover:text-gray-200'}`;
 
+    // The timeline and the selected result load independently, so each retries on its own.
+    const retryButton = (retry: () => void) => <button type="button"
+        className="py-1 px-2 rounded text-sm font-semibold text-white bg-sky-900 hover:bg-sky-950 transition-colors"
+        onClick={retry}>Retry</button>;
+    const retryList = () => setListReload(value => value + 1);
+    const retryResult = () => setReload(value => value + 1);
+
     const refreshControls = <RefreshControls vulnerabilities={vulnerabilities} projectId={projectId}
         variantId={comparisonScope ? undefined : variantId}
         getRefreshVulnerabilities={() => Vulnerabilities.list(variantId, projectId, baseVariantId, compareOperation, variantIds, multiOperation)}
         onRefreshComplete={onRefreshComplete} toolbar={<>
             <h1 className="text-lg font-bold">Refresh History</h1>
-            {!comparisonScope && <button type="button" className="py-1 px-2 rounded flex items-center gap-1 text-sm font-semibold bg-sky-900 hover:bg-sky-950 transition-colors"
-                onClick={() => setReload(value => value + 1)}>
-                <FontAwesomeIcon icon={faArrowsRotate} />
-                Reload results
+            {!comparisonScope && <button type="button" aria-pressed={hideIndividual}
+                className={`py-1 px-2 rounded flex items-center gap-1 text-sm font-semibold transition-colors text-white ${hideIndividual ? 'bg-emerald-700' : 'bg-sky-900 hover:bg-sky-950'}`}
+                title={hideIndividual ? 'Individual refreshes hidden' : 'Individual refreshes visible'}
+                onClick={() => {
+                    setListOffset(0);
+                    setHideIndividual(value => !value);
+                }}>
+                <FontAwesomeIcon icon={faEyeSlash} />
+                Hide individual refreshes
+                {hideIndividual && <span className="ml-1 bg-emerald-900 px-1 rounded text-xs">✓</span>}
             </button>}
         </>} toolbarActions={!comparisonScope && <RefreshHistoryExport projectId={projectId} />} />;
 
@@ -180,15 +194,10 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
     return <section className="w-full px-6 py-6 space-y-5 text-gray-800 dark:text-neutral-200" aria-label="Refresh changes">
         {refreshControls}
         <div className="space-y-2">
-            <h2 className="font-bold">Refresh runs</h2>
-            <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={hideIndividual} onChange={event => {
-                    setListOffset(0);
-                    setHideIndividual(event.target.checked);
-                }} />
-                Hide individual refreshes
-            </label>
-            {listError && <p role="alert">{listError}</p>}
+            {listError && <div role="alert" className="flex items-center gap-3">
+                <p>{listError}</p>
+                {retryButton(retryList)}
+            </div>}
             {!runList && !listError && <p role="status">Loading refresh runs…</p>}
             {runList && <ul className="relative" aria-label="Refresh runs">
                 {runList.runs.map((item, index) => <li key={item.run_id} className="flex items-stretch">
@@ -253,14 +262,17 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
         </div>
         {!runId && <>
             {loading && <p role="status">Loading refresh results…</p>}
-            {error && <p role="alert">{error}</p>}
+            {error && <div role="alert" className="flex items-center gap-3">
+                <p>{error}</p>
+                {retryButton(retryResult)}
+            </div>}
             {!loading && !error && !run && <p role="status">No refresh has been recorded in this scope. Run Refresh Vulnerability Data to begin.</p>}
         </>}
         {runId && <ModalShell isOpen title="Refresh Result" size="fullscreen" onClose={closeResult}
             subtitle={run?.run_id === runId ? `${formatDate(run.started_at)} · ${run.sources.map(sourceLabel).join(', ')} · ${run.status}` : undefined}
             testId="refresh-result-modal-backdrop"
             contentClassName="flex min-h-0 flex-1 flex-col p-0 md:p-0"
-            headerActions={<ModalButton onClick={() => setReload(value => value + 1)}>Reload results</ModalButton>}
+            headerActions={<ModalButton onClick={() => { retryResult(); retryList(); }}>Reload results</ModalButton>}
             footer={<ModalActions><ModalButton onClick={closeResult}>Close</ModalButton></ModalActions>}>
             {run?.run_id === runId && <nav aria-label="Refresh result sections" className="flex flex-wrap border-b border-gray-600 px-4">
                 <button type="button" className={tabClass('changes')} aria-pressed={section === 'changes'} onClick={() => setSection('changes')}>
@@ -273,7 +285,10 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
             </nav>}
             <div className="p-4 md:p-5 space-y-4 text-gray-300 flex-1 overflow-auto">
             {loading && <p role="status">Loading refresh results…</p>}
-            {error && <p role="alert">{error}</p>}
+            {error && <div role="alert" className="flex items-center gap-3">
+                <p>{error}</p>
+                {retryButton(retryResult)}
+            </div>}
             {!loading && !error && !run && <p role="status">Requested refresh run is unavailable in this scope. No other run has been substituted.</p>}
             {run?.run_id === runId && <>
             {run.status === 'running' && <p role="status">Refresh in progress. Only committed changes are shown. Reload results to see progress.</p>}

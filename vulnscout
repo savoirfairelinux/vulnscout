@@ -206,7 +206,7 @@ if [ "${1:-}" = "completion" ]; then
 fi
 
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.25}"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.25.1}"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 VULNSCOUT_BUILD_DIR="${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}"
 VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
@@ -939,7 +939,7 @@ EOF
         [ -z "$key" ] && continue
         [ "${key#\#}" = "$key" ] || continue
         case "$key" in
-            AI_PROVIDER|AI_AUTH_CREDENTIALS|AI_MODEL|AI_BASE_URL) continue ;;
+            AI_PROVIDER|AI_AUTH_CREDENTIALS|AI_MODEL|AI_BASE_URL|AI_CONTEXT_TIER|AI_REASONING_EFFORT) continue ;;
         esac
         env_args+=(-e "${key}=${value}")
     done < "$VULNSCOUT_CONFIG_FILE"

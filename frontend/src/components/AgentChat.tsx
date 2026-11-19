@@ -16,10 +16,11 @@ import AgentCodeBlock from './AgentCodeBlock';
 import { aiContextFormAction } from '../helpers/aiContextFormAction';
 import { agentScopeEntries } from '../helpers/agentTaskScope';
 type ConnectionState = { authenticated: boolean; login: string | null; configured: boolean; token_connected: boolean; provider: string | null };
-type AgentState = ConnectionState & { model: string };
+type ModelSelection = { model: string; context_tier: string; reasoning_effort: string | null };
+type AgentState = ConnectionState & ModelSelection;
 type DeviceCode = { user_code: string; verification_uri: string; interval: number };
 type DevicePoll = { status: 'pending' | 'connected'; interval?: number | null; login?: string | null };
-type ModelChoice = { id: string; name: string };
+type ModelChoice = { id: string; name: string; context_tiers?: string[]; reasoning_efforts?: string[]; default_reasoning_effort?: string };
 const pageLabels: Record<string, string> = { metrics: 'Overview', packages: 'SBOM', vulnerabilities: 'Vulnerabilities', scans: 'Scans', review: 'Review', exports: 'Export', settings: 'Settings', ai: 'AI context', unknown: 'Page not found' };
 const iconButton = 'flex h-9 w-9 shrink-0 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-white';
 const CLIPBOARD_ERROR = 'Clipboard unavailable. Select the text to copy it manually.';
@@ -62,6 +63,13 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
     const [modelBusy, setModelBusy] = useState(false);
     const [models, setModels] = useState<ModelChoice[]>([]);
     const [selectedModel, setSelectedModel] = useState('auto');
+    const [contextTier, setContextTier] = useState('default');
+    const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
+    const selectedChoice = models.find(model => model.id === selectedModel);
+    const unavailableOptions = Boolean(selectedChoice && (
+        contextTier !== 'default' && !selectedChoice.context_tiers?.includes(contextTier) ||
+        reasoningEffort && !selectedChoice.reasoning_efforts?.includes(reasoningEffort)
+    ));
     const [neverAsk, setNeverAsk] = useState(false);
     const [refresh, setRefresh] = useState(0);
     const activeId = useSyncExternalStore(subscribeAgentQueue, getActiveConversationId);
@@ -131,6 +139,8 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 const { model, authenticated, login, configured, token_connected, provider } = result;
                 setState({ authenticated, login, configured, token_connected, provider });
                 setSelectedModel(model);
+                setContextTier(result.context_tier ?? 'default');
+                setReasoningEffort(result.reasoning_effort ?? null);
             }
         }).catch(reason => {
             if (active) setError(errorMessage(reason));
@@ -328,15 +338,17 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
         }
     }
 
-    async function selectModel(model: string) {
-        const previous = selectedModel;
-        setSelectedModel(model);
+    async function selectModel(model: string, context_tier = 'default', reasoning_effort: string | null = null) {
         setModelBusy(true);
         setError('');
         try {
-            await request('/model', { method: 'POST', body: JSON.stringify({ model }) });
+            const result = await request<ModelSelection>('/model', {
+                method: 'POST', body: JSON.stringify({ model, context_tier, reasoning_effort }),
+            });
+            setSelectedModel(result.model ?? model);
+            setContextTier(result.context_tier ?? 'default');
+            setReasoningEffort(result.reasoning_effort ?? null);
         } catch (reason) {
-            setSelectedModel(previous);
             setError(errorMessage(reason));
         } finally {
             setModelBusy(false);
@@ -496,7 +508,7 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
             }} disabled={busy || modelBusy || mainBusy || !state || (inMain && !conversation.messages.length && !draft)} className={iconButton}><FontAwesomeIcon icon={faPlus} /></button>
             <button type="button" title="Close agent" aria-label="Close agent" onClick={onClose} className={iconButton}><FontAwesomeIcon icon={faXmark} /></button>
         </header>
-        {state?.authenticated && state.configured && !showConnections && <div className="flex shrink-0 items-center gap-2 border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
+        {state?.authenticated && state.configured && !showConnections && <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-200 px-4 py-2 dark:border-neutral-800">
             <label htmlFor={`${composerId}-model`} className="text-xs text-neutral-500 dark:text-neutral-400">Model</label>
             <select id={`${composerId}-model`} aria-label="Agent model" value={selectedModel} onChange={event => void selectModel(event.target.value)} disabled={busy || modelBusy || queueRunning || !models.length} title={queueRunning ? 'Wait for the running request to finish before changing models' : 'Select the AI model'} className="min-w-0 flex-1 truncate rounded border border-neutral-300 bg-white px-2 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-cyan-600 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900">
                 {!selectedModel && <option value="">Select a model</option>}
@@ -504,6 +516,36 @@ function AgentChat({ onClose, context, active = true }: Readonly<{ onClose: () =
                 {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
             </select>
             {modelBusy && <FontAwesomeIcon icon={faCircleNotch} spin className="text-xs text-neutral-500" title="Switching model" />}
+            {!state.provider && <div className="flex w-full flex-wrap items-center gap-2 text-xs">
+                <label htmlFor={`${composerId}-context`}>Context</label>
+                <select id={`${composerId}-context`} aria-label="Agent context tier" value={contextTier}
+                    disabled={busy || modelBusy || queueRunning || !models.length || !selectedModel}
+                    onChange={event => void selectModel(selectedModel, event.target.value, reasoningEffort)}
+                    className="min-w-0 rounded border border-neutral-300 bg-white p-1 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900">
+                    <option value="default">Default (≤272K input)</option>
+                    {contextTier === 'long_context' && !selectedChoice?.context_tiers?.includes('long_context') &&
+                        <option value="long_context" disabled>Unavailable long context</option>}
+                    {selectedChoice?.context_tiers?.includes('long_context') && <option value="long_context">Copilot Long context (&gt;272K input)</option>}
+                </select>
+                {Boolean(selectedChoice?.reasoning_efforts?.length) && <>
+                    <label htmlFor={`${composerId}-reasoning`}>Thinking</label>
+                    <select id={`${composerId}-reasoning`} aria-label="Agent thinking level" value={reasoningEffort ?? ''}
+                        disabled={busy || modelBusy || queueRunning}
+                        onChange={event => void selectModel(selectedModel, contextTier, event.target.value || null)}
+                        className="rounded border border-neutral-300 bg-white p-1 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900">
+                        <option value="">Model default{selectedChoice?.default_reasoning_effort ? ` (${selectedChoice.default_reasoning_effort})` : ''}</option>
+                        {selectedChoice?.reasoning_efforts?.map(effort => <option key={effort} value={effort}>{effort}</option>)}
+                    </select>
+                </>}
+                {contextTier === 'long_context' && <p className="w-full text-neutral-500">Long context may increase Copilot usage charges.</p>}
+                {unavailableOptions && <p role="status" className="w-full text-amber-700 dark:text-amber-400">
+                    Saved context or thinking settings are no longer available. Use model defaults or select another model.
+                </p>}
+                {(contextTier !== 'default' || reasoningEffort !== null) && <button type="button"
+                    disabled={busy || modelBusy || queueRunning}
+                    onClick={() => void selectModel(selectedModel)}
+                    className="text-cyan-700 hover:underline disabled:opacity-50 dark:text-cyan-400">Use model defaults</button>}
+            </div>}
         </div>}
         <dialog ref={confirmation} aria-labelledby={discardTitleId} aria-describedby={discardDescriptionId} className="w-[calc(100%-2rem)] max-w-sm rounded-lg border border-neutral-200 bg-white p-6 text-neutral-900 shadow-xl backdrop:bg-black/50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100" onCancel={() => setNeverAsk(false)} onKeyDown={event => {
             if (event.key === 'Escape') {
