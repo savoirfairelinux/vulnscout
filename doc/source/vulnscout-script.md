@@ -2,7 +2,7 @@
 
 The `./vulnscout` script is the main host-side entry point for running VulnScout.
 It manages the container lifecycle (Docker or Podman) and forwards commands to the container's entrypoint.
-The default container image is `docker.io/sflinux/vulnscout:v0.25`.
+The default container image is `docker.io/sflinux/vulnscout:v0.25.1`.
 
 This page introduces command syntax, options, and project/variant selection.
 For task-specific instructions, see [VulnScout Workflow](vulnscout-workflow.md).
