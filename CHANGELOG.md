@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.25.1] - 2026-11-19
+
+### Added
+- AI agent: select the Copilot context tier and reasoning effort.
+- Refresh: retry failed refresh loads.
+
+### Changed
+- Refresh: move individual refresh controls into the toolbar, remove Reload results, and scope refresh runs to the selected project.
+- AI context: paginate merged context tool output.
+
+### Fixed
+- Imports: import Yocto untriaged CVEs as pending.
+
+---
+
 ## [0.25.0] - 2026-11-17
 
 ### Added
