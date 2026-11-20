@@ -214,6 +214,16 @@ the host does not change a running container; use `docker run -e`/`--env-file` o
 the mounted config. Config values override same-named inherited environment
 values.
 
+### SQLite Write-Lock Timeout
+
+`VULNSCOUT_DB_WRITE_LOCK_TIMEOUT` sets the maximum time, in seconds, that a
+writer waits for the SQLite write lock. It defaults to `300`; a non-positive
+value disables the timeout. Set it in the **container environment**, for
+example in the mounted `config.env` file or with `docker run --env
+VULNSCOUT_DB_WRITE_LOCK_TIMEOUT=60`. A host-shell export alone does not update
+an existing container. Recreate the container and restart the web UI after
+changing this setting.
+
 ### Other Commands
 
 | Flag | Description |
