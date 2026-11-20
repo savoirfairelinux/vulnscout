@@ -10,15 +10,22 @@ Validates that:
   - Flask threads (priority 0) are woken before EPSS (1) before NVD (2).
   - SQLAlchemy session events correctly acquire/release the lock.
   - The lock survives session destruction between test fixtures.
+  - The lock is released whenever the outermost transaction ends, even when
+    it ends without a commit/rollback event (close after an error, failed
+    COMMIT), and waiting for it is bounded by a timeout.
 """
 
+import logging
 import os
 import time
 import threading
 import pytest
+from sqlalchemy import event
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.extensions import (
-    _PriorityWriteLock, _db_write_lock, _write_lock_state,
+    DEFAULT_WRITE_LOCK_TIMEOUT, WriteLockTimeout, _PriorityWriteLock, _db_write_lock,
+    _write_lock_state, hold_write_lock, write_lock, write_lock_timeout,
 )
 from src.extensions import db as _db
 
@@ -47,8 +54,10 @@ def _release_global_lock():
     """Safety net: ensure the global write-lock is never left held between tests."""
     yield
     # Force-release if still held (prevents cascading deadlocks on failure).
-    if _db_write_lock._held:
+    with _db_write_lock._mutex:
         _db_write_lock._held = False
+        _db_write_lock._owner = None
+        _db_write_lock._waiters = []
     _write_lock_state.__dict__.pop("held", None)
 
 
@@ -297,27 +306,104 @@ class TestWriteSerializationEvents:
     def test_lock_survives_session_destruction(self, app):
         """Thread-local flag prevents deadlock when Session objects change.
 
-        begin_nested() acquires the lock on flush, and the savepoint release
-        triggers after_soft_rollback which releases the lock.  A subsequent
-        begin_nested() must re-acquire without deadlocking.
+        begin_nested() acquires the lock on flush.  Releasing the savepoint
+        does not end the outer transaction, so the lock is kept until the
+        outer commit; a subsequent begin_nested() must not deadlock.
         """
         from src.models.project import Project
 
         # Simulate a begin_nested write (like PackagesController.add)
         with _db.session.begin_nested():
             _db.session.add(Project(name="Nested"))
-        # Savepoint released → after_soft_rollback fires → lock released.
-        # This is correct — the write transaction doesn't span savepoints.
-        assert not _db_write_lock._held
+        assert _db_write_lock._held
 
         # Another begin_nested in the same thread should work fine.
         with _db.session.begin_nested():
             _db.session.add(Project(name="Nested2"))
-        assert not _db_write_lock._held
+        assert _db_write_lock._held
 
         # Explicit commit on the outer transaction.
         _db.session.commit()
         assert not _db_write_lock._held
+
+    def test_savepoint_commit_keeps_outer_lock(self, app):
+        """Committing a savepoint must not release the outer transaction's lock."""
+        from src.models.project import Project
+        _db.session.add(Project(name="Outer"))
+        _db.session.flush()
+        assert _db_write_lock._held
+
+        with _db.session.begin_nested():
+            _db.session.add(Project(name="Inner"))
+            _db.session.flush()
+        assert _db_write_lock._held
+        assert getattr(_write_lock_state, "held", False)
+
+        _db.session.commit()
+        assert not _db_write_lock._held
+
+    def test_savepoint_rollback_keeps_outer_lock(self, app):
+        """Rolling back a savepoint (explicitly or after a failed flush) keeps the lock."""
+        from src.models.project import Project
+        _db.session.add(Project(name="Dup"))
+        _db.session.commit()
+
+        _db.session.add(Project(name="Outer"))
+        _db.session.flush()
+        assert _db_write_lock._held
+
+        nested = _db.session.begin_nested()
+        _db.session.add(Project(name="Inner"))
+        _db.session.flush()
+        nested.rollback()
+        assert _db_write_lock._held
+
+        with pytest.raises(IntegrityError):
+            with _db.session.begin_nested():
+                _db.session.add(Project(name="Dup"))
+        assert _db_write_lock._held
+
+        _db.session.rollback()
+        assert not _db_write_lock._held
+        assert not getattr(_write_lock_state, "held", False)
+
+    def test_failed_root_flush_releases_lock(self, app):
+        """A failed flush rolls back the root transaction and releases the lock."""
+        from src.models.project import Project
+        _db.session.add(Project(name="Dup"))
+        _db.session.commit()
+
+        _db.session.add(Project(name="Dup"))
+        with pytest.raises(IntegrityError):
+            _db.session.flush()
+        assert not _db_write_lock._held
+        _db.session.rollback()
+        assert not _db_write_lock._held
+
+    def test_close_releases_lock(self, app):
+        """Closing a session with flushed, uncommitted writes releases the lock."""
+        from src.models.project import Project
+        _db.session.add(Project(name="Closed"))
+        _db.session.flush()
+        assert _db_write_lock._held
+
+        _db.session.close()
+        assert not _db_write_lock._held
+        assert not getattr(_write_lock_state, "held", False)
+
+    def test_hold_write_lock_released_by_close(self, app):
+        """hold_write_lock() is released when the session transaction ends."""
+        _db.session.execute(_db.text("SELECT 1"))
+        hold_write_lock()
+        assert _db_write_lock._held
+        _db.session.close()
+        assert not _db_write_lock._held
+
+    def test_write_lock_releases_on_exit(self, app):
+        with write_lock():
+            assert _db_write_lock._held
+        assert not _db_write_lock._held
+        assert not getattr(_write_lock_state, "held", False)
 
 
 # ===================================================================
@@ -380,3 +466,283 @@ class TestPriorityEndToEnd:
 
         assert len(order) == 2, f"Not all writers completed: {order}"
         assert order[0] == "flask", f"Expected flask first, got: {order}"
+
+
+# ===================================================================
+# Bounded wait
+# ===================================================================
+
+class TestWriteLockTimeout:
+
+    @pytest.mark.parametrize("raw, expected", [
+        (None, DEFAULT_WRITE_LOCK_TIMEOUT),
+        ("", DEFAULT_WRITE_LOCK_TIMEOUT),
+        ("12.5", 12.5),
+        ("0", None),
+        ("-1", None),
+        ("soon", DEFAULT_WRITE_LOCK_TIMEOUT),
+        ("nan", DEFAULT_WRITE_LOCK_TIMEOUT),
+        ("inf", DEFAULT_WRITE_LOCK_TIMEOUT),
+        (str(threading.TIMEOUT_MAX * 2), DEFAULT_WRITE_LOCK_TIMEOUT),
+    ])
+    def test_timeout_from_environment(self, monkeypatch, raw, expected):
+        if raw is None:
+            monkeypatch.delenv("VULNSCOUT_DB_WRITE_LOCK_TIMEOUT", raising=False)
+        else:
+            monkeypatch.setenv("VULNSCOUT_DB_WRITE_LOCK_TIMEOUT", raw)
+        assert write_lock_timeout() == expected
+
+    @pytest.mark.parametrize("raw, timeout", [
+        ("inf", None),
+        ("nan", None),
+        (str(threading.TIMEOUT_MAX * 2), None),
+        ("1", float("inf")),
+        ("1", float("nan")),
+        ("1", threading.TIMEOUT_MAX * 2),
+    ])
+    def test_invalid_timeout_does_not_strand_contended_lock(self, lock, monkeypatch, raw, timeout):
+        monkeypatch.setenv("VULNSCOUT_DB_WRITE_LOCK_TIMEOUT", raw)
+        lock.acquire()
+        acquired = threading.Event()
+        errors = []
+
+        def waiter():
+            try:
+                lock.acquire(timeout=timeout)
+                acquired.set()
+                lock.release()
+            except Exception as exc:
+                errors.append(exc)
+
+        t = threading.Thread(target=waiter, name="invalid-timeout-waiter")
+        t.start()
+        deadline = time.monotonic() + 5
+        while not lock._waiters and t.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        queued = bool(lock._waiters)
+        lock.release()
+        t.join(timeout=5)
+
+        assert queued
+        assert not t.is_alive()
+        assert not errors
+        assert acquired.is_set()
+        assert lock._waiters == []
+        assert not lock._held
+        lock.acquire(timeout=0.1)
+        lock.release()
+
+    def test_default_exceeds_sqlite_busy_timeout(self):
+        assert DEFAULT_WRITE_LOCK_TIMEOUT > 30
+
+    def test_acquire_times_out_and_leaves_lock_consistent(self, lock, caplog):
+        lock.acquire()
+        errors = []
+
+        def waiter():
+            try:
+                lock.acquire(timeout=0.1)
+            except WriteLockTimeout as exc:
+                errors.append(exc)
+
+        t = threading.Thread(target=waiter, name="timeout-waiter")
+        with caplog.at_level(logging.WARNING, logger="src.extensions"):
+            t.start()
+            t.join(timeout=5)
+        assert not t.is_alive()
+        assert len(errors) == 1
+        assert "SQLite write lock" in str(errors[0])
+        assert "timeout-waiter" in caplog.text
+        # The timed-out waiter is gone; the holder still owns the lock.
+        assert lock._waiters == []
+        assert lock._held
+
+        lock.release()
+        assert not lock._held
+        lock.acquire(timeout=0.1)
+        lock.release()
+
+    def test_acquire_uses_environment_timeout(self, lock, monkeypatch):
+        monkeypatch.setenv("VULNSCOUT_DB_WRITE_LOCK_TIMEOUT", "0.05")
+        lock.acquire()
+        start = time.monotonic()
+        with pytest.raises(WriteLockTimeout):
+            lock.acquire()
+        assert time.monotonic() - start < 5
+        assert lock._waiters == []
+
+    def test_timeout_keeps_other_waiters(self, lock):
+        lock.acquire()
+        acquired = threading.Event()
+
+        def patient():
+            lock.acquire(timeout=5)
+            acquired.set()
+            lock.release()
+
+        t = threading.Thread(target=patient)
+        t.start()
+        deadline = time.monotonic() + 5
+        while len(lock._waiters) < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        with pytest.raises(WriteLockTimeout):
+            lock.acquire(timeout=0.05)
+        assert len(lock._waiters) == 1
+
+        lock.release()
+        assert acquired.wait(timeout=5)
+        t.join(timeout=5)
+        assert not lock._held and lock._waiters == []
+
+    def test_handoff_racing_with_timeout_counts_as_acquired(self, lock, monkeypatch):
+        """release() handing ownership over as the wait times out must not leak."""
+        test_thread = threading.current_thread()
+        real_event = threading.Event
+
+        class RacyEvent(real_event):
+            def wait(self, timeout=None):
+                if threading.current_thread() is not test_thread:
+                    return super().wait(timeout)
+                lock.release()      # hands ownership to this waiter...
+                return False        # ...just as the wait reports a timeout
+
+        lock.acquire()
+        monkeypatch.setattr(threading, "Event", RacyEvent)
+        try:
+            lock.acquire(timeout=0.01)
+        finally:
+            monkeypatch.setattr(threading, "Event", real_event)
+        assert lock._held
+        assert lock._waiters == []
+        assert lock._owner == test_thread.name
+        lock.release()
+        assert not lock._held
+
+    def test_callers_do_not_mark_lock_held_on_timeout(self, app, monkeypatch):
+        """before_flush, hold_write_lock and write_lock leak nothing on timeout."""
+        from src.models.project import Project
+        monkeypatch.setenv("VULNSCOUT_DB_WRITE_LOCK_TIMEOUT", "0.05")
+        _db_write_lock.acquire()    # held, but not by this thread's session
+
+        with pytest.raises(WriteLockTimeout):
+            with write_lock():
+                pass                # pragma: no cover
+        assert not getattr(_write_lock_state, "held", False)
+
+        with pytest.raises(WriteLockTimeout):
+            hold_write_lock()
+        assert not getattr(_write_lock_state, "held", False)
+
+        _db.session.add(Project(name="TimedOut"))
+        with pytest.raises(WriteLockTimeout):
+            _db.session.flush()
+        assert not getattr(_write_lock_state, "held", False)
+        assert _db_write_lock._waiters == []
+
+        _db_write_lock.release()
+        assert not _db_write_lock._held
+        _db.session.flush()
+        _db.session.commit()
+        assert not _db_write_lock._held
+
+
+# ===================================================================
+# Leak regressions: transactions that end without commit/rollback events
+# ===================================================================
+
+@pytest.fixture()
+def file_app(monkeypatch, tmp_path):
+    """App on a file database, so requests and threads use real connections."""
+    (tmp_path / "status").write_text("__END_OF_SCAN_SCRIPT__")
+    monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", f"sqlite:///{tmp_path / 'lock.db'}")
+    monkeypatch.setenv("FLASK_TESTING", "true")
+    monkeypatch.setenv("FLASK_SCAN_FILE", str(tmp_path / "status"))
+    monkeypatch.setenv("VULNSCOUT_DB_WRITE_LOCK_TIMEOUT", "5")
+    from src.bin.webapp import create_app
+    from src.models.project import Project
+    application = create_app()
+    application.config["PROPAGATE_EXCEPTIONS"] = False
+
+    @application.post("/_test/flush-then-fail")
+    def flush_then_fail():
+        _db.session.add(Project(name="flush-then-fail"))
+        _db.session.flush()
+        raise ValueError("boom after flush")
+
+    @application.post("/_test/commit")
+    def commit_project():
+        _db.session.add(Project(name=f"commit-{time.monotonic_ns()}"))
+        _db.session.commit()
+        return "ok"
+
+    with application.app_context():
+        _db.create_all()
+    yield application
+    with application.app_context():
+        _db.session.remove()
+        _db.engine.dispose()
+
+
+def _write_from_thread(app, name):
+    """Commit one row from a worker thread; return whether it finished in time."""
+    from src.models.project import Project
+    errors = []
+
+    def writer():
+        try:
+            with app.app_context():
+                _db.session.execute(_db.text("SELECT 1"))   # hold a connection first
+                _db.session.add(Project(name=name))
+                _db.session.commit()
+        except Exception as exc:    # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    t = threading.Thread(target=writer, name=f"writer-{name}")
+    t.start()
+    t.join(timeout=10)
+    return not t.is_alive() and not errors
+
+
+class TestWriteLockLeak:
+
+    def test_request_failing_after_flush_releases_lock(self, file_app):
+        client = file_app.test_client()
+        assert client.post("/_test/flush-then-fail").status_code == 500
+        assert not _db_write_lock._held
+
+        assert _write_from_thread(file_app, "after-failed-request")
+        assert client.post("/_test/commit").status_code == 200
+        assert not _db_write_lock._held
+
+    def test_failed_commit_releases_lock(self, file_app):
+        def refuse_commit(_conn):
+            raise OperationalError("COMMIT", {}, Exception("disk I/O error"))
+
+        client = file_app.test_client()
+        with file_app.app_context():
+            engine = _db.engine
+        event.listen(engine, "commit", refuse_commit)
+        try:
+            assert client.post("/_test/commit").status_code == 500
+        finally:
+            event.remove(engine, "commit", refuse_commit)
+        assert not _db_write_lock._held
+
+        assert _write_from_thread(file_app, "after-failed-commit")
+        assert client.post("/_test/commit").status_code == 200
+        assert not _db_write_lock._held
+
+    def test_concurrent_writers_complete_after_failure(self, file_app):
+        client = file_app.test_client()
+        assert client.post("/_test/flush-then-fail").status_code == 500
+        results = []
+        threads = [
+            threading.Thread(target=lambda i=i: results.append(_write_from_thread(file_app, f"w{i}")))
+            for i in range(20)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        assert results == [True] * 20
+        assert not _db_write_lock._held and _db_write_lock._waiters == []

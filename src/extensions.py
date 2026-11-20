@@ -1,10 +1,15 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy.orm import DeclarativeBase, Session, SessionTransaction
 from sqlalchemy import event
 from contextlib import contextmanager
 from typing import Generator
+import logging
+import math
+import os
 import threading
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -26,8 +31,10 @@ migrate = Migrate()
 #
 # The lock below serialises all write *transactions*.  It is acquired
 # transparently on the first ``Session.flush()`` that contains pending
-# writes and released on ``commit()`` or ``rollback()``.  Read-only
-# sessions never touch the lock.
+# writes and released when the outermost session transaction ends
+# (``commit()``, ``rollback()`` or ``close()``).  Savepoints
+# (``begin_nested()``) do not release it: SQLite keeps the write lock until
+# the outer transaction ends.  Read-only sessions never touch the lock.
 #
 # Priority order (highest first):
 #   0 — Flask request handlers             (interactive, latency-sensitive)
@@ -37,6 +44,45 @@ migrate = Migrate()
 # When the lock is released and several threads are waiting, the one with
 # the highest priority (lowest number) is woken first.
 # ---------------------------------------------------------------------------
+
+
+# Default bound on how long a writer waits for the lock.  It exceeds SQLite's
+# 30 s busy_timeout so a holder stalled on SQLite itself can still finish, and
+# leaves room for large batch writes, while ensuring that a lock that is never
+# released fails writers loudly instead of pinning pooled connections forever.
+DEFAULT_WRITE_LOCK_TIMEOUT = 300.0
+
+
+def _bounded_write_lock_timeout(value: float) -> float:
+    if not math.isfinite(value) or value > threading.TIMEOUT_MAX:
+        logger.warning(
+            "Invalid VULNSCOUT_DB_WRITE_LOCK_TIMEOUT=%r, using %ss",
+            value, DEFAULT_WRITE_LOCK_TIMEOUT,
+        )
+        return DEFAULT_WRITE_LOCK_TIMEOUT
+    return value
+
+
+def write_lock_timeout() -> float | None:
+    """Seconds to wait for the write lock (``VULNSCOUT_DB_WRITE_LOCK_TIMEOUT``).
+
+    Non-positive values disable the timeout; invalid values use the default.
+    """
+    raw = os.getenv("VULNSCOUT_DB_WRITE_LOCK_TIMEOUT", "").strip()
+    if not raw:
+        return DEFAULT_WRITE_LOCK_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid VULNSCOUT_DB_WRITE_LOCK_TIMEOUT=%r, using %ss",
+                       raw, DEFAULT_WRITE_LOCK_TIMEOUT)
+        return DEFAULT_WRITE_LOCK_TIMEOUT
+    value = _bounded_write_lock_timeout(value)
+    return value if value > 0 else None
+
+
+class WriteLockTimeout(RuntimeError):
+    """Raised when the SQLite write lock cannot be acquired in time."""
 
 
 class _PriorityWriteLock:
@@ -54,7 +100,8 @@ class _PriorityWriteLock:
     def __init__(self) -> None:
         self._mutex = threading.Lock()
         self._held = False
-        self._waiters: list = []  # [(priority, Event)]
+        self._owner: str | None = None  # thread name, for diagnostics only
+        self._waiters: list = []  # [(priority, Event, thread name)]
 
     # ---- priority detection ------------------------------------------------
 
@@ -69,27 +116,56 @@ class _PriorityWriteLock:
 
     # ---- public API --------------------------------------------------------
 
-    def acquire(self) -> None:
+    def acquire(self, timeout: float | None = None) -> None:
+        """Block until the lock is owned by the calling thread.
+
+        *timeout* defaults to :func:`write_lock_timeout`.  Raises
+        :class:`WriteLockTimeout` when it expires; the lock is then not held
+        by the caller.
+        """
+        if timeout is None:
+            timeout = write_lock_timeout()
+        else:
+            timeout = _bounded_write_lock_timeout(timeout)
         priority = self._thread_priority()
+        name = threading.current_thread().name
         evt = threading.Event()
         with self._mutex:
             if not self._held:
                 self._held = True
+                self._owner = name
                 return
-            self._waiters.append((priority, evt))
+            self._waiters.append((priority, evt, name))
             self._waiters.sort(key=lambda w: w[0])
-        evt.wait()  # block until release() hands ownership to us
+        # Block until release() hands ownership to us.
+        if evt.wait(timeout):
+            return
+        with self._mutex:
+            # release() may have handed ownership over just as the wait timed out.
+            if evt.is_set():
+                return
+            self._waiters = [w for w in self._waiters if w[1] is not evt]
+            owner = self._owner
+        logger.warning(
+            "Thread %r timed out after %ss waiting for the SQLite write lock (held by %r)",
+            name, timeout, owner,
+        )
+        raise WriteLockTimeout(
+            f"Could not acquire the SQLite write lock within {timeout}s (held by thread {owner!r})"
+        )
 
     def release(self) -> None:
         with self._mutex:
             if not self._held:
                 return
             if self._waiters:
-                _prio, evt = self._waiters.pop(0)
+                _prio, evt, name = self._waiters.pop(0)
                 # _held stays True — ownership transfers to the woken thread
+                self._owner = name
                 evt.set()
             else:
                 self._held = False
+                self._owner = None
 
 
 _db_write_lock = _PriorityWriteLock()
@@ -133,13 +209,28 @@ def setup_write_serialization(session_factory: object) -> None:
             _db_write_lock.acquire()
             _write_lock_state.held = True
 
+    def _root_transaction_over(session: Session) -> bool:
+        # A savepoint commit/rollback leaves the root transaction active, and
+        # SQLite keeps its write lock until that root transaction ends.
+        root = session.get_transaction()
+        return root is None or not root.is_active
+
     @event.listens_for(session_factory, "after_commit")
     def _after_commit(session: Session) -> None:  # type: ignore[assignment]
-        _release_lock()
+        if _root_transaction_over(session):
+            _release_lock()
 
     @event.listens_for(session_factory, "after_soft_rollback")
     def _after_soft_rollback(session: Session, previous_transaction: object) -> None:  # type: ignore[assignment]
-        _release_lock()
+        if _root_transaction_over(session):
+            _release_lock()
+
+    @event.listens_for(session_factory, "after_transaction_end")
+    def _after_transaction_end(session: Session, transaction: SessionTransaction) -> None:  # type: ignore[assignment]
+        # Safety net for transactions that end without commit()/rollback()
+        # events, e.g. close() after an unhandled error or a failed COMMIT.
+        if transaction.parent is None:
+            _release_lock()
 
 
 def hold_write_lock() -> None:
@@ -147,8 +238,8 @@ def hold_write_lock() -> None:
 
     For Core INSERT/UPDATE statements executed through the session, which
     bypass the ``before_flush`` listener.  Unlike :func:`write_lock`, the lock
-    is not released when the caller returns but by the ``after_commit`` /
-    ``after_soft_rollback`` listeners, together with the SQLite transaction.
+    is not released when the caller returns but by the session listeners when
+    the outermost transaction ends, together with the SQLite transaction.
     """
     if not _write_serialization_initialized or getattr(_write_lock_state, "held", False):
         return
@@ -167,9 +258,9 @@ def write_lock() -> Generator[None, None, None]:
     manager serialises it the same way a normal flush would.
 
     No-op when write serialisation is inactive (non-SQLite engines) or when the
-    current thread already holds the lock (reentrant).  The ``after_commit`` /
-    ``after_soft_rollback`` listeners release the lock at commit/rollback time;
-    the ``finally`` here is an idempotent safety net.
+    current thread already holds the lock (reentrant).  The session listeners
+    release the lock when the outermost transaction ends; the ``finally`` here
+    is an idempotent safety net.
     """
     if not _write_serialization_initialized or getattr(_write_lock_state, "held", False):
         yield
