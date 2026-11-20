@@ -94,6 +94,17 @@ Operated by plant technicians; updated over the air. Safety-relevant: it can sen
 write commands to PLCs.
 ```
 
+## Assessment format (sidebar item)
+
+Optional, project-level: how AI assessment notes are presented. **Sections**
+(Confidence, Verdict, Evidence, Reachability, Remediation) can be reordered with
+the move buttons, included or not (Confidence is always included) and given a
+label of at most 40 characters. **Layout** is "Inline (one paragraph)" or "One
+section per line". **Style notes** (at most 500 characters) give tone hints
+only. **Reset to default** returns to the skill's presentation. It never changes
+verdicts and saving it does not outdate assessments. No tool saves it: give the
+values to set and let the user save.
+
 ## Variant page
 
 Variants are selected in the sidebar. **Copy from…** replaces the whole unsaved

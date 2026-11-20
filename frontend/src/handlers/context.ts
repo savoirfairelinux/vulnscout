@@ -1,6 +1,18 @@
+type AssessmentFormatSectionId = 'confidence' | 'verdict' | 'evidence' | 'reachability' | 'remediation';
+type AssessmentFormatLayout = 'inline' | 'lines';
+type AssessmentFormatSection = { id: AssessmentFormatSectionId; enabled: boolean; label?: string };
+
+/** Project-level presentation of AI assessment text; null uses the skill's default. */
+type AssessmentFormat = {
+    sections: AssessmentFormatSection[];
+    layout: AssessmentFormatLayout;
+    style_notes?: string;
+};
+
 type ProjectContext = {
     project_id: string;
     description: string | null;
+    assessment_format?: AssessmentFormat | null;
 };
 
 type VariantContextData = {
@@ -134,6 +146,8 @@ type VariantEntry = {
 type ProjectEntry = {
     project_name: string;
     project_description: string | null;
+    /** Omitted in files before 3.1; import then keeps the destination's format. */
+    assessment_format?: AssessmentFormat | null;
     variants: VariantEntry[];
 };
 
@@ -157,6 +171,11 @@ type ContextExport = {
 };
 
 export type {
+    AssessmentFormat,
+    AssessmentFormatLayout,
+    AssessmentFormatSection,
+    AssessmentFormatSectionId,
+    ProjectContext,
     VariantContextData,
     MergedContext,
     ImportResult,
@@ -302,6 +321,28 @@ class Context {
             }
         );
         return jsonOrThrow<ProjectContext>(res, 'Failed to save project context');
+    }
+
+    /** Saves only the assessment format (null resets it); the description is left as stored. */
+    static async saveAssessmentFormat(projectId: string, format: AssessmentFormat | null): Promise<ProjectContext> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/context`,
+            {
+                mode: 'cors',
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ assessment_format: format }),
+            }
+        );
+        if (!res.ok) {
+            const data = await errorReply(res);
+            throw new ContextSaveError(
+                data.error || `Failed to save the assessment format (${res.status})`,
+                res.status,
+                data.fields ?? {},
+            );
+        }
+        return await res.json() as ProjectContext;
     }
 
     static async saveVariantEditor(variantId: string, draft: VariantDraft): Promise<VariantContext> {
