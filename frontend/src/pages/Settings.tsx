@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faFolderOpen,
@@ -39,13 +39,6 @@ import ModalShell from "../components/ModalShell";
 import Transfer from "./Transfer";
 import NotFound from "./NotFound";
 import { ROUTES, SETTINGS_PATHS, parseSettingsPath, settingsProjectPath, settingsVariantPath } from "../routes";
-import type { RefreshType } from "../helpers/refreshSources";
-import {
-  allVulnerabilityRefreshTypes,
-  resolveRefreshSources,
-  vulnerabilityRefreshSources,
-} from "../helpers/refreshSources";
-import type { RefreshMode } from "../helpers/refreshSources";
 import CustomExportContentManager from "../components/CustomExportContentManager";
 import NativePackageSettings from "../components/NativePackageSettings";
 import FileInputButton from "../components/FileInputButton";
@@ -606,11 +599,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importBusy, setImportBusy] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
-  const [importRefreshMode, setImportRefreshMode] = useState<RefreshMode>("complete");
-  const [importCustomRefreshSources, setImportCustomRefreshSources] = useState<Set<RefreshType>>(
-    () => new Set(allVulnerabilityRefreshTypes),
-  );
-  const importRefreshSources = resolveRefreshSources(importRefreshMode, importCustomRefreshSources);
 
   const handleFileSelected = (index: number, file: File | null) => {
     setImportMsg(null);
@@ -640,7 +628,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
         selectedProjectId,
         targetVariantId,
         importFiles,
-        Array.from(importRefreshSources),
       );
       if (unmountedRef.current) return;
       onLoadingMessage?.("Processing SBOM...");
@@ -1472,63 +1459,10 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
               </p>
             </div>
 
-            <fieldset className="space-y-3" disabled={importBusy}>
-              <legend className="block text-sm text-zinc-300 mb-1">Refresh vulnerability data</legend>
-              <p className="text-xs text-zinc-400">Optionally fetch current vulnerability data after the SBOM is imported.</p>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {([
-                  ["complete", "Complete refresh", "Refresh every supported data source."],
-                  ["custom", "Custom refresh", "Choose which data sources to refresh."],
-                ] as const).map(([mode, label, description]) => (
-                  <label key={mode} className={[
-                    "flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-3 text-sm transition-colors",
-                    importRefreshMode === mode
-                      ? "border-cyan-500 bg-cyan-950/40 text-white"
-                      : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                  ].join(" ")}>
-                    <input
-                      type="radio"
-                      name="import-refresh-mode"
-                      checked={importRefreshMode === mode}
-                      onChange={() => setImportRefreshMode(mode)}
-                      className="mt-0.5 accent-cyan-500"
-                    />
-                    <span className="flex flex-col">
-                      <span className="font-medium">{label}</span>
-                      <span className="mt-1 text-xs text-zinc-400">{description}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              {importRefreshMode === "custom" && (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {vulnerabilityRefreshSources.map(({ source, label }) => (
-                    <label key={source} className={[
-                      "flex cursor-pointer items-center gap-2 rounded border px-3 py-2 text-sm transition-colors",
-                      importCustomRefreshSources.has(source)
-                        ? "border-cyan-600 bg-cyan-950/30 text-zinc-100"
-                        : "border-slate-600 bg-slate-900/40 text-zinc-300 hover:border-slate-500",
-                    ].join(" ")}>
-                      <input
-                        type="checkbox"
-                        aria-label={label}
-                        checked={importCustomRefreshSources.has(source)}
-                        onChange={() => setImportCustomRefreshSources((previous) => {
-                        const next = new Set(previous);
-                        if (next.has(source)) next.delete(source); else next.add(source);
-                        return next;
-                      })}
-                      className="rounded accent-cyan-500"
-                    />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              )}
-              {importRefreshMode === "custom" && importRefreshSources.size === 0 && (
-                <p className="text-xs text-zinc-400">The SBOM will be imported without refreshing vulnerability data.</p>
-              )}
-            </fieldset>
+            <p className="text-xs text-zinc-400">
+              Importing does not refresh vulnerability data. Open the{" "}
+              <Link className="underline" to={ROUTES.refresh}>Refresh tab</Link> to update it.
+            </p>
 
             {/* ---- Submit ---- */}
             <div className="space-y-2 pt-1">
