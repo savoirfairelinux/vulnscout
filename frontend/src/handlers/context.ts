@@ -28,6 +28,33 @@ type CodebaseDirectory = {
 };
 type Rating = 'low' | 'medium' | 'high' | null;
 
+/** A host folder attached read-only to a variant; agents browse it with `file_id`. */
+type HostMount = {
+    alias: string;
+    file_id: string;
+    host_path: string;
+    created_at: string | null;
+    status: 'available' | 'unavailable';
+    message: string;
+};
+
+type HostMountList = {
+    helper: { available: boolean; message: string | null };
+    mounts: HostMount[];
+};
+
+/** Host folder helper availability and the operator-approved host roots. */
+type HostHelperStatus = { available: boolean; message: string | null; roots: string[] };
+
+/** Subfolders of a host folder inside an approved root (the roots when `path` is null). */
+type HostFolderListing = {
+    path: string | null;
+    root: string | null;
+    parent: string | null;
+    truncated: boolean;
+    directories: { name: string; path: string }[];
+};
+
 type StrideComponent = { id: string; name: string; description: string; trust_zone: string };
 
 type StrideInteraction = {
@@ -176,6 +203,10 @@ export type {
     AiContextDraft,
     ImportSource,
     CodebaseDirectory,
+    HostMount,
+    HostMountList,
+    HostHelperStatus,
+    HostFolderListing,
 };
 
 /** Rejected variant save; `fields` maps field paths to validation messages. */
@@ -281,6 +312,51 @@ class Context {
             { mode: 'cors', method: create ? 'POST' : 'GET' }
         );
         return jsonOrThrow<CodebaseDirectory>(res, 'Failed to load codebase directory');
+    }
+
+    static async listMounts(variantId: string): Promise<HostMountList> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/mounts`,
+            { mode: 'cors' }
+        );
+        return jsonOrThrow<HostMountList>(res, 'Failed to load attached folders');
+    }
+
+    static async attachMount(variantId: string, alias: string, hostPath: string): Promise<HostMount> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/mounts`,
+            {
+                mode: 'cors',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ alias, host_path: hostPath }),
+            }
+        );
+        return jsonOrThrow<HostMount>(res, 'Failed to attach folder');
+    }
+
+    /** Detaches a folder; resolves to the helper cleanup warning, if any. */
+    static async detachMount(variantId: string, alias: string): Promise<string | null> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/mounts/${encodeURIComponent(alias)}`,
+            { mode: 'cors', method: 'DELETE' }
+        );
+        const body = await jsonOrThrow<{ warning?: string | null }>(res, 'Failed to detach folder');
+        return body.warning ?? null;
+    }
+
+    static async getHostRoots(): Promise<HostHelperStatus> {
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/api/context/host-roots`, { mode: 'cors' });
+        return jsonOrThrow<HostHelperStatus>(res, 'Failed to load approved host folders');
+    }
+
+    static async browseHostFolder(path: string | null): Promise<HostFolderListing> {
+        const query = path ? `?path=${encodeURIComponent(path)}` : '';
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/context/host-roots/browse${query}`,
+            { mode: 'cors' }
+        );
+        return jsonOrThrow<HostFolderListing>(res, 'Failed to browse host folders');
     }
 
     static async getProject(projectId: string): Promise<ProjectContext> {

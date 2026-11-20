@@ -210,6 +210,12 @@ Commands without --project or --variant:
         --export-context                Export AI assessment context
         --import-context <path>         Import AI assessment context
 
+        Host folders attached to a variant's AI context (use the remaining arguments):
+        --ai-context-attach <alias>=<host path>...
+                                        Attach folders served by the host folder helper
+        --ai-context-list [--json]      List attached folders and their availability
+        --ai-context-detach <alias>...  Detach folders
+
 Options used by the host wrapper's subcommands:
         --dry-run                       Preview the --delete-* flag that follows without deleting anything
         --clear-vulnerability-history   Also clear refresh history with the --delete-outdated flag that follows
@@ -1091,6 +1097,10 @@ while [[ $# -gt 0 ]]; do
             shift; ai_exit=0; cmd_ai_command ai-assess "$@" || ai_exit=$?; exit "$ai_exit" ;;
         --ai-review)
             shift; ai_exit=0; cmd_ai_command ai-review "$@" || ai_exit=$?; exit "$ai_exit" ;;
+        --ai-context-attach|--ai-context-list|--ai-context-detach)
+            # Consumes the remaining arguments: alias=path pairs, aliases, or --json.
+            context_command="${1#--}"; shift; ai_exit=0
+            cmd_ai_command "$context_command" "$@" || ai_exit=$?; exit "$ai_exit" ;;
         --export-vulnerability-history)
             shift
             history_scope=()

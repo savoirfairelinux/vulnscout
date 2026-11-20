@@ -704,4 +704,67 @@ expect_fail "'config' does not accept --project or --variant." config list -p de
 expect_fail "unknown config action 'show'." config show
 expect_fail "'config' needs get, set, unset, or list." config
 
+# --- ai-context: attached host folders ---
+expect_fail "'ai-context' needs attach, list, detach, or helper." ai-context
+expect_fail "unknown ai-context action 'mount'." ai-context mount
+expect_fail "invalid alias 'Bad'" ai-context attach -p demo "Bad=$TEST_DIR"
+expect_fail "expected <alias>=<host path>, got 'src'." ai-context attach src
+expect_fail "host folder not found: $TEST_DIR/missing" ai-context attach "src=$TEST_DIR/missing"
+expect_fail "alias 'src' is given twice." ai-context attach "src=$TEST_DIR" "src=$TEST_DIR"
+expect_fail "no approved host roots" ai-context attach "src=$TEST_DIR"
+expect_fail "'ai-context helper' does not accept --project or --variant." ai-context helper status -p demo
+expect_fail "invalid alias '../x'" ai-context detach ../x
+expect_fail "'ai-context list' does not accept option --all." ai-context list --all
+
+run_ok ai-context list -p demo -v x86 --json
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-list --json"
+run_ok ai-context detach -p demo src build
+assert_log "/scan/src/entrypoint.sh --project demo --ai-context-detach src build"
+
+if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
+    roots="$TEST_DIR/roots"
+    mkdir -p "$roots/app" "$roots/build"
+    export VULNSCOUT_HOST_ROOTS="$roots"
+    socket="$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock"
+    trap 'VULNSCOUT_HOST_ROOTS="" "$ROOT_DIR/vulnscout" ai-context helper stop > /dev/null 2>&1 || true; rm -rf "$TEST_DIR"' EXIT
+
+    run_ok ai-context attach -p demo -v x86 "src=$roots/app/../app" "build=$roots/build"
+    assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-attach src=$roots/app build=$roots/build"
+    assert_stdout "Host folder helper running as"
+    if [ ! -S "$socket" ] || [ "$(stat -c %a "$socket")" != 600 ] ||
+        [ "$(stat -c %a "$(dirname "$socket")")" != 700 ]; then
+        echo "The helper socket must be owner-only inside a private directory." >&2
+        ls -la "$(dirname "$socket")" >&2
+        exit 1
+    fi
+
+    run_ok ai-context helper status
+    assert_stdout "$roots"
+
+    # An unchanged configuration reuses the running helper.
+    pid="$(cat "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid")"
+    run_ok ai-context list
+    if [ "$(cat "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid")" != "$pid" ]; then
+        echo "The helper must not restart when its roots are unchanged." >&2
+        exit 1
+    fi
+
+    # Changing the approved roots restarts it.
+    export VULNSCOUT_HOST_ROOTS="$roots/app"
+    run_ok ai-context helper start
+    run_ok ai-context helper status
+    assert_stdout "$roots/app"
+    refute_stdout "$roots/build"
+
+    run_ok stop
+    if [ -S "$socket" ] || [ -f "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid" ]; then
+        echo "'vulnscout stop' must stop the host folder helper." >&2
+        exit 1
+    fi
+    expect_fail "" ai-context helper status
+    unset VULNSCOUT_HOST_ROOTS
+else
+    echo "python3 not found or running as root; skipping the host folder helper tests." >&2
+fi
+
 echo "Host wrapper scope tests passed."

@@ -7,7 +7,7 @@ import logging
 from contextlib import ExitStack
 from datetime import datetime, timezone
 
-from flask import jsonify, request
+from flask import current_app, jsonify, request
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -16,7 +16,7 @@ from ..extensions import db
 from ..helpers import context_draft
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.codebase_reference import (
-    ARCHIVE_SUFFIXES, MAX_ENTRIES, MAX_FILE_BYTES, CodebaseReference, validate_reference,
+    ARCHIVE_SUFFIXES, MAX_ENTRIES, MAX_FILE_BYTES, MAX_RESPONSE_BYTES, CodebaseReference, validate_reference,
 )
 from ..helpers.codebase_directory import (
     CodebaseDirectory, EmptyCodebaseDirectory, directory_exists, directory_name, directory_path, provision_directory,
@@ -28,6 +28,9 @@ from ..helpers.context_io import (
     import_entries,
 )
 from ..helpers.stride_model import StrideValidationError
+from ..controllers import host_mounts
+from ..helpers.host_mounts import HostHelperError, HostHelperUnavailable
+from ..models.host_mount import MOUNT_FILE_ID_PREFIX, HostMount
 from ..models.project import Project
 from ..models.variant import Variant
 from ..models.variant_context import (
@@ -197,6 +200,45 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
     return result, 200
 
 
+def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
+    """List, read or search an attached host folder through the host folder helper."""
+    try:
+        alias = host_mounts.mount_alias(file_id)
+        assert alias is not None
+        operation = request.args.get("operation", "list")
+        pattern = request.args.get("pattern", "*")
+        if len(pattern) > 512:
+            raise ValueError("File pattern must be at most 512 characters.")
+        params: dict
+        if operation == "list":
+            params = {"pattern": pattern, "offset": _integer("offset", 0, 0, MAX_ENTRIES),
+                      "limit": _integer("limit", 200, 1, 200)}
+        elif operation == "read":
+            params = {"path": request.args.get("path", ""),
+                      "start_line": _integer("start_line", 1, 1, 10 * 1024 * 1024),
+                      "max_lines": _integer("max_lines", 200, 1, 200)}
+        elif operation == "search":
+            query = request.args.get("query", "")
+            if not query or len(query) > 200:
+                raise ValueError("Search query must contain 1-200 characters.")
+            params = {"query": query, "pattern": pattern, "max_results": _integer("max_results", 100, 1, 100)}
+        else:
+            raise ValueError("Operation must be list, read, or search.")
+        result = host_mounts.browse(variant_uuid, alias, operation, params)
+    except LookupError as exc:
+        return {"error": str(exc)}, 404
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
+    except HostHelperUnavailable as exc:
+        return {"error": exc.message, "helper_available": False}, 503
+    except HostHelperError as exc:
+        return {"error": exc.message, "code": exc.code}, exc.http_status
+    body = {"file_id": file_id, "original_name": f"Host folder {alias}", **result}
+    if len(current_app.json.dumps(body).encode("utf-8")) > MAX_RESPONSE_BYTES:
+        return {"error": "Source response exceeds 64 KB; reduce limit, max_lines or max_results."}, 400
+    return body, 200
+
+
 def _import_name(filename: str) -> str | None:
     """Base name of an uploaded import source, or None when it is unsafe to store."""
     name = os.path.basename(filename.replace('\\', '/'))
@@ -256,6 +298,7 @@ def init_app(app):
             "files": variant_part["files"],
             "editor": variant_part["editor"],
             "codebase_directory": variant_part.get("codebase_directory"),
+            "mounts": [mount.to_dict() for mount in HostMount.get_by_variant(variant_uuid)],
         })
 
     @app.route('/api/variants/<variant_id>/context/directory', methods=['GET', 'POST'])
@@ -818,10 +861,13 @@ def init_app(app):
 
     @app.route('/api/variants/<variant_id>/context/files/<file_id>/source', methods=['GET'])
     def get_codebase_source(variant_id, file_id):
-        """List, read or search an upload, or the active directory using file_id=directory.
+        """List, read or search an upload, the active directory (file_id=directory) or a host folder.
+
+        Host folders attached to the variant use file_id=mount:<alias> and are served
+        read-only by the host folder helper.
 
         OpenAPI:
-        path file_id string required Upload UUID or directory for the active server directory.
+        path file_id string required Upload UUID, directory for the active server directory, or mount:<alias>.
         query operation string optional list (default), read, or search.
         query path string optional Exact member path for read.
         query pattern string optional File-path glob for list or search (default *).
@@ -834,13 +880,19 @@ def init_app(app):
         response 200 SourceReferenceResult Source files, line-numbered content, or search matches.
         response 400 Error Invalid parameters or unreadable reference.
         response 404 Error Variant, reference, or source member not found.
-        response 409 Error Directory name ownership conflicts or is ambiguous.
+        response 409 Error Directory name ownership conflicts or is ambiguous, or host folder unavailable.
         response 500 Error Stored reference is unavailable.
+        response 503 Error Host folder helper is not running.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
         if err:
             return err
         assert variant_uuid is not None
+        if file_id.startswith(MOUNT_FILE_ID_PREFIX):
+            if Variant.get_by_id(variant_uuid) is None:
+                return jsonify(error="Variant not found"), 404
+            body, status = _browse_mount(variant_uuid, file_id)
+            return jsonify(body), status
         if file_id == "directory":
             if Variant.get_by_id(variant_uuid) is None:
                 return jsonify(error="Variant not found"), 404

@@ -96,3 +96,40 @@ def test_registered_tools_forward_parameters():
         source.assert_called_with("v1", "f1", {
             "operation": "search", "query": "needle", "pattern": "*.c", "max_results": 3,
         })
+
+
+def test_merged_context_lists_mount_file_ids():
+    result = _fmt_merged_context({"mounts": [
+        {"alias": "src", "file_id": "mount:src", "host_path": "/work/app", "created_at": "2026-01-01T00:00:00Z"},
+    ]})
+    line = next(line for line in result.splitlines() if line.startswith("mounts="))
+    assert json.loads(line.split("=", 1)[1]) == [{"alias": "src", "file_id": "mount:src", "host_path": "/work/app"}]
+    assert "mounts=[]" in _fmt_merged_context({})
+
+
+@pytest.mark.parametrize("operation", ["list", "read", "search"])
+def test_client_targets_one_mount_alias(operation):
+    with respx.mock:
+        route = respx.get(f"{BASE_URL}/api/variants/v1/context/files/mount%3Asrc/source").mock(
+            return_value=httpx.Response(200, json={"file_id": "mount:src", "matches": []}),
+        )
+        result = _codebase_source_impl(VulnScoutClient(BASE_URL), "v1", "mount:src", {"operation": operation})
+        assert json.loads(result)["file_id"] == "mount:src"
+        assert route.called
+
+
+def test_helper_unavailability_is_reported():
+    with respx.mock:
+        respx.get(f"{BASE_URL}/api/variants/v1/context/files/mount%3Asrc/source").mock(
+            return_value=httpx.Response(503, json={"error": "Host folder helper is not running."}),
+        )
+        result = _codebase_source_impl(VulnScoutClient(BASE_URL), "v1", "mount:src", {})
+        assert result == "Error: Host folder helper is not running."
+
+
+def test_mount_scope_rejected_before_request():
+    client = ScopedVulnScoutClient(BASE_URL, {"project_ids": ["p1"], "variant_ids": ["v1"]})
+    with patch.object(VulnScoutClient, "get_codebase_source") as source:
+        with pytest.raises(VulnScoutError, match="outside"):
+            client.get_codebase_source("v2", "mount:src", {})
+        source.assert_not_called()

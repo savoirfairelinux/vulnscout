@@ -22,12 +22,21 @@ def _fmt_merged_context(ctx: dict) -> str:
         f"variant_id={ctx.get('variant_id')}\n"
         f"variant_description={ctx.get('variant_description')}\n"
         f"codebase_directory={json.dumps(ctx.get('codebase_directory'), ensure_ascii=True)}\n"
+        f"mounts={json.dumps(_mount_metadata(ctx), ensure_ascii=True)}\n"
         f"environment={ctx.get('environment')}\n"
         f"threat_model={ctx.get('threat_model')}\n"
         f"risks={ctx.get('risks')}\n"
         f"other_info={ctx.get('other_info')}\n"
         f"files={file_names}"
     )
+
+
+def _mount_metadata(ctx: dict) -> list:
+    """Attached host folders: alias, file_id ("mount:<alias>") and host path."""
+    return [
+        {key: mount.get(key) for key in ("alias", "file_id", "host_path")}
+        for mount in ctx.get("mounts") or [] if isinstance(mount, dict)
+    ]
 
 
 def _fmt_project_context(ctx: dict) -> str:
@@ -445,7 +454,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         Offsets count Unicode characters. limit_bytes is 1-12288 UTF-8 bytes.
 
         Returns the project's description together with the variant's
-        variant_description, codebase_directory, environment,
+        variant_description, codebase_directory, mounts, environment,
         threat_model, risks, other_info, and uploaded reference metadata
         (files: id, original_name, description).
 
@@ -455,8 +464,13 @@ def register_tools(server, client: VulnScoutClient) -> None:
         the bounded API, never direct filesystem access.
         Matching cache directories created by CI are discovered automatically.
         No UI provisioning, separate context save or source selection is required.
+        mounts lists host folders attached to the variant (alias, file_id
+        "mount:<alias>", host_path), e.g. src and build. Pass one mount's file_id
+        to the same tools to inspect only that folder, so searching src never
+        scans build. They are served read-only by the host folder helper; a
+        "helper is not running" or unavailable error means missing evidence.
         Empty files only means no uploaded attachments;
-        always check codebase_directory before concluding source is unavailable.
+        always check codebase_directory and mounts before concluding source is unavailable.
         A null codebase_directory means no saved or matching directory was found;
         report the missing evidence instead of falling back to local paths.
 
@@ -510,11 +524,14 @@ def register_tools(server, client: VulnScoutClient) -> None:
     def list_codebase_files(
         variant_id: str, file_id: str, pattern: str = "*", offset: int = 0, limit: int = 200,
     ) -> str:
-        """List files in an uploaded reference or the variant's active server directory.
+        """List files in an uploaded reference, the active server directory or an attached host folder.
 
         Get file_id from get_merged_context's files metadata. Supports ZIP, TAR,
         TAR.GZ/TGZ and individual files. Paths belong to the upload, NOT the host.
         For an active directory use file_id="directory" from codebase_directory.
+        For an attached host folder use file_id="mount:<alias>" from mounts; paths
+        are relative to that folder, and truncated=true means the 500,000-entry or
+        time budget stopped the listing (total is then a lower bound).
         Directory browsing excludes hidden/sensitive names, links and special files,
         and is limited to 500,000 visited entries. It never reads the MCP host filesystem.
         pattern is a case-sensitive file-path glob. Follow next_offset until null
@@ -529,7 +546,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
     def read_codebase_file(
         variant_id: str, file_id: str, path: str, start_line: int = 1, max_lines: int = 200,
     ) -> str:
-        """Read UTF-8 source from a reference or active directory with line numbers.
+        """Read UTF-8 source from a reference, active directory or host folder (mount:<alias>).
 
         Use an exact path returned by list_codebase_files. start_line is 1-based;
         max_lines must be 1-200. Reads are capped at 64 KB. Follow next_line until
@@ -546,7 +563,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
     def search_codebase(
         variant_id: str, file_id: str, query: str, pattern: str = "*", max_results: int = 100,
     ) -> str:
-        """Search a reference or active directory for literal, case-sensitive text (not regex).
+        """Search a reference, active directory or one host folder (mount:<alias>) for literal text.
+
+        Matching is case-sensitive (not regex). Host folder searches stop at
+        100 MiB read or 20 seconds and then report truncated=true with a message.
 
         query must contain 1-200 characters; pattern is a file-path glob;
         max_results must be 1-100. Matches include paths and 1-based line numbers.

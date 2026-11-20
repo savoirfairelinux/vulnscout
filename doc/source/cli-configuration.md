@@ -118,6 +118,8 @@ an already-running web server must be restarted to pick up config-file changes.
 | `VITE_API_URL` | Optional backend API URL for the dev frontend (empty uses Vite's same-origin `/api` proxy) | empty |
 | `USER_UID` | UID used to write output files | current user |
 | `USER_GID` | GID used to write output files | current group |
+| `VULNSCOUT_HOST_ROOTS` | Colon-separated absolute host folders under which folders may be attached to the AI context (`ai-context attach`, **Attach folder**). Unset disables the host folder helper; see [Attached host folders](ai-assessments.md#attached-host-folders) | unset |
+| `VULNSCOUT_HOST_HELPER_STATE_DIR` | Host-only directory of the host folder helper (alias registry, PID and log); export on the host | `$VULNSCOUT_BUILD_DIR/host-helper` |
 
 The wrapper always publishes host port `7275` to container port `7275`; changing
 `FLASK_RUN_PORT` alone does not change this mapping. To use a different host

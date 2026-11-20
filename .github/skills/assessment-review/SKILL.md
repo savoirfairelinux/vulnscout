@@ -156,7 +156,8 @@ Phases 0, 2 and 3 describe, including **STRIDE Context** and
 use `vulnscout-list_codebase_files`, `vulnscout-search_codebase` and
 `vulnscout-read_codebase_file` for each target variant's own references.
 For an active directory use `codebase_directory.file_id="directory"` with those
-same tools, following the directory rules in `cve-assessment`. A provisioned
+same tools, following the directory rules in `cve-assessment`; attached host
+folders (`mounts`) use the same tools with their `file_id` (`"mount:<alias>"`). A provisioned
 directory requires no source selection; inspect it even when `files`
 is empty, since that list only describes attachments. Never open the
 server path directly. Null directory metadata, errors, empty results or exclusions

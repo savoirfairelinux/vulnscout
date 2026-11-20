@@ -38,6 +38,9 @@ from .cmd_assessments import (
     import_custom_vulnscout_data_command,
 )
 from .cmd_context import (
+    ai_context_attach_command,
+    ai_context_detach_command,
+    ai_context_list_command,
     export_context_command,
     import_context_command,
 )
@@ -70,6 +73,9 @@ def init_app(app) -> None:
     app.cli.add_command(import_custom_openvex_assessments_command)
     app.cli.add_command(export_context_command)
     app.cli.add_command(import_context_command)
+    app.cli.add_command(ai_context_attach_command)
+    app.cli.add_command(ai_context_list_command)
+    app.cli.add_command(ai_context_detach_command)
     app.cli.add_command(list_projects_command)
     app.cli.add_command(list_scans_command)
     app.cli.add_command(delete_scan_command)

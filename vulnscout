@@ -67,8 +67,8 @@ _vulnscout_files() {
 }
 _vulnscout_complete() {
     local cur prev word verb="" i k
-    local data_verbs="add scan match-condition assess review report export import refresh"
-    local all_verbs="add scan match-condition assess review report export import refresh delete list config asset start stop restart update version serve"
+    local data_verbs="add scan match-condition assess review report export import refresh ai-context"
+    local all_verbs="add scan match-condition assess review report export import refresh ai-context delete list config asset start stop restart update version serve"
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -188,6 +188,21 @@ _vulnscout_complete() {
             words="--run-id" ;;
         match-condition)
             words="" ;;
+        ai-context)
+            local action="" k
+            for ((k = i + 1; k < COMP_CWORD; k++)); do
+                case "${COMP_WORDS[k]}" in
+                    -p|--project|-v|--variant) k=$((k + 1)) ;;
+                    -*) ;;
+                    *) action="${COMP_WORDS[k]}"; break ;;
+                esac
+            done
+            case "$action" in
+                "") words="attach list detach helper"; scope="" ;;
+                list) words="--json" ;;
+                helper) words="start stop restart status"; scope="" ;;
+                *) words="" ;;
+            esac ;;
     esac
     mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
 }
@@ -295,6 +310,7 @@ Data commands (also accept --project and --variant; see '<command> --help'):
     export                  Export SBOMs, custom data, assessments or context
     import                  Import custom data, assessments or context
     refresh                 Refresh stored vulnerability data, including EPSS
+    ai-context              Attach host folders to a variant's AI context, read-only
 
 Maintenance commands:
     delete                  Delete scans and stale data
@@ -491,6 +507,29 @@ Options:
 Examples:
     vulnscout refresh
     vulnscout refresh -p demo
+EOF
+            ;;
+        ai-context) cat <<'EOF'
+Usage: vulnscout ai-context attach [-p <project>] [-v <variant>] <alias>=<host path>...
+       vulnscout ai-context list [-p <project>] [-v <variant>] [--json]
+       vulnscout ai-context detach [-p <project>] [-v <variant>] <alias>...
+       vulnscout ai-context helper start|stop|restart|status
+
+Attach host folders to a variant's AI context without copying them. Agents browse,
+read and search them read-only with file_id "mount:<alias>".
+Folders must be inside a root approved in VULNSCOUT_HOST_ROOTS (colon-separated
+absolute host paths, set with 'vulnscout config set'). A helper started on this
+host as the current user serves them over a private socket; no restart needed.
+Aliases: 1-32 lowercase letters, digits, '_' or '-', unique per variant.
+Options:
+    -p, --project <name>    Project (default: "default")
+    -v, --variant <name>    Variant (default: "default")
+    --json                  list: print the attachments as JSON
+
+Examples:
+    vulnscout ai-context attach -p demo -v x86 src=/work/app build=/work/build/tmp/work
+    vulnscout ai-context list -p demo -v x86
+    vulnscout ai-context detach -p demo -v x86 build
 EOF
             ;;
         delete) cat <<'EOF'
@@ -697,6 +736,7 @@ ensure_running() {
         console_out info "Container running without dev mode, restarting..."
         do_start
     fi
+    ensure_host_helper
 }
 
 die() {
@@ -870,6 +910,14 @@ config_set() {
     cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
     rm -f "$tmp"
     console_out success "Config set: $key=$value"
+    if [ "$key" = "VULNSCOUT_HOST_ROOTS" ]; then
+        host_helper_paths
+        if host_helper_running; then
+            VULNSCOUT_HOST_ROOTS="$value"
+            console_out info "Restarting the host folder helper with the new approved roots..."
+            start_host_helper || true
+        fi
+    fi
     # Restart the container so volume mounts reflect the new cache dir
     if [ "$key" = "VULNSCOUT_CACHE_DIR" ] && call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         console_out info "Restarting container to apply new VULNSCOUT_CACHE_DIR..."
@@ -887,6 +935,125 @@ config_clear() {
     cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
     rm -f "$tmp"
     console_out success "Config cleared: $key"
+    if [ "$key" = "VULNSCOUT_HOST_ROOTS" ]; then
+        stop_host_helper
+    fi
+}
+
+# Host folder helper: an unprivileged process on this host, run as the invoking user, that serves
+# attached folders read-only over a private socket inside the cache directory (already mounted).
+host_helper_paths() {
+    HOST_HELPER_STATE_DIR="${VULNSCOUT_HOST_HELPER_STATE_DIR:-$VULNSCOUT_BUILD_DIR/host-helper}"
+    HOST_HELPER_SOCKET="$VULNSCOUT_CACHE_DIR/host-helper/helper.sock"
+    HOST_HELPER_PID_FILE="$HOST_HELPER_STATE_DIR/helper.pid"
+}
+
+host_helper_pid() {
+    local pid
+    pid="$(cat "$HOST_HELPER_PID_FILE" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    # A recycled PID must not be signalled.
+    ps -o args= -p "$pid" 2>/dev/null | grep -q 'host_mount_helper' || return 1
+    echo "$pid"
+}
+
+host_helper_running() {
+    host_helper_pid >/dev/null && [ -S "$HOST_HELPER_SOCKET" ]
+}
+
+stop_host_helper() {
+    local pid i
+    host_helper_paths
+    if pid="$(host_helper_pid)"; then
+        kill "$pid" 2>/dev/null || true
+        for ((i = 0; i < 50; i++)); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        console_out info "Host folder helper stopped."
+    fi
+    rm -f "$HOST_HELPER_PID_FILE" "$HOST_HELPER_STATE_DIR/roots.active"
+}
+
+# Print the helper script path: the checkout's copy, else one extracted from the image (cached per image ID).
+host_helper_script() {
+    local script="$SCRIPT_DIR/src/helpers/host_mount_helper.py" cached image_id
+    if [ -f "$script" ]; then
+        echo "$script"
+        return 0
+    fi
+    cached="$HOST_HELPER_STATE_DIR/host_mount_helper.py"
+    image_id="$(call_container_engine inspect "$DOCKER_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+    if [ -n "$image_id" ] && [ -f "$cached" ] &&
+        [ "$(cat "$cached.image" 2>/dev/null || true)" = "$image_id" ]; then
+        echo "$cached"
+        return 0
+    fi
+    if ! call_container_engine run --rm --entrypoint cat "$DOCKER_IMAGE" \
+        /scan/src/helpers/host_mount_helper.py > "$cached.tmp" 2>/dev/null || [ ! -s "$cached.tmp" ]; then
+        rm -f "$cached.tmp"
+        console_err error "Error: cannot extract the host folder helper from $DOCKER_IMAGE."
+        return 1
+    fi
+    chmod 600 "$cached.tmp"
+    mv "$cached.tmp" "$cached"
+    printf '%s\n' "$image_id" > "$cached.image"
+    echo "$cached"
+}
+
+# Start (or restart after a VULNSCOUT_HOST_ROOTS change) the helper; return 1 with an error otherwise.
+start_host_helper() {
+    local script root i
+    local -a roots=() root_args=()
+    host_helper_paths
+    if [ -z "${VULNSCOUT_HOST_ROOTS:-}" ]; then
+        console_err error "Error: no approved host roots. Set them first, e.g. 'vulnscout config set VULNSCOUT_HOST_ROOTS /work:/srv/sources'."
+        return 1
+    fi
+    if [ "$(id -u)" -eq 0 ]; then
+        console_err error "Error: the host folder helper runs as the invoking user, never as root; run vulnscout as a regular user."
+        return 1
+    fi
+    if ! command -v python3 &>/dev/null ||
+        ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' 2>/dev/null; then
+        console_err error "Error: host folders need python3 (3.8 or newer) on this host."
+        return 1
+    fi
+    if host_helper_running &&
+        [ "$(cat "$HOST_HELPER_STATE_DIR/roots.active" 2>/dev/null || true)" = "$VULNSCOUT_HOST_ROOTS" ]; then
+        return 0
+    fi
+    stop_host_helper >/dev/null
+    mkdir -p "$HOST_HELPER_STATE_DIR"
+    chmod 700 "$HOST_HELPER_STATE_DIR"
+    script="$(host_helper_script)" || return 1
+    IFS=':' read -r -a roots <<< "$VULNSCOUT_HOST_ROOTS"
+    for root in "${roots[@]}"; do
+        [ -n "$root" ] && root_args+=(--root "$root")
+    done
+    if ! python3 "$script" serve --daemon --socket "$HOST_HELPER_SOCKET" \
+        --state-dir "$HOST_HELPER_STATE_DIR" --pid-file "$HOST_HELPER_PID_FILE" \
+        --log-file "$HOST_HELPER_STATE_DIR/helper.log" "${root_args[@]}" < /dev/null >&2; then
+        console_err error "Error: the host folder helper did not start; see the message above."
+        return 1
+    fi
+    for ((i = 0; i < 50; i++)); do
+        host_helper_running && break
+        sleep 0.1
+    done
+    if ! host_helper_running; then
+        console_err error "Error: the host folder helper did not start; see $HOST_HELPER_STATE_DIR/helper.log."
+        return 1
+    fi
+    printf '%s\n' "$VULNSCOUT_HOST_ROOTS" > "$HOST_HELPER_STATE_DIR/roots.active"
+    console_out success "Host folder helper running as $(id -un) (approved roots: $VULNSCOUT_HOST_ROOTS)."
+}
+
+# Keep attached host folders available when roots are configured; never fail the calling command.
+ensure_host_helper() {
+    [ -n "${VULNSCOUT_HOST_ROOTS:-}" ] || return 0
+    start_host_helper || console_err warning "Warning: attached host folders are unavailable until the helper runs."
 }
 
 do_start() {
@@ -1112,6 +1279,7 @@ verb_start() {
     reject_scope start
     require_no_args start "$@"
     do_start
+    ensure_host_helper
     if [ "$DEV_MODE" = true ]; then
         start_frontend_dev
     fi
@@ -1121,6 +1289,7 @@ verb_stop() {
     reject_scope stop
     require_no_args stop "$@"
     call_container_engine rm -f "$CONTAINER_NAME"
+    stop_host_helper
 }
 
 verb_restart() {
@@ -1128,6 +1297,7 @@ verb_restart() {
     require_no_args restart "$@"
     call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
     do_start
+    ensure_host_helper
     if [ "$DEV_MODE" = true ]; then
         start_frontend_dev
     fi
@@ -1626,6 +1796,116 @@ verb_import() {
     exec_container "${SCOPE_ARGS[@]}" "${import_args[@]}"
 }
 
+validate_host_alias() {
+    if [[ ! "$1" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+        die "invalid alias '$1': use 1-32 lowercase letters, digits, '_' or '-', starting with a letter or digit."
+    fi
+}
+
+verb_ai_context() {
+    local action="${1:-}"
+    case "$action" in
+        attach|list|detach) shift; "ai_context_$action" "$@" ;;
+        helper) shift; ai_context_helper "$@" ;;
+        "") die "'ai-context' needs attach, list, detach, or helper." ;;
+        *) die "unknown ai-context action '$action'. Expected attach, list, detach, or helper." ;;
+    esac
+}
+
+ai_context_attach() {
+    local arg alias path seen=" "
+    local -a pairs=()
+    if [ $# -eq 0 ]; then
+        die "'ai-context attach' needs at least one <alias>=<host path> pair, e.g. src=/work/app."
+    fi
+    for arg in "$@"; do
+        case "$arg" in
+            -*) reject_option "ai-context attach" "$arg" ;;
+            *=*) ;;
+            *) die "expected <alias>=<host path>, got '$arg'." ;;
+        esac
+        alias="${arg%%=*}"
+        path="${arg#*=}"
+        validate_host_alias "$alias"
+        if [[ "$seen" == *" $alias "* ]]; then
+            die "alias '$alias' is given twice."
+        fi
+        seen+="$alias "
+        if [ -z "$path" ] || [ ! -d "$path" ]; then
+            die "host folder not found: ${path:-<empty>}"
+        fi
+        # The helper runs elsewhere: send the absolute canonical host path.
+        pairs+=("$alias=$(readlink -f "$path")")
+    done
+    start_host_helper || exit 1
+    ensure_running
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --ai-context-attach "${pairs[@]}"
+}
+
+ai_context_list() {
+    local json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=true ;;
+            *) reject_option "ai-context list" "$1" ;;
+        esac
+        shift
+    done
+    set_explicit_scope_args
+    if [ "$json" = true ]; then
+        # stdout carries only the JSON document.
+        ensure_running >&2
+        exec_container "${SCOPE_ARGS[@]}" --ai-context-list --json
+    else
+        ensure_running
+        exec_container "${SCOPE_ARGS[@]}" --ai-context-list
+    fi
+}
+
+ai_context_detach() {
+    local alias
+    if [ $# -eq 0 ]; then
+        die "'ai-context detach' needs at least one alias."
+    fi
+    for alias in "$@"; do
+        case "$alias" in
+            -*) reject_option "ai-context detach" "$alias" ;;
+        esac
+        validate_host_alias "$alias"
+    done
+    ensure_running
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --ai-context-detach "$@"
+}
+
+ai_context_helper() {
+    local action="${1:-}" script
+    reject_scope "ai-context helper"
+    if [ $# -gt 1 ]; then
+        reject_option "ai-context helper $action" "$2"
+    fi
+    host_helper_paths
+    case "$action" in
+        start) start_host_helper || exit 1 ;;
+        stop) stop_host_helper ;;
+        restart)
+            stop_host_helper
+            start_host_helper || exit 1 ;;
+        status)
+            if ! host_helper_running; then
+                console_err warning "Host folder helper is not running."
+                return 1
+            fi
+            script="$(host_helper_script)" || exit 1
+            console_out success "Host folder helper is running (PID $(host_helper_pid)) on $HOST_HELPER_SOCKET."
+            console_out info "Approved roots:"
+            python3 "$script" ping --socket "$HOST_HELPER_SOCKET" | sed 's/^/    /' ;;
+        "") die "'ai-context helper' needs start, stop, restart, or status." ;;
+        *) die "unknown ai-context helper action '$action'. Expected start, stop, restart, or status." ;;
+    esac
+}
+
 stdin_is_tty() {
     [ -t 0 ]
 }
@@ -1807,6 +2087,7 @@ parse_new() {
         assess) verb_assess "${rest[@]}" ;;
         review) verb_review "${rest[@]}" ;;
         refresh) verb_refresh "${rest[@]}" ;;
+        ai-context) verb_ai_context "${rest[@]}" ;;
         asset) verb_asset "${rest[@]}" ;;
         report) verb_report "${rest[@]}" ;;
         export) verb_export "${rest[@]}" ;;

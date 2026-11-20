@@ -509,6 +509,38 @@ or separate editor save is required.
 See [administrator directory setup](ai-assessments.md#administrator-provided-codebase-directories)
 for naming, retention, copying, read-only mounts and permissions.
 
+### Attach Host Folders
+
+```
+GET /api/context/host-roots
+GET /api/context/host-roots/browse[?path=<absolute host folder>]
+GET /api/variants/<variant_id>/context/mounts
+POST /api/variants/<variant_id>/context/mounts
+DELETE /api/variants/<variant_id>/context/mounts/<alias>
+GET /api/variants/<variant_id>/context/files/mount:<alias>/source
+```
+
+`host-roots` returns `{"available": bool, "message": str|null, "roots": [...]}`: whether the
+host folder helper answers and the operator-approved roots (`VULNSCOUT_HOST_ROOTS`).
+`browse` lists the approved roots without `path`, otherwise the subfolders (at most 500,
+`truncated` beyond) of a folder inside a root, with its `parent` (`null` at a root); hidden or
+sensitive names and links are omitted. `POST` takes `{"alias": "src", "host_path": "/work/app"}`
+and returns `201` with `{"alias", "file_id": "mount:src", "host_path", "created_at", "status", "message"}`
+(`200` when the same folder is already attached under that alias). `GET .../mounts` returns
+`{"helper": {"available", "message"}, "mounts": [...]}` with each folder's `status`
+(`available` or `unavailable`) and `message`. `DELETE` returns
+`{"alias", "detached": true, "warning": str|null}`; access ends immediately even if the helper
+could not be updated. `GET /api/context` also lists `mounts` without availability.
+
+The source route accepts the same `operation=list|read|search` parameters as uploads and the
+codebase directory; listings and searches may add `truncated` and `message` when a time, entry or
+byte budget stopped them, and searches add `skipped_large_files`.
+
+Errors: `400` invalid alias, path or parameters; `403` path outside the approved roots;
+`404` unknown variant, alias or folder; `409` alias already attached to another folder, or folder
+unavailable (missing, unreadable, moved or replaced by a link); `503` helper not running.
+See [Attached host folders](ai-assessments.md#attached-host-folders).
+
 ### Browse Codebase Source
 
 ```
