@@ -9,7 +9,7 @@ import '@xyflow/react/dist/style.css';
 import type { DependencyDocument, DependencyEdge, DependencyPackage } from '../handlers/dependencies';
 import { packageVersionLabel, versionEvidenceTitle } from '../helpers/packageVersions';
 import { buildDependencyScopes, dependencyLinks, dependencyNeighborhood, dependencyRoots, dependencyTreeRows,
-    reachablePackages, TREE_PAGE_SIZE, treePathKey } from '../helpers/dependencyExplorer';
+    exclusiveDirectDependencies, reachablePackages, TREE_PAGE_SIZE, treePathKey } from '../helpers/dependencyExplorer';
 import type { DependencyDirection, DependencyScope, DependencyTreeRow } from '../helpers/dependencyExplorer';
 
 type Props = {
@@ -234,12 +234,14 @@ function NeighborhoodGraph({ scope, selection, direction, onSelect, onInspect }:
     </div>;
 }
 
-function PackageDetails({ scope, selection, onExplore, onInspect }: Readonly<{
+function PackageDetails({ scope, evidenceScope, selection, onExplore, onInspect }: Readonly<{
     scope: DependencyScope; selection: Selection; onExplore: (id: string, variantId: string, direction: DependencyDirection) => void;
+    evidenceScope: DependencyScope;
     onInspect: (edge: DependencyEdge) => void;
 }>) {
     const { id } = selection;
     const pkg = scope.packages.get(id)!;
+    const exclusive = useMemo(() => exclusiveDirectDependencies(scope, id, evidenceScope), [scope, id, evidenceScope]);
     const counts = useMemo(() => (['dependencies', 'dependents'] as const).map(direction => {
         const direct = new Set(dependencyLinks(scope, direction).get(id) ?? []);
         direct.delete(id);
@@ -273,6 +275,22 @@ function PackageDetails({ scope, selection, onExplore, onInspect }: Readonly<{
                 <span className={`text-xs ${mutedClass}`}>{direct} direct · {transitive} transitive only</span>
             </li>)}
         </ul>
+        <section aria-label="Exclusive direct dependencies" className="text-sm">
+            <h3 className="mb-2 font-semibold">Exclusive direct dependencies ({exclusive.length})</h3>
+            <p className={`mb-2 text-xs ${mutedClass}`}>Direct dependencies whose only recorded dependent is this package.
+                Other active SBOM sources in this variant are checked, including packages hidden by comparison filters.
+                No transitive or removal analysis is performed.</p>
+            {exclusive.length ? <ul className="space-y-1">
+                {exclusive.map(dependency => <li key={dependency.id}>
+                    <button type="button" className="text-left text-cyan-700 underline dark:text-cyan-300"
+                        onClick={() => onExplore(dependency.id, scope.id, 'dependencies')}>
+                        <PackageLabel pkg={dependency} />
+                    </button>
+                </li>)}
+            </ul> : <p>No exclusive direct dependencies recorded in this selection.</p>}
+            <p className={`mt-2 text-xs ${mutedClass}`}>SBOM graphs may be incomplete. These relations are not proof of actual build or runtime requirements,
+                and do not establish that a package can safely be removed.</p>
+        </section>
         <details className="text-sm">
             <summary className="cursor-pointer">Inspect dependency links</summary>
             {scope.edges.filter(edge => edge.package_id === id || edge.dependency_id === id).map(edge =>
@@ -296,6 +314,8 @@ export default function DependencyExplorer({ documents, loading = false, error =
     const [documentId, setDocumentId] = useState('all');
     const sourceId = documents.some(doc => doc.id === documentId) ? documentId : 'all';
     const allScopes = useMemo(() => buildDependencyScopes(documents, sourceId), [documents, sourceId]);
+    const evidenceScopes = useMemo(() => sourceId === 'all' ? allScopes : buildDependencyScopes(documents, 'all'),
+        [documents, sourceId, allScopes]);
     const [hiddenVariants, setHiddenVariants] = useState(new Set<string>());
     const scopes = useMemo(() => allScopes.filter(scope => !hiddenVariants.has(scope.id)), [allScopes, hiddenVariants]);
     const [direction, setDirection] = useState<DependencyDirection>('dependencies');
@@ -453,6 +473,7 @@ export default function DependencyExplorer({ documents, loading = false, error =
                         {inspectedLink && inspectedLink.scope === selectedScope && inspectedLink.packageId === selected?.id &&
                             <DependencyLinkDetails scope={selectedScope} edge={inspectedLink.edge} onClose={() => setInspectedLink(undefined)} />}
                         {selected && selectedScope ? <PackageDetails scope={selectedScope} selection={selected} onExplore={explore}
+                            evidenceScope={evidenceScopes.find(scope => scope.id === selectedScope.id)!}
                             onInspect={edge => setInspectedLink({ scope: selectedScope, packageId: selected.id, edge })} />
                             : <div className="py-8 text-center"><FontAwesomeIcon icon={faBox} className={`mb-3 text-2xl ${mutedClass}`} />
                                 <h2 className="text-sm font-semibold">Inspect a package</h2><p className={`mt-2 text-sm ${mutedClass}`}>Select a tree row to see direct and transitive relationships, source evidence, and reverse dependency paths.</p></div>}
