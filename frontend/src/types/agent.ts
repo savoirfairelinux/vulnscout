@@ -1,4 +1,10 @@
+/**
+ * Window event telling views that the agent changed data. Bursts of writes are coalesced into one
+ * event (see `agentQueue.ts`), so its detail lists every tool that wrote since the previous event.
+ */
 export const AGENT_WRITE_EVENT = 'vulnscout:agent-write';
+/** `tools` is empty when views must refresh after a missed write (stream resynchronization). */
+export type AgentWriteDetail = { tool?: string; tools: string[] };
 // Mirrors the backend message limit of the AI queue (src/controllers/agent_queue.py).
 export const AGENT_MESSAGE_MAX_LENGTH = 8000;
 

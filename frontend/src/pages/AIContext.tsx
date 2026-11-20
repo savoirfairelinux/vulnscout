@@ -20,7 +20,8 @@ import ContextTransferControls, { ImportDetails } from "../components/aiContext/
 import VariantEditor, { type VariantTab } from "../components/aiContext/VariantEditor";
 import CopyFromDialog, { type CopySourceProject } from "../components/aiContext/CopyFromDialog";
 import { BUTTON_SECONDARY, ERROR } from "../components/aiContext/styles";
-import { AGENT_WRITE_EVENT, type AgentViewContext, type AgentAction } from "../types/agent";
+import { type AgentViewContext, type AgentAction } from "../types/agent";
+import useAgentWriteRefresh from "../hooks/useAgentWriteRefresh";
 import { agentActionState, enqueueAgentActions, openAgentChat, removeAgentTask } from "../handlers/agentQueue";
 import useAgentQueue from "../hooks/useAgentQueue";
 import AgentActionButton from "../components/AgentActionButton";
@@ -481,27 +482,22 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     useEffect(() => () => registerGuard(null), [registerGuard]);
 
     // Agent updates reload only a clean open item, so unsaved edits are never replaced.
-    const agentRefreshRef = useRef<(tool?: string) => void>(() => undefined);
-    useEffect(() => {
-        agentRefreshRef.current = (tool?: string) => {
-            if (tool === 'update_project_context' && selected?.kind === 'project') {
-                if (projectDraft.dirty) showBanner(DIRTY_PROJECT_AGENT_TEXT, "error");
-                else reloadProject();
-            }
-            if (tool === 'update_variant_context' && selected?.kind === 'variant') {
-                if (variantDraft.dirty) showBanner(DIRTY_VARIANT_AGENT_TEXT, "error");
-                else reloadVariant();
-            }
-            if (tool === 'propose_variant_threat_model' && selected?.kind === 'variant') {
-                void loadAiDraftRef.current();
-            }
-        };
+    // One announcement may cover several coalesced writes, so every tool that wrote is considered.
+    useAgentWriteRefresh(({ tools }) => {
+        const reads: Promise<void>[] = [];
+        if (tools.includes('update_project_context') && selected?.kind === 'project') {
+            if (projectDraft.dirty) showBanner(DIRTY_PROJECT_AGENT_TEXT, "error");
+            else reads.push(reloadProject());
+        }
+        if (tools.includes('update_variant_context') && selected?.kind === 'variant') {
+            if (variantDraft.dirty) showBanner(DIRTY_VARIANT_AGENT_TEXT, "error");
+            else reads.push(reloadVariant());
+        }
+        if (tools.includes('propose_variant_threat_model') && selected?.kind === 'variant') {
+            reads.push(loadAiDraftRef.current());
+        }
+        return Promise.allSettled(reads);
     });
-    useEffect(() => {
-        const refresh = (event: Event) => agentRefreshRef.current((event as CustomEvent<{ tool?: string }>).detail?.tool);
-        window.addEventListener(AGENT_WRITE_EVENT, refresh);
-        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
-    }, []);
 
     const handleSelect = async (next: SidebarSelection) => {
         const same = next.kind === selected?.kind && (next.kind === 'project' || (selected?.kind === 'variant' && next.id === selected.id));

@@ -29,7 +29,8 @@ import type { AiContextScope } from './AIContext';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import AgentChat from '../components/AgentChat';
 import { getAgentChatRequest, subscribeAgentChatRequest } from '../handlers/agentQueue';
-import { AGENT_WRITE_EVENT, type AgentContext, type AgentViewContext } from '../types/agent';
+import { type AgentContext, type AgentViewContext } from '../types/agent';
+import useAgentWriteRefresh from '../hooks/useAgentWriteRefresh';
 import Assessments, { removeDuplicateAssessments, STATUS_VEX_TO_GRAPH } from '../handlers/assessments';
 import Config from "../handlers/config";
 import type { AppConfig } from "../handlers/config";
@@ -120,6 +121,7 @@ function Explorer() {
     const observedOperationActivity = useRef(new Map<string, boolean>());
     const setupCheckGeneration = useRef(0);
     const loadGeneration = useRef(0);
+    const loadController = useRef<AbortController | null>(null);
     const scopeReady = useRef(false);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
     const agentChatRequest = useSyncExternalStore(subscribeAgentChatRequest, getAgentChatRequest).nonce;
@@ -174,14 +176,19 @@ function Explorer() {
         setBannerVisible(false);
     };
 
-    const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string) => {
+    // Each load supersedes the previous one: its requests are aborted so reloads never pile up.
+    const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<void> => {
         const generation = ++loadGeneration.current;
+        loadController.current?.abort();
+        const controller = new AbortController();
+        loadController.current = controller;
+        const { signal } = controller;
         setIsLoadingData(true);
 
         const multiActive = !!(variantIds && variantIds.length >= 2);
-        Promise.allSettled([
-            Packages.list(variantId, projectId, compareVariantId, operation, variantIds, multiOperation),
-            Vulnerabilities.list(variantId, projectId, compareVariantId, operation, variantIds, multiOperation),
+        return Promise.allSettled([
+            Packages.list(variantId, projectId, compareVariantId, operation, variantIds, multiOperation, false, signal),
+            Vulnerabilities.list(variantId, projectId, compareVariantId, operation, variantIds, multiOperation, signal),
         ]).then(async ([pkgsResult, vulnsResult]) => {
             if (pkgsResult.status === 'rejected' || vulnsResult.status === 'rejected') {
                 throw new Error("Failed to load packages or vulnerabilities");
@@ -189,20 +196,20 @@ function Explorer() {
             let assessments: Assessment[];
             if (multiActive) {
                 const lists = await Promise.all(
-                    variantIds!.map(id => Assessments.list(id, projectId)),
+                    variantIds!.map(id => Assessments.list(id, projectId, signal)),
                 );
                 assessments = removeDuplicateAssessments(lists.flat());
             } else if (compareVariantId && variantId) {
                 const [a1, a2] = await Promise.all([
-                    Assessments.list(variantId, projectId),
-                    Assessments.list(compareVariantId, projectId),
+                    Assessments.list(variantId, projectId, signal),
+                    Assessments.list(compareVariantId, projectId, signal),
                 ]);
                 assessments = removeDuplicateAssessments([...a1, ...a2]);
             } else {
-                assessments = await Assessments.list(variantId, projectId);
+                assessments = await Assessments.list(variantId, projectId, signal);
             }
 
-            if (generation !== loadGeneration.current) return;
+            if (generation !== loadGeneration.current || signal.aborted) return;
             setIsLoadingData(false);
             setLoadingMessage("Loading data...");
             const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessments);
@@ -211,13 +218,18 @@ function Explorer() {
             setPkgs(enrichedPkgs);
             setDataRevision(value => value + 1);
         }).catch(error => {
-            if (generation !== loadGeneration.current) return;
+            if (generation !== loadGeneration.current || signal.aborted) return;
+            controller.abort();
             console.error(error);
             setIsLoadingData(false);
             setLoadingMessage("Loading data...");
             triggerBanner("Failed to load data", "error");
+        }).finally(() => {
+            if (loadController.current === controller) loadController.current = null;
         });
     }, []);
+
+    useEffect(() => () => loadController.current?.abort(), []);
 
     // On mount: fetch default project/variant from config, then load data
     useEffect(() => {
@@ -367,16 +379,14 @@ function Explorer() {
             currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
     }, [loadData, currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
 
-    useEffect(() => {
-        const refresh = () => {
-            loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
-                currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
-            void loadSetupRequirement();
-        };
-        window.addEventListener(AGENT_WRITE_EVENT, refresh);
-        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
-    }, [loadData, loadSetupRequirement, currentBaseVariantId, currentVariantId, currentProjectId,
-        currentOperation, currentVariantIds, currentMultiOperation]);
+    // Agent writes reload the current scope; a scope change meanwhile aborts and replaces that reload.
+    useAgentWriteRefresh((_, announcedRevision) => Promise.all([
+        announcedRevision === loadGeneration.current
+            ? loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+                currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation)
+            : undefined,
+        loadSetupRequirement(),
+    ]), loadGeneration);
 
     useEffect(() => {
         const previous = observedOperationActivity.current;

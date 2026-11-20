@@ -8,7 +8,7 @@
 import { agentRequest } from './agent';
 import { RECONNECT_DELAYS_MS } from './operationStore';
 import {
-    AGENT_WRITE_EVENT, type Activity, type AgentAction, type AgentActionKind, type AgentActionState, type AgentContext,
+    AGENT_WRITE_EVENT, type Activity, type AgentAction, type AgentActionKind, type AgentActionState, type AgentContext, type AgentWriteDetail,
     type AgentConversationDetail, type AgentConversationSummary, type AgentLiveTurn, type AgentMessage, type AgentQueuePaused,
     type AgentQueueState, type AgentQueueSubmitted, type AgentRequestRecord, type AgentRequestStatus, type AgentUsage,
 } from '../types/agent';
@@ -18,6 +18,10 @@ export const MAIN_CONVERSATION = 'main';
 export const AGENT_CHAT_SOURCE = 'Agent chat';
 /** The backend's limit of actions per queue request (`agent_queue.MAX_ACTIONS`); larger lists go in batches. */
 export const ACTIONS_PER_REQUEST = 500;
+/** Agent writes are announced once this long after the last one of a burst… */
+export const AGENT_WRITE_DEBOUNCE_MS = 1500;
+/** …or at least this often while writes keep coming, so views still refresh during long batches. */
+export const AGENT_WRITE_MAX_WAIT_MS = 8000;
 export const agentActionLabels = {
     assess: 'Assess', review: 'Review', message: 'Message', 'context-import': 'Fill',
 } as const;
@@ -109,6 +113,9 @@ let source: EventSource | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 let lastEventId: string | null = null;
+/** Agent writes not yet announced to the views: their tools and when the first one arrived. */
+let pendingWrite: { tools: string[]; since: number } | null = null;
+let writeTimer: ReturnType<typeof setTimeout> | null = null;
 /** Swappable so tests can drive the store without a live server; jsdom has no EventSource. */
 let createEventSource: (url: string) => EventSource | null = url =>
     typeof EventSource === 'undefined' ? null : new EventSource(url);
@@ -231,6 +238,30 @@ function parse<T>(event: Event): T | null {
     }
 }
 
+function flushAgentWrites() {
+    if (writeTimer !== null) clearTimeout(writeTimer);
+    writeTimer = null;
+    const pending = pendingWrite;
+    pendingWrite = null;
+    if (!pending) return;
+    const detail: AgentWriteDetail = { tool: pending.tools[pending.tools.length - 1], tools: pending.tools };
+    window.dispatchEvent(new CustomEvent<AgentWriteDetail>(AGENT_WRITE_EVENT, { detail }));
+}
+
+/**
+ * Announces an agent write (or, without a tool, a resynchronization) to the views. A batch of agent
+ * actions writes in quick succession and every view reloads on each announcement, so a burst is
+ * announced once, after it settles or at the latest `AGENT_WRITE_MAX_WAIT_MS` after its first write.
+ */
+function queueAgentWrite(tool?: string) {
+    const now = Date.now();
+    pendingWrite ??= { tools: [], since: now };
+    if (tool) pendingWrite.tools = [...pendingWrite.tools.filter(seen => seen !== tool), tool];
+    if (writeTimer !== null) clearTimeout(writeTimer);
+    const delay = Math.max(0, Math.min(AGENT_WRITE_DEBOUNCE_MS, pendingWrite.since + AGENT_WRITE_MAX_WAIT_MS - now));
+    writeTimer = setTimeout(flushAgentWrites, delay);
+}
+
 function scheduleReconnect() {
     if (reconnectTimer !== null) return;
     const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
@@ -262,7 +293,7 @@ function openStream() {
         reconnectAttempt = 0;
         const resynchronizing = summaries.size > 0;
         applyState(state);
-        if (resynchronizing) window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT));
+        if (resynchronizing) queueAgentWrite();
     });
     stream.addEventListener('queue', onState);
     stream.addEventListener('request_progress', event => {
@@ -280,7 +311,7 @@ function openStream() {
     });
     stream.addEventListener('agent_write', event => {
         const frame = parse<{ tool: string }>(event);
-        if (frame) window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: frame.tool } }));
+        if (frame) queueAgentWrite(typeof frame.tool === 'string' ? frame.tool : undefined);
     });
     stream.addEventListener('heartbeat', event => {
         parse(event);
@@ -298,6 +329,8 @@ function openStream() {
 }
 
 function teardown() {
+    // Nothing would announce writes still waiting once the stream is gone.
+    flushAgentWrites();
     if (reconnectTimer !== null) clearTimeout(reconnectTimer);
     reconnectTimer = null;
     closeStream();
@@ -461,6 +494,7 @@ export const __setEventSourceFactory = (factory: (url: string) => EventSource | 
 };
 
 export const __resetAgentQueue = () => {
+    pendingWrite = null;
     teardown();
     listeners.clear();
     chatListeners.clear();

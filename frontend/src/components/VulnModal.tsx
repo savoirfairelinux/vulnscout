@@ -32,7 +32,8 @@ import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import { agentActionState as queueActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
 import AgentActionButton from './AgentActionButton';
 import useAgentQueue from '../hooks/useAgentQueue';
-import { AGENT_WRITE_EVENT, type AgentAction, type AgentActionState, type AgentContext } from "../types/agent";
+import { type AgentAction, type AgentActionState, type AgentContext } from "../types/agent";
+import useAgentWriteRefresh from "../hooks/useAgentWriteRefresh";
 import { assessmentKey } from "../helpers/aiAssessment";
 import { assessmentReviewKey } from "../helpers/aiAssessmentReview";
 import VulnHistory from "./VulnHistory";
@@ -256,11 +257,11 @@ type VariantScopedSnapshot = {
     // review's `is_stale` flag is derived server-side from the assessment's
     // current content, so an edit/delete/approve leaves the previously
     // fetched review stale-flag stale (pun intended) until this refetches.
-    const refreshReviews = useCallback(() => {
+    const refreshReviews = useCallback(() => (
         AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
             .then(data => setReviews(data))
-            .catch(() => setReviews({}));
-    }, [variantId, projectId, vuln.id]);
+            .catch(() => setReviews({}))
+    ), [variantId, projectId, vuln.id]);
 
     useEffect(() => {
         let cancelled = false;
@@ -352,16 +353,10 @@ type VariantScopedSnapshot = {
         }
     }, [vuln.id, projectId]);
 
-    useEffect(() => {
-        const refresh = () => {
-            void refreshAllVulnAssessments();
-            void refreshAssessmentRows();
-            refreshReviews();
-            setSnapshotVersion(version => version + 1);
-        };
-        window.addEventListener(AGENT_WRITE_EVENT, refresh);
-        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
-    }, [refreshAllVulnAssessments, refreshAssessmentRows, refreshReviews]);
+    useAgentWriteRefresh(() => {
+        setSnapshotVersion(version => version + 1);
+        return Promise.all([refreshAllVulnAssessments(), refreshAssessmentRows(), refreshReviews()]);
+    });
 
     useEffect(() => {
         const controller = new AbortController();

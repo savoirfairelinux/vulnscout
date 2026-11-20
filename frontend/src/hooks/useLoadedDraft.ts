@@ -18,7 +18,7 @@ export type LoadedDraft<T> = DraftState<T> & {
     commit: (saved: T, sent: T) => boolean;
     /** Drop edits: the draft goes back to the baseline. */
     reset: () => void;
-    reload: () => void;
+    reload: () => Promise<void>;
 };
 
 /**
@@ -49,7 +49,7 @@ export function useLoadedDraft<T>(
         equalRef.current = equal;
     });
 
-    const reload = useCallback(() => {
+    const reload = useCallback(async () => {
         const loadId = ++loadIdRef.current;
         const keyChanged = keyRef.current !== key;
         keyRef.current = key;
@@ -61,7 +61,7 @@ export function useLoadedDraft<T>(
         setState(prev => keyChanged
             ? { ...prev, draft: emptyRef.current, baseline: null, loading: true, epoch: prev.epoch + 1 }
             : { ...prev, loading: true });
-        loadRef.current().then(value => {
+        return loadRef.current().then(value => {
             if (loadId === loadIdRef.current) {
                 setState(prev => ({ ...prev, draft: value, baseline: value, loading: false, epoch: prev.epoch + 1 }));
             }
@@ -73,7 +73,7 @@ export function useLoadedDraft<T>(
     }, [key]);
 
     useEffect(() => {
-        reload();
+        void reload();
     }, [reload]);
     // Responses arriving after unmount are ignored.
     useEffect(() => () => { loadIdRef.current += 1; }, []);

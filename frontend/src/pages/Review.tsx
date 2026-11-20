@@ -28,7 +28,8 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
-import { AGENT_WRITE_EVENT, type AgentAction, type AgentViewContext } from '../types/agent';
+import { type AgentAction, type AgentViewContext } from '../types/agent';
+import useAgentWriteRefresh from '../hooks/useAgentWriteRefresh';
 import { ACTIONS_PER_REQUEST, agentActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
 import AgentActionButton from '../components/AgentActionButton';
 import useAgentQueue from '../hooks/useAgentQueue';
@@ -841,21 +842,17 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
      * approving/rejecting a pending AI assessment from the AI Assessments
      * table, since approving moves a row from one list to the other). */
     const refreshAssessmentLists = useCallback(async () => {
-        const [reviewRows, aiRows] = await Promise.all([
+        const [reviewRows, aiRows] = await Promise.allSettled([
             Assessments.listForReview(variantId, projectId, 'custom'),
             Assessments.listForReview(variantId, projectId, 'ai'),
         ]);
-        setAssessments(reviewRows.map(a => toReviewRow(a, vulnDescriptions)));
-        setAiAssessments(aiRows.map(a => toReviewRow(a, vulnDescriptions)));
+        if (reviewRows.status === 'rejected') throw reviewRows.reason;
+        if (aiRows.status === 'rejected') throw aiRows.reason;
+        setAssessments(reviewRows.value.map(a => toReviewRow(a, vulnDescriptions)));
+        setAiAssessments(aiRows.value.map(a => toReviewRow(a, vulnDescriptions)));
     }, [variantId, projectId, vulnDescriptions]);
 
-    useEffect(() => {
-        const refresh = () => {
-            void Promise.all([refreshAssessmentLists(), refreshReviews()]).catch(() => {});
-        };
-        window.addEventListener(AGENT_WRITE_EVENT, refresh);
-        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
-    }, [refreshAssessmentLists, refreshReviews]);
+    useAgentWriteRefresh(() => Promise.allSettled([refreshAssessmentLists(), refreshReviews()]));
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;

@@ -315,7 +315,7 @@ class Assessments {
      * Fetch server API to list all packages
      * @returns {Promise<Assessment[]>} A promise that resolves to a list of packages
      */
-    static async list(variantId?: string, projectId?: string): Promise<Assessment[]> {
+    static async list(variantId?: string, projectId?: string, signal?: AbortSignal): Promise<Assessment[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments", window.location.href);
         // Initial Explorer rendering only needs status, timestamp, package and
         // variant scope. Full notes/responses are fetched for one vulnerability
@@ -325,6 +325,7 @@ class Assessments {
         else if (projectId) url.searchParams.set('project_id', projectId);
         const response = await fetch(url.toString(), {
             mode: "cors",
+            signal,
         });
         const data = await response.json();
         const assessments = data.flatMap(asAssessment);
