@@ -1081,3 +1081,191 @@ def test_reserved_latest_identity_is_rejected_so_exact_urls_never_resolve_anothe
     assert result.exit_code == 1 and "reserved" in result.output
     with app.app_context():
         assert db.session.get(RefreshRun, "latest") is None
+
+
+NEW_LINK = "https://example.org/patch/CVE-2020-35492"
+
+
+def _run(targets, run_id, age, scope=None):
+    """Create a run started ``age`` seconds ago so ordering never depends on clock resolution."""
+    create_run(targets, run_id=run_id, scope=scope)
+    db.session.get(RefreshRun, run_id).started_at = datetime.now(timezone.utc) - timedelta(seconds=age)
+    db.session.commit()
+    return run_id
+
+
+def _indicators(client, **scope):
+    response = client.get(f"/api/vulnerabilities/{CVE.lower()}/refresh-indicators", query_string=scope)
+    assert response.status_code == 200
+    return {entry["source"]: entry for entry in response.get_json()["sources"]}
+
+
+def _by_field(entry):
+    return {change["field"]: change for change in entry["changes"]}
+
+
+def test_refresh_indicators_report_new_updated_and_removed_values_with_previous_values(app, client):
+    with app.app_context():
+        metric = Metrics(vulnerability_id=CVE, version="3.1", author="nvd@nist.gov", score=7.5,
+                         vector="CVSS:3.1/AV:N/AC:L")
+        db.session.add(metric)
+        db.session.commit()
+        metric_id = str(metric.id)
+        run = _run({"nvd": [CVE], "epss": [CVE]}, "nvd-1", 60)
+        with capture_source(run, "nvd"):
+            record = db.session.get(Vulnerability, CVE)
+            record.links = [*record.links[1:], NEW_LINK]
+            record.weaknesses = ["CWE-787"]
+            db.session.get(Metrics, metric.id).score = 9.8
+            target_result("nvd", CVE)
+            db.session.commit()
+        finish_source(run, "nvd")
+        _change(run, 0.31132)
+        finish_source(run, "epss")
+
+    sources = _indicators(client)
+    assert list(sources) == ["nvd", "epss"]
+    nvd = sources["nvd"]
+    assert nvd["state"] == "changed"
+    assert nvd["run"]["run_id"] == "nvd-1" and nvd["run"]["status"] == "complete"
+    assert nvd["later_attempt"] is None
+    changes = _by_field(nvd)
+    links = changes["links"]
+    assert links["indicator"] == "updated" and links["kind"] == "changed"
+    assert links["added"] == [NEW_LINK]
+    assert links["removed"] == ["https://bugzilla.redhat.com/show_bug.cgi?id=1898396"]
+    assert changes["weaknesses"]["indicator"] == "new"
+    assert changes["weaknesses"]["kind"] == "first_enrichment"
+    assert changes["weaknesses"]["before"] is None and changes["weaknesses"]["added"] == ["CWE-787"]
+    cvss = changes[f"cvss:3.1:nvd@nist.gov:{metric_id}"]
+    assert cvss["indicator"] == "updated" and cvss["current"] is True
+    assert cvss["before"] == {"score": 7.5, "vector": "CVSS:3.1/AV:N/AC:L"}
+    assert cvss["after"] == {"score": 9.8, "vector": "CVSS:3.1/AV:N/AC:L"}
+    assert cvss["cvss"] == {"version": "3.1", "author": "nvd@nist.gov", "metric_id": metric_id}
+    # An unchanged value produces no indicator but an explicit, checked no-change state.
+    assert sources["epss"]["state"] == "no_change" and sources["epss"]["changes"] == []
+    assert sources["epss"]["run"]["run_id"] == "nvd-1"
+
+
+def test_refresh_indicator_marks_collections_that_only_gained_entries_as_new(app, client):
+    with app.app_context():
+        run = _run({"nvd": [CVE]}, "links", 10)
+        with capture_source(run, "nvd"):
+            record = db.session.get(Vulnerability, CVE)
+            record.links = [*record.links, NEW_LINK]
+            target_result("nvd", CVE)
+            db.session.commit()
+        finish_source(run, "nvd")
+    links = _by_field(_indicators(client)["nvd"])["links"]
+    assert (links["indicator"], links["added"], links["removed"]) == ("new", [NEW_LINK], [])
+
+
+def test_reordered_lists_and_timestamp_only_updates_are_not_changes(app, client):
+    with app.app_context():
+        run = _run({"nvd": [CVE]}, "reorder", 10)
+        with capture_source(run, "nvd"):
+            record = db.session.get(Vulnerability, CVE)
+            record.links = list(reversed(record.links))
+            record.nvd_fetched_at = datetime.now(timezone.utc)
+            record.nvd_last_modified = "2026-01-01T00:00:00"
+            target_result("nvd", CVE)
+            db.session.commit()
+        finish_source(run, "nvd")
+        assert db.session.scalars(db.select(RefreshChange)).all() == []
+        assert db.session.scalars(db.select(VulnerabilityHistory).where(
+            VulnerabilityHistory.vuln_id == CVE, VulnerabilityHistory.source == "nvd",
+        )).all() == []
+    nvd = _indicators(client)["nvd"]
+    assert (nvd["state"], nvd["changes"]) == ("no_change", [])
+
+
+def test_later_refresh_replaces_only_the_sources_it_checked(app, client):
+    with app.app_context():
+        first = _run({"nvd": [CVE], "epss": [CVE]}, "first", 60)
+        with capture_source(first, "nvd"):
+            db.session.get(Vulnerability, CVE).description = "Updated description"
+            target_result("nvd", CVE)
+            db.session.commit()
+        finish_source(first, "nvd")
+        _change(first, 0.5)
+        finish_source(first, "epss")
+        second = _run({"epss": [CVE]}, "second", 30)
+        _change(second, 0.5)
+        finish_source(second, "epss")
+        third = _run({"epss": [CVE], "nvd": [CVE]}, "third", 10)
+        with capture_source(third, "epss"):
+            target_result("epss", CVE, "failed", "HTTP 500")
+        finish_source(third, "epss", "failed", "HTTP 500")
+        with capture_source(third, "nvd"):
+            target_result("nvd", CVE, "skipped", "Not returned by provider")
+        finish_source(third, "nvd")
+
+    sources = _indicators(client)
+    # The explicit no-change result of the second run replaced EPSS indicators only.
+    assert sources["epss"]["state"] == "no_change" and sources["epss"]["run"]["run_id"] == "second"
+    assert sources["epss"]["later_attempt"]["status"] == "failed"
+    assert sources["epss"]["later_attempt"]["error"] == "HTTP 500"
+    assert sources["epss"]["later_attempt"]["run"]["run_id"] == "third"
+    # Failed and skipped targets keep the prior valid indicators.
+    nvd = sources["nvd"]
+    assert nvd["run"]["run_id"] == "first"
+    assert _by_field(nvd)["description"]["after"] == "Updated description"
+    assert nvd["later_attempt"]["status"] == "skipped"
+    assert nvd["later_attempt"]["run"]["status"] == "incomplete"
+
+
+def test_refresh_indicators_follow_project_scope_and_persist_across_reloads(app, client):
+    with app.app_context():
+        project = Project(id=uuid.uuid4(), name="other")
+        variant = Variant(id=uuid.uuid4(), name="other", project_id=project.id)
+        scan = Scan(id=uuid.uuid4(), variant_id=variant.id, scan_type="sbom")
+        finding = db.session.scalar(db.select(Finding).where(Finding.vulnerability_id == CVE))
+        db.session.add_all([project, variant, scan])
+        db.session.flush()
+        db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+        db.session.commit()
+        other_id = str(project.id)
+        demo = _run({"epss": [CVE]}, "demo", 60, scope={"project_id": PROJECT, "variant_id": None})
+        _change(demo, 0.4)
+        finish_source(demo, "epss")
+        other = _run({"epss": [CVE]}, "other", 10, scope={"project_id": other_id, "variant_id": None})
+        _change(other, 0.4)
+        finish_source(other, "epss")
+
+    for _ in range(2):
+        demo_scope = _indicators(client, project_id=PROJECT)["epss"]
+        assert demo_scope["run"]["run_id"] == "demo" and demo_scope["state"] == "changed"
+        assert _by_field(demo_scope)["epss_score"]["before"] == pytest.approx(0.31132)
+    assert _indicators(client, project_id=PROJECT, variant_id=VARIANT)["epss"]["run"]["run_id"] == "demo"
+    other_scope = _indicators(client, project_id=other_id)["epss"]
+    assert (other_scope["run"]["run_id"], other_scope["state"]) == ("other", "no_change")
+    assert _indicators(client)["epss"]["run"]["run_id"] == "other"
+    assert _indicators(client, project_id=str(uuid.uuid4())) == {}
+
+
+def test_refresh_indicators_expose_missing_baseline_partial_runs_and_superseded_values(app, client):
+    missing = "CVE-2099-1111"
+    with app.app_context():
+        Vulnerability.create_record(id=missing, epss_score=0.1)
+        failed = _run({"nvd": [CVE]}, "failed", 60)
+        with capture_source(failed, "nvd"):
+            target_result("nvd", CVE, "failed", "HTTP 503")
+        finish_source(failed, "nvd")
+        partial = _run({"epss": [CVE, missing]}, "partial", 30)
+        _change(partial, 0.6)
+        finish_source(partial, "epss")
+        record = db.session.get(Vulnerability, CVE)
+        record.epss_score = 0.7
+        db.session.commit()
+
+    sources = _indicators(client)
+    assert sources["nvd"]["state"] == "no_baseline" and sources["nvd"]["run"] is None
+    assert sources["nvd"]["later_attempt"]["status"] == "failed"
+    epss = sources["epss"]
+    assert epss["state"] == "changed" and epss["run"]["status"] == "incomplete"
+    change = _by_field(epss)["epss_score"]
+    assert change["after"] == 0.6 and change["current"] is False
+    assert client.get("/api/vulnerabilities/CVE-2099-0000/refresh-indicators").status_code == 404
+    other = client.get(f"/api/vulnerabilities/{missing}/refresh-indicators").get_json()
+    assert other["sources"][0]["state"] == "no_baseline"
+    assert other["sources"][0]["later_attempt"]["status"] == "failed"
