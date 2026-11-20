@@ -16,6 +16,10 @@ import { draftFromContext, draftsEqual, emptyDraft, hasThreatModel, requiredFiel
 import ContextSidebar from "../components/aiContext/ContextSidebar";
 import type { SidebarSelection } from "../components/aiContext/ContextSidebar";
 import ProjectDescriptionPanel from "../components/aiContext/ProjectDescriptionPanel";
+import AssessmentFormatPanel from "../components/aiContext/AssessmentFormatPanel";
+import {
+    DEFAULT_FORMAT_DRAFT, formatDraftFrom, formatDraftsEqual, formatPayload, type AssessmentFormatDraft,
+} from "../helpers/assessmentFormat";
 import ContextTransferControls, { ImportDetails } from "../components/aiContext/ContextTransferControls";
 import VariantEditor, { type VariantTab } from "../components/aiContext/VariantEditor";
 import CopyFromDialog, { type CopySourceProject } from "../components/aiContext/CopyFromDialog";
@@ -68,6 +72,7 @@ export type AiContextScope = { projectId?: string; variantIds?: string[]; revisi
 
 type SaveTarget =
     | { kind: 'project'; projectId: string; description: string; sent: string }
+    | { kind: 'format'; projectId: string; draft: AssessmentFormatDraft }
     | { kind: 'variant'; projectId: string; variantId: string; draft: VariantDraft; draftRevision?: string };
 
 const DIRTY_PROJECT_AGENT_TEXT = "The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.";
@@ -182,18 +187,24 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
 
     // Drafts: only the open item has a key, so only it is loaded.
     const projectKey = projectId && selected?.kind === 'project' ? projectId : null;
+    const formatKey = projectId && selected?.kind === 'format' ? `${projectId}#format` : null;
     const variantKey = projectId && selected?.kind === 'variant' ? `${projectId}/${selected.id}` : null;
     const projectDraft = useLoadedDraft<string>(
         projectKey,
         () => Context.getProject(projectId ?? '').then(ctx => ctx.description ?? ''),
         '', sameText, showLoadError,
     );
+    const formatDraft = useLoadedDraft<AssessmentFormatDraft>(
+        formatKey,
+        () => Context.getProject(projectId ?? '').then(ctx => formatDraftFrom(ctx.assessment_format)),
+        DEFAULT_FORMAT_DRAFT, formatDraftsEqual, showLoadError,
+    );
     const variantDraft = useLoadedDraft<VariantDraft>(
         variantKey,
         () => Context.get(projectId ?? '', selected?.kind === 'variant' ? selected.id : '').then(draftFromContext),
         EMPTY_VARIANT_DRAFT, draftsEqual, showLoadError,
     );
-    const openKey = projectKey ?? variantKey;
+    const openKey = projectKey ?? formatKey ?? variantKey;
     const openKeyRef = useRef(openKey);
     openKeyRef.current = openKey;
     // Tagged with the draft key: a view for another item is never shown.
@@ -309,7 +320,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         setFieldError('');
         setFieldErrors({});
         setVariantTab('context');
-    }, [openKey, projectDraft.epoch, variantDraft.epoch]);
+    }, [openKey, projectDraft.epoch, formatDraft.epoch, variantDraft.epoch]);
     useEffect(() => { setCopySources(null); }, [openKey]);
     // Errors about the item or project just left no longer apply. Opening the
     // first item keeps them: they may explain why the variant list is empty.
@@ -320,6 +331,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         if (last.projectId !== projectId || (last.openKey !== null && last.openKey !== openKey)) hideErrorBanner();
     }, [projectId, openKey, hideErrorBanner]);
     const { reset: resetProject, reload: reloadProject } = projectDraft;
+    const { reset: resetFormat, reload: reloadFormat } = formatDraft;
     const { reset: resetVariant, reload: reloadVariant } = variantDraft;
 
     // Keep the selection inside the scope; otherwise open the project
@@ -330,19 +342,25 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         const ids = inScopeKey ? inScopeKey.split(',') : [];
         setSelection(prev => {
             const item = prev?.projectId === projectId ? prev.item : null;
-            if (item?.kind === 'project' || (item?.kind === 'variant' && ids.includes(item.id))) return prev;
+            if (item?.kind === 'project' || item?.kind === 'format' || (item?.kind === 'variant' && ids.includes(item.id))) return prev;
             return { projectId, item: { kind: 'project' } };
         });
         resetProject();
+        resetFormat();
         resetVariant();
-    }, [projectId, variants, inScopeKey, scope.revision, resetProject, resetVariant]);
+    }, [projectId, variants, inScopeKey, scope.revision, resetProject, resetFormat, resetVariant]);
 
     const projectName = projects.find(p => p.id === projectId)?.name ?? '';
     const openVariant = selected?.kind === 'variant' ? variants?.find(v => v.id === selected.id) : undefined;
-    const openLabel = selected?.kind === 'variant' ? (openVariant?.name ?? 'this variant') : (projectName || 'the project description');
-    const dirty = selected?.kind === 'variant' ? variantDraft.dirty : projectDraft.dirty;
+    const openLabel = selected?.kind === 'variant' ? (openVariant?.name ?? 'this variant')
+        : selected?.kind === 'format' ? 'the assessment format'
+        : (projectName || 'the project description');
+    const dirty = selected?.kind === 'variant' ? variantDraft.dirty
+        : selected?.kind === 'format' ? formatDraft.dirty : projectDraft.dirty;
 
-    const agentSection = selected?.kind === 'variant' ? variantTab : selected ? 'project_description' : undefined;
+    const agentSection = selected?.kind === 'variant' ? variantTab
+        : selected?.kind === 'format' ? 'assessment_format'
+        : selected ? 'project_description' : undefined;
     useEffect(() => {
         onAgentContextChange?.({
             selectedProjectId: projectId,
@@ -355,6 +373,10 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
 
     const buildSaveTarget = (): SaveTarget | null => {
         if (!projectId || !selected) return null;
+        if (selected.kind === 'format') {
+            if (formatDraft.baseline === null) return null;
+            return { kind: 'format', projectId, draft: formatDraft.draft };
+        }
         if (selected.kind === 'project') {
             if (projectDraft.baseline === null) return null;
             if (!projectDraft.draft.trim()) {
@@ -393,6 +415,9 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             if (target.kind === 'project') {
                 const saved = await Context.saveProject(target.projectId, target.description);
                 if (openKeyRef.current === key) savedEverythingRef.current = projectDraft.commit(saved.description ?? target.description, target.sent);
+            } else if (target.kind === 'format') {
+                const saved = await Context.saveAssessmentFormat(target.projectId, formatPayload(target.draft));
+                if (openKeyRef.current === key) savedEverythingRef.current = formatDraft.commit(formatDraftFrom(saved.assessment_format), target.draft);
             } else {
                 const saved = await Context.saveVariantEditor(target.variantId, target.draft);
                 const value = saved?.editor
@@ -423,7 +448,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             const first = Object.keys(fields)[0];
             if (e instanceof ContextSaveError && !unmountedRef.current && openKeyRef.current === key) {
                 setFieldErrors(fields);
-                if (first !== undefined) setVariantTab(tabForField(first));
+                if (first !== undefined && target.kind === 'variant') setVariantTab(tabForField(first));
             }
             // Field problems are shown inline; the raw server text joins their paths.
             showBanner(first === undefined ? (e?.message || "Failed to save context.") : FIX_FIELDS_TEXT, "error");
@@ -444,7 +469,8 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
         const target = buildSaveTarget();
         if (!target) return false;
         const key = openKeyRef.current;
-        const pending = await hasPendingAi(target);
+        // The format only changes presentation, so it never outdates assessments.
+        const pending = target.kind !== 'format' && await hasPendingAi(target);
         // The selection may have moved on while the check was in flight.
         if (unmountedRef.current || key !== openKeyRef.current) return false;
         if (!pending) return performSave(target, key);
@@ -504,7 +530,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     }, []);
 
     const handleSelect = async (next: SidebarSelection) => {
-        const same = next.kind === selected?.kind && (next.kind === 'project' || (selected?.kind === 'variant' && next.id === selected.id));
+        const same = next.kind === selected?.kind && (next.kind !== 'variant' || (selected?.kind === 'variant' && next.id === selected.id));
         if (!projectId || same || !(await confirmLeave())) return;
         setSelection({ projectId, item: next });
     };
@@ -522,6 +548,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const beforeImport = async () => {
         if (!(await confirmLeave())) return false;
         resetProject();
+        resetFormat();
         resetVariant();
         setImportDetails(null);
         return true;
@@ -639,6 +666,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     const handleImported = (result: ImportResult) => {
         setImportDetails(result);
         reloadProject();
+        reloadFormat();
         reloadVariant();
     };
 
@@ -705,6 +733,19 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                                 saving={busy}
                                 dirty={projectDraft.dirty}
                                 error={fieldError}
+                            />
+                        )}
+                        {selected?.kind === 'format' && (
+                            <AssessmentFormatPanel
+                                projectName={projectName}
+                                value={formatDraft.draft}
+                                onChange={formatDraft.setDraft}
+                                onSave={() => { void requestSave(); }}
+                                saving={busy}
+                                dirty={formatDraft.dirty}
+                                loading={formatDraft.loading}
+                                disabled={formatDraft.baseline === null}
+                                fieldErrors={fieldErrors}
                             />
                         )}
                         {selected?.kind === 'variant' && (

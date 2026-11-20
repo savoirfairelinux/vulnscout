@@ -32,6 +32,8 @@ type FileRow = { id: string; original_name: string; description: string | null }
 type Backend = {
     description: string; threat: string; aiRows: unknown[]; requests: Request[]; files: FileRow[];
     variantPutError?: { error: string; fields: Record<string, string> };
+    projectPutError?: { error: string; fields: Record<string, string> };
+    assessmentFormat?: unknown;
     echoPut?: boolean;
     projects?: { id: string; name: string }[];
     variants?: Record<string, { id: string; name: string; project_id: string }[]>;
@@ -77,8 +79,13 @@ function respond(backend: Backend, url: string, method: string, body: string | n
         return { requests: [{ id: 'import-request', key: actions[0].key, conversation_id: 'import-conversation' }], skipped: [] };
     }
     if (path === '/api/projects/p1/context') {
-        if (method === 'PUT') backend.description = JSON.parse(body ?? '{}').description;
-        return { project_id: 'p1', description: backend.description };
+        if (method === 'PUT') {
+            // Like the server, only the fields sent are replaced.
+            const values = JSON.parse(body ?? '{}');
+            if ('description' in values) backend.description = values.description;
+            if ('assessment_format' in values) backend.assessmentFormat = values.assessment_format;
+        }
+        return { project_id: 'p1', description: backend.description, assessment_format: backend.assessmentFormat ?? null };
     }
     if (path === '/api/context') {
         const variantId = new URL(url).searchParams.get('variant_id') ?? '';
@@ -125,6 +132,9 @@ function mockBackend(overrides: Partial<Backend> = {}): Backend {
         if (hold) await hold.until;
         if (backend.variantPutError && request.method === 'PUT' && request.url.includes('/api/variants/')) {
             return { status: 400, body: JSON.stringify(backend.variantPutError) };
+        }
+        if (backend.projectPutError && request.method === 'PUT' && request.url.includes('/api/projects/')) {
+            return { status: 400, body: JSON.stringify(backend.projectPutError) };
         }
         if (backend.failUrls?.some(fragment => request.url.includes(fragment))) {
             return { status: 500, body: JSON.stringify({ error: 'Server unavailable' }),
@@ -404,6 +414,107 @@ describe('AIContext page', () => {
         agentWrite('update_project_context');
         await waitFor(() => expect(screen.getByLabelText('Project description')).toHaveValue('Agent v2'));
         expect(screen.queryByText(DIRTY_PROJECT_TEXT)).not.toBeInTheDocument();
+    });
+
+    describe('assessment format', () => {
+        const SAVED_FORMAT = {
+            sections: [{ id: 'verdict', enabled: true, label: 'Result' }, { id: 'confidence', enabled: true }],
+            layout: 'lines',
+            style_notes: 'Plain words.',
+        };
+
+        async function openFormat() {
+            fireEvent.click(await screen.findByRole('button', { name: 'Assessment format' }));
+            await waitFor(() => expect(screen.getByRole('heading', { name: 'Assessment format' })).toBeInTheDocument());
+            await waitFor(() => expect(screen.getByLabelText('Style notes')).toBeEnabled());
+        }
+
+        test('is a project-level sidebar item reported to the agent', async () => {
+            mockBackend();
+            const onAgentContextChange = jest.fn();
+            renderPage({ projectId: 'p1' }, onAgentContextChange);
+            await openFormat();
+            expect(sidebarItem('Assessment format')).toHaveAttribute('aria-current', 'true');
+            expect(sidebarItem('Project description')).not.toHaveAttribute('aria-current');
+            await waitFor(() => expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
+                selectedProjectId: 'p1', selectedVariantId: undefined, section: 'assessment_format',
+            })));
+            expect(screen.getByRole('note')).toHaveTextContent('Using the default presentation.');
+        });
+
+        test('saves only the format, without the outdated-assessment confirmation', async () => {
+            const backend = mockBackend({ aiRows: [AI_ROW] });
+            renderPage({ projectId: 'p1' });
+            await openFormat();
+
+            fireEvent.click(screen.getByRole('button', { name: 'Move Verdict up' }));
+            fireEvent.click(screen.getByLabelText('One section per line'));
+            fireEvent.change(screen.getByLabelText('Style notes'), { target: { value: ' Neutral. ' } });
+            expect(screen.getByText('Unsaved changes in the assessment format')).toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            await waitFor(() => expect(screen.getByText('Saved.')).toHaveAttribute('role', 'status'));
+            expect(screen.queryByText('Mark AI assessments as outdated?')).not.toBeInTheDocument();
+            expect(requestsTo(backend, '/api/reviews/assessments')).toHaveLength(0);
+            const puts = requestsTo(backend, '/api/projects/p1/context', 'PUT');
+            expect(JSON.parse(puts[0].body ?? '{}')).toEqual({
+                assessment_format: {
+                    sections: ['verdict', 'confidence', 'evidence', 'reachability', 'remediation'].map(id => ({ id, enabled: true })),
+                    layout: 'lines',
+                    style_notes: 'Neutral.',
+                },
+            });
+            expect(backend.description).toBe('Desc');
+            expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+            expect(screen.queryByText('Unsaved changes in the assessment format')).not.toBeInTheDocument();
+        });
+
+        test('loads the saved format and resets it to the default', async () => {
+            const backend = mockBackend({ assessmentFormat: SAVED_FORMAT });
+            renderPage({ projectId: 'p1' });
+            await openFormat();
+            await waitFor(() => expect(screen.getByLabelText('Style notes')).toHaveValue('Plain words.'));
+            expect(screen.getByRole('textbox', { name: 'Verdict label' })).toHaveValue('Result');
+            expect(screen.getByRole('checkbox', { name: 'Include Evidence' })).not.toBeChecked();
+            expect(screen.getByTestId('assessment-format-preview').textContent).toBe('Result: Not affected\nconfidence level: high');
+
+            fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            await waitFor(() => expect(requestsTo(backend, '/api/projects/p1/context', 'PUT')).toHaveLength(1));
+            expect(JSON.parse(requestsTo(backend, '/api/projects/p1/context', 'PUT')[0].body ?? '{}')).toEqual({ assessment_format: null });
+            await waitFor(() => expect(screen.getByRole('note')).toHaveTextContent('Using the default presentation.'));
+        });
+
+        test('shows server field errors next to the fields', async () => {
+            const backend = mockBackend({ projectPutError: {
+                error: 'assessment_format.style_notes: must be at most 500 characters',
+                fields: { 'assessment_format.style_notes': 'must be at most 500 characters' },
+            } });
+            renderPage({ projectId: 'p1' });
+            await openFormat();
+            fireEvent.change(screen.getByLabelText('Style notes'), { target: { value: 'Too long' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+            await waitFor(() => expect(screen.getByLabelText('Style notes')).toHaveAttribute('aria-invalid', 'true'));
+            expect(screen.getByLabelText('Style notes')).toHaveAccessibleDescription(/must be at most 500 characters/);
+            expect(await screen.findByText('Fix the highlighted fields before saving.')).toBeInTheDocument();
+            expect(backend.assessmentFormat).toBeUndefined();
+            expect(screen.getByText('Unsaved changes in the assessment format')).toBeInTheDocument();
+        });
+
+        test('leaving with unsaved format edits asks first', async () => {
+            mockBackend();
+            renderPage({ projectId: 'p1' });
+            await openFormat();
+            fireEvent.click(screen.getByRole('checkbox', { name: 'Include Remediation' }));
+
+            fireEvent.click(sidebarItem('Project description'));
+            const dialog = await screen.findByRole('alertdialog', { name: 'Unsaved changes' });
+            expect(dialog).toHaveTextContent('You have unsaved changes in the assessment format.');
+            fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+            await openProjectDescription();
+        });
     });
 
     test('scope change removing the selected variant falls back to the project description', async () => {

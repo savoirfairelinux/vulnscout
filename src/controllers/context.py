@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from ..models.project import Project
 from ..models.variant import Variant
-from ..models.project_context import ProjectContext
+from ..models.project_context import KEEP, ProjectContext
+from ..helpers.assessment_format import normalize_assessment_format
 from ..models.variant_context import VariantContext
 from ._base import ensure_uuid
 
@@ -33,12 +34,22 @@ class ProjectContextController:
     @staticmethod
     def upsert(
         project_id: uuid.UUID | str,
-        description: Optional[str] = None,
+        description: Optional[str] | Any = None,
         commit: bool = True,
+        assessment_format: Any = KEEP,
     ) -> ProjectContext:
+        """Pass ``KEEP`` to leave a field unchanged.
+
+        Raises ``StrideValidationError`` for an invalid *assessment_format*
+        before anything is written.
+        """
         pid = ensure_uuid(project_id)
         ProjectContextController._get_project(pid)
-        return ProjectContext.upsert(pid, description=description, commit=commit)
+        if assessment_format is not KEEP:
+            assessment_format = normalize_assessment_format(assessment_format)
+        return ProjectContext.upsert(
+            pid, description=description, commit=commit, assessment_format=assessment_format,
+        )
 
     @staticmethod
     def serialize(pc: ProjectContext) -> dict:
