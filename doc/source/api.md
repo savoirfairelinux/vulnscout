@@ -334,7 +334,8 @@ DELETE /api/variants/<variant_id>
 GET /api/context?project_id=<project_id>&variant_id=<variant_id>
 ```
 
-Returns the merged project and variant context, including uploaded codebase reference metadata
+Returns the merged project and variant context, including the project's `assessment_format` (see below)
+and uploaded codebase reference metadata
 (`files`: `id`, `original_name`, `description`; no server filesystem paths). Both UUID parameters are required,
 and the variant must belong to the selected project.
 
@@ -350,7 +351,29 @@ GET /api/projects/<project_id>/context
 PUT /api/projects/<project_id>/context
 ```
 
-The `PUT` request accepts a JSON object with a `description` field.
+Both return `project_id`, `description` and `assessment_format`. The `PUT` request accepts a JSON object with
+`description` and/or `assessment_format`; omitted fields keep their stored value and `null` clears one.
+Changing only `assessment_format` does not mark AI assessments as outdated.
+
+`assessment_format` sets how AI assessment text is presented, or `null` for the skill's default:
+
+```json
+{
+  "sections": [
+    {"id": "confidence", "enabled": true},
+    {"id": "verdict", "enabled": true, "label": "Verdict"},
+    {"id": "evidence", "enabled": false}
+  ],
+  "layout": "lines",
+  "style_notes": "Neutral tone."
+}
+```
+
+`sections` is an ordered list using each of `confidence`, `verdict`, `evidence`, `reachability` and `remediation` at
+most once (`enabled` defaults to `true`; `label` is at most 40 characters). `layout` is `inline` (default) or `lines`.
+`style_notes` is at most 500 characters. Control characters are removed and blank labels and notes are dropped.
+Invalid values return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`, for example
+`"assessment_format.sections[1].id": "is duplicated"`.
 
 ### Update Variant Context
 
@@ -406,7 +429,8 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-Export format `3.0` carries `system` and `stride_model` per variant, alongside the text fields,
+Export format `3.1` carries each project's `assessment_format` and, per variant, `system` and `stride_model` alongside
+the text fields,
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
 contents are not exported, and import ignores `files`. Directory names,
 mounts and contents are not transferred; provision each destination variant's own directory.
@@ -430,14 +454,17 @@ rows, fails the entry without changing its context.
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
 Files exported as `2.x` still import, but their removed source selector and external paths are discarded.
 For `2.0`, each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
+A project without the `assessment_format` key (files before `3.1`) keeps the destination project's format; an invalid
+format fails the project's entries.
 
 ```json
 {
-  "version": "3.0",
+  "version": "3.1",
   "exported_at": "2026-01-01T12:00:00+00:00",
   "projects": [{
     "project_name": "demo",
     "project_description": "Required. Describes the project.",
+    "assessment_format": null,
     "variants": [{
       "variant_name": "x86",
       "variant_description": "text or null",

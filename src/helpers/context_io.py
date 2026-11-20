@@ -15,14 +15,15 @@ from typing import NotRequired, Optional, TypedDict
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..models.project import Project
-from ..models.project_context import ProjectContext
+from ..models.project_context import KEEP, ProjectContext
 from ..models.variant import Variant
 from ..models.variant_context import VariantContext, default_editor_block
+from ..helpers.assessment_format import normalize_assessment_format
 from ..helpers.stride_model import SYSTEM_KEYS, StrideValidationError, empty_stride_model, upgrade_legacy_risks
 
 # Version of the export file format. Bump the major component only on a
 # breaking change to the entry shape.
-EXPORT_VERSION = "3.0"
+EXPORT_VERSION = "3.1"
 
 
 class ExportedFile(TypedDict):
@@ -47,6 +48,7 @@ class ProjectEntry(TypedDict):
     """One exported project with its variants nested underneath."""
     project_name: str
     project_description: Optional[str]
+    assessment_format: Optional[dict]
     variants: list[VariantEntry]
 
 
@@ -95,6 +97,7 @@ def project_entry(project: Project, pc: Optional[ProjectContext],
     return {
         "project_name": project.name,
         "project_description": pc.description if pc else None,
+        "assessment_format": pc.assessment_format if pc else None,
         "variants": variants,
     }
 
@@ -168,9 +171,11 @@ def extract_entries(body) -> list:
 
     Accepts either the versioned envelope (a dict with a ``projects`` list) or
     a bare list of project objects. Each project object carries
-    ``project_name`` / ``project_description`` and a ``variants`` list. The
-    returned records are flattened so each carries ``project_name``,
-    ``project_description`` and the variant fields, matching what
+    ``project_name`` / ``project_description`` (and optionally
+    ``assessment_format``) and a ``variants`` list. The returned records are
+    flattened so each carries ``project_name``, ``project_description``, the
+    ``assessment_format`` when the project has that key, and the variant
+    fields, matching what
     :func:`import_entries` consumes. The ``version`` / ``exported_at`` fields
     are ignored (lenient).
 
@@ -204,11 +209,15 @@ def extract_entries(body) -> list:
             if not isinstance(variant, dict):
                 records.append(variant)
                 continue
-            records.append({
+            record = {
                 "project_name": project_name,
                 "description": project_description,
                 **variant,
-            })
+            }
+            # Files without the key (before 3.1) keep the destination's format.
+            if "assessment_format" in project:
+                record["assessment_format"] = project["assessment_format"]
+            records.append(record)
     return records
 
 
@@ -316,8 +325,9 @@ def _txt(value):
 def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[str]:
     """Write one entry; return a failure reason, or None on success.
 
-    Variant writes raise before touching the session, so a failing entry
-    leaves nothing staged (the project description is written afterwards).
+    The assessment format is validated and variant writes raise before
+    touching the session, so a failing entry leaves nothing staged (the
+    project context is written afterwards).
     """
     description = _txt(entry.get('description'))
     if not (description and description.strip()):
@@ -326,9 +336,13 @@ def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[st
     try:
         VariantContextController.save_editor(variant.id, _editor_payload(entry), commit=False,
                                              replace_empty_model=entry.get("context_configured") is True)
+        assessment_format = (normalize_assessment_format(entry['assessment_format'])
+                             if 'assessment_format' in entry else KEEP)
     except StrideValidationError as exc:
         return str(exc)
-    ProjectContextController.upsert(project.id, description=description, commit=False)
+    ProjectContextController.upsert(
+        project.id, description=description, commit=False, assessment_format=assessment_format,
+    )
     return None
 
 
