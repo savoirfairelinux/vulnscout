@@ -9,6 +9,7 @@ from typing import Any, Literal, overload
 from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding
+from ..models.assessment import STATUS_TO_SIMPLIFIED
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
 from ..extensions import db, batch_session
@@ -45,6 +46,7 @@ from ._assessment_write import (
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
 from sqlalchemy import func, select
+from werkzeug.exceptions import RequestEntityTooLarge
 
 _SCANNER_AUTHORS = {
     "nvd",
@@ -134,10 +136,84 @@ def _resolve_pending_ai_row(
     return existing, None
 
 
-def _approve_row(row: "DBAssessment") -> ResponseReturnValue:
-    """Turn a pending AI row into a custom assessment."""
+_CONTENT_EDIT_FIELDS = ("status", "status_notes", "justification", "impact_statement", "workaround")
+_APPROVAL_REQUEST_MAX_BYTES = 64 * 1024
+
+
+def _validate_content_edit(
+    existing: "DBAssessment", payload: dict[str, Any],
+) -> "tuple[DBAssessment | None, str | None]":
+    """Apply a partial content edit to a copy of *existing* and validate it.
+
+    Returns the validated in-memory assessment, or an error message. The
+    stored row is never modified, so a rejected edit leaves it untouched.
+    """
+    mem_assess = DBAssessment.from_dict(existing.to_dict())
+
+    if "status" in payload and isinstance(payload["status"], str):
+        if not mem_assess.set_status(payload["status"]):
+            return None, "Invalid status"
+        if mem_assess.status not in ["not_affected", "false_positive"]:
+            mem_assess.justification = ""
+            mem_assess.impact_statement = ""
+
+    if "status_notes" in payload and isinstance(payload["status_notes"], str):
+        mem_assess.set_status_notes(payload["status_notes"], False)
+
+    if "justification" in payload and isinstance(payload["justification"], str):
+        if payload["justification"] == "":
+            mem_assess.justification = ""
+        elif not mem_assess.set_justification(payload["justification"]):
+            return None, "Invalid justification"
+
+    if "impact_statement" in payload and isinstance(payload["impact_statement"], str):
+        if payload["impact_statement"] == "":
+            mem_assess.impact_statement = ""
+        else:
+            mem_assess.set_not_affected_reason(payload["impact_statement"], False)
+
+    if "workaround" in payload and isinstance(payload["workaround"], str):
+        mem_assess.set_workaround(payload["workaround"])
+
+    if mem_assess.is_justification_required() and not mem_assess.justification:
+        return None, "Justification required"
+
+    return mem_assess, None
+
+
+def _approve_row(
+    row: "DBAssessment", content: "DBAssessment | None" = None,
+) -> ResponseReturnValue:
+    """Turn a pending AI row into a custom assessment.
+
+    When *content* is given, its validated fields replace the suggestion's in
+    the same transaction, so the row is never left edited but still pending.
+    """
+    values: dict[str, Any] = {
+        "origin": "custom",
+        "timestamp": datetime.now(timezone.utc),
+    }
+    if content is not None:
+        values.update(
+            status=content.status,
+            simplified_status=STATUS_TO_SIMPLIFIED.get(
+                content.status or "", "Pending Assessment"
+            ),
+            status_notes=content.status_notes,
+            justification=content.justification,
+            impact_statement=content.impact_statement,
+            workaround=getattr(content, "workaround", None),
+        )
     with batch_session():
-        row.update(origin="custom")
+        result = db.session.execute(
+            db.update(DBAssessment)
+            .where(DBAssessment.id == row.id, DBAssessment.origin == "ai")
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            return {"error": "Assessment is no longer pending AI approval"}, 409
+        db.session.refresh(row)
     return {"status": "success", "assessments": [row.to_dict()]}, 200
 
 
@@ -1677,35 +1753,9 @@ def init_app(app: Flask) -> None:
         # explicitly approves/rejects it via the dedicated endpoints.
         new_origin = "ai" if existing.origin == "ai" else "custom"
 
-        # Reconstruct Assessment DTO for validation
-        mem_assess = DBAssessment.from_dict(existing.to_dict())
-
-        if "status" in payload_data and isinstance(payload_data["status"], str):
-            if not mem_assess.set_status(payload_data["status"]):
-                return {"error": "Invalid status"}, 400
-            if mem_assess.status not in ["not_affected", "false_positive"]:
-                mem_assess.justification = ""
-                mem_assess.impact_statement = ""
-
-        if "status_notes" in payload_data and isinstance(payload_data["status_notes"], str):
-            mem_assess.set_status_notes(payload_data["status_notes"], False)
-
-        if "justification" in payload_data and isinstance(payload_data["justification"], str):
-            if payload_data["justification"] == "":
-                mem_assess.justification = ""
-            elif not mem_assess.set_justification(payload_data["justification"]):
-                return {"error": "Invalid justification"}, 400
-        elif mem_assess.is_justification_required():
-            return {"error": "Justification required"}, 400
-
-        if "impact_statement" in payload_data and isinstance(payload_data["impact_statement"], str):
-            if payload_data["impact_statement"] == "":
-                mem_assess.impact_statement = ""
-            else:
-                mem_assess.set_not_affected_reason(payload_data["impact_statement"], False)
-
-        if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
-            mem_assess.set_workaround(payload_data["workaround"])
+        mem_assess, content_error = _validate_content_edit(existing, payload_data)
+        if mem_assess is None:
+            return {"error": content_error or "Invalid request data"}, 400
 
         update_timestamp = payload_data.get("update_timestamp", True)
         if not isinstance(update_timestamp, bool):
@@ -1763,17 +1813,46 @@ def init_app(app: Flask) -> None:
     def approve_ai_assessment(assessment_id: str) -> ResponseReturnValue:
         """Approve a pending AI assessment, converting it to custom.
 
+        An optional body edits the suggestion's content before approving it,
+        in one transaction, with the same validation as an assessment update.
+
         OpenAPI:
-        response 200 Assessment Approved assessment.
-        response 400 Error Not a pending AI assessment.
+        body AssessmentApproval optional Content edits applied before approval.
+        response 200 AssessmentWriteResult Approved assessment.
+        response 400 Error Not a pending AI assessment, or invalid content edits.
         response 404 Error Assessment not found.
+        response 409 Error Assessment is no longer pending AI approval.
+        response 413 Error Request body exceeds the approval size limit.
         """
+        # Only a JSON body carries edits; any other body is ignored as before.
+        payload: Any = {}
+        current_limit = request.max_content_length
+        request.max_content_length = min(
+            current_limit, _APPROVAL_REQUEST_MAX_BYTES
+        ) if current_limit is not None else _APPROVAL_REQUEST_MAX_BYTES
+        try:
+            if request.is_json and request.get_data(cache=True):
+                payload = request.get_json(silent=True)
+                if not isinstance(payload, dict):
+                    return {"error": "Invalid request data"}, 400
+        except RequestEntityTooLarge:
+            return {"error": "Request body exceeds the approval size limit"}, 413
+        if any(
+            field in payload and not isinstance(payload[field], str)
+            for field in _CONTENT_EDIT_FIELDS
+        ):
+            return {"error": "Assessment edit fields must be strings"}, 400
         row, err = _resolve_pending_ai_row(assessment_id)
         if err is not None:
             return err
         if row is None:
             return {"error": "Internal error"}, 500
-        return _approve_row(row)
+        if not any(field in payload for field in _CONTENT_EDIT_FIELDS):
+            return _approve_row(row)
+        content, content_error = _validate_content_edit(row, payload)
+        if content is None:
+            return {"error": content_error or "Invalid request data"}, 400
+        return _approve_row(row, content)
 
     @app.route("/api/assessments/<assessment_id>/reject", methods=["POST"])
     def reject_ai_assessment(assessment_id: str) -> ResponseReturnValue:

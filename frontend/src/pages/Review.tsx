@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
-import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
+import type { AiAssessmentEdits, Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
 import { asAssessment, isMultiTarget, reconcileTargetPairs } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
@@ -15,6 +15,7 @@ import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimesta
 import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
+import EditAiAssessment from '../components/EditAiAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
@@ -264,6 +265,9 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [editHasUnsavedChanges, setEditHasUnsavedChanges] = useState(false);
     const [showDiscardEditConfirmation, setShowDiscardEditConfirmation] = useState(false);
     const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
+    const [aiEditingRow, setAiEditingRow] = useState<ReviewRow | null>(null);
+    const [aiEditSaving, setAiEditSaving] = useState(false);
+    const [aiEditError, setAiEditError] = useState<string | null>(null);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowKey, setCopiedRowKey] = useState<string | null>(null);
@@ -904,6 +908,41 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         }
     }, [refreshAssessmentLists, showMessage]);
 
+    const openAiAssessmentEditor = useCallback((row: ReviewRow) => {
+        setAiEditError(null);
+        setShowBanner(false);
+        setAiEditingRow(row);
+    }, []);
+
+    const closeAiAssessmentEditor = useCallback(() => {
+        if (aiEditSaving) return;
+        setAiEditError(null);
+        setAiEditingRow(null);
+    }, [aiEditSaving]);
+
+    const handleConfirmAiEdit = useCallback(async (edits: AiAssessmentEdits) => {
+        if (!aiEditingRow || aiEditSaving) return;
+        setAiEditSaving(true);
+        setAiEditError(null);
+        try {
+            await Assessments.approveAi(aiEditingRow.id, edits);
+        } catch (e) {
+            // Stay in edit mode so the user keeps their changes and can retry.
+            const message = e instanceof Error ? e.message : String(e);
+            setAiEditError(`Failed to approve AI assessment: ${message}`);
+            setAiEditSaving(false);
+            return;
+        }
+        setAiEditingRow(null);
+        setAiEditSaving(false);
+        try {
+            await refreshAssessmentLists();
+        } catch {
+            // The approval succeeded; the lists refresh on the next load.
+        }
+        showMessage('AI assessment approved!', 'success');
+    }, [aiEditingRow, aiEditSaving, refreshAssessmentLists, showMessage]);
+
     const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
         try {
             await Assessments.rejectAi(row.id);
@@ -1407,6 +1446,13 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                     <FontAwesomeIcon icon={faCheck} className="w-4 h-4" />
                 </button>
                 <button
+                    onClick={() => openAiAssessmentEditor(info.row.original)}
+                    className="text-blue-400 hover:text-blue-300 transition-colors"
+                    title="Edit AI suggestion"
+                >
+                    <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
+                </button>
+                <button
                     onClick={() => handleRejectAiRow(info.row.original)}
                     className="text-red-400 hover:text-red-300 transition-colors"
                     title="Reject AI suggestion"
@@ -1416,7 +1462,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
             </div>
         ),
-    }), [handleApproveAiRow, handleRejectAiRow, copiedRowKey, copyRowId]);
+    }), [handleApproveAiRow, openAiAssessmentEditor, handleRejectAiRow, copiedRowKey, copyRowId]);
 
     const aiColumns = useMemo(
         () => columns.map(c => (c.id === 'actions' ? aiActionsColumn : c)),
@@ -2063,6 +2109,29 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                             findingsError={editCompatibilityError}
                         />
                     )}
+                </ModalShell>
+            )}
+
+            {aiEditingRow && (
+                <ModalShell
+                    isOpen={true}
+                    title={aiEditingRow.vuln_id}
+                    onClose={closeAiAssessmentEditor}
+                    closeLabel="Close AI assessment editor"
+                    closeDisabled={aiEditSaving}
+                    closeOnEscape={!aiEditSaving}
+                    closeOnBackdrop={false}
+                    size="large"
+                    contentClassName="overflow-y-auto p-6 md:p-6"
+                >
+                    <EditAiAssessment
+                        assessment={aiEditingRow}
+                        onConfirm={edits => { void handleConfirmAiEdit(edits); }}
+                        onCancel={closeAiAssessmentEditor}
+                        triggerBanner={showMessage}
+                        saving={aiEditSaving}
+                        errorMessage={aiEditError}
+                    />
                 </ModalShell>
             )}
 
