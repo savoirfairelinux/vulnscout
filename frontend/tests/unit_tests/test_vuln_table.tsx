@@ -4,7 +4,7 @@ fetchMock.enableMocks();
 
 jest.setTimeout(15000);
 
-import { act, fireEvent, render as rtlRender, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { act, fireEvent, render as rtlRender, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import type { RenderOptions } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
@@ -3284,6 +3284,43 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         const pkgCheckbox = screen.getByRole('checkbox', { name: 'aaabbbccc@1.0.0' });
         await user.click(pkgCheckbox);
 
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+        });
+    });
+
+    test('packages filter select all / deselect all toggles every package', async () => {
+        render(
+            <TableVulnerabilities
+                vulnerabilities={vulnerabilities}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="aaabbbccc@1.0.0"
+            />
+        );
+
+        const user = userEvent.setup();
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: /^packages$/i }));
+        const packageCheckboxes = () => within(screen.getByRole('searchbox', { name: 'Search packages' }).parentElement as HTMLElement)
+            .getAllByRole('checkbox');
+
+        await user.click(screen.getByRole('button', { name: 'Select all' }));
+        packageCheckboxes().forEach(checkbox => expect(checkbox).toBeChecked());
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+            expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+        });
+
+        // Clearing the selection removes the Packages filter entirely
+        await user.click(screen.getByRole('button', { name: 'Deselect all' }));
+        packageCheckboxes().forEach(checkbox => expect(checkbox).not.toBeChecked());
+        expect(screen.getByRole('button', { name: 'Select all' })).toBeInTheDocument();
         await waitFor(() => {
             expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
         });
