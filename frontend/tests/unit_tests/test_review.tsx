@@ -706,6 +706,40 @@ describe('Review — bulk AI reviews', () => {
         expect(screen.getByText('Delete selected (1)')).toBeInTheDocument();
     });
 
+    test('waits for all Review reads before replaying a queued write after an assessment list fails', async () => {
+        network([makeAssessment('a1', 'v1')]);
+        render(<Review projectId="proj1" />);
+        await screen.findAllByTitle('Select');
+
+        let releaseAiList!: () => void;
+        let releaseReviews!: () => void;
+        const aiList = new Promise<void>(resolve => { releaseAiList = resolve; });
+        const reviews = new Promise<void>(resolve => { releaseReviews = resolve; });
+        const respond = async (request: Request) => {
+            const url = new URL(request.url);
+            if (url.pathname === '/api/assessment-reviews') {
+                await reviews;
+                return '{}';
+            }
+            if (url.searchParams.get('origin') === 'ai') {
+                await aiList;
+                return '[]';
+            }
+            return { status: 500, body: 'Assessment list unavailable' };
+        };
+        fetchMock.mockResponseOnce(respond).mockResponseOnce(respond).mockResponseOnce(respond);
+        const requestsBefore = fetchMock.mock.calls.length;
+        const announce = () => window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: 'write_assessment_review' } }));
+        await act(async () => { announce(); announce(); });
+        expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 3);
+
+        await act(async () => { releaseAiList(); });
+        expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 3);
+
+        await act(async () => { releaseReviews(); });
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 6));
+    });
+
     test('the agent chat follows the backend queue: running, failed elsewhere, retry, and paused', async () => {
         mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1'), makeAssessment('a3', 'v1')]);
         serveAgentQueue(path => path.endsWith('/models') ? { models: [{ id: 'auto', name: 'Auto' }] } : {

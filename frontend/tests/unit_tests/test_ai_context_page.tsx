@@ -406,6 +406,26 @@ describe('AIContext page', () => {
         expect(screen.queryByText(DIRTY_PROJECT_TEXT)).not.toBeInTheDocument();
     });
 
+    test.each(['update_variant_context', 'propose_variant_threat_model'])('queues an agent announcement while %s reads context', async tool => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+        const draftPath = '/api/variants/v1/context/draft';
+        const gate = deferred();
+        backend.holds = [{ fragment: 'variant_id=v1', method: 'GET', until: gate.promise }];
+
+        agentWrite(tool);
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(3));
+        const draftLoads = requestsTo(backend, draftPath).length;
+        await act(async () => { agentWrite('propose_variant_threat_model'); });
+        expect(requestsTo(backend, draftPath)).toHaveLength(draftLoads);
+
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1').length).toBeGreaterThan(3));
+        expect(requestsTo(backend, draftPath).length).toBeGreaterThan(draftLoads);
+    });
+
     test('scope change removing the selected variant falls back to the project description', async () => {
         mockBackend();
         const { setScope } = renderPage({ projectId: 'p1' });

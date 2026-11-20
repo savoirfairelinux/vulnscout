@@ -4,7 +4,7 @@
  * Frames are delivered through a stand-in EventSource; the queue routes are mocked on fetch.
  */
 import {
-    MAIN_CONVERSATION, RECONNECT_DELAYS_MS, __resetAgentQueue, __setEventSourceFactory, agentActionState, boundedAgentContext,
+    AGENT_WRITE_DEBOUNCE_MS, AGENT_WRITE_MAX_WAIT_MS, MAIN_CONVERSATION, RECONNECT_DELAYS_MS, __resetAgentQueue, __setEventSourceFactory, agentActionState, boundedAgentContext,
     clearAgentChatFocus, clearAgentQueue, clearFinishedConversations, conversationStatus,
     deleteAgentConversation, enqueueAgentActions, findAgentTask, getActiveConversationId, getAgentChatRequest,
     getAgentConnectionRevision, getAgentConversation, getAgentConversations, getAgentHistory, getAgentQueue, getAgentQueuePaused, openAgentChat,
@@ -140,8 +140,11 @@ test('a recovery snapshot invalidates views when an agent write was missed', () 
         FakeEventSource.latest().send('snapshot', { ...state({
             history: [request('finished', { kind: 'assess', status: 'done' })],
         }), seq: 100 }, 'e:100');
-        expect(written).toHaveBeenCalledTimes(1);
         expect(getAgentHistory()[0].id).toBe('finished');
+        expect(written).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS);
+        expect(written).toHaveBeenCalledTimes(1);
+        expect((written.mock.calls[0][0] as CustomEvent).detail).toEqual({ tool: undefined, tools: [] });
     } finally {
         window.removeEventListener(AGENT_WRITE_EVENT, written);
     }
@@ -241,13 +244,109 @@ test('follows the connection revision', () => {
     expect(getAgentConnectionRevision()).toBe(4);
 });
 
-test('relays agent writes to the window', () => {
+test('relays agent writes to the window once they settle', () => {
+    jest.useFakeTimers();
     const seen = jest.fn();
     window.addEventListener(AGENT_WRITE_EVENT, seen);
-    connect();
-    FakeEventSource.latest().send('agent_write', { tool: 'write_assessment', request_id: 'r1', conversation_id: 'c1' });
-    window.removeEventListener(AGENT_WRITE_EVENT, seen);
-    expect((seen.mock.calls[0][0] as CustomEvent).detail).toEqual({ tool: 'write_assessment' });
+    try {
+        connect();
+        FakeEventSource.latest().send('agent_write', { tool: 'write_assessment', request_id: 'r1', conversation_id: 'c1' });
+        jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS - 1);
+        expect(seen).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(1);
+        expect(seen).toHaveBeenCalledTimes(1);
+        expect((seen.mock.calls[0][0] as CustomEvent).detail).toEqual({ tool: 'write_assessment', tools: ['write_assessment'] });
+    } finally {
+        window.removeEventListener(AGENT_WRITE_EVENT, seen);
+    }
+});
+
+test('coalesces a burst of agent writes into one announcement listing every tool', () => {
+    jest.useFakeTimers();
+    const seen = jest.fn();
+    window.addEventListener(AGENT_WRITE_EVENT, seen);
+    try {
+        connect();
+        const write = (tool: string) => FakeEventSource.latest().send('agent_write', { tool, request_id: 'r1', conversation_id: 'c1' });
+        write('write_assessment');
+        jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS / 2);
+        write('write_review');
+        jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS / 2);
+        write('write_assessment');
+        FakeEventSource.latest().send('agent_write', 'not json');
+        jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS - 1);
+        expect(seen).not.toHaveBeenCalled();
+        jest.advanceTimersByTime(1);
+        expect(seen).toHaveBeenCalledTimes(1);
+        expect((seen.mock.calls[0][0] as CustomEvent).detail).toEqual({
+            tool: 'write_assessment', tools: ['write_review', 'write_assessment'],
+        });
+
+        // The next write starts a new burst.
+        write('update_variant_context');
+        jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS);
+        expect(seen).toHaveBeenCalledTimes(2);
+        expect((seen.mock.calls[1][0] as CustomEvent).detail).toEqual({
+            tool: 'update_variant_context', tools: ['update_variant_context'],
+        });
+    } finally {
+        window.removeEventListener(AGENT_WRITE_EVENT, seen);
+    }
+});
+
+test('announces continuous agent writes at least once per maximum wait', () => {
+    jest.useFakeTimers();
+    const seen = jest.fn();
+    window.addEventListener(AGENT_WRITE_EVENT, seen);
+    try {
+        connect();
+        const step = AGENT_WRITE_DEBOUNCE_MS / 2;
+        for (let elapsed = 0; elapsed < AGENT_WRITE_MAX_WAIT_MS; elapsed += step) {
+            FakeEventSource.latest().send('agent_write', { tool: 'write_assessment', request_id: 'r1', conversation_id: 'c1' });
+            expect(seen).not.toHaveBeenCalled();
+            jest.advanceTimersByTime(step);
+        }
+        expect(seen).toHaveBeenCalledTimes(1);
+        // The last write of the burst is still announced once it settles.
+        FakeEventSource.latest().send('agent_write', { tool: 'write_assessment', request_id: 'r1', conversation_id: 'c1' });
+        jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS);
+        expect(seen).toHaveBeenCalledTimes(2);
+    } finally {
+        window.removeEventListener(AGENT_WRITE_EVENT, seen);
+    }
+});
+
+test('a resynchronization joins the pending burst of agent writes', () => {
+    jest.useFakeTimers();
+    const seen = jest.fn();
+    window.addEventListener(AGENT_WRITE_EVENT, seen);
+    try {
+        connect();
+        FakeEventSource.latest().send('agent_write', { tool: 'write_assessment', request_id: 'r1', conversation_id: 'c1' });
+        FakeEventSource.latest().send('snapshot', { ...state(), seq: 2 }, 'e:2');
+        jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS);
+        expect(seen).toHaveBeenCalledTimes(1);
+        expect((seen.mock.calls[0][0] as CustomEvent).detail).toEqual({ tool: 'write_assessment', tools: ['write_assessment'] });
+    } finally {
+        window.removeEventListener(AGENT_WRITE_EVENT, seen);
+    }
+});
+
+test('announces pending agent writes when the stream closes', () => {
+    jest.useFakeTimers();
+    const seen = jest.fn();
+    window.addEventListener(AGENT_WRITE_EVENT, seen);
+    try {
+        connect();
+        FakeEventSource.latest().send('agent_write', { tool: 'write_assessment', request_id: 'r1', conversation_id: 'c1' });
+        unsubscribe?.();
+        unsubscribe = undefined;
+        expect(seen).toHaveBeenCalledTimes(1);
+        jest.advanceTimersByTime(AGENT_WRITE_MAX_WAIT_MS);
+        expect(seen).toHaveBeenCalledTimes(1);
+    } finally {
+        window.removeEventListener(AGENT_WRITE_EVENT, seen);
+    }
 });
 
 test('reconnects with backoff from the last event and stops when nobody listens', () => {

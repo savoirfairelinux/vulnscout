@@ -154,7 +154,7 @@ class Packages {
      * Fetch server API to list all packages
      * @returns {Promise<Package[]>} A promise that resolves to a list of packages
      */
-    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string, includeOutdated = false): Promise<Package[]> {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string, includeOutdated = false, signal?: AbortSignal): Promise<Package[]> {
         const url = packageListUrl(variantId, projectId, compareVariantId, operation, variantIds, multiOperation);
         if (includeOutdated) {
             url.searchParams.set('include_outdated', 'true');
@@ -162,6 +162,7 @@ class Packages {
         }
         const response = await fetch(url.toString(), {
             mode: "cors",
+            signal,
         });
         const data = await response.json();
         return data.flatMap(asPackage);

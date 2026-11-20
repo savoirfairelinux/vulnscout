@@ -372,7 +372,7 @@ class Vulnerabilities {
             : [];
     }
 
-    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<Vulnerability[]> {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string, signal?: AbortSignal): Promise<Vulnerability[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
         url.searchParams.set('format', 'compact');
         if (variantId && compareVariantId) {
@@ -390,6 +390,7 @@ class Vulnerabilities {
         }
         const response = await fetch(url.toString(), {
             mode: "cors",
+            signal,
         });
         const data = await response.json();
         return data.flatMap(asVulnerability);

@@ -20,6 +20,7 @@ import RefreshRuns from '../../src/handlers/refreshRuns';
 import Operations from '../../src/handlers/operations';
 import VulnerabilityHistory from '../../src/handlers/vulnerabilityHistory';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
+import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 
 class TestEventSource {
     static current: TestEventSource;
@@ -109,6 +110,7 @@ jest.mock('../../src/components/NavigationBar', () => ({
             <button onClick={() => { void Promise.resolve(onApply('p2', 'v9', '', '', [], '')).then(result => {
                 document.body.dataset.applyResult = String(result);
             }); }}>apply other scope</button>
+            <button onClick={() => { void onApply('p2', 'v9', 'v10', 'difference', [], ''); }}>apply compare scope</button>
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
             <span data-testid="frontend-scope">{defaultScope?.project_id ?? ''}</span>
             <span data-testid="operation-counts">{`${finishedScanCount}/${trackedScanCount}/${activeScanCount}`}</span>
@@ -372,7 +374,7 @@ describe('Explorer saved-scope validation', () => {
         await waitFor(() => {
             expect(screen.getByTestId('default-project')).toHaveTextContent('default-project');
             expect(screen.getByTestId('frontend-scope')).toBeEmptyDOMElement();
-            expect(mockPackagesList).toHaveBeenCalledWith('default-variant', undefined, undefined, undefined, undefined, undefined);
+            expect(mockPackagesList).toHaveBeenCalledWith('default-variant', undefined, undefined, undefined, undefined, undefined, false, expect.any(AbortSignal));
         });
         expect(mockClearFrontendScope).not.toHaveBeenCalled();
     });
@@ -624,7 +626,7 @@ describe('Explorer saved-scope validation', () => {
 
         render(<Explorer />, { wrapper: MemoryRouter });
         await waitFor(() => expect(mockPackagesList).toHaveBeenCalledWith(
-            undefined, 'saved-project', undefined, undefined, ['v1', 'v2'], 'union',
+            undefined, 'saved-project', undefined, undefined, ['v1', 'v2'], 'union', false, expect.any(AbortSignal),
         ));
         fireEvent.click(screen.getByRole('link', {name: 'scans'}));
 
@@ -917,5 +919,134 @@ describe('Explorer refresh run identity', () => {
         expect(screen.getByTestId('location')).toHaveTextContent(`${ROUTES.refresh}?run=A`);
         expect(RefreshRuns.latest).not.toHaveBeenCalled();
         await waitFor(() => expect(screen.getByText(/Requested refresh run is unavailable in this scope/)).toBeInTheDocument());
+    });
+});
+
+describe('Explorer agent write reloads', () => {
+    let restoreStream: () => void;
+    beforeEach(() => {
+        restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
+        mockConfigGet.mockResolvedValue(SERVER_CONFIG);
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([{ id: 'default-project', name: 'Default Project' }]);
+        mockVariantsListAll.mockResolvedValue([{ id: 'default-variant', project_id: 'default-project', name: 'Default Variant' }]);
+        mockPackagesList.mockResolvedValue([]);
+        mockVulnerabilitiesList.mockResolvedValue([]);
+        mockAssessmentsList.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        __reset();
+        restoreStream();
+        jest.clearAllMocks();
+    });
+
+    const announceWrite = () => act(() => {
+        window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: 'write_assessment', tools: ['write_assessment'] } }));
+    });
+    const abortable = (signals: AbortSignal[]) => (...args: Parameters<typeof Vulnerabilities.list>) => {
+        const signal = args[6]!;
+        signals.push(signal);
+        return new Promise<never>((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))));
+    };
+
+    test('an agent write arriving during a reload is deferred into one rerun instead of an overlapping reload', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+
+        announceWrite();
+        announceWrite();
+        announceWrite();
+        expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(2);
+        expect(mockVulnerabilitiesList.mock.calls[1][6]!.aborted).toBe(false);
+
+        await act(async () => finish([]));
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3));
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(3));
+        expect(mockVulnerabilitiesList.mock.calls[1][6]!.aborted).toBe(false);
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    test('a scope change aborts the agent reload in flight without reporting a load failure', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const signals: AbortSignal[] = [];
+        mockVulnerabilitiesList.mockImplementationOnce(abortable(signals));
+
+        announceWrite();
+        expect(signals).toHaveLength(1);
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+
+        expect(signals[0].aborted).toBe(true);
+        expect(mockPackagesList.mock.calls[1][7]!.aborted).toBe(true);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledWith('v9', undefined, expect.any(AbortSignal)));
+        await act(async () => { await Promise.resolve(); });
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        // The aborted agent reload does not queue another one.
+        expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3);
+    });
+
+    test.each([false, true])('a queued write only replaces a scope load if announced after it starts (%s)', async (writeAfterScopeChange) => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const signals: AbortSignal[] = [];
+        let finishScopeLoad: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(abortable(signals));
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finishScopeLoad = resolve; }));
+
+        announceWrite();
+        announceWrite();
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        if (writeAfterScopeChange) announceWrite();
+        await act(async () => { await Promise.resolve(); });
+
+        expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(writeAfterScopeChange ? 4 : 3);
+        expect(mockVulnerabilitiesList.mock.calls[2][6]!.aborted).toBe(writeAfterScopeChange);
+        await act(async () => finishScopeLoad([]));
+    });
+
+    test('an assessment load failure aborts sibling requests and reports the failure', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const reportError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        const siblingAborted = jest.fn();
+        mockAssessmentsList.mockRejectedValueOnce(new Error('assessment request failed'));
+        mockAssessmentsList.mockImplementationOnce((_variant, _project, signal) => new Promise((_, reject) => {
+            signal!.addEventListener('abort', () => {
+                siblingAborted();
+                reject(new DOMException('Aborted', 'AbortError'));
+            });
+        }));
+
+        fireEvent.click(screen.getByRole('button', { name: 'apply compare scope' }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load data');
+        expect(siblingAborted).toHaveBeenCalledTimes(1);
+        reportError.mockRestore();
+    });
+
+    test('a failed reload still reports the failure', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        mockVulnerabilitiesList.mockRejectedValueOnce(new Error('server error'));
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+        announceWrite();
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load data');
+    });
+
+    test('unmounting aborts the reload in flight', async () => {
+        const { unmount } = render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const signals: AbortSignal[] = [];
+        mockVulnerabilitiesList.mockImplementationOnce(abortable(signals));
+        announceWrite();
+
+        unmount();
+
+        expect(signals[0].aborted).toBe(true);
     });
 });

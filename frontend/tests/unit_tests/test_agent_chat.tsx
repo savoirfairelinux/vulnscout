@@ -4,11 +4,11 @@ import '@testing-library/jest-dom';
 import React from 'react';
 
 import AgentChat from '../../src/components/AgentChat';
-import { AGENT_WRITE_EVENT } from '../../src/types/agent';
+import { AGENT_WRITE_EVENT, type AgentWriteDetail } from '../../src/types/agent';
 import type {
     AgentAction, AgentContext, AgentConversationSummary, AgentLiveTurn, AgentMessage, AgentQueuePaused, AgentRequestRecord,
 } from '../../src/types/agent';
-import { __resetAgentQueue, __setEventSourceFactory, getAgentQueue, openAgentChat, setActiveConversation } from '../../src/handlers/agentQueue';
+import { AGENT_WRITE_DEBOUNCE_MS, __resetAgentQueue, __setEventSourceFactory, getAgentQueue, openAgentChat, setActiveConversation } from '../../src/handlers/agentQueue';
 
 const usage = { cost: null, input_tokens: null, output_tokens: null };
 const signedIn = { authenticated: true, login: 'tester', configured: true, device_login: true,
@@ -473,16 +473,20 @@ test('sends every selected variant so the backend enforces the displayed scope',
     expect(posted[0].context).not.toHaveProperty('variantCount');
 });
 
-test('notifies views of each write the backend reports', async () => {
-    const writes: string[] = [];
-    const onWrite = (event: Event) => writes.push((event as CustomEvent<{ tool: string }>).detail.tool);
+test('notifies views of the writes the backend reports', async () => {
+    const writes: string[][] = [];
+    const onWrite = (event: Event) => writes.push((event as CustomEvent<AgentWriteDetail>).detail.tools);
     window.addEventListener(AGENT_WRITE_EVENT, onWrite);
     serve();
     try {
         renderChat();
         await screen.findByRole('button', { name: 'Summarize vulnerabilities' });
+        jest.useFakeTimers();
         deliver('agent_write', { tool: 'write_assessment', request_id: 'req', conversation_id: 'main' });
-        expect(writes).toEqual(['write_assessment']);
+        deliver('agent_write', { tool: 'write_assessment', request_id: 'req', conversation_id: 'main' });
+        expect(writes).toEqual([]);
+        act(() => { jest.advanceTimersByTime(AGENT_WRITE_DEBOUNCE_MS); });
+        expect(writes).toEqual([['write_assessment']]);
     } finally {
         window.removeEventListener(AGENT_WRITE_EVENT, onWrite);
     }

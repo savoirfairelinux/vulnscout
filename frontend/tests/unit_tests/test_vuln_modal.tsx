@@ -16,6 +16,7 @@ import VulnModal from '../../src/components/VulnModal';
 import AgentChat from '../../src/components/AgentChat';
 import { __resetAgentQueue, __setEventSourceFactory } from '../../src/handlers/agentQueue';
 import AssessmentReviews from "../../src/handlers/assessmentReviews";
+import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
 
 
@@ -247,6 +248,25 @@ describe('Vulnerability Modal', () => {
         expect(within(history).getAllByText('second@1.0.0')).toHaveLength(1);
         expect(history.querySelectorAll('[data-timeline-connector]')).toHaveLength(1);
         expect(within(history).getAllByRole('listitem')[1].querySelector('[data-timeline-connector]')).toBeNull();
+    });
+
+    test('reloads assessments once per agent write announcement without overlapping reloads', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(() => Promise.resolve(JSON.stringify([])));
+        const assessmentPath = `/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`;
+        const assessmentFetches = () => fetchMock.mock.calls.filter(([input]) => String(input).includes(assessmentPath)).length;
+        // The refresh replaces vuln.assessments in place, so the shared fixture is not handed over.
+        render(<VulnModal vuln={{ ...vulnerability }} onClose={() => {}} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        await waitFor(() => expect(assessmentFetches()).toBe(2));
+
+        act(() => {
+            window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: 'write_assessment', tools: ['write_assessment'] } }));
+            window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: 'write_assessment', tools: ['write_assessment'] } }));
+        });
+        expect(assessmentFetches()).toBe(4);
+
+        // The second announcement reruns the refresh once the first one settled.
+        await waitFor(() => expect(assessmentFetches()).toBe(6));
     });
 
     test('titles the add form above the assessment history and draws no bar for a single assessment', async () => {
