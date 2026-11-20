@@ -300,7 +300,7 @@ describe('Variants.uploadSBOM', () => {
         const file1 = new File(['{"spdxVersion":"SPDX-2.3"}'], 'sbom1.spdx.json', { type: 'application/json' });
         const file2 = new File(['{"spdxVersion":"SPDX-2.3"}'], 'sbom2.spdx.json', { type: 'application/json' });
 
-        const result = await Variants.uploadSBOM('p1', 'v1', [file1, file2], ['epss', 'nvd']);
+        const result = await Variants.uploadSBOM('p1', 'v1', [file1, file2]);
 
         expect(result.op_id).toBe('upload:uid-1');
         expect(result.scan_id).toBe('sid-1');
@@ -313,7 +313,7 @@ describe('Variants.uploadSBOM', () => {
         const calledBody = (fetchMock.mock.calls[0] as any[])[1].body as FormData;
         expect(calledBody.get('project_id')).toBe('p1');
         expect(calledBody.get('variant_id')).toBe('v1');
-        expect(calledBody.getAll('refresh_sources')).toEqual(['epss', 'nvd']);
+        expect(calledBody.getAll('refresh_sources')).toEqual(['none']);
         const files = calledBody.getAll('files');
         expect(files).toHaveLength(2);
     });
@@ -330,23 +330,9 @@ describe('Variants.uploadSBOM', () => {
 
         expect(result.op_id).toBe('upload:uid-2');
         const calledBody = (fetchMock.mock.calls[0] as any[])[1].body as FormData;
-        expect(calledBody.getAll('refresh_sources')).toEqual(['epss']);
+        expect(calledBody.getAll('refresh_sources')).toEqual(['none']);
         const files = calledBody.getAll('files');
         expect(files).toHaveLength(1);
-    });
-
-    test('sends the "none" sentinel when every refresh source is unchecked', async () => {
-        fetchMock.mockResponseOnce(JSON.stringify({
-            op_id: 'upload:uid-3',
-            scan_id: 'sid-3',
-            message: 'accepted',
-        }));
-
-        const file = new File(['{}'], 'sbom.json', { type: 'application/json' });
-        await Variants.uploadSBOM('p1', 'v1', [file], []);
-
-        const calledBody = (fetchMock.mock.calls[0] as any[])[1].body as FormData;
-        expect(calledBody.getAll('refresh_sources')).toEqual(['none']);
     });
 
     test('throws on error response', async () => {

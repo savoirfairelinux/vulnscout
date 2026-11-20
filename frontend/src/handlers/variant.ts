@@ -1,4 +1,3 @@
-import type { RefreshType } from "../helpers/refreshSources";
 
 type Variant = {
     id: string;
@@ -190,7 +189,6 @@ class Variants {
         projectId: string,
         variantId: string,
         files: File[],
-        refreshSources: RefreshType[] = ["epss"],
     ): Promise<{ op_id: string; scan_id: string; message: string }> {
         const formData = new FormData();
         for (const file of files) {
@@ -198,14 +196,8 @@ class Variants {
         }
         formData.append("project_id", projectId);
         formData.append("variant_id", variantId);
-        if (refreshSources.length === 0) {
-            // Explicit sentinel: the user unchecked every source, don't fall back to the default.
-            formData.append("refresh_sources", "none");
-        } else {
-            for (const source of refreshSources) {
-                formData.append("refresh_sources", source);
-            }
-        }
+        // Vulnerability data is refreshed from the Refresh tab, so opt out of the server's default refresh.
+        formData.append("refresh_sources", "none");
 
         const response = await fetch(
             import.meta.env.VITE_API_URL + "/api/sbom/upload",

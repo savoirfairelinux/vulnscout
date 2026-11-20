@@ -30,14 +30,9 @@ Upload individual SBOM files or SPDX archives (`.tar`, `.tar.gz`, `.tgz`,
 `.tar.xz`, `.tar.zst`) containing `.spdx.json` or `.jsonld` companion documents.
 All companion documents in an archive are imported together into the selected variant.
 
-SBOM uploads on a variant page default to **Complete refresh**. After parsing,
-VulnScout refreshes NVD, EPSS, GHSA, and ENISA EUVD metadata for vulnerabilities
-encountered in the import. This can make external provider requests and lengthen
-the upload operation.
-
-To import without enrichment, choose **Custom refresh** and deselect every source
-before uploading. Selected refreshes enrich the imported findings; they do not
-run additional vulnerability scanners.
+SBOM uploads on a variant page do not refresh vulnerability data. To fetch
+current NVD, EPSS, GHSA, or ENISA EUVD metadata for the imported findings, start
+a refresh from the [Refresh](web-refresh.md) tab once the import finishes.
 
 ## Native-Package Scan Defaults
 
