@@ -721,6 +721,15 @@ assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-li
 run_ok ai-context detach -p demo src build
 assert_log "/scan/src/entrypoint.sh --project demo --ai-context-detach src build"
 
+# A host python3 older than 3.9 (here a stub failing the version check) cannot run the helper.
+mkdir -p "$TEST_DIR/oldpython"
+printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/oldpython/python3"
+chmod +x "$TEST_DIR/oldpython/python3"
+if [ "$(id -u)" -ne 0 ]; then
+    PATH="$TEST_DIR/oldpython:$PATH" VULNSCOUT_HOST_ROOTS="$TEST_DIR" \
+        expect_fail "host folders need python3 (3.9 or newer)" ai-context attach "src=$TEST_DIR"
+fi
+
 if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     roots="$TEST_DIR/roots"
     mkdir -p "$roots/app" "$roots/build"

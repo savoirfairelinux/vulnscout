@@ -530,7 +530,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
         TAR.GZ/TGZ and individual files. Paths belong to the upload, NOT the host.
         For an active directory use file_id="directory" from codebase_directory.
         For an attached host folder use file_id="mount:<alias>" from mounts; paths
-        are relative to that folder, and truncated=true means the 500,000-entry or
+        are relative to that folder; its pattern allows at most 16 '*'/'?' wildcards,
+        and truncated=true means the 500,000-entry or
         time budget stopped the listing (total is then a lower bound).
         Directory browsing excludes hidden/sensitive names, links and special files,
         and is limited to 500,000 visited entries. It never reads the MCP host filesystem.

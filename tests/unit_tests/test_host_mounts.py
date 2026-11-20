@@ -209,10 +209,24 @@ class TestSourceBrowsing:
         ("mount:src", {"operation": "read", "path": "../outside"}, 400),
         ("mount:src", {"operation": "search", "query": ""}, 400),
         ("mount:src", {"limit": 500}, 400),
+        ("mount:src", {"pattern": "*?" * 20 + "Z"}, 400),
+        ("mount:src", {"operation": "search", "query": "needle", "pattern": "*" * 17}, 400),
     ])
     def test_invalid_source_requests(self, client, variant, host, helper_server, file_id, params, status):
         _attach(client, variant, "src", host["app"])
         assert _source(client, variant, file_id, **params).status_code == status
+
+    def test_excessive_wildcards_are_rejected_before_reaching_the_helper(self, client, variant, host,
+                                                                          helper_server, monkeypatch):
+        _attach(client, variant, "src", host["app"])
+        from src.controllers import host_mounts as controller
+        calls = []
+        monkeypatch.setattr(controller, "browse", lambda *args: calls.append(args) or {"files": []})
+        response = _source(client, variant, "mount:src", pattern="*?" * 20 + "Z")
+        assert response.status_code == 400 and "16" in response.get_json()["error"]
+        assert calls == []
+        assert _source(client, variant, "mount:src", pattern="src/*.c").status_code == 200
+        assert len(calls) == 1
 
     def test_lost_helper_registry_is_restored_from_the_database(self, client, variant, host, helper_server):
         _attach(client, variant, "src", host["app"])

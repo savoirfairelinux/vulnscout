@@ -446,3 +446,44 @@ def test_serve_reports_missing_roots(tree, capsys):
     assert hh.main(["serve", "--socket", str(tree["tmp"] / "s.sock"), "--state-dir", str(tree["tmp"] / "st"),
                     "--root", str(tree["tmp"] / "missing")]) == 1
     assert "No approved host root exists" in capsys.readouterr().err
+
+
+# -- file patterns ------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("op, params", [("list", {}), ("search", {"query": "needle"})])
+def test_patterns_with_too_many_wildcards_are_rejected(helper, tree, op, params):
+    attached(helper, tree)
+    code, message = err(helper, op, variant_id=VARIANT, alias="src", pattern="*?" * 20 + "Z", **params)
+    assert code == "invalid" and "16" in message
+    limit = "*" * hh.MAX_PATTERN_WILDCARDS
+    assert call(helper, op, variant_id=VARIANT, alias="src", pattern=limit, **params)["ok"]
+    assert err(helper, op, variant_id=VARIANT, alias="src", pattern=limit + "?", **params)[0] == "invalid"
+
+
+@pytest.mark.parametrize("pattern, expected", [
+    ("*", ["README", "blob.bin", "src/main.c"]),
+    ("src/*.c", ["src/main.c"]),
+    ("*.[cb]*", ["blob.bin", "src/main.c"]),
+    ("READM?", ["README"]),
+    ("*.h", []),
+])
+def test_normal_globs_still_match(helper, tree, pattern, expected):
+    attached(helper, tree)
+    result = ok(helper, "list", variant_id=VARIANT, alias="src", pattern=pattern)
+    assert [entry["path"] for entry in result["files"]] == expected
+
+
+def test_pattern_is_compiled_once_per_request(helper, tree, monkeypatch):
+    attached(helper, tree)
+    compiled = []
+    original = hh.translate
+    monkeypatch.setattr(hh, "translate", lambda pattern: compiled.append(pattern) or original(pattern))
+    ok(helper, "list", variant_id=VARIANT, alias="src", pattern="*.c")
+    ok(helper, "search", variant_id=VARIANT, alias="src", query="needle", pattern="*")
+    assert compiled == ["*.c", "*"]
+
+
+def test_helper_requires_python_3_9(monkeypatch, capsys):
+    monkeypatch.setattr(hh.sys, "version_info", (3, 8, 18))
+    assert hh.main(["ping", "--socket", "unused"]) == 1
+    assert "Python 3.9 or newer" in capsys.readouterr().err

@@ -5,7 +5,7 @@
 
 The ``vulnscout`` wrapper starts this script on the container host as the invoking
 user (never root). It must stay a standalone, standard-library-only module: the
-wrapper runs it with the host's ``python3`` (3.8 or newer) outside the container.
+wrapper runs it with the host's ``python3`` (3.9 or newer) outside the container.
 
 It listens on a private Unix socket (directory ``0700``, socket ``0600``) inside the
 VulnScout cache directory, which the container already mounts, so attaching folders
@@ -35,7 +35,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from fnmatch import fnmatchcase
+from fnmatch import fnmatchcase, translate
 from typing import Any, Callable, Iterator
 
 PROTOCOL_VERSION = 1
@@ -56,6 +56,9 @@ MAX_SEARCH_RESULTS = 100
 MAX_SNIPPET_CHARS = 500
 MAX_QUERY_CHARS = 200
 MAX_PATTERN_CHARS = 512
+# Few wildcards keep glob matching linear enough: a regex match cannot be interrupted by the time limits.
+MAX_PATTERN_WILDCARDS = 16
+MIN_PYTHON = (3, 9)
 MAX_PATH_CHARS = 4096
 MAX_BROWSE_ENTRIES = 500
 MAX_ATTACHMENTS_PER_VARIANT = 32
@@ -116,6 +119,20 @@ def _string(request: dict, name: str, *, required: bool = True, maximum: int = M
     if len(value) > maximum or "\x00" in value:
         raise HelperError("invalid", f"{name} is too long or contains invalid characters.")
     return value
+
+
+def compile_pattern(pattern: str) -> Callable[[str], bool]:
+    """Validate a case-sensitive file-path glob and compile it once for the whole request."""
+    if len(pattern) > MAX_PATTERN_CHARS or "\x00" in pattern:
+        raise HelperError("invalid", f"File pattern must be at most {MAX_PATTERN_CHARS} characters.")
+    if pattern.count("*") + pattern.count("?") > MAX_PATTERN_WILDCARDS:
+        raise HelperError("invalid", f"File pattern may contain at most {MAX_PATTERN_WILDCARDS} '*' or '?' wildcards.")
+    match = re.compile(translate(pattern)).match
+    return lambda path: match(path) is not None
+
+
+def _pattern(request: dict) -> Callable[[str], bool]:
+    return compile_pattern(_string(request, "pattern", required=False, maximum=MAX_PATTERN_CHARS) or "*")
 
 
 def _integer(request: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -480,7 +497,7 @@ class Helper:
         return {"attachments": report}
 
     def list_files(self, request: dict) -> dict:
-        pattern = _string(request, "pattern", required=False, maximum=MAX_PATTERN_CHARS) or "*"
+        matches_pattern = _pattern(request)
         offset = _integer(request, "offset", 0, 0, MAX_WALK_ENTRIES)
         limit = _integer(request, "limit", MAX_LIST_LIMIT, 1, MAX_LIST_LIMIT)
         fd = self._attachment_fd(request)
@@ -489,7 +506,7 @@ class Helper:
         message = None
         try:
             for path, size in _Walk(fd, LIST_TIME_LIMIT).files():
-                if not fnmatchcase(path, pattern):
+                if not matches_pattern(path):
                     continue
                 if offset <= total < offset + limit:
                     files.append({"path": path, "size": size})
@@ -581,7 +598,7 @@ class Helper:
 
     def search(self, request: dict) -> dict:
         query = _string(request, "query", maximum=MAX_QUERY_CHARS)
-        pattern = _string(request, "pattern", required=False, maximum=MAX_PATTERN_CHARS) or "*"
+        matches_pattern = _pattern(request)
         max_results = _integer(request, "max_results", MAX_SEARCH_RESULTS, 1, MAX_SEARCH_RESULTS)
         needle = query.encode("utf-8")
         fd = self._attachment_fd(request)
@@ -592,7 +609,7 @@ class Helper:
         message = None
         try:
             for path, size in _Walk(fd, SEARCH_TIME_LIMIT).files():
-                if not fnmatchcase(path, pattern):
+                if not matches_pattern(path):
                     continue
                 if size > MAX_FILE_BYTES:
                     skipped_large += 1
@@ -904,6 +921,9 @@ def _ping(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < MIN_PYTHON:
+        print("Error: the host folder helper needs Python 3.9 or newer.", file=sys.stderr)
+        return 1
     parser = argparse.ArgumentParser(description="VulnScout read-only host folder helper.")
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve", help="Serve attached folders on a private Unix socket.")

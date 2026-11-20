@@ -627,7 +627,7 @@ source changes.
 - Every `vulnscout` command that needs the container starts, when
   `VULNSCOUT_HOST_ROOTS` is set, an **unprivileged helper process on the host, as
   the invoking user** (never root; it refuses to run as root). It needs `python3`
-  3.8 or newer on the host and uses only its standard library. From a source
+  3.9 or newer on the host and uses only its standard library. From a source
   checkout the wrapper runs `src/helpers/host_mount_helper.py`; otherwise it
   extracts that file from the configured image once per image ID. `vulnscout stop`
   and `ai-context helper stop` stop it.
@@ -664,7 +664,9 @@ source changes.
   budget stops them; reads are limited to **10 MiB/file**, 200 lines and
   **64 KiB**; searches stop after **100 matches**, **100 MiB** read or **20 s**
   (`truncated=true` with a message), skip binary files and count files over
-  10 MiB as `skipped_large_files`. At most 8 requests run at once.
+  10 MiB as `skipped_large_files`. File patterns are limited to 512 characters
+  and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
+  time limits. At most 8 requests run at once.
 
 **Unavailability is explicit.** When the helper is not running, the AI Context
 page shows **Host folder helper unavailable** and each folder as

@@ -1016,8 +1016,8 @@ start_host_helper() {
         return 1
     fi
     if ! command -v python3 &>/dev/null ||
-        ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' 2>/dev/null; then
-        console_err error "Error: host folders need python3 (3.8 or newer) on this host."
+        ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
+        console_err error "Error: host folders need python3 (3.9 or newer) on this host."
         return 1
     fi
     if host_helper_running &&

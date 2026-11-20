@@ -536,7 +536,8 @@ The source route accepts the same `operation=list|read|search` parameters as upl
 codebase directory; listings and searches may add `truncated` and `message` when a time, entry or
 byte budget stopped them, and searches add `skipped_large_files`.
 
-Errors: `400` invalid alias, path or parameters; `403` path outside the approved roots;
+Errors: `400` invalid alias, path or parameters (including a `pattern` over 512 characters or
+with more than 16 `*`/`?` wildcards); `403` path outside the approved roots;
 `404` unknown variant, alias or folder; `409` alias already attached to another folder, or folder
 unavailable (missing, unreadable, moved or replaced by a link); `503` helper not running.
 See [Attached host folders](ai-assessments.md#attached-host-folders).

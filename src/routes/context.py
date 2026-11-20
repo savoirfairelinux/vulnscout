@@ -30,6 +30,7 @@ from ..helpers.context_io import (
 from ..helpers.stride_model import StrideValidationError
 from ..controllers import host_mounts
 from ..helpers.host_mounts import HostHelperError, HostHelperUnavailable
+from ..helpers.host_mounts import validate_pattern as validate_mount_pattern
 from ..models.host_mount import MOUNT_FILE_ID_PREFIX, HostMount
 from ..models.project import Project
 from ..models.variant import Variant
@@ -209,6 +210,8 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
         pattern = request.args.get("pattern", "*")
         if len(pattern) > 512:
             raise ValueError("File pattern must be at most 512 characters.")
+        if operation in ("list", "search"):
+            validate_mount_pattern(pattern)
         params: dict
         if operation == "list":
             params = {"pattern": pattern, "offset": _integer("offset", 0, 0, MAX_ENTRIES),

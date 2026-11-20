@@ -56,6 +56,14 @@ def validate_alias(alias: object) -> str:
     return alias
 
 
+def validate_pattern(pattern: str) -> None:
+    """Apply the helper's file-pattern limits before sending a request; raises ValueError."""
+    try:
+        protocol.compile_pattern(pattern)
+    except protocol.HelperError as exc:
+        raise ValueError(exc.message) from None
+
+
 def call(operation: str, timeout: float = CALL_TIMEOUT, **params: object) -> dict:
     """Run one helper operation; raises HostHelperUnavailable or HostHelperError."""
     path = socket_path()
