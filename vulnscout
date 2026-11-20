@@ -909,15 +909,17 @@ config_set() {
     echo "${key}=${value}" >> "$tmp"
     cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
     rm -f "$tmp"
-    console_out success "Config set: $key=$value"
     if [ "$key" = "VULNSCOUT_HOST_ROOTS" ]; then
+        VULNSCOUT_HOST_ROOTS="$value"
         host_helper_paths
-        if host_helper_running; then
-            VULNSCOUT_HOST_ROOTS="$value"
+        if [ -z "$value" ]; then
+            stop_host_helper
+        elif host_helper_running; then
             console_out info "Restarting the host folder helper with the new approved roots..."
-            start_host_helper || true
+            start_host_helper || return 1
         fi
     fi
+    console_out success "Config set: $key=$value"
     # Restart the container so volume mounts reflect the new cache dir
     if [ "$key" = "VULNSCOUT_CACHE_DIR" ] && call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         console_out info "Restarting container to apply new VULNSCOUT_CACHE_DIR..."

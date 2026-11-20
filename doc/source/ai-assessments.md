@@ -596,8 +596,9 @@ as colon-separated absolute paths (paths cannot contain `:`; `/` is refused):
 ```
 
 Nothing can be attached, from the CLI or the browser, outside these roots.
-Changing the value restarts a running helper; `config unset` stops it. The roots
-are read on the host by the wrapper, never from a browser request.
+Changing the value restarts a running helper; setting it to an empty value or
+using `config unset` stops the helper. A failed restart reports an error. The
+roots are read on the host by the wrapper, never from a browser request.
 
 **From the CLI** (project and variant default to `default`):
 
@@ -620,7 +621,8 @@ click **Attach selected folder**. Each attached folder shows **Available** or
 **Unavailable** with the reason (folder missing or unreadable, moved, outside the
 current roots, or helper not running), and a **Detach** button. Attaching or
 detaching marks older pending AI assessments of the variant outdated, like other
-source changes.
+source changes. The host-folder management, browse and source-read APIs accept
+only local operator requests, and browser requests must be same-origin.
 
 **How it works and security model.**
 
@@ -645,16 +647,17 @@ source changes.
   against it before reaching the helper, so a detached alias is refused at once.
   The **helper is the enforcement point**: it keeps its own alias registry in the
   host-only `VULNSCOUT_HOST_HELPER_STATE_DIR` (default `.vulnscout/host-helper`,
-  outside the cache mount), re-derives it from the database when needed, and for
-  every request resolves the variant's alias to its host path, re-checks that the
-  real path (all links resolved) is still inside an approved root, and refuses a
-  folder that was moved or replaced by a link since it was attached.
+  outside the cache mount), re-derives it from the database when needed, and
+  re-checks that paths are still inside an approved root. Host-source reads use
+  the exact path returned by the database lookup and validate/open it in the same
+  helper request, rather than resolving the alias a second time.
 - Requests are scoped by **variant ID and alias**. Paths are relative to the
   attached folder; absolute paths, `..`, empty components and hidden or sensitive
   names (the same list as codebase directories) are rejected, and every path
-  component is opened without following symbolic links, so links (including a
-  directory swapped for a link) cannot escape. Hard-linked regular files inside
-  the folder are readable.
+  component, including each approved-root ancestor, is opened relative to a
+  verified directory descriptor without following symbolic links, so links
+  (including a directory swapped for a link) cannot escape. Hard-linked regular
+  files inside the folder are readable.
 - The helper is **read-only**: it only implements `status`, `browse` (approved
   roots and subfolders, at most 500), `attach`/`detach`/`sync` of its own
   registry, `list`, `read` and `search`. No operation creates, writes or deletes

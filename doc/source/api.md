@@ -532,12 +532,16 @@ and returns `201` with `{"alias", "file_id": "mount:src", "host_path", "created_
 `{"alias", "detached": true, "warning": str|null}`; access ends immediately even if the helper
 could not be updated. `GET /api/context` also lists `mounts` without availability.
 
+Host-folder management, browsing and source reads are restricted to local operator requests.
+Browser requests must be same-origin; remote clients and cross-origin browser requests receive
+`403`. This does not change local Agent or MCP access.
+
 The source route accepts the same `operation=list|read|search` parameters as uploads and the
 codebase directory; listings and searches may add `truncated` and `message` when a time, entry or
 byte budget stopped them, and searches add `skipped_large_files`.
 
 Errors: `400` invalid alias, path or parameters (including a `pattern` over 512 characters or
-with more than 16 `*`/`?` wildcards); `403` path outside the approved roots;
+with more than 16 `*`/`?` wildcards); `403` access denied or path outside the approved roots;
 `404` unknown variant, alias or folder; `409` alias already attached to another folder, or folder
 unavailable (missing, unreadable, moved or replaced by a link); `503` helper not running.
 See [Attached host folders](ai-assessments.md#attached-host-folders).

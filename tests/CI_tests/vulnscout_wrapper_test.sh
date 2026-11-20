@@ -765,6 +765,13 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     assert_stdout "$roots/app"
     refute_stdout "$roots/build"
 
+    # Clearing the roots stops the old helper instead of leaving its policy active.
+    run_ok config set VULNSCOUT_HOST_ROOTS ""
+    if [ -S "$socket" ] || [ -f "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid" ]; then
+        echo "Clearing approved roots must stop the host folder helper." >&2
+        exit 1
+    fi
+
     run_ok stop
     if [ -S "$socket" ] || [ -f "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid" ]; then
         echo "'vulnscout stop' must stop the host folder helper." >&2

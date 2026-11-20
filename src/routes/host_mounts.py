@@ -12,6 +12,7 @@ from ..controllers.host_mounts import HostMountConflict
 from ..helpers.host_mounts import HostHelperError, HostHelperUnavailable
 from ..routes._scan_helpers import parse_uuid_or_400
 from ..models.variant import Variant
+from .agent import _access_error as _operator_access_error
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,8 @@ def init_app(app):
         OpenAPI:
         response 200 HostHelperStatus Helper availability and approved host roots.
         """
+        if error := _operator_access_error():
+            return error
         return jsonify(host_mounts.helper_status())
 
     @app.route('/api/context/host-roots/browse', methods=['GET'])
@@ -58,6 +61,8 @@ def init_app(app):
         response 409 Error Folder is not readable by the helper.
         response 503 Error Host folder helper is not running.
         """
+        if error := _operator_access_error():
+            return error
         try:
             return jsonify(host_mounts.helper.call("browse", path=request.args.get("path", "")))
         except (HostHelperUnavailable, HostHelperError) as exc:
@@ -72,6 +77,8 @@ def init_app(app):
         response 400 Error Invalid variant identifier.
         response 404 Error Variant not found.
         """
+        if error := _operator_access_error():
+            return error
         variant_uuid, err = _variant_or_error(variant_id)
         if err:
             return err
@@ -100,6 +107,8 @@ def init_app(app):
         response 409 Error Alias already attached to another folder, or folder unavailable.
         response 503 Error Host folder helper is not running.
         """
+        if error := _operator_access_error():
+            return error
         variant_uuid, err = _variant_or_error(variant_id)
         if err:
             return err
@@ -133,6 +142,8 @@ def init_app(app):
         response 400 Error Invalid variant identifier or alias.
         response 404 Error Variant or alias not found.
         """
+        if error := _operator_access_error():
+            return error
         variant_uuid, err = _variant_or_error(variant_id)
         if err:
             return err

@@ -139,6 +139,36 @@ def test_attachment_replaced_by_a_link_becomes_unavailable(helper, tree):
     assert exact[0] == "unavailable"
 
 
+def test_ancestor_replaced_by_symlink_after_validation_is_not_followed(tree, monkeypatch):
+    ancestor = tree["tmp"] / "ancestor"
+    root = ancestor / "approved"
+    app = root / "app"
+    app.mkdir(parents=True)
+    (app / "main.c").write_text("approved")
+    (tree["outside"] / "main.c").write_text("outside")
+    state = tree["tmp"] / "race-state"
+    state.mkdir()
+    helper = hh.Helper(hh.canonical_roots([str(root)]), str(state))
+    attached(helper, {"app": app}, path=app)
+
+    original_realpath = os.path.realpath
+    swapped = False
+
+    def realpath(path):
+        nonlocal swapped
+        resolved = original_realpath(path)
+        if path == str(app) and not swapped:
+            swapped = True
+            ancestor.rename(tree["tmp"] / "ancestor-moved")
+            ancestor.symlink_to(tree["outside"], target_is_directory=True)
+        return resolved
+
+    monkeypatch.setattr(hh.os.path, "realpath", realpath)
+
+    code, _ = err(helper, "list", variant_id=VARIANT, alias="src")
+    assert code == "invalid"
+
+
 def test_unknown_and_write_operations_do_not_exist(helper):
     for op in ("write", "delete", "mkdir", None):
         assert err(helper, op)[0] == "invalid"

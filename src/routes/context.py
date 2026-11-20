@@ -40,6 +40,7 @@ from ..models.variant_context import (
     default_editor_block,
 )
 from ..routes._scan_helpers import parse_uuid_or_400
+from .agent import _access_error as _operator_access_error
 
 logger = logging.getLogger(__name__)
 
@@ -892,6 +893,8 @@ def init_app(app):
             return err
         assert variant_uuid is not None
         if file_id.startswith(MOUNT_FILE_ID_PREFIX):
+            if error := _operator_access_error():
+                return error
             if Variant.get_by_id(variant_uuid) is None:
                 return jsonify(error="Variant not found"), 404
             body, status = _browse_mount(variant_uuid, file_id)

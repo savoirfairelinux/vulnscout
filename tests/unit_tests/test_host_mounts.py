@@ -13,6 +13,7 @@ from src.helpers import host_mount_helper as hh
 from src.models.host_mount import HostMount
 from src.models.project import Project
 from src.models.variant import Variant
+from src.models.variant_context import VariantContext
 
 
 @pytest.fixture()
@@ -81,6 +82,36 @@ def _source(client, variant, file_id, **params):
     return client.get(f"/api/variants/{variant.id}/context/files/{file_id}/source", query_string=params)
 
 
+class TestAccessControl:
+
+    def test_host_folder_routes_reject_remote_clients(self, client, variant, host):
+        remote = {"environ_overrides": {"REMOTE_ADDR": "192.0.2.10"}}
+        responses = [
+            client.get("/api/context/host-roots", **remote),
+            client.get("/api/context/host-roots/browse", **remote),
+            client.get(f"/api/variants/{variant.id}/context/mounts", **remote),
+            client.post(f"/api/variants/{variant.id}/context/mounts",
+                        json={"alias": "src", "host_path": str(host["app"])}, **remote),
+            client.delete(f"/api/variants/{variant.id}/context/mounts/src", **remote),
+            client.get(
+                f"/api/variants/{variant.id}/context/files/mount:src/source",
+                environ_overrides={"REMOTE_ADDR": "192.0.2.10"},
+            ),
+        ]
+        assert [response.status_code for response in responses] == [403] * len(responses)
+
+    def test_host_folder_routes_reject_cross_origin_browsers(self, client, variant):
+        response = client.get(
+            f"/api/variants/{variant.id}/context/files/mount:src/source",
+            headers={"Origin": "https://attacker.example"},
+        )
+        assert response.status_code == 403
+
+    def test_local_same_origin_access_remains_available(self, client, helper_server):
+        response = client.get("/api/context/host-roots", headers={"Origin": "http://localhost"})
+        assert response.status_code == 200
+
+
 class TestHelperUnavailable:
 
     def test_roots_report_unavailable_helper(self, client):
@@ -144,6 +175,18 @@ class TestAttachDetach:
         assert conflict.status_code == 409 and "detach it first" in conflict.get_json()["error"]
         assert HostMount.get(variant.id, "src").host_path == str(host["app"])
         assert helper_server.registry.get(str(variant.id), "src") == str(host["app"])
+
+    def test_mount_mutations_create_and_advance_context_revision(self, client, variant, host, helper_server):
+        assert VariantContext.get_by_variant(variant.id) is None
+
+        assert _attach(client, variant, "src", host["app"]).status_code == 201
+        context = VariantContext.get_by_variant(variant.id)
+        assert context is not None
+        attached_revision = context.updated_at
+
+        assert client.delete(f"/api/variants/{variant.id}/context/mounts/src").status_code == 200
+        _db.session.refresh(context)
+        assert context.updated_at != attached_revision
 
     @pytest.mark.parametrize("payload, status", [
         ({"alias": "Bad Alias", "host_path": "/x"}, 400),
@@ -228,10 +271,11 @@ class TestSourceBrowsing:
         assert _source(client, variant, "mount:src", pattern="src/*.c").status_code == 200
         assert len(calls) == 1
 
-    def test_lost_helper_registry_is_restored_from_the_database(self, client, variant, host, helper_server):
+    def test_source_works_without_a_helper_registry_entry(self, client, variant, host, helper_server):
         _attach(client, variant, "src", host["app"])
         helper_server.registry.remove(str(variant.id), "src")
         assert _source(client, variant, "mount:src").status_code == 200
+        assert helper_server.registry.get(str(variant.id), "src") is None
 
     def test_detached_alias_is_refused_even_if_the_helper_still_knows_it(self, client, variant, host,
                                                                          helper_server):
@@ -248,6 +292,15 @@ class TestSourceBrowsing:
         host["app"].symlink_to(moved)
         response = _source(client, variant, "mount:src")
         assert response.status_code == 409 and "moved" in response.get_json()["error"]
+
+    def test_source_uses_database_path_not_mutable_helper_alias(self, client, variant, host, helper_server):
+        _attach(client, variant, "src", host["app"])
+        helper_server.registry.set(str(variant.id), "src", str(host["build"]))
+
+        response = _source(client, variant, "mount:src")
+
+        assert response.status_code == 200
+        assert [entry["path"] for entry in response.get_json()["files"]] == ["src/main.c"]
 
 
 class TestCli:

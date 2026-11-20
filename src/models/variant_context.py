@@ -329,8 +329,8 @@ class VariantContext(Base):
         return vc
 
     @staticmethod
-    def touch(variant_id: uuid.UUID, commit: bool = True) -> "VariantContext | None":
-        """Mark an existing variant context as changed without altering its fields.
+    def touch(variant_id: uuid.UUID, commit: bool = True) -> "VariantContext":
+        """Mark a variant context as changed, creating its revision row if needed.
 
         Used by callers that mutate context outside the text-field set covered by
         `upsert` (e.g. supplemental context files), so `context_outdated` still
@@ -338,8 +338,10 @@ class VariantContext(Base):
         """
         existing = VariantContext.get_by_variant(variant_id)
         if existing is None:
-            return None
-        existing.updated_at = datetime.now(timezone.utc)
+            existing = VariantContext(variant_id=variant_id, updated_at=datetime.now(timezone.utc))
+            db.session.add(existing)
+        else:
+            existing.updated_at = datetime.now(timezone.utc)
         if commit:
             db.session.commit()
         return existing

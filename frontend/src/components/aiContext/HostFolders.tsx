@@ -168,10 +168,11 @@ function HostFolders({ variantId, disabled }: Readonly<{ variantId: string; disa
         try {
             const warning = await Context.detachMount(variantId, alias);
             setNotice(warning ? `Detached ${alias}. ${warning}` : `Detached ${alias}.`);
+            await load();
         } catch (failure) {
             setError(message(failure, 'Could not detach this folder.'));
+            setBusy(false);
         }
-        await load();
     };
 
     const mounts = list?.mounts ?? [];

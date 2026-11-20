@@ -194,8 +194,14 @@ def canonical_roots(paths: list[str], warn: Callable[[str], None] | None = None)
 def _open_under(root: str, path: str) -> int:
     """Open ``path`` (canonical, inside ``root``) as a directory without following any link."""
     relative = os.path.relpath(path, root)
-    fd = os.open(root, _DIRECTORY_FLAGS)
+    fd = os.open("/", _DIRECTORY_FLAGS)
     try:
+        for part in root.split("/"):
+            if not part:
+                continue
+            child = os.open(part, _DIRECTORY_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = child
         if relative != ".":
             for part in relative.split("/"):
                 child = os.open(part, _DIRECTORY_FLAGS, dir_fd=fd)
@@ -347,7 +353,8 @@ class Helper:
         self.registry = Registry(state_dir)
         self.operations: dict[str, Callable[[dict], dict]] = {
             "status": self.status, "browse": self.browse, "attach": self.attach, "detach": self.detach,
-            "sync": self.sync, "list": self.list_files, "read": self.read, "search": self.search,
+            "sync": self.sync, "source": self.source,
+            "list": self.list_files, "read": self.read, "search": self.search,
         }
 
     # -- dispatch -----------------------------------------------------------------------------
@@ -398,6 +405,11 @@ class Helper:
             raise HelperError("unavailable", "Host folder cannot be opened.") from None
 
     def _attachment_fd(self, request: dict) -> int:
+        authorized_path = request.get("authorized_path")
+        if authorized_path is not None:
+            authorized_folder = _string({"path": authorized_path}, "path")
+            real, root = self._checked(authorized_folder)
+            return self._open_folder(real, root)
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
         path = self.registry.get(variant_id, alias)
@@ -470,6 +482,21 @@ class Helper:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
         return {"removed": self.registry.remove(variant_id, alias)}
+
+    def source(self, request: dict) -> dict:
+        """Browse a database-authorized mount path without resolving its mutable alias again."""
+        _variant_id(request)
+        validate_alias(request.get("alias"))
+        path = _string(request, "mount_path")
+        operation = request.get("source_operation")
+        if operation not in ("list", "read", "search"):
+            raise HelperError("invalid", "Operation must be list, read, or search.")
+        forwarded = {**request, "authorized_path": path}
+        return {
+            "list": self.list_files,
+            "read": self.read,
+            "search": self.search,
+        }[operation](forwarded)
 
     def sync(self, request: dict) -> dict:
         """Align a variant's registry with the backend's attachments and report availability."""

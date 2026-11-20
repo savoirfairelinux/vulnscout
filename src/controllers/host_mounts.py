@@ -148,12 +148,13 @@ def helper_status() -> dict:
 
 
 def browse(variant_id: uuid.UUID, alias: str, operation: str, params: dict) -> dict:
-    """List, read or search an attached folder through the helper, after the database check."""
+    """Browse the exact database-authorized folder through one helper request."""
     mount = HostMount.get(variant_id, alias)
     if mount is None:
         raise LookupError(f"No folder is attached as '{alias}' for this variant.")
     if operation not in ("list", "read", "search"):
         raise ValueError("Operation must be list, read, or search.")
-    # Idempotent: restores a lost helper registry entry from the database, re-checking the approved roots.
-    helper.call("attach", variant_id=str(variant_id), alias=alias, path=mount.host_path, exact=True)
-    return helper.call(operation, variant_id=str(variant_id), alias=alias, **params)
+    return helper.call(
+        "source", variant_id=str(variant_id), alias=alias, mount_path=mount.host_path,
+        source_operation=operation, **params,
+    )
