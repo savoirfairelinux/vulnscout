@@ -16,9 +16,12 @@ from ..helpers.refresh_runs import source_statuses
 from ..models.refresh_run import (
     RefreshChange, RefreshRun, RefreshRunScope, RefreshTarget, RefreshTargetLink,
 )
+from ..models.vulnerability import Vulnerability
+from ..models.vulnerability_history import CVSS_FIELD_PREFIX, current_values, equivalent_values
 
 SCOPE_KEYS = ("project_id", "variant_id")
 CHANGE_FILTERS = ("source", "field", "kind", "change_type")
+SOURCE_ORDER = ("nvd", "epss", "ghsa", "euvd")
 
 
 def pagination(params: dict) -> tuple[int, int]:
@@ -199,12 +202,16 @@ def artifact(run: RefreshRun, params: dict, *, paginate: bool = True) -> dict:
     return {**meta, "coverage": coverage, "changes": changes, "total": total, "limit": limit, "offset": offset}
 
 
+def _retention_cutoff() -> datetime:
+    days = current_app.config.get("REFRESH_RUN_RETENTION_DAYS", 90)
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
 def retained_runs():
     from ..helpers.refresh_runs import reconcile_interrupted_runs
     reconcile_interrupted_runs()
-    days = current_app.config.get("REFRESH_RUN_RETENTION_DAYS", 90)
     return db.select(RefreshRun).where(
-        RefreshRun.started_at >= datetime.now(timezone.utc) - timedelta(days=days)
+        RefreshRun.started_at >= _retention_cutoff()
     ).order_by(RefreshRun.started_at.desc(), RefreshRun.run_id.desc())
 
 
@@ -214,6 +221,113 @@ def find_run(params: dict, run_id: str | None = None) -> RefreshRun | None:
     if run_id is not None:
         query = query.where(RefreshRun.run_id == run_id)
     return db.session.scalars(query.limit(1)).first()
+
+
+def _cvss_identity(field: str) -> dict | None:
+    if not field.startswith(CVSS_FIELD_PREFIX):
+        return None
+    version, _, rest = field[len(CVSS_FIELD_PREFIX):].partition(":")
+    author, _, metric_id = rest.rpartition(":")
+    return {"version": version, "author": author, "metric_id": metric_id}
+
+
+def _entry_key(item) -> str:
+    return json.dumps(item, sort_keys=True, default=str)
+
+
+def _field_indicator(field: str, before, after, changed_at: str, live) -> dict | None:
+    """Net effect of one refresh on one field, or ``None`` when it cancelled out.
+
+    ``new`` covers previously absent values and collections that only gained
+    entries, ``updated`` covers modified values (the previous value is kept),
+    and ``removed`` covers values the provider cleared. ``current`` is false
+    once another write replaced the refreshed value, so stale indicators never
+    describe live data.
+    """
+    if equivalent_values(before, after):
+        return None
+    indicator: dict = {
+        "field": field, "before": before, "after": after, "changed_at": changed_at,
+        "kind": "first_enrichment" if before is None else "changed",
+        "current": equivalent_values(after, live),
+        "cvss": _cvss_identity(field),
+    }
+    removed: list = []
+    if isinstance(before, list) or isinstance(after, list):
+        old = [item for item in (before if isinstance(before, list) else []) if item is not None]
+        new = [item for item in (after if isinstance(after, list) else []) if item is not None]
+        old_keys, new_keys = {_entry_key(item) for item in old}, {_entry_key(item) for item in new}
+        removed = [item for item in old if _entry_key(item) not in new_keys]
+        indicator["added"] = [item for item in new if _entry_key(item) not in old_keys]
+        indicator["removed"] = removed
+    if before is None:
+        indicator["indicator"] = "new"
+    elif after is None:
+        indicator["indicator"] = "removed"
+    elif "added" in indicator and indicator["added"] and not removed:
+        indicator["indicator"] = "new"
+    else:
+        indicator["indicator"] = "updated"
+    return indicator
+
+
+def _run_reference(run: RefreshRun, params: dict, cache: dict[str, dict]) -> dict:
+    if run.run_id not in cache:
+        meta = metadata(run, params)
+        cache[run.run_id] = {key: meta[key] for key in (
+            "run_id", "refresh_type", "status", "source_status", "started_at", "finished_at",
+        )}
+    return cache[run.run_id]
+
+
+def vulnerability_indicators(vuln: Vulnerability, params: dict) -> dict:
+    """Per-source deltas of the latest refresh that successfully checked ``vuln``.
+
+    Each source is resolved independently: its newest retained, in-scope
+    target with a ``complete`` outcome is the applicable refresh, including an
+    explicit no-change result. Newer failed, skipped, cancelled or pending
+    targets never replace those indicators; the newest one is reported as
+    ``later_attempt`` instead.
+    """
+    from ..helpers.refresh_runs import reconcile_interrupted_runs
+    reconcile_interrupted_runs()
+    scope = {key: params[key] for key in SCOPE_KEYS if params.get(key)}
+    rows = db.session.execute(
+        select(RefreshTarget, RefreshRun).join(RefreshRun, RefreshRun.run_id == RefreshTarget.run_id)
+        .where(*_target_filter(RefreshTarget.run_id, {**scope, "vuln_id": vuln.id}),
+               RefreshRun.started_at >= _retention_cutoff())
+        .order_by(RefreshRun.started_at.desc(), RefreshRun.run_id.desc())
+    ).all()
+    attempts: dict[str, list[tuple[RefreshTarget, RefreshRun]]] = {}
+    for target, run in rows:
+        attempts.setdefault(target.source, []).append((target, run))
+    live = current_values(vuln)
+    cache: dict[str, dict] = {}
+    sources = []
+    for source in sorted(attempts, key=lambda name: (
+        SOURCE_ORDER.index(name) if name in SOURCE_ORDER else len(SOURCE_ORDER), name,
+    )):
+        newest_target, newest_run = attempts[source][0]
+        entry: dict = {"source": source, "state": "no_baseline", "run": None, "changes": [], "later_attempt": None}
+        if newest_target.status != "complete":
+            entry["later_attempt"] = {"status": newest_target.status, "error": newest_target.error,
+                                      "run": _run_reference(newest_run, scope, cache)}
+        applicable = next((run for target, run in attempts[source] if target.status == "complete"), None)
+        if applicable is not None:
+            by_field: dict[str, list[dict]] = {}
+            for change in db.session.scalars(
+                select(RefreshChange).where(RefreshChange.run_id == applicable.run_id,
+                                            RefreshChange.source == source, RefreshChange.vuln_id == vuln.id)
+                .order_by(RefreshChange.id)
+            ):
+                by_field.setdefault(change.field, []).append(change.snapshot)
+            changes = [indicator for field, snapshots in by_field.items() if (indicator := _field_indicator(
+                field, snapshots[0]["before"], snapshots[-1]["after"], snapshots[-1]["changed_at"], live.get(field),
+            ))]
+            entry.update(state="changed" if changes else "no_change", changes=changes,
+                         run=_run_reference(applicable, scope, cache))
+        sources.append(entry)
+    return {"vuln_id": vuln.id, "scope": scope, "sources": sources}
 
 
 def export_artifact(data: dict, format_: str) -> str:
@@ -286,3 +400,20 @@ def init_app(app):
                             mimetype="text/csv" if format_ == "csv" else "application/json",
                             headers={"Content-Disposition": f'attachment; filename="refresh-{run.run_id}.{format_}"'})
         return jsonify(data)
+
+    @app.get("/api/vulnerabilities/<vuln_id>/refresh-indicators")
+    def get_vulnerability_refresh_indicators(vuln_id: str):
+        """Per-source New/Updated indicators from the latest refresh that checked a vulnerability.
+
+        Derived from persisted refresh deltas only; reading them acknowledges nothing.
+
+        OpenAPI:
+        query project_id uuid optional Restrict to refreshes visible in a project.
+        query variant_id uuid optional Restrict to refreshes visible in a variant.
+        response 200 JsonObject Object with vuln_id, scope and per-source indicator states.
+        response 404 Error Vulnerability not found.
+        """
+        vuln = db.session.get(Vulnerability, vuln_id.upper())
+        if vuln is None:
+            return {"error": "Vulnerability not found"}, 404
+        return jsonify(vulnerability_indicators(vuln, request.args.to_dict()))

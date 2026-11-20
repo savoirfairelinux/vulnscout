@@ -18,6 +18,13 @@ import { __resetAgentQueue, __setEventSourceFactory } from '../../src/handlers/a
 import AssessmentReviews from "../../src/handlers/assessmentReviews";
 import type { AssessmentReview } from "../../src/handlers/assessmentReviews";
 
+// Refresh indicators are covered by test_vuln_modal_refresh_indicators; keep this file's mount request sequence.
+jest.mock('../../src/handlers/refreshIndicators', () => ({
+    ...jest.requireActual('../../src/handlers/refreshIndicators'),
+    __esModule: true,
+    default: { forVulnerability: () => Promise.resolve(null) },
+}));
+
 
 describe('Vulnerability Modal', () => {
 

@@ -71,6 +71,10 @@ are displayed without internal IDs.
 reload or server restart. It does not refresh provider data, acknowledge changes,
 or clear another user's indicators.
 
+The vulnerability details modal shows **New** and **Updated**
+[refresh indicators](web-vulnerability-details.md#refresh-indicators) derived
+from these runs, each linking back to its run on this page.
+
 ## Counts and Coverage
 
 Each card shows distinct vulnerabilities refreshed (successfully checked by at

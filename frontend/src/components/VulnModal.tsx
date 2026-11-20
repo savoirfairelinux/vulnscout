@@ -36,6 +36,9 @@ import { AGENT_WRITE_EVENT, type AgentAction, type AgentActionState, type AgentC
 import { assessmentKey } from "../helpers/aiAssessment";
 import { assessmentReviewKey } from "../helpers/aiAssessmentReview";
 import VulnHistory from "./VulnHistory";
+import RefreshIndicators, { activeIndicators, addedEntries, cvssIndicators, indicatorsFor } from "../handlers/refreshIndicators";
+import type { VulnerabilityRefreshIndicators } from "../handlers/refreshIndicators";
+import { EntryRefreshIndicator, FieldRefreshIndicator } from "./RefreshIndicator";
 
 type Props = {
     vuln: Vulnerability;
@@ -555,6 +558,9 @@ type VariantScopedSnapshot = {
     const [refreshError, setRefreshError] = useState<string | null>(null);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
     const [historyVersion, setHistoryVersion] = useState(0);
+    // Undefined while loading; reloaded with the history after a modal refresh.
+    const [refreshIndicators, setRefreshIndicators] = useState<VulnerabilityRefreshIndicators | null | undefined>(undefined);
+    const [refreshIndicatorsError, setRefreshIndicatorsError] = useState<string | null>(null);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
 
@@ -580,6 +586,20 @@ type VariantScopedSnapshot = {
         setRefreshError(null);
         setRefreshedList([]);
     }, [vuln.id]);
+
+    useEffect(() => {
+        const controller = new AbortController();
+        setRefreshIndicators(undefined);
+        setRefreshIndicatorsError(null);
+        RefreshIndicators.forVulnerability(vuln.id, { projectId, variantId }, controller.signal)
+            .then(data => { if (!controller.signal.aborted) setRefreshIndicators(data); })
+            .catch(error => { if (!controller.signal.aborted) setRefreshIndicatorsError(String(error)); });
+        return () => controller.abort();
+    }, [vuln.id, projectId, variantId, historyVersion]);
+
+    const liveIndicators = useMemo(() => activeIndicators(refreshIndicators), [refreshIndicators]);
+    const newLinks = useMemo(() => addedEntries(liveIndicators, 'links'), [liveIndicators]);
+    const newCpes = useMemo(() => addedEntries(liveIndicators, 'cpes'), [liveIndicators]);
 
     const showMessage = (message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -1769,14 +1789,17 @@ type VariantScopedSnapshot = {
                                 <li key="severity">
                                     <span className="font-bold mr-1">Severity:</span>
                                     <SeverityTag severity={vuln.severity.severity} className="text-white" />
+                                    <FieldRefreshIndicator indicators={indicatorsFor(liveIndicators, 'status')} />
                                 </li>
                                 {vuln.epss?.score !== undefined && vuln.epss.score !== 0 && <li key="epss">
                                     <span className="font-bold mr-1">EPSS Score: </span>
                                     {(vuln.epss.score * 100).toFixed(2)}%
+                                    <FieldRefreshIndicator indicators={indicatorsFor(liveIndicators, 'epss_score')} />
                                 </li>}
                                 {vuln.published && <li key="published">
                                     <span className="font-bold mr-1">Published:</span>
                                     {new Date(vuln.published).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+                                    <FieldRefreshIndicator indicators={indicatorsFor(liveIndicators, 'publish_date')} />
                                 </li>}
                                 <li key="sources">
                                     <span className="font-bold mr-1">Found by:</span>
@@ -1817,6 +1840,7 @@ type VariantScopedSnapshot = {
                                                 EU KEV — Known Exploited
                                             </span>
                                         )}
+                                        <FieldRefreshIndicator indicators={indicatorsFor(liveIndicators, 'euvd_id', 'euvd_known_exploited', 'euvd_kev_sources', 'euvd_date_added')} />
                                     </li>
                                 )}
                                 <li key="related_vulns">
@@ -1868,6 +1892,11 @@ type VariantScopedSnapshot = {
                                         className="bg-gray-800 p-2 rounded-xl min-w-[216px]"
                                     >
                                         <h3 className="text-center font-bold">CVSS {cvss.version}</h3>
+                                        {!cvss.variant_id && cvssIndicators(liveIndicators, cvss).length > 0 && (
+                                            <div className="flex justify-center">
+                                                <FieldRefreshIndicator indicators={cvssIndicators(liveIndicators, cvss)} />
+                                            </div>
+                                        )}
                                         {cvss.variant_id && (
                                             <div className="flex justify-center mb-1">
                                                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300">
@@ -1913,12 +1942,15 @@ type VariantScopedSnapshot = {
                         )}
 
                         <div className="mb-6 flex flex-col gap-2">
-                            {vuln.texts.map((text) => {
+                            {vuln.texts.map((text, index) => {
+                                const isDescription = text.title?.toLowerCase() === 'description'
+                                    && vuln.texts.findIndex(item => item.title?.toLowerCase() === 'description') === index;
                                 return (
                                 <div key={encodeURIComponent(text.title)}>
                                     <h3>
                                         <span className="font-bold mb-2">{text.title?.replace(/\b\w/g, c => c.toLocaleUpperCase())}</span>
                                         {text.packages && <span className="pl-2">({text.packages.join(", ")})</span>}
+                                        {isDescription && <FieldRefreshIndicator indicators={indicatorsFor(liveIndicators, 'description')} />}
                                     </h3>
                                     <p className="leading-relaxed bg-gray-800 p-2 px-4 rounded-lg whitespace-pre-line">{text.content}</p>
                                 </div>)
@@ -1926,10 +1958,13 @@ type VariantScopedSnapshot = {
                         </div>
 
                         <div className="mb-6 mt-6">
-                            <h3 className="font-bold mb-2">Links</h3>
+                            <h3 className="font-bold mb-2">
+                                Links
+                                <FieldRefreshIndicator indicators={indicatorsFor(liveIndicators, 'links')} />
+                            </h3>
                             <ul className="max-h-64 overflow-y-auto bg-gray-800 p-2 px-4 rounded-lg">
                                 {vuln.urls.map(url => (
-                                    <li key={encodeURIComponent(url)} className="truncate"><a className="underline" href={encodeURI(url)} target="_blank" title={url}>{url}</a></li>
+                                    <li key={encodeURIComponent(url)} className="truncate"><EntryRefreshIndicator indicator={newLinks.get(url)} /><a className="underline" href={encodeURI(url)} target="_blank" title={url}>{url}</a></li>
                                 ))}
                             </ul>
                         </div>
@@ -1938,6 +1973,7 @@ type VariantScopedSnapshot = {
                             <div className="mb-6 mt-6">
                                 <div className="relative mb-2 flex items-center gap-2">
                                     <h3 className="font-bold">Affected CPEs ({vuln.cpes?.length})</h3>
+                                    <FieldRefreshIndicator indicators={indicatorsFor(liveIndicators, 'cpes')} />
                                     <button
                                         aria-label="About affected CPEs"
                                         type="button"
@@ -1975,14 +2011,15 @@ type VariantScopedSnapshot = {
                                 {showCpeList && (
                                     <ul className="max-h-64 overflow-y-auto space-y-1 rounded-lg bg-gray-800 p-3 text-sm">
                                         {vuln.cpes?.map(cpe => (
-                                            <li key={cpe}><code className="break-all">{cpe}</code></li>
+                                            <li key={cpe}><EntryRefreshIndicator indicator={newCpes.get(cpe)} /><code className="break-all">{cpe}</code></li>
                                         ))}
                                     </ul>
                                 )}
                             </div>
                         )}
 
-                        <VulnHistory vulnId={vuln.id} reloadKey={historyVersion} />
+                        <VulnHistory vulnId={vuln.id} reloadKey={historyVersion}
+                            refreshIndicators={refreshIndicators} refreshIndicatorsError={refreshIndicatorsError} />
 
                         <div className="mb-6 mt-6" tabIndex={isEditing ? undefined : -1}>
                             <TimeEstimateEditor
