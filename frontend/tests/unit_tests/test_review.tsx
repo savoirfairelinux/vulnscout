@@ -1894,6 +1894,89 @@ describe('Review — filters, search and keyboard', () => {
         expect(screen.getByText('CVE-CTX-OUTDATED')).toBeInTheDocument();
     });
 
+    test('the not outdated toggle hides rows with any outdated assessment', async () => {
+        const mixedRow = makeMultiTargetAssessment('mixed-1', 'CVE-2020-MIXED', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v2', pkg: 'pkgB@1.0.0', outdated: false },
+        ]);
+        mockNetwork([mixedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-MIXED');
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'Show Not outdated' }));
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-MIXED')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+    });
+
+    test('the outdated and not outdated toggles are mutually exclusive', async () => {
+        const outdatedRow = makeMultiTargetAssessment('old-1', 'CVE-2020-OLD', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+        ]);
+        mockNetwork([outdatedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-OLD');
+        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-1111')).not.toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: 'Show Not outdated' }));
+        await screen.findByText('CVE-2020-1111');
+        expect(screen.queryByText('CVE-2020-OLD')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Show Outdated' })).toHaveAttribute('aria-pressed', 'false');
+        expect(screen.getByRole('button', { name: 'Hide Not outdated' })).toHaveAttribute('aria-pressed', 'true');
+
+        await user.click(screen.getByRole('button', { name: 'Hide Not outdated' }));
+        await screen.findByText('CVE-2020-OLD');
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+    });
+
+    test('the not outdated toggle on the AI Assessments tab hides rows whose context is outdated', async () => {
+        mockNetwork([], {
+            aiReviewList: [
+                { ...makeAssessment('ai1', 'v1'), vuln_id: 'CVE-CTX-OUTDATED', context_outdated: true },
+                { ...makeAssessment('ai2', 'v1'), vuln_id: 'CVE-CTX-CURRENT' },
+            ],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText('AI Assessments'));
+        await screen.findByText('CVE-CTX-OUTDATED');
+        await user.click(screen.getByRole('button', { name: 'Show Not outdated' }));
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-CTX-OUTDATED')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-CTX-CURRENT')).toBeInTheDocument();
+    });
+
+    test('reset filters clears the not outdated toggle', async () => {
+        const outdatedRow = makeMultiTargetAssessment('old-1', 'CVE-2020-OLD', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+        ]);
+        mockNetwork([outdatedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-OLD');
+        await user.click(screen.getByRole('button', { name: 'Show Not outdated' }));
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-OLD')).not.toBeInTheDocument();
+        });
+
+        await user.click(screen.getByText('Reset Filters'));
+        await screen.findByText('CVE-2020-OLD');
+        expect(screen.getByRole('button', { name: 'Show Not outdated' })).toHaveAttribute('aria-pressed', 'false');
+    });
+
     test('filtering by status hides non-matching rows', async () => {
         mockNetwork([RICH_ASSESSMENT, makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
