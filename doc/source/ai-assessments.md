@@ -670,6 +670,11 @@ only local operator requests, and browser requests must be same-origin.
   10 MiB as `skipped_large_files`. File patterns are limited to 512 characters
   and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
   time limits. At most 8 requests run at once.
+- Large trees (for example a Yocto build directory): the pattern is applied while
+  walking, so folders that cannot match the pattern's literal prefix are never
+  opened and non-matching files are never stat'ed. Start patterns with a literal
+  folder path (`build/tmp/work/*/curl/*`) instead of `*curl*`. Results and
+  truncation messages report `visited_entries` and `elapsed_seconds`.
 
 **Unavailability is explicit.** When the helper is not running, the AI Context
 page shows **Host folder helper unavailable** and each folder as

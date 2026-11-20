@@ -517,3 +517,20 @@ def test_helper_requires_python_3_9(monkeypatch, capsys):
     monkeypatch.setattr(hh.sys, "version_info", (3, 8, 18))
     assert hh.main(["ping", "--socket", "unused"]) == 1
     assert "Python 3.9 or newer" in capsys.readouterr().err
+
+
+def test_literal_prefix_prunes_unrelated_folders(helper, tree, monkeypatch):
+    (tree["app"] / "docs").mkdir()
+    (tree["app"] / "docs" / "guide.txt").write_text("guide\n")
+    attached(helper, tree)
+    opened = []
+    real_open = hh.os.open
+
+    def tracking_open(path, *args, **kwargs):
+        opened.append(path)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(hh.os, "open", tracking_open)
+    result = ok(helper, "list", variant_id=VARIANT, alias="src", pattern="src/*")
+    assert result["total"] == 1 and "visited_entries" in result and "elapsed_seconds" in result
+    assert "src" in opened and "docs" not in opened

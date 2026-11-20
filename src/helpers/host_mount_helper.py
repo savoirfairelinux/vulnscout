@@ -131,8 +131,9 @@ def compile_pattern(pattern: str) -> Callable[[str], bool]:
     return lambda path: match(path) is not None
 
 
-def _pattern(request: dict) -> Callable[[str], bool]:
-    return compile_pattern(_string(request, "pattern", required=False, maximum=MAX_PATTERN_CHARS) or "*")
+def _pattern(request: dict) -> tuple[Callable[[str], bool], str]:
+    pattern = _string(request, "pattern", required=False, maximum=MAX_PATTERN_CHARS) or "*"
+    return compile_pattern(pattern), _literal_prefix(pattern)
 
 
 def _integer(request: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -286,16 +287,40 @@ class Registry:
             raise
 
 
-class _Walk:
-    """Sorted depth-first walk of eligible regular files, bounded by entries and time."""
+def _literal_prefix(pattern: str) -> str:
+    """Leading part of a glob that contains no wildcard."""
+    for index, char in enumerate(pattern):
+        if char in "*?[":
+            return pattern[:index]
+    return pattern
 
-    def __init__(self, root_fd: int, time_limit: float):
+
+class _Walk:
+    """Sorted depth-first walk of eligible regular files, bounded by entries and time.
+
+    The pattern is applied during the walk so that directories which cannot contain a match
+    (their path conflicts with the pattern's literal prefix) are never opened and files that do
+    not match are never stat'ed; huge build trees stay cheap for narrow patterns.
+    """
+
+    def __init__(self, root_fd: int, time_limit: float, matcher: Callable[[str], bool] | None = None,
+                 literal: str = ""):
         self.root_fd = root_fd
-        self.deadline = time.monotonic() + time_limit
+        self.started = time.monotonic()
+        self.deadline = self.started + time_limit
         self.visited = 0
+        self.matcher = matcher
+        self.literal = literal
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
 
     def files(self) -> Iterator[tuple[str, int]]:
         yield from self._walk(self.root_fd, "")
+
+    def _may_contain(self, directory: str) -> bool:
+        return self.literal.startswith(directory) or directory.startswith(self.literal)
 
     def _walk(self, directory_fd: int, prefix: str) -> Iterator[tuple[str, int]]:
         try:
@@ -313,36 +338,49 @@ class _Walk:
             if _excluded(entry.name) or not _printable(entry.name):
                 continue
             try:
-                info = entry.stat(follow_symlinks=False)
+                is_dir = entry.is_dir(follow_symlinks=False)
+                is_file = not is_dir and entry.is_file(follow_symlinks=False)
             except OSError:
                 continue
-            if stat.S_ISDIR(info.st_mode):
+            if is_dir:
+                directory = f"{prefix}{entry.name}/"
+                if not self._may_contain(directory):
+                    continue
                 try:
                     child = os.open(entry.name, _DIRECTORY_FLAGS, dir_fd=directory_fd)
                 except OSError:
                     continue
                 try:
-                    yield from self._walk(child, f"{prefix}{entry.name}/")
+                    yield from self._walk(child, directory)
                 finally:
                     os.close(child)
-            elif stat.S_ISREG(info.st_mode):
-                yield f"{prefix}{entry.name}", info.st_size
+            elif is_file:
+                path = f"{prefix}{entry.name}"
+                if self.matcher is not None and not self.matcher(path):
+                    continue
+                try:
+                    yield path, entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
 
     def _tick(self) -> None:
         self.visited += 1
         if self.visited > MAX_WALK_ENTRIES:
             raise _Exhausted("entries")
-        if self.visited % 1024 == 0 and time.monotonic() > self.deadline:
+        if self.visited % 256 == 0 and time.monotonic() > self.deadline:
             raise _Exhausted("time")
 
 
-def _exhausted_message(reason: str, operation: str) -> str:
+def _exhausted_message(reason: str, operation: str, walk: "_Walk | None" = None) -> str:
+    detail = f" (visited {walk.visited} entries in {walk.elapsed:.1f}s)" if walk else ""
+    advice = ("narrow the pattern with a literal folder prefix such as 'build/tmp/work/*/curl/*' "
+              "or attach a smaller folder.")
     if reason == "entries":
-        return (f"The {operation} stopped after visiting {MAX_WALK_ENTRIES} entries; "
-                "narrow the pattern or attach a smaller folder.")
+        return f"The {operation} stopped after visiting {MAX_WALK_ENTRIES} entries{detail}; {advice}"
     if reason == "bytes":
-        return f"The {operation} stopped after reading {SEARCH_BYTE_BUDGET // (1024 * 1024)} MiB; narrow the pattern."
-    return f"The {operation} stopped at its time limit; narrow the pattern or attach a smaller folder."
+        mebibytes = SEARCH_BYTE_BUDGET // (1024 * 1024)
+        return f"The {operation} stopped after reading {mebibytes} MiB{detail}; narrow the pattern."
+    return f"The {operation} stopped at its time limit{detail}; {advice}"
 
 
 class Helper:
@@ -524,26 +562,26 @@ class Helper:
         return {"attachments": report}
 
     def list_files(self, request: dict) -> dict:
-        matches_pattern = _pattern(request)
+        matches_pattern, literal = _pattern(request)
         offset = _integer(request, "offset", 0, 0, MAX_WALK_ENTRIES)
         limit = _integer(request, "limit", MAX_LIST_LIMIT, 1, MAX_LIST_LIMIT)
         fd = self._attachment_fd(request)
+        walk = _Walk(fd, LIST_TIME_LIMIT, matches_pattern, literal)
         files: list[dict] = []
         total = 0
         message = None
         try:
-            for path, size in _Walk(fd, LIST_TIME_LIMIT).files():
-                if not matches_pattern(path):
-                    continue
+            for path, size in walk.files():
                 if offset <= total < offset + limit:
                     files.append({"path": path, "size": size})
                 total += 1
         except _Exhausted as exc:
-            message = _exhausted_message(str(exc), "listing")
+            message = _exhausted_message(str(exc), "listing", walk)
         finally:
             os.close(fd)
         result: dict[str, Any] = {
             "files": files, "total": total, "truncated": message is not None,
+            "visited_entries": walk.visited, "elapsed_seconds": round(walk.elapsed, 2),
             "next_offset": offset + limit if offset + limit < total else None,
         }
         if message:
@@ -625,19 +663,18 @@ class Helper:
 
     def search(self, request: dict) -> dict:
         query = _string(request, "query", maximum=MAX_QUERY_CHARS)
-        matches_pattern = _pattern(request)
+        matches_pattern, literal = _pattern(request)
         max_results = _integer(request, "max_results", MAX_SEARCH_RESULTS, 1, MAX_SEARCH_RESULTS)
         needle = query.encode("utf-8")
         fd = self._attachment_fd(request)
         matches: list[dict] = []
         searched = skipped_binary = skipped_large = 0
         budget = [SEARCH_BYTE_BUDGET]
+        walk = _Walk(fd, SEARCH_TIME_LIMIT, matches_pattern, literal)
         truncated = False
         message = None
         try:
-            for path, size in _Walk(fd, SEARCH_TIME_LIMIT).files():
-                if not matches_pattern(path):
-                    continue
+            for path, size in walk.files():
                 if size > MAX_FILE_BYTES:
                     skipped_large += 1
                     continue
@@ -670,12 +707,13 @@ class Helper:
         except _Exhausted as exc:
             truncated = True
             if str(exc) != "results":
-                message = _exhausted_message(str(exc), "search")
+                message = _exhausted_message(str(exc), "search", walk)
         finally:
             os.close(fd)
         result: dict[str, Any] = {
             "matches": matches, "truncated": truncated, "searched_files": searched,
             "skipped_binary_files": skipped_binary, "skipped_large_files": skipped_large,
+            "visited_entries": walk.visited, "elapsed_seconds": round(walk.elapsed, 2),
         }
         if message:
             result["message"] = message
