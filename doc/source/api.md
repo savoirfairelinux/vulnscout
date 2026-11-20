@@ -934,6 +934,23 @@ Converts a pending AI assessment to `custom` origin.
 POST /api/assessments/<assessment_id>/approve
 ```
 
+The body is optional. Without one (or with `{}`), the suggestion is approved
+unchanged. A JSON object containing any of `status`, `status_notes`,
+`justification`, `impact_statement` and `workaround` edits the suggestion's
+content and approves it in the same transaction. Omitted fields keep the
+suggested value, and the edits are validated exactly like a content update
+(`PATCH /api/assessments/<assessment_id>`); targets cannot be changed here.
+
+**Request body (optional):**
+```json
+{
+  "status": "not_affected",
+  "justification": "component_not_present",
+  "impact_statement": "The vulnerable module is not built.",
+  "status_notes": "Reviewed and edited before approval."
+}
+```
+
 **Response:**
 ```json
 {
@@ -942,8 +959,10 @@ POST /api/assessments/<assessment_id>/approve
 }
 ```
 
-`400` if the assessment is not a pending AI assessment. `404` if it does not
-exist.
+`400` if the assessment is not a pending AI assessment, the JSON body is not
+an object, or the edits are invalid (`Invalid status`, `Justification required`,
+`Invalid justification`); the suggestion then stays pending and unchanged.
+`404` if it does not exist.
 
 ### Reject an AI Assessment
 

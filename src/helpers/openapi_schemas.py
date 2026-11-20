@@ -257,6 +257,13 @@ SCHEMAS: dict[str, Any] = {
         **_VEX_FIELDS, "timestamp": _STRING, "update_timestamp": _BOOL,
         "allowed_variant_ids": _array(_UUID, minItems=1),
     }, description="Partial content update; targeting is changed through reconcile."),
+    "AssessmentApproval": _object({
+        name: _VEX_FIELDS[name]
+        for name in ("status", "status_notes", "justification", "impact_statement", "workaround")
+    }, description=(
+        "Optional partial content edit of a pending AI assessment, validated like an assessment update "
+        "and applied in the same transaction as the approval. Omit every field to approve unchanged."
+    )),
     "AssessmentBatch": _object({
         "assessments": _array(_object({
             **_VEX_FIELDS, "vuln_id": _VULN_ID, "packages": _array(_PACKAGE_ID, minItems=1),

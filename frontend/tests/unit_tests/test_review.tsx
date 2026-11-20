@@ -1212,6 +1212,65 @@ describe('Review — AI Assessments tab', () => {
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
     });
 
+    test('editing a pending AI row approves it with the edited content in one request', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+
+        const notes = await screen.findByPlaceholderText(/Free text notes/);
+        expect(notes).toHaveValue('shared note');
+        await user.clear(notes);
+        await user.type(notes, 'Edited message');
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+
+        await screen.findByText('AI assessment approved!');
+        const approveCalls = postCalls().filter(c => String(c[0]).includes('/api/assessments/ai1/approve'));
+        expect(approveCalls).toHaveLength(1);
+        expect(JSON.parse(String((approveCalls[0][1] as RequestInit).body))).toEqual(expect.objectContaining({
+            status: 'affected',
+            status_notes: 'Edited message',
+        }));
+        expect(screen.queryByRole('button', { name: 'Confirm and approve' })).not.toBeInTheDocument();
+    });
+
+    test('cancelling a pending AI row edit discards it without approving', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        await user.type(await screen.findByPlaceholderText(/Free text notes/), ' changed');
+        await user.click(screen.getByRole('button', { name: 'Cancel changes' }));
+
+        expect(screen.queryByPlaceholderText(/Free text notes/)).not.toBeInTheDocument();
+        expect(screen.getByTitle('Approve AI suggestion')).toBeInTheDocument();
+        expect(postCalls().some(c => String(c[0]).includes('/approve'))).toBe(false);
+    });
+
+    test('a failed edited approval keeps the AI row editor open with the error', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')], mutationOk: false });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const notes = await screen.findByPlaceholderText(/Free text notes/);
+        await user.clear(notes);
+        await user.type(notes, 'Edited message');
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+
+        expect(await screen.findByText('Failed to approve AI assessment: HTTP 500')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(/Free text notes/)).toHaveValue('Edited message');
+        expect(screen.getByRole('button', { name: 'Confirm and approve' })).toBeEnabled();
+    });
+
     test('rejecting a pending AI row calls the reject endpoint with its own id', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
         render(<Review projectId="proj1" />);

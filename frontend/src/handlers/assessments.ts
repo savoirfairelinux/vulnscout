@@ -170,6 +170,17 @@ type BatchResult = {
 export type { BatchAssessmentItem, BatchResult };
 export { reconcileTargetPairs };
 
+/** Content edits applied to a pending AI assessment as it is approved. */
+type AiAssessmentEdits = {
+    status: string;
+    justification?: string;
+    impact_statement?: string;
+    status_notes?: string;
+    workaround?: string;
+};
+
+export type { AiAssessmentEdits };
+
 type ReviewTimeEstimate = {
     id: string;
     vuln_id: string;
@@ -449,13 +460,19 @@ class Assessments {
         if (!response.ok) throw new Error(`Failed to delete assessment: ${response.status}`);
     }
 
-    /** Approve a pending AI-origin assessment. */
-    static async approveAi(assessmentId: string): Promise<Assessment[]> {
+    /** Approve a pending AI-origin assessment. When `edits` is given, the
+     *  edited content is saved and approved in one atomic request. */
+    static async approveAi(assessmentId: string, edits?: AiAssessmentEdits): Promise<Assessment[]> {
         const url = new URL(
             import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/approve`,
             window.location.href
         );
-        const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
+        const init: RequestInit = { method: 'POST', mode: 'cors' };
+        if (edits) {
+            init.headers = { 'Content-Type': 'application/json' };
+            init.body = JSON.stringify(edits);
+        }
+        const response = await fetch(url.toString(), init);
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `HTTP ${response.status}`);

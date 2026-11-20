@@ -34,6 +34,17 @@ type Props = {
     variantFindingsMap?: Record<string, Array<{ pkg: string; outdated: boolean }>>;
     findingsLoading?: boolean;
     findingsError?: string;
+    /** Edit only the assessment content: hide the timestamp option. */
+    contentOnly?: boolean;
+    /** Require a non-empty message (notes, or impact statement where it applies). */
+    requireMessage?: boolean;
+    title?: string;
+    saveLabel?: string;
+    cancelLabel?: string;
+    /** Disable the actions while the parent persists the edit. */
+    saving?: boolean;
+    /** Error from the last save attempt, shown next to the actions. */
+    errorMessage?: string | null;
 }
 
 function EditAssessment({
@@ -52,6 +63,13 @@ function EditAssessment({
     variantFindingsMap,
     findingsLoading = false,
     findingsError,
+    contentOnly = false,
+    requireMessage = false,
+    title = "Edit Assessment",
+    saveLabel = "Save Changes",
+    cancelLabel = "Cancel",
+    saving = false,
+    errorMessage,
 }: Readonly<Props>) {
     const isImpactStatus = assessment.status === 'not_affected' || assessment.status === 'false_positive';
     const hasSelectedOutdatedFinding = useMemo(() => {
@@ -214,6 +232,7 @@ function EditAssessment({
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [messageError, setMessageError] = useState<string | null>(null);
 
     const internalTriggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -228,6 +247,10 @@ function EditAssessment({
     useEffect(() => {
         setIncludeOutdatedPackages(hasSelectedOutdatedFinding);
     }, [hasSelectedOutdatedFinding]);
+
+    useEffect(() => {
+        setMessageError(null);
+    }, [status, statusNotes, impact]);
 
     // Check if fields have changes compared to original assessment
     useEffect(() => {
@@ -261,6 +284,7 @@ function EditAssessment({
     }, [availableVariants, defaultSelectedVariantIds]);
 
     function saveAssessment() {
+        if (saving) return;
         if (status == '' || justification == '')
             return;
         if (status == "not_affected" && justification == 'none') {
@@ -284,6 +308,13 @@ function EditAssessment({
         // applies to both not_affected and false_positive (mirrors StatusEditor).
         const includeJustification = status == "not_affected";
         const includeImpact = status == "not_affected" || status == "false_positive";
+        if (requireMessage && !statusNotes.trim() && !(includeImpact && impact.trim())) {
+            setMessageError(includeImpact
+                ? "The assessment message cannot be empty: provide an impact statement or notes."
+                : "The assessment message cannot be empty.");
+            return;
+        }
+        setMessageError(null);
         const exactVariantIds = [...new Set(selectedExactTargets.flatMap(target =>
             target.variant_id ? [target.variant_id] : []))];
         const exactPackages = [...new Set(selectedExactTargets.map(target => target.package))];
@@ -339,7 +370,7 @@ function EditAssessment({
                 />
             )}
 
-            <h4 className="text-lg font-semibold text-white mb-3">Edit Assessment</h4>
+            <h4 className="text-lg font-semibold text-white mb-3">{title}</h4>
 
             <h3 className="m-1 text-white">
                 Status:
@@ -478,6 +509,7 @@ function EditAssessment({
                 </div>
             )}
 
+            {!contentOnly && (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-gray-600 bg-gray-800/40 px-3 py-2">
                 <span>
                     <span className="block text-sm font-medium text-gray-200">Keep the current timestamp</span>
@@ -503,6 +535,7 @@ function EditAssessment({
                     />
                 </button>
             </div>
+            )}
 
             {(status === 'not_affected' || status === 'false_positive') && (
                 <><textarea
@@ -533,20 +566,29 @@ function EditAssessment({
                     placeholder="Describe workaround here if available"
                 /><br/>
 
+            {(messageError || errorMessage) && (
+                <p role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+                    {messageError ?? errorMessage}
+                </p>
+            )}
+
             <div className="flex gap-2 mt-3">
                 <button
                     onClick={saveAssessment}
                     type="button"
-                    className="bg-green-600 hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-800 font-medium rounded-lg px-4 py-2 text-center text-white"
+                    disabled={saving}
+                    aria-busy={saving || undefined}
+                    className="bg-green-600 hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-800 font-medium rounded-lg px-4 py-2 text-center text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                    Save Changes
+                    {saveLabel}
                 </button>
                 <button
                     onClick={onCancel}
                     type="button"
-                    className="bg-gray-600 hover:bg-gray-700 focus:ring-4 focus:outline-none focus:ring-gray-800 font-medium rounded-lg px-4 py-2 text-center text-white"
+                    disabled={saving}
+                    className="bg-gray-600 hover:bg-gray-700 focus:ring-4 focus:outline-none focus:ring-gray-800 font-medium rounded-lg px-4 py-2 text-center text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                    Cancel
+                    {cancelLabel}
                 </button>
             </div>
         </div>

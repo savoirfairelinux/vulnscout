@@ -1,7 +1,7 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
-import type { Assessment, AssessmentTargetPair } from "../handlers/assessments";
+import type { AiAssessmentEdits, Assessment, AssessmentTargetPair } from "../handlers/assessments";
 import Assessments, { asAssessment, isMultiTarget, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
@@ -19,6 +19,7 @@ import ConfirmationModal from "./ConfirmationModal";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from "./EditAssessment";
+import EditAiAssessment from "./EditAiAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import HelpPopover from "./HelpPopover";
 import Variants from '../handlers/variant';
@@ -139,6 +140,10 @@ type VariantScopedSnapshot = {
     };
     customCvss: CVSS[];
 };
+
+type PendingAiEditTransition =
+    | { kind: "switch"; row: Assessment }
+    | { kind: "exit" };
 
   function VulnModal(props: Readonly<Props>) {
         const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
@@ -545,7 +550,14 @@ type VariantScopedSnapshot = {
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
-    const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges;
+    // Inline edit of a pending AI assessment before approving it.
+    const [editingAiId, setEditingAiId] = useState<string | null>(null);
+    const [aiEditSaving, setAiEditSaving] = useState(false);
+    const [aiEditError, setAiEditError] = useState<string | null>(null);
+    const [hasAiEditChanges, setHasAiEditChanges] = useState(false);
+    const [pendingAiEditTransition, setPendingAiEditTransition] =
+        useState<PendingAiEditTransition | null>(null);
+    const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges || hasAiEditChanges;
 
     // Message banner state
     const [bannerMessage, setBannerMessage] = useState("");
@@ -581,6 +593,12 @@ type VariantScopedSnapshot = {
         setRefreshedList([]);
     }, [vuln.id]);
 
+    useEffect(() => {
+        setEditingAiId(null);
+        setAiEditError(null);
+        setHasAiEditChanges(false);
+    }, [vuln.id, isEditing]);
+
     const showMessage = (message: string, type: "error" | "success") => {
         setBannerMessage(message);
         setBannerType(type);
@@ -602,6 +620,17 @@ type VariantScopedSnapshot = {
 
     const handleConfirmClose = () => {
         setShowConfirmClose(false);
+        if (pendingAiEditTransition) {
+            const transition = pendingAiEditTransition;
+            setPendingAiEditTransition(null);
+            resetAiEdit();
+            if (transition.kind === "switch") {
+                setEditingAiId(transition.row.id);
+            } else {
+                setIsEditing(false);
+            }
+            return;
+        }
         setClearTimeFields(true);
         setTimeout(() => setClearTimeFields(false), 100);
         if (pendingNavigation !== null && onNavigate) {
@@ -615,6 +644,7 @@ type VariantScopedSnapshot = {
     const handleCancelClose = () => {
         setShowConfirmClose(false);
         setPendingNavigation(null);
+        setPendingAiEditTransition(null);
     };
 
     const navigateTo = useCallback((targetIndex: number) => {
@@ -802,36 +832,90 @@ type VariantScopedSnapshot = {
         }
     };
 
+    /** Reflect an approved AI assessment in the modal state. */
+    const applyApprovedAiAssessment = (row: Assessment, approved: Assessment[], edits?: AiAssessmentEdits) => {
+        const approvedById = new Map(approved.map(a => [a.id, a]));
+
+        setAllVulnAssessments(prev => prev.map(a => {
+            if (a.id !== row.id) return a;
+            return approvedById.get(a.id) ?? { ...a, ...edits, origin: "custom" };
+        }));
+
+        approved.forEach(a => {
+            if (!vuln.assessments.some(x => x.id === a.id)) {
+                vuln.assessments.push(a);
+            } else {
+                vuln.assessments = vuln.assessments.map(x => x.id === a.id ? a : x);
+            }
+        });
+
+        const latest = vuln.assessments.slice().sort(
+            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
+        if (latest.length > 0) vuln.simplified_status = latest[0].simplified_status;
+
+        patchVuln(vuln.id, vuln);
+        refreshAssessmentRows();
+        refreshReviews();
+        showMessage("AI assessment approved!", "success");
+    };
+
     const handleApproveAiAssessment = async (row: Assessment) => {
         try {
             const approved = await Assessments.approveAi(row.id);
-            const approvedIds = new Set([row.id]);
-            const approvedById = new Map(approved.map(a => [a.id, a]));
-
-            setAllVulnAssessments(prev => prev.map(a => {
-                if (!approvedIds.has(a.id)) return a;
-                return approvedById.get(a.id) ?? { ...a, origin: "custom" };
-            }));
-
-            approved.forEach(a => {
-                if (!vuln.assessments.some(x => x.id === a.id)) {
-                    vuln.assessments.push(a);
-                } else {
-                    vuln.assessments = vuln.assessments.map(x => x.id === a.id ? a : x);
-                }
-            });
-
-            const latest = vuln.assessments.slice().sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            );
-            if (latest.length > 0) vuln.simplified_status = latest[0].simplified_status;
-
-            patchVuln(vuln.id, vuln);
-            refreshAssessmentRows();
-            refreshReviews();
-            showMessage("AI assessment approved!", "success");
+            applyApprovedAiAssessment(row, approved);
         } catch (e) {
             showMessage(`Failed to approve AI assessment: ${escape(String(e))}`, "error");
+        }
+    };
+
+    const resetAiEdit = () => {
+        setEditingAiId(null);
+        setAiEditError(null);
+        setHasAiEditChanges(false);
+    };
+
+    const handleEditAiAssessment = (row: Assessment) => {
+        if (aiEditSaving) return;
+        if (hasAiEditChanges && editingAiId !== null && editingAiId !== row.id) {
+            setPendingNavigation(null);
+            setPendingAiEditTransition({ kind: "switch", row });
+            setShowConfirmClose(true);
+            return;
+        }
+        resetAiEdit();
+        setEditingAiId(row.id);
+    };
+
+    const handleToggleEditing = () => {
+        if (isEditing && hasAiEditChanges) {
+            setPendingNavigation(null);
+            setPendingAiEditTransition({ kind: "exit" });
+            setShowConfirmClose(true);
+            return;
+        }
+        setIsEditing(!isEditing);
+    };
+
+    const handleCancelAiEdit = () => {
+        if (aiEditSaving) return;
+        resetAiEdit();
+    };
+
+    const handleConfirmAiEdit = async (row: Assessment, edits: AiAssessmentEdits) => {
+        if (aiEditSaving) return;
+        setAiEditSaving(true);
+        setAiEditError(null);
+        try {
+            const approved = await Assessments.approveAi(row.id, edits);
+            resetAiEdit();
+            applyApprovedAiAssessment(row, approved, edits);
+        } catch (e) {
+            // Stay in edit mode so the user keeps their changes and can retry.
+            const message = e instanceof Error ? e.message : String(e);
+            setAiEditError(`Failed to approve AI assessment: ${message}`);
+        } finally {
+            setAiEditSaving(false);
         }
     };
 
@@ -1682,7 +1766,7 @@ type VariantScopedSnapshot = {
             )}
             {!readOnly && (
                 <button
-                    onClick={() => setIsEditing(!isEditing)}
+                    onClick={handleToggleEditing}
                     type="button"
                     className={`rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors ${isEditing ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-600 hover:bg-blue-700"}`}
                     title={isEditing ? "Exit editing mode" : "Enter editing mode"}
@@ -2065,6 +2149,7 @@ type VariantScopedSnapshot = {
                                     const firstTarget = targets[0];
                                     const hasStatusNotes = hasAssessmentText(row.status_notes);
                                     const hasWorkaround = hasAssessmentText(row.workaround);
+                                    const isAiBeingEdited = isEditing && editingAiId === row.id;
                                     return (
                                         <div
                                             key={`ai-${encodeURIComponent(rowKey)}`}
@@ -2089,7 +2174,7 @@ type VariantScopedSnapshot = {
                                                     )}
                                                 </span>
                                                 <div className="flex items-center gap-2">
-                                                    {isEditing && (
+                                                    {isEditing && !isAiBeingEdited && (
                                                     <div className="flex gap-2">
                                                         <button
                                                             type="button"
@@ -2097,6 +2182,14 @@ type VariantScopedSnapshot = {
                                                             className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-sm"
                                                         >
                                                             Approve
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleEditAiAssessment(row)}
+                                                            disabled={aiEditSaving}
+                                                            className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                            Edit
                                                         </button>
                                                         <button
                                                             type="button"
@@ -2144,16 +2237,30 @@ type VariantScopedSnapshot = {
                                                     );
                                                 })}
                                             </div>
-                                            <h3 className="text-lg font-semibold text-white mb-1">
-                                                {row.simplified_status}
-                                                {row.justification && <> - {row.justification}</>}
-                                            </h3>
-                                            {(row.impact_statement || hasStatusNotes || hasWorkaround) && (
-                                                <p className="text-base font-normal text-gray-300 whitespace-pre-line">
-                                                    {row.impact_statement && <>{row.impact_statement}<br/></>}
-                                                    {hasStatusNotes && <>{row.status_notes}<br/></>}
-                                                    {hasWorkaround && row.workaround}
-                                                </p>
+                                            {isAiBeingEdited ? (
+                                                <EditAiAssessment
+                                                    assessment={row}
+                                                    onConfirm={edits => { void handleConfirmAiEdit(row, edits); }}
+                                                    onCancel={handleCancelAiEdit}
+                                                    onFieldsChange={setHasAiEditChanges}
+                                                    triggerBanner={showMessage}
+                                                    saving={aiEditSaving}
+                                                    errorMessage={aiEditError}
+                                                />
+                                            ) : (
+                                                <>
+                                                    <h3 className="text-lg font-semibold text-white mb-1">
+                                                        {row.simplified_status}
+                                                        {row.justification && <> - {row.justification}</>}
+                                                    </h3>
+                                                    {(row.impact_statement || hasStatusNotes || hasWorkaround) && (
+                                                        <p className="text-base font-normal text-gray-300 whitespace-pre-line">
+                                                            {row.impact_statement && <>{row.impact_statement}<br/></>}
+                                                            {hasStatusNotes && <>{row.status_notes}<br/></>}
+                                                            {hasWorkaround && row.workaround}
+                                                        </p>
+                                                    )}
+                                                </>
                                             )}
                                         </div>
                                     );
@@ -2386,12 +2493,16 @@ type VariantScopedSnapshot = {
                 isOpen={showConfirmClose}
                 title="Unsaved Changes"
                 message={
-                    pendingNavigation !== null
+                    pendingAiEditTransition
+                        ? "Are you sure you want to discard the unsaved AI assessment changes?"
+                        : pendingNavigation !== null
                         ? "Are you sure you want to navigate without saving? All unsaved changes will be lost."
                         : "Are you sure you want to close without saving? All unsaved changes will be lost."
                 }
-                confirmText={pendingNavigation !== null ? "Yes, navigate" : "Yes, close"}
-                cancelText={pendingNavigation !== null ? "No, stay" : "No, stay"}
+                confirmText={pendingAiEditTransition
+                    ? "Discard changes"
+                    : pendingNavigation !== null ? "Yes, navigate" : "Yes, close"}
+                cancelText="No, stay"
                 showTitleIcon={true}
                 onConfirm={handleConfirmClose}
                 onCancel={handleCancelClose}
