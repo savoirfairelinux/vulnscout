@@ -1,7 +1,7 @@
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
-import type { Assessment, AssessmentTargetPair } from "../handlers/assessments";
+import type { AiAssessmentEdits, Assessment, AssessmentTargetPair } from "../handlers/assessments";
 import Assessments, { asAssessment, isMultiTarget, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
@@ -19,6 +19,7 @@ import ConfirmationModal from "./ConfirmationModal";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from "./EditAssessment";
+import EditAiAssessment from "./EditAiAssessment";
 import type { EditAssessmentData } from "./EditAssessment";
 import HelpPopover from "./HelpPopover";
 import Variants from '../handlers/variant';
@@ -26,7 +27,7 @@ import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { refreshIndividual } from "../handlers/individualRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import { agentActionState as queueActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
@@ -141,6 +142,10 @@ type VariantScopedSnapshot = {
     customCvss: CVSS[];
 };
 
+type PendingAiEditTransition =
+    | { kind: "switch"; row: Assessment }
+    | { kind: "exit" };
+
   function VulnModal(props: Readonly<Props>) {
         const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
@@ -253,24 +258,37 @@ type VariantScopedSnapshot = {
         return () => document.removeEventListener('mousedown', closeCpeHint);
     }, [showCpeHint]);
 
+    // Each visit has its own identity, including when navigating A -> B -> A.
+    const assessmentScope = useMemo(() => ({ vulnId: vuln.id, projectId, variantId }),
+        [vuln.id, projectId, variantId]);
+    const activeScope = useRef<typeof assessmentScope | null>(null);
+    const generations = useRef({ reviews: 0, rows: 0, full: 0, edit: 0 });
+    useLayoutEffect(() => {
+        activeScope.current = assessmentScope;
+        return () => { activeScope.current = null; };
+    }, [assessmentScope]);
+    const beginRequest = useCallback((kind: keyof typeof generations.current) => {
+        if (activeScope.current !== assessmentScope) return () => false;
+        const generation = ++generations.current[kind];
+        return () => activeScope.current === assessmentScope && generations.current[kind] === generation;
+    }, [assessmentScope]);
+
     // Reviews are keyed by assessment ID and rendered beneath their assessment.
     // Re-run after any assessment mutation, not just on scope change: a
     // review's `is_stale` flag is derived server-side from the assessment's
     // current content, so an edit/delete/approve leaves the previously
     // fetched review stale-flag stale (pun intended) until this refetches.
-    const refreshReviews = useCallback(() => (
-        AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
-            .then(data => setReviews(data))
-            .catch(() => setReviews({}))
-    ), [variantId, projectId, vuln.id]);
+    const refreshReviews = useCallback(() => {
+        const current = beginRequest("reviews");
+        return AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
+            .then(data => { if (current()) setReviews(data); })
+            .catch(() => { if (current()) setReviews({}); });
+    }, [beginRequest, variantId, projectId, vuln.id]);
 
     useEffect(() => {
-        let cancelled = false;
-        AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
-            .then(data => { if (!cancelled) setReviews(data); })
-            .catch(() => { if (!cancelled) setReviews({}); });
-        return () => { cancelled = true; };
-    }, [variantId, projectId, vuln.id]);
+        setReviews({});
+        refreshReviews();
+    }, [refreshReviews]);
 
     // Fetch variants that have a finding for this specific vulnerability,
     // filtered to the current project when a projectId is provided.
@@ -294,12 +312,13 @@ type VariantScopedSnapshot = {
     // its history remains complete when the Explorer is variant-scoped.
     useEffect(() => {
         const controller = new AbortController();
+        const current = beginRequest("full");
         setAllVulnAssessments([]);
         const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
         fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments${projectQuery}`, { mode: 'cors', signal: controller.signal })
             .then(r => r.json())
             .then((data: any[]) => {
-                if (Array.isArray(data)) {
+                if (current() && !controller.signal.aborted && Array.isArray(data)) {
                     const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
                     const fullById = new Map(fullAssessments.map(a => [a.id, a]));
                     // Keep the Explorer's current scope, but replace its compact
@@ -310,7 +329,7 @@ type VariantScopedSnapshot = {
             })
             .catch(() => {});
         return () => controller.abort();
-    }, [vuln, projectId]);
+    }, [beginRequest, vuln, projectId]);
 
     // Re-fetch the full assessment list after an assessment mutation (reconcile,
     // approve/reject, delete) so vuln.assessments/allVulnAssessments — and
@@ -321,11 +340,12 @@ type VariantScopedSnapshot = {
     // scoped the way the modal is scoped, which is what callers must use to
     // recompute the vulnerability status summary.
     const refreshAllVulnAssessments = useCallback(async (): Promise<Assessment[] | null> => {
+        const current = beginRequest("full");
         const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
         try {
             const r = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments${projectQuery}`, { mode: 'cors' });
             const data = await r.json();
-            if (Array.isArray(data)) {
+            if (current() && Array.isArray(data)) {
                 const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
                 const scopedAssessments = variantId
                     ? fullAssessments.filter(a => appliesToVariant(a, variantId))
@@ -338,32 +358,27 @@ type VariantScopedSnapshot = {
             // Keep whatever was previously loaded.
         }
         return null;
-    }, [vuln, projectId, variantId]);
+    }, [beginRequest, vuln, projectId, variantId]);
 
     // Fetch server-built assessment rows for this vulnerability (Task 8/11),
     // replacing the old client-side grouping heuristic. When this request is
     // still pending, empty, or fails, the render below falls back to building
     // rows from allVulnAssessments/vuln.assessments locally so history still renders.
     const refreshAssessmentRows = useCallback(async () => {
+        const current = beginRequest("rows");
         try {
             const rows = await Assessments.listByVuln(vuln.id, projectId);
-            setAssessmentRows(Array.isArray(rows) ? rows : []);
+            if (current()) setAssessmentRows(Array.isArray(rows) ? rows : []);
         } catch {
             // Keep whatever was previously loaded; the render's fallback path
             // covers the case where nothing ever loaded successfully.
         }
-    }, [vuln.id, projectId]);
+    }, [beginRequest, vuln.id, projectId]);
 
     useEffect(() => {
-        const controller = new AbortController();
         setAssessmentRows([]);
-        Assessments.listByVuln(vuln.id, projectId)
-            .then(rows => {
-                if (!controller.signal.aborted) setAssessmentRows(Array.isArray(rows) ? rows : []);
-            })
-            .catch(() => {});
-        return () => controller.abort();
-    }, [vuln.id, projectId]);
+        void refreshAssessmentRows();
+    }, [refreshAssessmentRows]);
 
     // In all-variants mode, default to all variant targets for custom CVSS/time edits.
     useEffect(() => {
@@ -543,7 +558,14 @@ type VariantScopedSnapshot = {
 
     const [hasTimeChanges, setHasTimeChanges] = useState(false);
     const [hasAssessmentChanges, setHasAssessmentChanges] = useState(false);
-    const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges;
+    // Inline edit of a pending AI assessment before approving it.
+    const [editingAiRow, setEditingAiRow] = useState<Assessment | null>(null);
+    const [aiEditSaving, setAiEditSaving] = useState(false);
+    const [aiEditError, setAiEditError] = useState<string | null>(null);
+    const [hasAiEditChanges, setHasAiEditChanges] = useState(false);
+    const [pendingAiEditTransition, setPendingAiEditTransition] =
+        useState<PendingAiEditTransition | null>(null);
+    const hasUnsavedChanges = hasTimeChanges || hasAssessmentChanges || hasAiEditChanges;
 
     // Message banner state
     const [bannerMessage, setBannerMessage] = useState("");
@@ -579,6 +601,14 @@ type VariantScopedSnapshot = {
         setRefreshedList([]);
     }, [vuln.id]);
 
+    useEffect(() => {
+        setEditingAiRow(null);
+        setAiEditSaving(false);
+        setAiEditError(null);
+        setHasAiEditChanges(false);
+        setPendingAiEditTransition(null);
+    }, [assessmentScope, isEditing]);
+
     const showMessage = (message: string, type: "error" | "success") => {
         setBannerMessage(message);
         setBannerType(type);
@@ -600,6 +630,17 @@ type VariantScopedSnapshot = {
 
     const handleConfirmClose = () => {
         setShowConfirmClose(false);
+        if (pendingAiEditTransition) {
+            const transition = pendingAiEditTransition;
+            setPendingAiEditTransition(null);
+            resetAiEdit();
+            if (transition.kind === "switch") {
+                setEditingAiRow(transition.row);
+            } else {
+                setIsEditing(false);
+            }
+            return;
+        }
         setClearTimeFields(true);
         setTimeout(() => setClearTimeFields(false), 100);
         if (pendingNavigation !== null && onNavigate) {
@@ -613,6 +654,7 @@ type VariantScopedSnapshot = {
     const handleCancelClose = () => {
         setShowConfirmClose(false);
         setPendingNavigation(null);
+        setPendingAiEditTransition(null);
     };
 
     const navigateTo = useCallback((targetIndex: number) => {
@@ -800,36 +842,98 @@ type VariantScopedSnapshot = {
         }
     };
 
+    /** Reflect an approved AI assessment in the modal state. */
+    const applyApprovedAiAssessment = (row: Assessment, approved: Assessment[], edits?: AiAssessmentEdits) => {
+        // Replace any pre-approval request, even if the initial history
+        // hasn't arrived yet and there is nothing to update optimistically.
+        void refreshAllVulnAssessments();
+        const approvedById = new Map(approved.map(a => [a.id, a]));
+
+        setAllVulnAssessments(prev => prev.map(a => {
+            if (a.id !== row.id) return a;
+            return approvedById.get(a.id) ?? { ...a, ...edits, origin: "custom" };
+        }));
+
+        approved.forEach(a => {
+            if (!vuln.assessments.some(x => x.id === a.id)) {
+                vuln.assessments.push(a);
+            } else {
+                vuln.assessments = vuln.assessments.map(x => x.id === a.id ? a : x);
+            }
+        });
+
+        const latest = vuln.assessments.slice().sort(
+            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
+        if (latest.length > 0) vuln.simplified_status = latest[0].simplified_status;
+
+        patchVuln(vuln.id, vuln);
+        refreshAssessmentRows();
+        refreshReviews();
+        showMessage("AI assessment approved!", "success");
+    };
+
     const handleApproveAiAssessment = async (row: Assessment) => {
         try {
             const approved = await Assessments.approveAi(row.id);
-            const approvedIds = new Set([row.id]);
-            const approvedById = new Map(approved.map(a => [a.id, a]));
-
-            setAllVulnAssessments(prev => prev.map(a => {
-                if (!approvedIds.has(a.id)) return a;
-                return approvedById.get(a.id) ?? { ...a, origin: "custom" };
-            }));
-
-            approved.forEach(a => {
-                if (!vuln.assessments.some(x => x.id === a.id)) {
-                    vuln.assessments.push(a);
-                } else {
-                    vuln.assessments = vuln.assessments.map(x => x.id === a.id ? a : x);
-                }
-            });
-
-            const latest = vuln.assessments.slice().sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            );
-            if (latest.length > 0) vuln.simplified_status = latest[0].simplified_status;
-
-            patchVuln(vuln.id, vuln);
-            refreshAssessmentRows();
-            refreshReviews();
-            showMessage("AI assessment approved!", "success");
+            if (activeScope.current !== assessmentScope) return;
+            applyApprovedAiAssessment(row, approved);
         } catch (e) {
+            if (activeScope.current !== assessmentScope) return;
             showMessage(`Failed to approve AI assessment: ${escape(String(e))}`, "error");
+        }
+    };
+
+    const resetAiEdit = () => {
+        setEditingAiRow(null);
+        setAiEditError(null);
+        setHasAiEditChanges(false);
+    };
+
+    const handleEditAiAssessment = (row: Assessment) => {
+        if (aiEditSaving) return;
+        if (hasAiEditChanges && editingAiRow && editingAiRow.id !== row.id) {
+            setPendingNavigation(null);
+            setPendingAiEditTransition({ kind: "switch", row });
+            setShowConfirmClose(true);
+            return;
+        }
+        resetAiEdit();
+        setEditingAiRow(row);
+    };
+
+    const handleToggleEditing = () => {
+        if (isEditing && hasAiEditChanges) {
+            setPendingNavigation(null);
+            setPendingAiEditTransition({ kind: "exit" });
+            setShowConfirmClose(true);
+            return;
+        }
+        setIsEditing(!isEditing);
+    };
+
+    const handleCancelAiEdit = () => {
+        if (aiEditSaving) return;
+        resetAiEdit();
+    };
+
+    const handleConfirmAiEdit = async (row: Assessment, edits: AiAssessmentEdits) => {
+        if (aiEditSaving) return;
+        const current = beginRequest("edit");
+        setAiEditSaving(true);
+        setAiEditError(null);
+        try {
+            const approved = await Assessments.approveAi(row.id, edits);
+            if (!current()) return;
+            resetAiEdit();
+            applyApprovedAiAssessment(row, approved, edits);
+        } catch (e) {
+            if (!current()) return;
+            // Stay in edit mode so the user keeps their changes and can retry.
+            const message = e instanceof Error ? e.message : String(e);
+            setAiEditError(`Failed to approve AI assessment: ${message}`);
+        } finally {
+            if (current()) setAiEditSaving(false);
         }
     };
 
@@ -1220,6 +1324,9 @@ type VariantScopedSnapshot = {
     const aiRows = aiServerRows.length > 0
         ? aiServerRows
         : buildFallbackRows(pendingAiAssessments);
+    const missingDraft = isEditing && editingAiRow && !aiRows.some(row => row.id === editingAiRow.id)
+        ? editingAiRow : null;
+    const visibleAiRows = missingDraft ? [...aiRows, missingDraft] : aiRows;
 
     const latestAssessmentFor = (variantIdValue: string, pkg: string | null): Assessment | null =>
         allVulnAssessments
@@ -1680,7 +1787,7 @@ type VariantScopedSnapshot = {
             )}
             {!readOnly && (
                 <button
-                    onClick={() => setIsEditing(!isEditing)}
+                    onClick={handleToggleEditing}
                     type="button"
                     className={`rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors ${isEditing ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-600 hover:bg-blue-700"}`}
                     title={isEditing ? "Exit editing mode" : "Enter editing mode"}
@@ -2057,12 +2164,13 @@ type VariantScopedSnapshot = {
                             )}
                             <h4 className="font-semibold text-gray-200 mb-2">Assessment history</h4>
                             <div>
-                                {aiRows.map(row => {
+                                {visibleAiRows.map(row => {
                                     const rowKey = row.id;
                                     const targets = row.targets ?? [];
                                     const firstTarget = targets[0];
                                     const hasStatusNotes = hasAssessmentText(row.status_notes);
                                     const hasWorkaround = hasAssessmentText(row.workaround);
+                                    const isAiBeingEdited = isEditing && editingAiRow?.id === row.id;
                                     return (
                                         <div
                                             key={`ai-${encodeURIComponent(rowKey)}`}
@@ -2072,7 +2180,7 @@ type VariantScopedSnapshot = {
                                             <div className="flex items-center justify-between mb-2">
                                                 <span className="inline-flex items-center gap-2 text-amber-300 font-semibold">
                                                     <FontAwesomeIcon icon={faRobot} className="w-4 h-4" />
-                                                    AI-generated · Pending review
+                                                    {row === missingDraft ? "AI-generated · Replaced draft" : "AI-generated · Pending review"}
                                                     {(() => {
                                                         const v = availableVariants.find(v => v.id === firstTarget?.variant_id);
                                                         return v ? <span className="ml-1 opacity-80 text-xs">({v.name})</span> : null;
@@ -2087,7 +2195,7 @@ type VariantScopedSnapshot = {
                                                     )}
                                                 </span>
                                                 <div className="flex items-center gap-2">
-                                                    {isEditing && (
+                                                    {isEditing && !isAiBeingEdited && (
                                                     <div className="flex gap-2">
                                                         <button
                                                             type="button"
@@ -2095,6 +2203,14 @@ type VariantScopedSnapshot = {
                                                             className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-sm"
                                                         >
                                                             Approve
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleEditAiAssessment(row)}
+                                                            disabled={aiEditSaving}
+                                                            className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                            Edit
                                                         </button>
                                                         <button
                                                             type="button"
@@ -2142,16 +2258,31 @@ type VariantScopedSnapshot = {
                                                     );
                                                 })}
                                             </div>
-                                            <h3 className="text-lg font-semibold text-white mb-1">
-                                                {row.simplified_status}
-                                                {row.justification && <> - {row.justification}</>}
-                                            </h3>
-                                            {(row.impact_statement || hasStatusNotes || hasWorkaround) && (
-                                                <p className="text-base font-normal text-gray-300 whitespace-pre-line">
-                                                    {row.impact_statement && <>{row.impact_statement}<br/></>}
-                                                    {hasStatusNotes && <>{row.status_notes}<br/></>}
-                                                    {hasWorkaround && row.workaround}
-                                                </p>
+                                            {isAiBeingEdited ? (
+                                                <EditAiAssessment
+                                                    assessment={editingAiRow}
+                                                    onConfirm={edits => { void handleConfirmAiEdit(editingAiRow, edits); }}
+                                                    onCancel={handleCancelAiEdit}
+                                                    onFieldsChange={setHasAiEditChanges}
+                                                    triggerBanner={showMessage}
+                                                    saving={aiEditSaving}
+                                                    replaced={row === missingDraft}
+                                                    errorMessage={aiEditError}
+                                                />
+                                            ) : (
+                                                <>
+                                                    <h3 className="text-lg font-semibold text-white mb-1">
+                                                        {row.simplified_status}
+                                                        {row.justification && <> - {row.justification}</>}
+                                                    </h3>
+                                                    {(row.impact_statement || hasStatusNotes || hasWorkaround) && (
+                                                        <p className="text-base font-normal text-gray-300 whitespace-pre-line">
+                                                            {row.impact_statement && <>{row.impact_statement}<br/></>}
+                                                            {hasStatusNotes && <>{row.status_notes}<br/></>}
+                                                            {hasWorkaround && row.workaround}
+                                                        </p>
+                                                    )}
+                                                </>
                                             )}
                                         </div>
                                     );
@@ -2384,12 +2515,16 @@ type VariantScopedSnapshot = {
                 isOpen={showConfirmClose}
                 title="Unsaved Changes"
                 message={
-                    pendingNavigation !== null
+                    pendingAiEditTransition
+                        ? "Are you sure you want to discard the unsaved AI assessment changes?"
+                        : pendingNavigation !== null
                         ? "Are you sure you want to navigate without saving? All unsaved changes will be lost."
                         : "Are you sure you want to close without saving? All unsaved changes will be lost."
                 }
-                confirmText={pendingNavigation !== null ? "Yes, navigate" : "Yes, close"}
-                cancelText={pendingNavigation !== null ? "No, stay" : "No, stay"}
+                confirmText={pendingAiEditTransition
+                    ? "Discard changes"
+                    : pendingNavigation !== null ? "Yes, navigate" : "Yes, close"}
+                cancelText="No, stay"
                 showTitleIcon={true}
                 onConfirm={handleConfirmClose}
                 onCancel={handleCancelClose}

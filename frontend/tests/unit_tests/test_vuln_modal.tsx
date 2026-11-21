@@ -2868,6 +2868,7 @@ describe('Vulnerability Modal', () => {
     });
 
     const pendingAiAssessment = {
+        approval_fingerprint: 'original',
         id: 'assessment-ai-1',
         vuln_id: 'CVE-2010-1234',
         variant_id: 'variant-1',
@@ -2883,7 +2884,13 @@ describe('Vulnerability Modal', () => {
         responses: []
     };
 
-    const renderWithPendingAiAssessment = (options?: { readOnly?: boolean; isEditing?: boolean; patchVuln?: jest.Mock }) => {
+    const renderWithPendingAiAssessment = (options?: {
+        readOnly?: boolean;
+        isEditing?: boolean;
+        patchVuln?: jest.Mock;
+        pendingAssessments?: typeof pendingAiAssessment[];
+        fullHistory?: () => Promise<string>;
+    }) => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
             if (req.url.includes('/variants')) {
@@ -2903,12 +2910,13 @@ describe('Vulnerability Modal', () => {
                 ]));
             }
             if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
-                return Promise.resolve(JSON.stringify([pendingAiAssessment]));
+                if (options?.fullHistory) return options.fullHistory();
+                return Promise.resolve(JSON.stringify(options?.pendingAssessments ?? [pendingAiAssessment]));
             }
             return Promise.resolve(JSON.stringify([]));
         });
 
-        render(
+        return render(
             <VulnModal
                 vuln={{ ...vulnerability, assessments: [] }}
                 readOnly={options?.readOnly}
@@ -2974,7 +2982,9 @@ describe('Vulnerability Modal', () => {
             .mockResolvedValueOnce([pendingAiAssessment])
             .mockResolvedValue([]);
 
-        renderWithPendingAiAssessment({ patchVuln, isEditing: true });
+        const fullHistory = jest.fn().mockResolvedValueOnce(JSON.stringify([pendingAiAssessment]))
+            .mockResolvedValue(JSON.stringify([{ ...pendingAiAssessment, origin: 'custom' }]));
+        renderWithPendingAiAssessment({ patchVuln, isEditing: true, fullHistory });
         const user = userEvent.setup();
 
         await screen.findByText(/AI-generated/i);
@@ -2990,6 +3000,322 @@ describe('Vulnerability Modal', () => {
 
         approveAiSpy.mockRestore();
         listByVulnSpy.mockRestore();
+    });
+
+    const aiPanel = () => screen.getByText(/AI-generated/i).closest('[data-assessment-id]') as HTMLElement;
+
+    test('confirm uses the suggestion shown when the editor opened, not a later history response', async () => {
+        let finish!: (rows: Assessment[]) => void;
+        const history = jest.spyOn(Assessments, 'listByVuln')
+            .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const approve = jest.spyOn(Assessments, 'approveAi').mockRejectedValue(new Error('Stale suggestion'));
+        try {
+            renderWithPendingAiAssessment({ isEditing: true });
+            await screen.findByText(/AI-generated/i);
+            const user = userEvent.setup();
+            await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+            await act(async () => finish([{
+                ...pendingAiAssessment, status: 'fixed', approval_fingerprint: 'changed',
+            }]));
+            await user.click(within(aiPanel()).getByRole('button', { name: 'Confirm and approve' }));
+            expect(approve).toHaveBeenCalledWith(pendingAiAssessment.id, { expected_fingerprint: 'original' });
+        } finally {
+            history.mockRestore();
+            approve.mockRestore();
+        }
+    });
+
+    test.each(['vulnerability', 'project', 'variant'])(
+        'ignores an edited approval after changing %s', async change => {
+            const patchVuln = jest.fn();
+            let finish!: (rows: Assessment[]) => void;
+            const approval = jest.spyOn(Assessments, 'approveAi').mockImplementation(
+                () => new Promise(resolve => { finish = resolve; })
+            );
+            const history = jest.spyOn(Assessments, 'listByVuln').mockResolvedValue([]);
+            try {
+                const { rerender } = renderWithPendingAiAssessment({ isEditing: true, patchVuln });
+                const user = userEvent.setup();
+                await screen.findByText(/AI-generated/i);
+                await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+                await user.click(within(aiPanel()).getByRole('button', { name: 'Confirm and approve' }));
+
+                rerender(<VulnModal
+                    vuln={{ ...vulnerability, id: change === 'vulnerability' ? 'CVE-2026-0001' : vulnerability.id, assessments: [] }}
+                    projectId={change === 'project' ? 'other-project' : undefined}
+                    variantId={change === 'variant' ? 'other-variant' : undefined}
+                    isEditing onClose={() => {}} appendAssessment={() => {}}
+                    appendCVSS={() => null} patchVuln={patchVuln}
+                />);
+                history.mockClear();
+                await act(async () => finish([{ ...pendingAiAssessment, origin: 'custom' }]));
+                expect(history).not.toHaveBeenCalled();
+                expect(patchVuln).not.toHaveBeenCalled();
+                expect(screen.queryByText('AI assessment approved!')).not.toBeInTheDocument();
+            } finally {
+                approval.mockRestore();
+                history.mockRestore();
+            }
+        }
+    );
+
+    test('an older history request cannot restore a card after approval', async () => {
+        let finish!: (rows: Assessment[]) => void;
+        const approved = { ...pendingAiAssessment, origin: 'custom' };
+        const history = jest.spyOn(Assessments, 'listByVuln')
+            .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+            .mockResolvedValue([approved]);
+        const approval = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([approved]);
+        try {
+            const fullHistory = jest.fn().mockResolvedValueOnce(JSON.stringify([pendingAiAssessment]))
+                .mockResolvedValue(JSON.stringify([approved]));
+            renderWithPendingAiAssessment({ isEditing: true, fullHistory });
+            await screen.findByText(/AI-generated/i);
+            await userEvent.setup().click(within(aiPanel()).getByRole('button', { name: 'Approve' }));
+            await screen.findByText('AI assessment approved!');
+            await act(async () => finish([pendingAiAssessment]));
+            expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
+        } finally {
+            approval.mockRestore();
+            history.mockRestore();
+        }
+    });
+
+    test('loads per-target status when approval beats the initial full history', async () => {
+        const approved = { ...pendingAiAssessment, origin: 'custom', status_notes: 'Approved target notes' };
+        let finish!: (body: string) => void;
+        const fullHistory = jest.fn()
+            .mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve; }))
+            .mockResolvedValue(JSON.stringify([approved]));
+        const grouped = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValueOnce([pendingAiAssessment]).mockResolvedValue([approved]);
+        const approval = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([approved]);
+        try {
+            renderWithPendingAiAssessment({ isEditing: true, fullHistory });
+            await screen.findByText(/AI-generated/i);
+            await userEvent.setup().click(within(aiPanel()).getByRole('button', { name: 'Approve' }));
+            await screen.findByRole('cell', { name: approved.status_notes });
+            await act(async () => finish(JSON.stringify([pendingAiAssessment])));
+            expect(screen.getByRole('cell', { name: approved.status_notes })).toBeInTheDocument();
+        } finally {
+            grouped.mockRestore();
+            approval.mockRestore();
+        }
+    });
+
+    test('editing a pending AI review approves it with the edited content', async () => {
+        const patchVuln = jest.fn();
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
+            { ...pendingAiAssessment, status_notes: 'edited notes', origin: 'custom' }
+        ]);
+        const listByVulnSpy = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValueOnce([pendingAiAssessment])
+            .mockResolvedValue([]);
+
+        const fullHistory = jest.fn().mockResolvedValueOnce(JSON.stringify([pendingAiAssessment]))
+            .mockResolvedValue(JSON.stringify([{ ...pendingAiAssessment, status_notes: 'edited notes', origin: 'custom' }]));
+        renderWithPendingAiAssessment({ patchVuln, isEditing: true, fullHistory });
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+
+        const panel = aiPanel();
+        expect(within(panel).queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+        expect(within(panel).queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+        expect(within(panel).getByText('affected')).toBeVisible();
+        expect(within(panel).queryByRole('combobox')).not.toBeInTheDocument();
+        const notes = within(panel).getByPlaceholderText(/Free text notes/);
+        expect(notes).toHaveValue('ai notes');
+        await user.clear(notes);
+        await user.type(notes, 'edited notes');
+        await user.click(within(panel).getByRole('button', { name: 'Confirm and approve' }));
+
+        await waitFor(() => {
+            expect(approveAiSpy).toHaveBeenCalledWith('assessment-ai-1', {
+                expected_fingerprint: 'original',
+                status_notes: 'edited notes',
+            });
+        });
+        await waitFor(() => {
+            expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
+        });
+        expect(patchVuln).toHaveBeenCalled();
+        expect(screen.getByText('AI assessment approved!')).toBeInTheDocument();
+
+        approveAiSpy.mockRestore();
+        listByVulnSpy.mockRestore();
+    });
+
+    test('a replaced pending row retains its draft for copying or cancellation', async () => {
+        const replacement = { ...pendingAiAssessment, id: 'replacement' };
+        const grouped = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValueOnce([pendingAiAssessment]).mockResolvedValue([replacement]);
+        const approval = jest.spyOn(Assessments, 'approveAi');
+        try {
+            renderWithPendingAiAssessment({ isEditing: true });
+            const user = userEvent.setup();
+            await screen.findByText(/AI-generated/i);
+            await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+            const notes = within(aiPanel()).getByPlaceholderText(/Free text notes/);
+            await user.type(notes, ' still needed');
+
+            await act(async () => { window.dispatchEvent(new Event(AGENT_WRITE_EVENT)); });
+            const draft = (await screen.findByText(/Replaced draft/)).closest<HTMLElement>('[data-assessment-id]')!;
+            expect(within(draft).getByPlaceholderText(/Free text notes/)).toHaveValue('ai notes still needed');
+            expect(within(draft).getByRole('button', { name: 'Confirm and approve' })).toBeDisabled();
+            await user.click(within(draft).getByRole('button', { name: 'Cancel changes' }));
+            expect(draft).not.toBeInTheDocument();
+            expect(approval).not.toHaveBeenCalled();
+        } finally {
+            grouped.mockRestore();
+            approval.mockRestore();
+        }
+    });
+
+    test('cancelling an AI review edit discards it and restores the actions', async () => {
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi');
+
+        renderWithPendingAiAssessment({ isEditing: true });
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+        const notes = within(aiPanel()).getByPlaceholderText(/Free text notes/);
+        await user.clear(notes);
+        await user.type(notes, 'discarded notes');
+        await user.click(within(aiPanel()).getByRole('button', { name: 'Cancel changes' }));
+
+        const panel = aiPanel();
+        expect(within(panel).getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+        expect(within(panel).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+        expect(within(panel).getByRole('button', { name: 'Reject' })).toBeInTheDocument();
+        expect(within(panel).queryByPlaceholderText(/Free text notes/)).not.toBeInTheDocument();
+        expect(panel).toHaveTextContent('ai notes');
+        expect(panel).not.toHaveTextContent('discarded notes');
+        expect(approveAiSpy).not.toHaveBeenCalled();
+
+        await user.click(within(panel).getByRole('button', { name: 'Edit' }));
+        expect(within(aiPanel()).getByPlaceholderText(/Free text notes/)).toHaveValue('ai notes');
+
+        approveAiSpy.mockRestore();
+    });
+
+    test('confirms before switching pending AI rows with unsaved edits', async () => {
+        const secondAssessment = {
+            ...pendingAiAssessment,
+            id: 'assessment-ai-2',
+            packages: ['other-package@2.0.0'],
+            status_notes: 'other notes',
+        };
+        const listByVulnSpy = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValue([pendingAiAssessment, secondAssessment]);
+        renderWithPendingAiAssessment({
+            isEditing: true,
+            pendingAssessments: [pendingAiAssessment, secondAssessment],
+        });
+        const user = userEvent.setup();
+
+        await waitFor(() => expect(screen.getAllByText(/AI-generated/)).toHaveLength(2));
+        const cards = screen.getAllByText(/AI-generated/).map(
+            title => title.closest<HTMLElement>('[data-assessment-id]'),
+        );
+        expect(cards.map(card => card?.textContent ?? '')).toEqual(
+            expect.arrayContaining([expect.stringContaining('other notes')]),
+        );
+        const firstPanel = document.querySelector<HTMLElement>('[data-assessment-id="assessment-ai-1"]')!;
+        await user.click(within(firstPanel).getByRole('button', { name: 'Edit' }));
+        const firstNotes = within(firstPanel).getByPlaceholderText(/Free text notes/);
+        await user.clear(firstNotes);
+        await user.type(firstNotes, 'unsaved first notes');
+
+        const secondPanel = document.querySelector<HTMLElement>('[data-assessment-id="assessment-ai-2"]')!;
+        expect(secondPanel).toHaveTextContent('other notes');
+        await user.click(within(secondPanel).getByRole('button', { name: 'Edit' }));
+
+        expect(await screen.findByText('Are you sure you want to discard the unsaved AI assessment changes?')).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'No, stay' }));
+        expect(within(firstPanel).getByPlaceholderText(/Free text notes/)).toHaveValue('unsaved first notes');
+
+        await user.click(within(secondPanel).getByRole('button', { name: 'Edit' }));
+        await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+        expect(within(secondPanel).getByPlaceholderText(/Free text notes/)).toHaveValue('other notes');
+        expect(screen.queryByDisplayValue('unsaved first notes')).not.toBeInTheDocument();
+
+        listByVulnSpy.mockRestore();
+    });
+
+    test('confirms before exiting edit mode with unsaved AI edits', async () => {
+        renderWithPendingAiAssessment({ isEditing: true });
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+        const notes = within(aiPanel()).getByPlaceholderText(/Free text notes/);
+        await user.clear(notes);
+        await user.type(notes, 'unsaved notes');
+
+        await user.click(screen.getByRole('button', { name: 'Exit editing' }));
+        expect(await screen.findByText('Are you sure you want to discard the unsaved AI assessment changes?')).toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: 'No, stay' }));
+        expect(within(aiPanel()).getByPlaceholderText(/Free text notes/)).toHaveValue('unsaved notes');
+
+        await user.click(screen.getByRole('button', { name: 'Exit editing' }));
+        await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+        expect(within(aiPanel()).queryByPlaceholderText(/Free text notes/)).not.toBeInTheDocument();
+        expect(within(aiPanel()).queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    });
+
+    test('a failed edited approval keeps the edit and shows the error', async () => {
+        let rejectApproval: (error: Error) => void = () => {};
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockImplementation(
+            () => new Promise((_, reject) => { rejectApproval = reject; })
+        );
+
+        renderWithPendingAiAssessment({ isEditing: true });
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+        const notes = within(aiPanel()).getByPlaceholderText(/Free text notes/);
+        await user.clear(notes);
+        await user.type(notes, 'edited notes');
+        await user.click(within(aiPanel()).getByRole('button', { name: 'Confirm and approve' }));
+
+        expect(within(aiPanel()).getByRole('button', { name: 'Approving…' })).toBeDisabled();
+        expect(within(aiPanel()).getByRole('button', { name: 'Cancel changes' })).toBeDisabled();
+        expect(notes).toBeDisabled();
+        await user.type(notes, ' too late');
+        expect(notes).toHaveValue('edited notes');
+
+        await act(async () => { rejectApproval(new Error('Invalid justification')); });
+
+        const panel = aiPanel();
+        expect(within(panel).getByRole('alert')).toHaveTextContent('Failed to approve AI assessment: Invalid justification');
+        expect(notes).toBeEnabled();
+        expect(within(panel).getByPlaceholderText(/Free text notes/)).toHaveValue('edited notes');
+        expect(within(panel).getByRole('button', { name: 'Confirm and approve' })).toBeEnabled();
+        expect(within(panel).getByRole('button', { name: 'Cancel changes' })).toBeEnabled();
+        expect(approveAiSpy).toHaveBeenCalledTimes(1);
+
+        approveAiSpy.mockRestore();
+    });
+
+    test('an edited AI review with an empty message is not approved', async () => {
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi');
+
+        renderWithPendingAiAssessment({ isEditing: true });
+        const user = userEvent.setup();
+
+        await screen.findByText(/AI-generated/i);
+        await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+        await user.clear(within(aiPanel()).getByPlaceholderText(/Free text notes/));
+        await user.click(within(aiPanel()).getByRole('button', { name: 'Confirm and approve' }));
+
+        expect(within(aiPanel()).getByRole('alert')).toHaveTextContent('The assessment message cannot be empty.');
+        expect(approveAiSpy).not.toHaveBeenCalled();
+
+        approveAiSpy.mockRestore();
     });
 
     test('rejecting a pending AI review calls rejectAi with the assessment id', async () => {
