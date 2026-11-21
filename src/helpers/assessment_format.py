@@ -38,6 +38,11 @@ def _clean(value: object, path: str, limit: int, errors: dict[str, str], *, mult
         errors.setdefault(path, "must be a string")
         return None
     text = (_CONTROL_KEEP_BREAKS if multiline else _CONTROL).sub("", value).strip()
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        errors.setdefault(path, "must be valid UTF-8 text")
+        return None
     if len(text) > limit:
         errors.setdefault(path, f"must be at most {limit} characters")
         return None

@@ -713,12 +713,13 @@ class TestAssessmentFormatTransfer:
         self._post(client, [{**project, "assessment_format": None}])
         assert self._project(client, "ProjectA")["assessment_format"] is None
 
-    def test_import_without_the_key_keeps_the_destination_format(self, client_and_data):
+    @pytest.mark.parametrize("nested", [{}, {"assessment_format": None, "description": "Wrong scope"}])
+    def test_import_without_the_key_keeps_the_destination_format(self, client_and_data, nested):
         client, data = client_and_data
         self._set_format(client, data["project_a_id"], _FORMAT)
         body = json.loads(self._post(client, [{
             "project_name": "ProjectA", "project_description": "From 3.0",
-            "variants": [{"variant_name": "VariantA1", **_tm("t")}],
+            "variants": [{"variant_name": "VariantA1", **_tm("t"), **nested}],
         }]).data)
         assert body["failed"] == []
         exported = self._project(client, "ProjectA")

@@ -355,7 +355,7 @@ Both return `project_id`, `description` and `assessment_format`. The `PUT` reque
 `description` and/or `assessment_format`; omitted fields keep their stored value and `null` clears one.
 Changing only `assessment_format` does not mark AI assessments as outdated.
 
-`assessment_format` sets how AI assessment text is presented, or `null` for the skill's default:
+`assessment_format` sets how AI `status_notes` are presented, or `null` for the skill's default:
 
 ```json
 {
@@ -371,7 +371,7 @@ Changing only `assessment_format` does not mark AI assessments as outdated.
 
 `sections` is an ordered list using each of `confidence`, `verdict`, `evidence`, `reachability` and `remediation` at
 most once (`enabled` defaults to `true`; `label` is at most 40 characters). `layout` is `inline` (default) or `lines`.
-`style_notes` is at most 500 characters. Control characters are removed and blank labels and notes are dropped.
+`style_notes` is at most 500 characters. Labels and style notes must be UTF-8 encodable. Control characters are removed and blank labels and notes are dropped.
 Invalid values return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`, for example
 `"assessment_format.sections[1].id": "is duplicated"`.
 
