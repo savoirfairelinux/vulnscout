@@ -6,6 +6,7 @@ import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
@@ -122,7 +123,7 @@ class TestHelperUnavailable:
     def test_roots_report_unavailable_helper(self, client):
         body = client.get("/api/context/host-roots").get_json()
         assert body["available"] is False and body["roots"] == []
-        assert "VULNSCOUT_HOST_ROOTS" in body["message"]
+        assert "ai-context helper start" in body["message"]
 
     def test_reads_never_create_the_socket_directory(self, client, variant, tmp_path):
         client.get("/api/context/host-roots")
@@ -197,7 +198,8 @@ class TestAttachDetach:
 
     def test_status_full_unicode_attachment_set(self, client, variant, helper_server, monkeypatch):
         # Exercise the socket framing independently of OS-specific filesystem path limits.
-        monkeypatch.setattr(helper_server, "_validated_folder", lambda path: path)
+        monkeypatch.setattr(helper_server, "_checked", lambda variant_id, alias, path: (path, path))
+        monkeypatch.setattr(helper_server, "_open_folder", lambda path, root: os.open(os.devnull, os.O_RDONLY))
         path = "/" + "\U0001f600" * (hh.MAX_PATH_CHARS - 1)
         aliases = [f"s{i:031d}" for i in range(hh.MAX_ATTACHMENTS_PER_VARIANT)]
         _db.session.add_all([HostMount(variant_id=variant.id, alias=alias, host_path=path) for alias in aliases])
@@ -392,6 +394,31 @@ class TestCli:
 
     def _run(self, app, *args):
         return app.test_cli_runner().invoke(args=list(args))
+
+    def test_host_command_grants_only_one_scoped_folder(self, app, client, variant, host, helper_server):
+        scope = self._run(app, "ai-context-list", "-p", "Demo", "-v", "x86", "--variant-id-only")
+        assert scope.exit_code == 0 and scope.output.strip() == str(variant.id)
+        helper_server.roots.clear()
+        path = str(host["app"])
+        permit = Path(helper_server.state_dir) / "permit.Abc123Def456"
+        permit.mkdir()
+        (permit / "src").write_bytes(str(variant.id).encode() + b"\0" + os.fsencode(path))
+        params = {"variant_id": str(variant.id), "alias": "src", "path": path, "host_permit": permit.name}
+        for invalid in ({"variant_id": str(uuid.uuid4())}, {"alias": "other"}, {"path": str(host["outside"])}):
+            assert not helper_server.dispatch({"op": "attach", **params, **invalid})["ok"]
+        result = self._run(app, "ai-context-attach", "-p", "Demo", "-v", "x86",
+                           "--host-permit", permit.name, f"src={path}")
+        assert result.exit_code == 0, result.output
+        assert not (permit / "src").exists()
+        assert client.get("/api/context/host-roots").get_json()["roots"] == []
+        assert _attach(client, variant, "other", path).status_code == 403
+        restarted = hh.Helper([], helper_server.state_dir)
+        assert restarted.dispatch({"op": "sync", "variant_id": str(variant.id),
+                                   "attachments": {"src": path}})["result"]["attachments"]["src"]["status"] == "available"
+        assert _source(client, variant, "mount:src").status_code == 200
+        assert self._run(app, "ai-context-detach", "-p", "Demo", "-v", "x86", "src").exit_code == 0
+        assert not helper_server.registry.host_approved(str(variant.id), "src", path)
+        assert _attach(client, variant, "src", path).status_code == 403
 
     def test_attach_list_detach(self, app, variant, host, helper_server):
         result = self._run(app, "ai-context-attach", "-p", "Demo", "-v", "x86",

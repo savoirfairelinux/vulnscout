@@ -33,7 +33,7 @@ v0.25; see [Migrating from Legacy CLI Flags](cli-migration.md).
 | `import custom-data <path> [--timestamps original\|current]` | Import custom VulnScout JSON data. | default `default` | rejected (the file names its variants) |
 | `import custom-openvex <path> [--timestamps original\|current]` | Import custom OpenVEX assessments. | default `default` | optional; the project's only variant when omitted |
 | `import context <path>` | Import project and variant context. | optional; retargets the file | optional; needs `-p` |
-| `ai-context attach <alias>=<host path>...` | Attach host folders inside the approved roots to the variant's AI context, read-only; see [Attached host folders](ai-assessments.md#attached-host-folders). | default `default` | default `default` |
+| `ai-context attach <alias>=<host path>...` | Approve and attach the named host folders to this variant, read-only; see [Attached host folders](ai-assessments.md#attached-host-folders). | default `default` | default `default` |
 | `ai-context list [--json]` \| `ai-context detach <alias>...` | List attached folders with their availability, or detach them. | default `default` | default `default` |
 | `ai-context helper start\|stop\|restart\|status` | Manage the host folder helper. | rejected | rejected |
 | `delete scan <id>\|outdated\|empty-scans\|orphaned-vulns [--dry-run] [--yes]` | Remove data from every project. | rejected | rejected |
@@ -163,11 +163,10 @@ HTTP export.
 ## Attach host folders to the AI context
 
 Agents can browse, read and search folders from the container host without
-copying files, uploading archives or restarting the container. An operator first
-approves host roots; folders are then attached to a variant under short aliases:
+copying files, uploading archives or restarting the container. The host command
+itself approves the selected folder for that variant and alias:
 
 ```bash
-./vulnscout config set VULNSCOUT_HOST_ROOTS /work:/srv/sources
 ./vulnscout ai-context attach -p demo -v x86 src=/work/app build=/work/build/tmp/work
 ./vulnscout ai-context list -p demo -v x86
 ./vulnscout ai-context detach -p demo -v x86 build

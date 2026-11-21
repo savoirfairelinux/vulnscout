@@ -575,9 +575,9 @@ Usage: vulnscout ai-context attach [-p <project>] [-v <variant>] <alias>=<host p
 
 Attach host folders to a variant's AI context without copying them. Agents browse,
 read and search them read-only with file_id "mount:<alias>".
-Folders must be inside a root approved in VULNSCOUT_HOST_ROOTS (colon-separated
-absolute host paths, set with 'vulnscout config set'). A helper started on this
-host as the current user serves them over a private socket; no restart needed.
+This host command approves the named folders. VULNSCOUT_HOST_ROOTS is only
+needed to select folders from the web UI or API. A helper running as the
+current user serves them over a private socket; no container restart needed.
 Aliases: 1-32 lowercase letters, digits, '_' or '-', unique per variant.
 Options:
     -p, --project <name>    Project (default: "default")
@@ -1091,11 +1091,7 @@ start_host_helper() {
     local script root i
     local -a roots=() root_args=()
     host_helper_paths
-    if [ -z "${VULNSCOUT_HOST_ROOTS:-}" ]; then
-        [[ ! -f "$HOST_HELPER_PID_FILE" ]] || stop_host_helper
-        console_err error "Error: no approved host roots. Set them first, e.g. 'vulnscout config set VULNSCOUT_HOST_ROOTS /work:/srv/sources'."
-        return 1
-    fi
+    local policy="scoped-v1:${VULNSCOUT_HOST_ROOTS:-}"
     if [ "$(id -u)" -eq 0 ]; then
         console_err error "Error: the host folder helper runs as the invoking user, never as root; run vulnscout as a regular user."
         return 1
@@ -1106,14 +1102,14 @@ start_host_helper() {
         return 1
     fi
     if host_helper_running &&
-        [ "$(cat "$HOST_HELPER_STATE_DIR/roots.active" 2>/dev/null || true)" = "$VULNSCOUT_HOST_ROOTS" ]; then
+        [ "$(cat "$HOST_HELPER_STATE_DIR/roots.active" 2>/dev/null || true)" = "$policy" ]; then
         return 0
     fi
     stop_host_helper >/dev/null
     mkdir -p "$HOST_HELPER_STATE_DIR"
     chmod 700 "$HOST_HELPER_STATE_DIR"
     script="$(host_helper_script)" || return 1
-    IFS=':' read -r -a roots <<< "$VULNSCOUT_HOST_ROOTS"
+    IFS=':' read -r -a roots <<< "${VULNSCOUT_HOST_ROOTS:-}"
     for root in "${roots[@]}"; do
         [ -n "$root" ] && root_args+=(--root "$root")
     done
@@ -1131,15 +1127,15 @@ start_host_helper() {
         console_err error "Error: the host folder helper did not start; see $HOST_HELPER_STATE_DIR/helper.log."
         return 1
     fi
-    printf '%s\n' "$VULNSCOUT_HOST_ROOTS" > "$HOST_HELPER_STATE_DIR/roots.active"
-    console_out success "Host folder helper running as $(id -un) (approved roots: $VULNSCOUT_HOST_ROOTS)."
+    printf '%s\n' "$policy" > "$HOST_HELPER_STATE_DIR/roots.active"
+    console_out success "Host folder helper running as $(id -un) (picker roots: ${VULNSCOUT_HOST_ROOTS:-none})."
 }
 
 # Keep attached host folders available when roots are configured; never fail the calling command.
 ensure_host_helper() {
-    if [[ -z "${VULNSCOUT_HOST_ROOTS:-}" ]]; then
-        host_helper_paths
-        [[ ! -f "$HOST_HELPER_PID_FILE" ]] || stop_host_helper
+    host_helper_paths
+    if [[ -z "${VULNSCOUT_HOST_ROOTS:-}" && ! -f "$HOST_HELPER_STATE_DIR/registry.json" &&
+          ! -f "$HOST_HELPER_PID_FILE" ]]; then
         return 0
     fi
     start_host_helper || console_err warning "Warning: attached host folders are unavailable until the helper runs."
@@ -1903,8 +1899,8 @@ verb_ai_context() {
     esac
 }
 
-ai_context_attach() {
-    local arg alias path seen=" "
+ai_context_attach() (
+    local arg alias path scope permit seen=" "
     local -a pairs=()
     if [ $# -eq 0 ]; then
         die "'ai-context attach' needs at least one <alias>=<host path> pair, e.g. src=/work/app."
@@ -1926,13 +1922,22 @@ ai_context_attach() {
             die "host folder not found: ${path:-<empty>}"
         fi
         # The helper runs elsewhere: send the absolute canonical host path.
-        pairs+=("$alias=$(readlink -f "$path")")
+        IFS= read -r -d '' path < <(realpath -ez -- "$path") || die "could not resolve host folder."
+        [[ "$path" != / ]] || die "cannot attach the host root directory."
+        pairs+=("$alias=$path")
     done
-    start_host_helper || exit 1
     ensure_running
+    start_host_helper || exit 1
     set_explicit_scope_args
-    exec_container "${SCOPE_ARGS[@]}" --ai-context-attach "${pairs[@]}"
-}
+    scope="$(exec_container "${SCOPE_ARGS[@]}" --ai-context-list --variant-id-only)" || exit 1
+    [[ "$scope" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]] || die "could not resolve the variant ID."
+    permit="$(mktemp -d -- "$HOST_HELPER_STATE_DIR/permit.XXXXXXXXXXXX")"
+    trap 'for arg in "${pairs[@]}"; do rm -f -- "$permit/${arg%%=*}"; done; rmdir -- "$permit"' EXIT
+    for arg in "${pairs[@]}"; do
+        printf '%s\0%s' "$scope" "${arg#*=}" > "$permit/${arg%%=*}"
+    done
+    exec_container "${SCOPE_ARGS[@]}" --ai-context-attach --host-permit "${permit##*/}" "${pairs[@]}"
+)
 
 ai_context_list() {
     local json=false

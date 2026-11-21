@@ -588,18 +588,6 @@ search of `src` never scans `build`. `get_merged_context` lists them under
 `mounts` (`alias`, `file_id`); the provisioned codebase directory
 keeps working unchanged alongside them.
 
-**Operator setup.** Approve the host roots under which folders may be attached,
-as colon-separated absolute paths (paths cannot contain `:`; `/` is refused):
-
-```bash
-./vulnscout config set VULNSCOUT_HOST_ROOTS /work:/srv/sources
-```
-
-Nothing can be attached, from the CLI or the browser, outside these roots.
-Changing the value restarts a running helper; setting it to an empty value or
-using `config unset` stops the helper. A failed restart reports an error. The
-roots are read on the host by the wrapper, never from a browser request.
-
 **From the CLI** (project and variant default to `default`):
 
 ```bash
@@ -609,12 +597,17 @@ roots are read on the host by the wrapper, never from a browser request.
 ./vulnscout ai-context helper status                # running? approved roots
 ```
 
-Relative paths are resolved on the host. Aliases are 1-32 lowercase letters,
+`attach` approves exactly the named folder for that variant and alias. No
+`config set` is required. It does not approve the parent directory or add a web
+picker root. Relative paths are resolved on the host. Aliases are 1-32 lowercase letters,
 digits, `_` or `-`, starting with a letter or digit, unique per variant;
 re-attaching the same folder under the same alias is a no-op, and a different
 folder needs `detach` first. A variant can have at most 32 attached folders.
 
-**From the web UI.** On the variant's **Context** tab, **Attach folder** opens a
+**From the web UI.** Optionally enable the picker with
+`./vulnscout config set VULNSCOUT_HOST_ROOTS /work:/srv/sources`. These roots
+are colon-separated absolute paths; `/` is refused. Clearing the setting
+revokes picker roots, not explicit CLI approvals. On the variant's **Context** tab, **Attach folder** opens a
 picker that only lists the approved roots and their subfolders (hidden and
 sensitive names and links are not listed); choose a folder, give it an alias and
 click **Attach selected folder**. Each attached folder shows **Available** or
@@ -626,8 +619,8 @@ only local operator requests, and browser requests must be same-origin.
 
 **How it works and security model.**
 
-- Every `vulnscout` command that needs the container starts, when
-  `VULNSCOUT_HOST_ROOTS` is set, an **unprivileged helper process on the host, as
+- The wrapper starts or reuses, for CLI attachments or configured picker roots,
+  an **unprivileged helper process on the host, as
   the invoking user** (never root; it refuses to run as root). It needs `python3`
   3.9 or newer on the host and uses only its standard library. From a source
   checkout the wrapper runs `src/helpers/host_mount_helper.py`; otherwise it
@@ -647,8 +640,10 @@ only local operator requests, and browser requests must be same-origin.
   against it before reaching the helper, so a detached alias is refused at once.
   The **helper is the enforcement point**: it keeps its own alias registry in the
   host-only `VULNSCOUT_HOST_HELPER_STATE_DIR` (default `.vulnscout/host-helper`,
-  outside the cache mount), re-derives it from the database when needed, and
-  re-checks that paths are still inside an approved root. Host-source reads use
+  outside the cache mount). A host CLI approval is redeemed once for the exact
+  variant ID, alias and path and persists there until detached. If the registry
+  is lost, repeat the host command: the database alone cannot recreate that
+  approval. Picker attachments can be recovered within configured roots. Host-source reads use
   the exact path returned by the database lookup and validate/open it in the same
   helper request, rather than resolving the alias a second time.
 - Requests are scoped by **variant ID and alias**. Paths are relative to the

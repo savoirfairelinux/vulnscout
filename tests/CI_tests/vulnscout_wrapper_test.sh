@@ -55,6 +55,22 @@ case "$1" in
             esac
         fi
         case " $* " in
+            *" --variant-id-only "*) echo "00000000-0000-4000-8000-000000000001" ;;
+            *" --ai-context-attach --host-permit "*)
+                while [[ "$1" != --host-permit ]]; do shift; done
+                python3 - "$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock" "${@:2}" <<'PY'
+import json, socket, sys
+for mapping in sys.argv[3:]:
+    alias, path = mapping.split("=", 1)
+    with socket.socket(socket.AF_UNIX) as client:
+        client.connect(sys.argv[1])
+        payload = dict(op="attach", variant_id="00000000-0000-4000-8000-000000000001",
+                       alias=alias, path=path, host_permit=sys.argv[2])
+        client.sendall(json.dumps(payload).encode() + b"\n")
+        reply = json.loads(client.makefile("rb").readline())
+        assert reply["ok"] and reply["result"]["path"] == path, reply
+PY
+                ;;
             *" --ai-assess "*" --json "*|*" --ai-review "*" --json "*) echo '{"results": []}' ;;
         esac
         exit "${VULNSCOUT_TEST_EXEC_EXIT:-0}"
@@ -723,7 +739,6 @@ run_ok config list
 assert_stdout "VULNSCOUT_HOST_ROOTS=$TEST_DIR/with spaces"
 refute_stdout "/unapproved"
 if grep -Fq "$TEST_DIR/with spaces" "$app_config"; then exit 1; fi
-VULNSCOUT_HOST_ROOTS="" expect_fail "no approved host roots" ai-context helper start
 run_ok config unset VULNSCOUT_HOST_ROOTS
 run_ok config unset VULNSCOUT_IMAGE
 expect_fail "config key not set: VULNSCOUT_HOST_ROOTS" config get VULNSCOUT_HOST_ROOTS
@@ -740,7 +755,7 @@ expect_fail "invalid alias 'Bad'" ai-context attach -p demo "Bad=$TEST_DIR"
 expect_fail "expected <alias>=<host path>, got 'src'." ai-context attach src
 expect_fail "host folder not found: $TEST_DIR/missing" ai-context attach "src=$TEST_DIR/missing"
 expect_fail "alias 'src' is given twice." ai-context attach "src=$TEST_DIR" "src=$TEST_DIR"
-expect_fail "no approved host roots" ai-context attach "src=$TEST_DIR"
+expect_fail "cannot attach the host root directory" ai-context attach "src=/"
 expect_fail "'ai-context helper' does not accept --project or --variant." ai-context helper status -p demo
 expect_fail "invalid alias '../x'" ai-context detach ../x
 expect_fail "'ai-context list' does not accept option --all." ai-context list --all
@@ -762,12 +777,12 @@ fi
 if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     roots="$TEST_DIR/roots"
     mkdir -p "$roots/app" "$roots/build"
-    run_ok config set VULNSCOUT_HOST_ROOTS "$roots"
     socket="$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock"
     trap 'VULNSCOUT_HOST_ROOTS="" "$ROOT_DIR/vulnscout" ai-context helper stop > /dev/null 2>&1 || true; rm -rf "$TEST_DIR"' EXIT
 
     run_ok ai-context attach -p demo -v x86 "src=$roots/app/../app" "build=$roots/build"
-    assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-attach src=$roots/app build=$roots/build"
+    assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-attach --host-permit permit."
+    assert_log "src=$roots/app build=$roots/build"
     assert_stdout "Host folder helper running as"
     if [ ! -S "$socket" ] || [ "$(stat -c %a "$socket")" != 600 ] ||
         [ "$(stat -c %a "$(dirname "$socket")")" != 700 ]; then
@@ -777,7 +792,7 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     fi
 
     run_ok ai-context helper status
-    assert_stdout "$roots"
+    refute_stdout "$roots"
 
     # An unchanged configuration reuses the running helper.
     pid="$(cat "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid")"

@@ -39,7 +39,8 @@ def list_mounts(variant_id: uuid.UUID) -> list[HostMount]:
     return HostMount.get_by_variant(variant_id)
 
 
-def attach(variant_id: uuid.UUID, alias: str, host_path: str) -> tuple[HostMount, bool]:
+def attach(variant_id: uuid.UUID, alias: str, host_path: str, *, host_permit: str | None = None
+           ) -> tuple[HostMount, bool]:
     """Register a folder with the helper, then store it; returns (mount, created).
 
     Re-attaching the same folder under the same alias is a no-op.
@@ -53,13 +54,14 @@ def attach(variant_id: uuid.UUID, alias: str, host_path: str) -> tuple[HostMount
     if existing is not None:
         if host_path == existing.host_path:
             # Revalidate the stored path without following a moved folder to a new target.
-            helper.call("attach", variant_id=str(variant_id), alias=alias, path=existing.host_path, exact=True)
+            helper.call("attach", variant_id=str(variant_id), alias=alias,
+                        path=existing.host_path, exact=True, host_permit=host_permit)
         elif helper.call("browse", path=host_path)["path"] != existing.host_path:
             raise HostMountConflict(
                 f"Alias '{alias}' is already attached to {existing.host_path}; detach it first."
             )
         return existing, False
-    result = helper.call("attach", variant_id=str(variant_id), alias=alias, path=host_path)
+    result = helper.call("attach", variant_id=str(variant_id), alias=alias, path=host_path, host_permit=host_permit)
     mount = HostMount(variant_id=variant_id, alias=alias, host_path=result["path"],
                       created_at=datetime.now(timezone.utc))
     try:

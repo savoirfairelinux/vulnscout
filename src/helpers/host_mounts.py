@@ -11,8 +11,7 @@ from .host_mount_helper import ALIAS_RE, ALIAS_RULE
 HELPER_DIRECTORY = "host-helper"
 CALL_TIMEOUT = protocol.SEARCH_TIME_LIMIT + 20.0
 UNAVAILABLE_MESSAGE = (
-    "Host folder helper is not running. On the container host, set VULNSCOUT_HOST_ROOTS "
-    "and run './vulnscout ai-context helper start' (or any vulnscout command)."
+    "Host folder helper is not running. On the container host, run './vulnscout ai-context helper start'."
 )
 # Helper error code -> HTTP status.
 HTTP_STATUS = {

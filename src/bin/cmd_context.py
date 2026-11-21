@@ -147,13 +147,14 @@ def _scoped(command):
 
 @click.command("ai-context-attach", cls=Command)
 @click.argument("mappings", nargs=-1, required=True)
+@click.option("--host-permit", hidden=True)
 @_scoped
 @with_appcontext
-def ai_context_attach_command(mappings: tuple[str, ...], project: str, variant: str) -> None:
+def ai_context_attach_command(mappings: tuple[str, ...], project: str, variant: str, host_permit: str | None) -> None:
     """Attach host folders to a variant's AI context as ALIAS=HOST_PATH pairs.
 
-    Folders must be inside a root approved by the operator (VULNSCOUT_HOST_ROOTS);
-    the host folder helper serves them read-only, without copying files.
+    The host wrapper approves each folder explicitly; direct container commands
+    require an approved root. The host helper serves the files read-only.
     """
     pairs = []
     for mapping in mappings:
@@ -166,7 +167,7 @@ def ai_context_attach_command(mappings: tuple[str, ...], project: str, variant: 
     failed = False
     for alias, path in pairs:
         try:
-            mount, created = host_mounts.attach(variant_obj.id, alias, path)
+            mount, created = host_mounts.attach(variant_obj.id, alias, path, host_permit=host_permit)
         except (HostMountConflict, ValueError) as exc:
             echo(f"Error: {alias}: {exc}", err=True, role="error")
             failed = True
@@ -188,10 +189,14 @@ def ai_context_attach_command(mappings: tuple[str, ...], project: str, variant: 
 @click.command("ai-context-list", cls=Command)
 @_scoped
 @click.option("--json", "as_json", is_flag=True, help="Print the attachments as JSON.")
+@click.option("--variant-id-only", is_flag=True, hidden=True)
 @with_appcontext
-def ai_context_list_command(project: str, variant: str, as_json: bool) -> None:
+def ai_context_list_command(project: str, variant: str, as_json: bool, variant_id_only: bool) -> None:
     """List the host folders attached to a variant, with their availability."""
     _, variant_obj = resolve_project_variant(project, variant, create=False)
+    if variant_id_only:
+        click.echo(str(variant_obj.id))
+        return
     mounts = host_mounts.list_mounts(variant_obj.id)
     helper_state, statuses = host_mounts.availability(variant_obj.id, mounts)
     rows = [{**mount.to_dict(), **statuses[mount.alias]} for mount in mounts]

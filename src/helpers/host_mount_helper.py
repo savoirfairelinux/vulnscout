@@ -256,15 +256,23 @@ class Registry:
         with self.lock:
             return {alias: entry["path"] for alias, entry in self.data.get(variant_id, {}).items()}
 
-    def set(self, variant_id: str, alias: str, path: str) -> None:
+    def host_approved(self, variant_id: str, alias: str, path: str) -> bool:
+        with self.lock:
+            entry = self.data.get(variant_id, {}).get(alias, {})
+            return entry.get("host_approved") == "yes" and entry.get("path") == path
+
+    def set(self, variant_id: str, alias: str, path: str, *, host_approved: bool = False) -> None:
         with self.lock:
             aliases = self.data.setdefault(variant_id, {})
             if alias not in aliases and len(aliases) >= MAX_ATTACHMENTS_PER_VARIANT:
                 raise HelperError(
                     "limit", f"A variant can have at most {MAX_ATTACHMENTS_PER_VARIANT} attached folders.")
-            if aliases.get(alias, {}).get("path") == path:
+            previous = aliases.get(alias, {})
+            if previous.get("path") == path and (not host_approved or previous.get("host_approved") == "yes"):
                 return
             aliases[alias] = {"path": path, "created_at": datetime.now(timezone.utc).isoformat()}
+            if host_approved:
+                aliases[alias]["host_approved"] = "yes"
             self._save()
 
     def remove(self, variant_id: str, alias: str) -> bool:
@@ -414,6 +422,7 @@ class Helper:
 
     def __init__(self, roots: list[str], state_dir: str):
         self.roots = list(roots)
+        self.state_dir = state_dir
         self.registry = Registry(state_dir)
         self.operations: dict[str, Callable[[dict], dict]] = {
             "status": self.status, "browse": self.browse, "attach": self.attach, "detach": self.detach,
@@ -469,17 +478,17 @@ class Helper:
             raise HelperError("unavailable", "Host folder cannot be opened.") from None
 
     def _attachment_fd(self, request: dict) -> int:
+        variant_id = _variant_id(request)
+        alias = validate_alias(request.get("alias"))
         authorized_path = request.get("authorized_path")
         if authorized_path is not None:
             authorized_folder = _string({"path": authorized_path}, "path")
-            real, root = self._checked(authorized_folder)
+            real, root = self._checked(variant_id, alias, authorized_folder)
             return self._open_folder(real, root)
-        variant_id = _variant_id(request)
-        alias = validate_alias(request.get("alias"))
         path = self.registry.get(variant_id, alias)
         if path is None:
             raise HelperError("not_found", f"No folder is attached as '{alias}' for this variant.")
-        real, root = self._checked(path)
+        real, root = self._checked(variant_id, alias, path)
         return self._open_folder(real, root)
 
     def _scoped_fd(self, request: dict) -> tuple[int, str]:
@@ -502,7 +511,10 @@ class Helper:
             raise HelperError("unavailable", "Folder cannot be opened.") from None
         return current, "".join(f"{part}/" for part in parts)
 
-    def _checked(self, path: str) -> tuple[str, str]:
+    def _checked(self, variant_id: str, alias: str, path: str) -> tuple[str, str]:
+        if self.registry.host_approved(variant_id, alias, path):
+            # Already canonical when granted. _open_folder walks it from / without following links.
+            return path, path
         real, root = self._approved(path)
         if real != path:
             raise HelperError("unavailable", _MOVED)
@@ -555,11 +567,37 @@ class Helper:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
         path = _string(request, "path")
-        real = self._validated_folder(path)
+        permit = request.get("host_permit")
+        if permit is not None:
+            # Only the host wrapper can create a permit in this non-mounted directory.
+            if not isinstance(permit, str) or not re.fullmatch(r"permit\.[a-zA-Z0-9]{12}", permit):
+                raise HelperError("forbidden", "Invalid host attachment permit.")
+            try:
+                permit_file = os.path.join(self.state_dir, permit, alias)
+                with open(permit_file, "rb") as handle:
+                    approval = handle.read()
+            except FileNotFoundError:
+                raise HelperError("forbidden", "Host attachment permit has expired.") from None
+            if (approval != variant_id.encode() + b"\0" + os.fsencode(path)
+                    or not os.path.isabs(path) or path == "/" or os.path.realpath(path) != path):
+                raise HelperError("forbidden", "Host attachment permit does not authorize this folder.")
+            if any(_excluded(part) for part in path.split("/") if part):
+                raise HelperError("forbidden", "Hidden or sensitive folders cannot be attached.")
+            try:
+                os.unlink(permit_file)
+            except FileNotFoundError:
+                raise HelperError("forbidden", "Host attachment permit has expired.") from None
+            os.close(self._open_folder(path, path))
+            real = path
+        elif request.get("exact") is True:
+            real, root = self._checked(variant_id, alias, path)
+            os.close(self._open_folder(real, root))
+        else:
+            real = self._validated_folder(path)
         if request.get("exact") is True and real != path:
             # Re-registration of a stored attachment must not silently follow a replaced folder.
             raise HelperError("unavailable", _MOVED)
-        self.registry.set(variant_id, alias, real)
+        self.registry.set(variant_id, alias, real, host_approved=permit is not None)
         return {"variant_id": variant_id, "alias": alias, "path": real}
 
     def detach(self, request: dict) -> dict:
@@ -598,9 +636,8 @@ class Helper:
             if not isinstance(path, str) or not path or len(path) > MAX_PATH_CHARS:
                 raise HelperError("invalid", "Each attachment needs a host path.")
             try:
-                real = self._validated_folder(path)
-                if real != path:
-                    raise HelperError("unavailable", _MOVED)
+                real, root = self._checked(variant_id, alias, path)
+                os.close(self._open_folder(real, root))
                 self.registry.set(variant_id, alias, real)
                 report[alias] = {"status": "available", "message": "Folder is available read-only."}
             except HelperError as exc:
@@ -993,7 +1030,7 @@ def _serve(args: argparse.Namespace) -> int:
         return 1
     try:
         roots = canonical_roots(args.root, warn=lambda text: print(f"Warning: {text}", file=sys.stderr))
-        if not roots:
+        if args.root and not roots:
             raise ValueError("No approved host root exists; set VULNSCOUT_HOST_ROOTS to existing folders.")
         os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
         os.chmod(args.state_dir, 0o700)

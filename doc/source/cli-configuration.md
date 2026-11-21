@@ -116,7 +116,7 @@ Export `VULNSCOUT_BUILD_DIR` to select a different launcher configuration.
 Container name, image, host mount directories, approved roots, helper state
 directory, and `VITE_API_URL` can be set persistently. Explicit host environment
 values override these saved settings, including an empty `VULNSCOUT_HOST_ROOTS`
-to disable the helper. `config get` and `list` show stored values, not environment
+to disable picker roots. `config get` and `list` show stored values, not environment
 overrides. The launcher explicitly forwards host `GRYPE_MEMLIMIT` and
 `SBOM_CVE_CHECK_AUTO_UPDATE` at container creation, but does not inject later
 host changes into `docker exec`/`podman exec`. Restart after environment, mount,
@@ -137,7 +137,7 @@ an already-running web server must be restarted to pick up config-file changes.
 | `VITE_API_URL` | Optional backend API URL for the dev frontend (empty uses Vite's same-origin `/api` proxy) | empty |
 | `USER_UID` | UID used to write output files | current user |
 | `USER_GID` | GID used to write output files | current group |
-| `VULNSCOUT_HOST_ROOTS` | Colon-separated absolute host folders under which folders may be attached to the AI context (`ai-context attach`, **Attach folder**). Unset disables the host folder helper; see [Attached host folders](ai-assessments.md#attached-host-folders) | unset |
+| `VULNSCOUT_HOST_ROOTS` | Optional colon-separated absolute roots for the web picker and API. The host `ai-context attach` command approves its own exact folders and does not need this setting; see [Attached host folders](ai-assessments.md#attached-host-folders) | unset |
 | `VULNSCOUT_HOST_HELPER_STATE_DIR` | Host-only directory of the host folder helper (alias registry, PID and log); export on the host | `$VULNSCOUT_BUILD_DIR/host-helper` |
 
 The wrapper always publishes host port `7275` to container port `7275`; changing

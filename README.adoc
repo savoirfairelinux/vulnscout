@@ -119,8 +119,8 @@ over stdio. MCP tools call VulnScout's REST API rather than accessing the
 database directly. The embedded Agent has no shell, arbitrary filesystem,
 or web research tools; source evidence is provided through uploaded references,
 the variant's codebase directory, or host folders attached read-only with
-`./vulnscout ai-context attach` (served by an unprivileged host helper within
-operator-approved roots; see
+`./vulnscout ai-context attach -p demo -v x86 src=/work/app` (no prior
+configuration needed; see
 link:doc/source/ai-assessments.md#attached-host-folders[Attached host folders]).
 
 The embedded Agent is *localhost-only and single-user*. Provider credentials
