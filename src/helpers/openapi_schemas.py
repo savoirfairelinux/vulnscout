@@ -431,6 +431,20 @@ SCHEMAS: dict[str, Any] = {
         "file_count": {**_COUNT, "nullable": True},
         "directory_count": {**_COUNT, "nullable": True},
     }, ("file_id", "path", "status", "message", "file_count", "directory_count")),
+    "HostMount": _object({
+        "alias": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
+        "file_id": {"type": "string", "example": "mount:src"},
+        "host_path": _STRING, "created_at": _DATE,
+        "status": {"type": "string", "enum": ["available", "unavailable"]},
+        "message": _STRING,
+    }, ("alias", "file_id", "host_path", "created_at", "status", "message")),
+    "HostMountList": _object({
+        "helper": _object({"available": _BOOL, "message": _TEXT}, ("available", "message")),
+        "mounts": _array(_ref("HostMount")),
+    }, ("helper", "mounts")),
+    "HostMountDetached": _object({
+        "alias": _STRING, "detached": _BOOL, "warning": _TEXT,
+    }, ("alias", "detached", "warning")),
     "ProjectContext": _object({
         "project_id": _UUID, "description": _TEXT,
     }, ("project_id", "description")),
@@ -474,8 +488,12 @@ SCHEMAS: dict[str, Any] = {
         "project_id": _UUID, "description": _TEXT, "variant_id": _UUID,
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
         "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
+        "mounts": _array(_object({
+            "alias": _STRING, "file_id": _STRING,
+        }, ("alias", "file_id")),
+            description="Host folders attached read-only; browse them with file_id mount:<alias>."),
         "editor": _ref("VariantContextEditor"),
-    }, ("project_id", "variant_id", "description", "files")),
+    }, ("project_id", "variant_id", "description", "files", "mounts")),
     "ScanConfiguration": _object({
         "exclude_native": _BOOL,
         "native_package_exceptions": _array({"type": "string", "maxLength": 255, "example": "gcc-native"}),
@@ -719,6 +737,7 @@ SCHEMAS: dict[str, Any] = {
                 "file_id": _STRING, "original_name": _STRING, "path": _STRING, "content": _STRING,
                 "start_line": _INT, "end_line": _INT, "total_lines": _COUNT,
                 "next_line": {**_INT, "nullable": True},
+                "partial_line": _BOOL,
             }, ("file_id", "original_name", "path", "content", "start_line", "end_line", "total_lines", "next_line")),
             _object({
                 "file_id": _STRING, "original_name": _STRING, "truncated": _BOOL,

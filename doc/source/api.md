@@ -509,6 +509,44 @@ or separate editor save is required.
 See [administrator directory setup](ai-assessments.md#administrator-provided-codebase-directories)
 for naming, retention, copying, read-only mounts and permissions.
 
+### Attached Host Folders
+
+```
+GET /api/variants/<variant_id>/context/mounts
+DELETE /api/variants/<variant_id>/context/mounts/<alias>
+GET /api/variants/<variant_id>/context/files/mount:<alias>/source
+```
+
+Only `./vulnscout ai-context attach` on the host can authorize a folder.
+The REST API cannot enumerate unattached host paths or grant access to them. `GET .../mounts` returns
+`{"helper": {"available", "message"}, "mounts": [...]}` with each folder's `status`
+(`available` or `unavailable`) and `message`. `DELETE` returns
+`{"alias", "detached": true, "warning": str|null}`; access ends immediately even if the helper
+could not be updated. The backend records pending cleanup in the same transaction
+and retries it when the helper is reachable. Cleanup is scoped to the deleted
+attachment ID, not just its alias. `GET /api/context` lists only `alias` and `file_id` for each mount;
+absolute host paths are available only through the operator endpoints.
+
+Host-folder management, browsing and source reads are restricted to local operator requests.
+Browser requests must be same-origin; remote clients and cross-origin browser requests receive
+`403`. This does not change local Agent or MCP access.
+
+The source route accepts the same `operation=list|read|search` parameters as uploads and the
+codebase directory. Host listings and searches return `engine="python"` and mark results
+`truncated` with a `message` when a budget, an I/O error or an unreadable path format
+limits coverage. `skipped_paths` counts files omitted because their paths cannot
+be passed to the read operation. Searches also report
+`bytes_read` (including nonmatches), `io_errors`, `skipped_binary_files` and `skipped_large_files`.
+When the 64 KiB JSON limit cuts a listing short, use `next_offset` to resume
+after the last file returned. Searches return the matches that fit; narrow the
+folder, pattern or query if the response is truncated.
+
+Errors: `400` invalid alias, path or parameters (including a `pattern` over 512 characters or
+with more than 16 `*`/`?` wildcards); `403` access denied;
+`404` unknown variant, alias or folder; `409` folder unavailable;
+`503` helper not running.
+See [Attached host folders](ai-assessments.md#attached-host-folders).
+
 ### Browse Codebase Source
 
 ```
@@ -525,7 +563,11 @@ use the literal `file_id=directory`; unprovisioned directories return `404`.
 | `read` | `path` (exact listed member path), `start_line` (1-based, default 1), `max_lines` (1-200, default 200) | UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`; at most 64 KB of content |
 | `search` | `query` (1-200 characters, literal case-sensitive text), `pattern` (glob, default `*`), `max_results` (1-100, default 100) | `matches` with `path`/`line`/`text` (500-character snippets), `truncated`, `searched_files`, `skipped_binary_files` |
 
-Every response includes `file_id` and `original_name`. Follow pagination for complete evidence and narrow
+For `mount:<alias>` reads, `partial_line: true` means only a prefix of the
+requested line fits in the serialized response. Its suffix is omitted;
+`next_line` points to the following line, not the omitted suffix.
+
+Every response includes `file_id` and `original_name`. Follow pagination for further evidence and narrow
 truncated searches. Binary/non-UTF-8 files return 400 for reads and are counted as skipped in searches.
 Missing references/members return 404; unavailable stored files return 500 with an explicit error.
 Individual files use their original name as the listed path. No arbitrary host path is accepted.

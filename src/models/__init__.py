@@ -27,4 +27,5 @@ from .refresh_run import (
 from .vulnerability_history import VulnerabilityHistory
 from .project_context import ProjectContext
 from .variant_context import VariantContext, ContextFile
+from .host_mount import HostMount
 from .assessment_review import AssessmentReview
