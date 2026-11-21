@@ -740,6 +740,29 @@ describe('Review — bulk AI reviews', () => {
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 6));
     });
 
+    test('refreshes a new variant without waiting for or applying old variant reads', async () => {
+        network([makeAssessment('a1', 'v1')]);
+        const { rerender } = render(<Review variantId="v1" />);
+        await screen.findAllByTitle('Select');
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        const stale = async (request: Request) => {
+            await pending;
+            return request.url.includes('/assessment-reviews') ? '{}' : '[]';
+        };
+        fetchMock.mockResponseOnce(stale).mockResponseOnce(stale).mockResponseOnce(stale);
+        const announce = () => window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT));
+        await act(async () => { announce(); announce(); });
+        rerender(<Review variantId="v2" />);
+        await screen.findAllByTitle('Select');
+        const before = fetchMock.mock.calls.length;
+        await act(async () => { announce(); });
+        expect(fetchMock).toHaveBeenCalledTimes(before + 3);
+        await act(async () => { release(); });
+        expect(screen.getAllByTitle('Select')).not.toHaveLength(0);
+        expect(fetchMock).toHaveBeenCalledTimes(before + 3);
+    });
+
     test('the agent chat follows the backend queue: running, failed elsewhere, retry, and paused', async () => {
         mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1'), makeAssessment('a3', 'v1')]);
         serveAgentQueue(path => path.endsWith('/models') ? { models: [{ id: 'auto', name: 'Auto' }] } : {

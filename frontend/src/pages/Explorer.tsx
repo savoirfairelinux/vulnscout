@@ -386,7 +386,7 @@ function Explorer() {
                 currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation)
             : undefined,
         loadSetupRequirement(),
-    ]), loadGeneration);
+    ]), { revision: loadGeneration });
 
     useEffect(() => {
         const previous = observedOperationActivity.current;
