@@ -102,14 +102,15 @@ describe('EditAiAssessment', () => {
         const user = userEvent.setup();
         render(<EditAiAssessment assessment={{ ...aiAssessment, status: 'not_affected' }}
             onConfirm={onConfirm} onCancel={jest.fn()} />);
-        await user.selectOptions(screen.getByRole('combobox'), 'component_not_present');
+        expect(screen.getByRole('option', { name: 'Component not present' })).toBeDisabled();
+        await user.selectOptions(screen.getByRole('combobox'), 'code_not_reachable');
         const impact = screen.getByPlaceholderText(/Why this vulnerability is not exploitable/i);
         await user.clear(impact);
         await user.type(impact, 'Reviewed impact');
         await user.clear(screen.getByPlaceholderText(/Describe workaround/i));
         await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
         expect(onConfirm).toHaveBeenCalledWith({
-            expected_fingerprint: 'original', justification: 'component_not_present',
+            expected_fingerprint: 'original', justification: 'code_not_reachable',
             impact_statement: 'Reviewed impact', workaround: '',
         });
     });
@@ -160,6 +161,7 @@ describe('EditAiAssessment', () => {
             onCancel={jest.fn()}
         />);
         const user = userEvent.setup();
+        expect(screen.getByRole('combobox')).toBeDisabled();
 
         await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
 

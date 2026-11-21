@@ -702,7 +702,7 @@ def test_approve_with_edits_applies_content_and_promotes_atomically(client, app)
                    status_notes="AI rationale").json["assessment"]["id"]
 
     resp = client.post(f"/api/assessments/{aid}/approve", json={
-        "justification": "component_not_present",
+        "justification": "code_not_reachable",
         "impact_statement": "Edited impact",
         "status_notes": "Edited message",
         "workaround": "Edited workaround",
@@ -719,12 +719,32 @@ def test_approve_with_edits_applies_content_and_promotes_atomically(client, app)
         "status": "not_affected",
         "simplified_status": "Not affected",
         "status_notes": "Edited message",
-        "justification": "component_not_present",
+        "justification": "code_not_reachable",
         "impact_statement": "Edited impact",
         "workaround": "Edited workaround",
     }
     listed = json.loads(client.get("/api/assessments?format=list").data)
     assert any(a["id"] == aid and a["status_notes"] == "Edited message" for a in listed)
+
+
+@pytest.mark.parametrize("original,edited,exported", [
+    ("code_not_reachable", "component_not_present", "not_affected"),
+    ("component_not_present", "code_not_reachable", "false_positive"),
+])
+def test_approve_preserves_exported_verdict(client, app, original, edited, exported):
+    pending = _post_ai(client, status="not_affected", justification=original).json["assessment"]
+    aid = pending["id"]
+    before = _stored(app, aid)
+    response = client.post(f"/api/assessments/{aid}/approve", json={
+        "justification": edited, "status_notes": "Revised", "expected_fingerprint": pending["approval_fingerprint"],
+    })
+    assert response.status_code == 400
+    assert "CycloneDX verdict" in response.json["error"]
+    assert _stored(app, aid) == before
+    assert client.post(f"/api/assessments/{aid}/approve", json={"status_notes": "Revised"}).status_code == 200
+    with app.app_context():
+        approved = DBAssessment.get_by_id(aid)
+        assert approved.to_cdx_vex_dict()["analysis"]["state"] == exported
 
 
 def test_approve_with_partial_edit_keeps_other_fields(client, app):
