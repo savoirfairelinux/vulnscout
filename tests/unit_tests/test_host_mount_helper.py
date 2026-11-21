@@ -10,6 +10,7 @@ import socket
 import stat
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -487,6 +488,34 @@ def test_socket_round_trip_and_cleanup(server, helper, tree):
     assert hh.request(server.socket_path, {"op": "activate", **staged, "attachment_id": params["attachment_id"]})["ok"]
     reply = hh.request(server.socket_path, {"op": "read", "variant_id": VARIANT, "alias": "src", "path": "README"})
     assert reply["result"]["total_lines"] == 3
+
+
+def test_stalled_activation_does_not_block_other_socket_requests(server, helper, tree, monkeypatch):
+    monkeypatch.setattr(hh, "_NAME_TO_HANDLE_AT", None)
+    attached(helper, tree)
+    params = grant(helper, tree["outside"], alias="slow")
+    staged = ok(helper, "stage", **params)
+    entered, release = threading.Event(), threading.Event()
+    open_folder = helper._open_folder
+
+    def stall(path):
+        if path == params["path"]:
+            entered.set()
+            assert release.wait(10)
+        return open_folder(path)
+
+    monkeypatch.setattr(helper, "_open_folder", stall)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        activation = pool.submit(hh.request, server.socket_path,
+                                 {"op": "activate", **staged, "attachment_id": params["attachment_id"]})
+        try:
+            assert entered.wait(3)
+            assert hh.request(server.socket_path, {"op": "status"}, timeout=2)["ok"]
+            read = {"op": "read", "variant_id": VARIANT, "alias": "src", "path": "README"}
+            assert hh.request(server.socket_path, read, timeout=2)["result"]["total_lines"] == 3
+        finally:
+            release.set()
+        assert activation.result()["ok"]
 
 
 def _raw_exchange(path, payload):

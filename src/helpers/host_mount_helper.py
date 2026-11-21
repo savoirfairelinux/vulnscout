@@ -250,10 +250,11 @@ def _directory_handle(fd: int, boot: bytes | None) -> str | None:
 class _SessionPin:
     """Own an exact directory descriptor until activation is abandoned or the grant is detached."""
 
-    def __init__(self, fd: int, attachment_id: str):
+    def __init__(self, fd: int, attachment_id: str, info: os.stat_result):
         self.fd = os.dup(fd)
         self.close = weakref.finalize(self, os.close, self.fd)
         self.attachment_id = attachment_id
+        self.info = info
         self.expires = time.monotonic() + STAGED_PIN_SECONDS
 
 
@@ -572,7 +573,8 @@ class Helper:
         self._key = _proof_key(state_dir)
         self._boot = _boot_id()
         self._pins: dict[str, _SessionPin] = {}
-        self._pin_lock = threading.RLock()
+        self._pin_lock = threading.Lock()
+        self._mutation_lock = threading.Lock()
         self.operations: dict[str, Callable[[dict], dict]] = {
             "status": self.status, "detach": self.detach,
             "source": self.source, "stage": self.stage, "activate": self.activate,
@@ -610,27 +612,31 @@ class Helper:
             raise HelperError("unavailable", "Host folder cannot be opened.") from None
 
     def expire_pending_pins(self) -> None:
-        with self._pin_lock:
+        if not self._pin_lock.acquire(blocking=False):
+            return
+        try:
             now = time.monotonic()
-            for key, pin in list(self._pins.items()):
-                if pin.expires <= now:
-                    self._pins.pop(key).close()
+            expired = [self._pins.pop(key) for key, pin in list(self._pins.items()) if pin.expires <= now]
+        finally:
+            self._pin_lock.release()
+        for pin in expired:
+            pin.close()
 
     def _approval_identity(self, fd: int, attachment_id: str) -> str:
         durable = _directory_handle(fd, self._boot)
         if durable is not None:
             return durable
+        self.expire_pending_pins()
+        info = os.fstat(fd)
         with self._pin_lock:
-            self.expire_pending_pins()
-            info = os.fstat(fd)
             for key, pin in self._pins.items():
-                if pin.attachment_id == attachment_id and os.path.samestat(info, os.fstat(pin.fd)):
+                if pin.attachment_id == attachment_id and os.path.samestat(info, pin.info):
                     pin.expires = max(pin.expires, time.monotonic() + STAGED_PIN_SECONDS)
                     return key
             if len(self._pins) >= MAX_SESSION_PINS:
                 raise HelperError("limit", "Session-only folder limit reached; detach unused folders and retry.")
             key = "s" + uuid.uuid4().hex
-            self._pins[key] = _SessionPin(fd, attachment_id)
+            self._pins[key] = _SessionPin(fd, attachment_id, info)
             return key
 
     def _open_approved(self, path: str, identity: str) -> int:
@@ -641,10 +647,14 @@ class Helper:
                     pin = self._pins.get(identity)
                     if pin is None or pin.expires <= time.monotonic():
                         raise HelperError("unavailable", "Session-only approval expired; reattach with the host CLI.")
-                    info = os.fstat(pin.fd)
+                    pinned_fd = os.dup(pin.fd)
+                try:
+                    info = os.fstat(pinned_fd)
                     if info.st_nlink and os.path.samestat(info, os.fstat(fd)):
                         # Serve the pinned object, never merely one reporting the same inode.
-                        return os.open(".", _DIRECTORY_FLAGS, dir_fd=pin.fd)
+                        return os.open(".", _DIRECTORY_FLAGS, dir_fd=pinned_fd)
+                finally:
+                    os.close(pinned_fd)
             elif _directory_handle(fd, self._boot) == identity:
                 return os.dup(fd)
             raise HelperError("unavailable", _MOVED)
@@ -737,25 +747,42 @@ class Helper:
                 or not hmac.compare_digest(proof, self._proof(attachment_id, variant_id, alias, path, match[1]))):
             raise HelperError("forbidden", "No valid host approval; reattach this folder with the host CLI.")
         identity = match[1]
-        with self._pin_lock:
-            os.close(self._open_approved(path, identity))
-            self.registry.set(variant_id, alias, path, attachment_id=attachment_id, identity=identity)
-            for key, pin in list(self._pins.items()):
-                if key == identity:
+        os.close(self._open_approved(path, identity))
+        # Order registry publication and pin retirement, but never wait for the
+        # attached filesystem while holding either shared lock.
+        with self._mutation_lock:
+            with self._pin_lock:
+                pin = self._pins.get(identity)
+                if identity.startswith("s") and (pin is None or pin.expires <= time.monotonic()):
+                    raise HelperError("unavailable", "Session-only approval expired; reattach with the host CLI.")
+                if pin is not None:
+                    previous_expiry = pin.expires
                     pin.expires = float("inf")
-                elif pin.attachment_id == attachment_id and pin.expires == float("inf"):
-                    self._pins.pop(key).close()
+            try:
+                self.registry.set(variant_id, alias, path, attachment_id=attachment_id, identity=identity)
+            except BaseException:
+                if pin is not None:
+                    with self._pin_lock:
+                        pin.expires = previous_expiry
+                raise
+            with self._pin_lock:
+                retired = [self._pins.pop(key) for key, old in list(self._pins.items())
+                           if key != identity and old.attachment_id == attachment_id and old.expires == float("inf")]
+        for old in retired:
+            old.close()
         return {"path": path}
 
     def detach(self, request: dict) -> dict:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
         attachment_id = _string(request, "attachment_id", maximum=36)
-        with self._pin_lock:
+        with self._mutation_lock:
             removed = self.registry.remove(variant_id, alias, attachment_id=attachment_id, retire=True)
-            for key, pin in list(self._pins.items()):
-                if pin.attachment_id == attachment_id:
-                    self._pins.pop(key).close()
+            with self._pin_lock:
+                retired = [self._pins.pop(key) for key, pin in list(self._pins.items())
+                           if pin.attachment_id == attachment_id]
+        for pin in retired:
+            pin.close()
         return {"removed": removed}
 
     def source(self, request: dict) -> dict:
@@ -1037,9 +1064,19 @@ class HelperServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     request_queue_size = 32
 
-    def service_actions(self) -> None:
-        super().service_actions()
-        self.helper.expire_pending_pins()
+    def serve_forever(self, poll_interval: float = 0.5) -> None:
+        stopped = threading.Event()
+
+        def sweep() -> None:
+            # Even closing the last descriptor can wait on a remote filesystem.
+            while not stopped.wait(1):
+                self.helper.expire_pending_pins()
+
+        threading.Thread(target=sweep, daemon=True).start()
+        try:
+            super().serve_forever(poll_interval)
+        finally:
+            stopped.set()
 
     def __init__(self, socket_path: str, helper: Helper):
         self.helper = helper
