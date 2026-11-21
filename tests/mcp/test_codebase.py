@@ -6,7 +6,10 @@ import pytest
 import respx
 
 from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutClient, VulnScoutError
-from vulnscout_mcp.tools.context import _codebase_source_impl, _fmt_merged_context, register_tools
+from vulnscout_mcp.tools import context as context_tools
+from vulnscout_mcp.tools.context import (
+    _codebase_source_impl, _fmt_merged_context, _read_codebase_files_impl, register_tools,
+)
 
 BASE_URL = "http://vulnscout.test"
 
@@ -62,6 +65,38 @@ def test_scope_rejected_before_request(file_id):
         source.assert_called_once_with("v1", file_id, {"operation": "list"})
 
 
+def test_read_codebase_files_reads_in_order_and_isolates_errors():
+    client = VulnScoutClient(BASE_URL)
+
+    def fake(variant_id, file_id, params):
+        if params["path"] == "bad.c":
+            raise VulnScoutError("Source file not found or excluded.")
+        return {"path": params["path"], "content": "x\n", "start_line": params["start_line"]}
+
+    with patch.object(client, "get_codebase_source", side_effect=fake) as source:
+        result = json.loads(_read_codebase_files_impl(client, "v1", "mount:src", ["a.c", "bad.c", "b.c"], 2, 5))
+    assert [entry["path"] for entry in result["files"]] == ["a.c", "bad.c", "b.c"]
+    assert result["files"][1] == {"path": "bad.c", "error": "Source file not found or excluded."}
+    assert result["files"][0]["start_line"] == 2 and source.call_count == 3
+    source.assert_any_call("v1", "mount:src", {"operation": "read", "path": "a.c", "start_line": 2, "max_lines": 5})
+
+
+def test_read_codebase_files_validates_paths_and_caps_the_response(monkeypatch):
+    client = VulnScoutClient(BASE_URL)
+    assert _read_codebase_files_impl(client, "v1", "f", [], 1, 10).startswith("Error:")
+    assert "at most" in _read_codebase_files_impl(client, "v1", "f", [f"{i}.c" for i in range(9)], 1, 10)
+    monkeypatch.setattr(context_tools, "MAX_BATCH_BYTES", 210)
+    with patch.object(client, "get_codebase_source", return_value={"content": "y" * 80}):
+        response = _read_codebase_files_impl(client, "v1", "f", ["a.c", "b.c"], 1, 10)
+    assert len(response.encode()) <= 210
+    files = json.loads(response)["files"]
+    assert "content" in files[0] and "budget" in files[1]["error"]
+    with patch.object(client, "get_codebase_source", return_value={"content": "\u00e9" * 40}):
+        response = _read_codebase_files_impl(client, "v1", "f", ["a.c"], 1, 10)
+    assert len(response.encode()) <= 210 and "budget" in json.loads(response)["files"][0]["error"]
+    assert "budget" in _read_codebase_files_impl(client, "v1", "f", ["x" * 210], 1, 10)
+
+
 def test_directory_metadata_exposes_the_bounded_tool_id():
     result = _fmt_merged_context({
         "codebase_directory": {"file_id": "directory", "path": "/cache/vulnscout/context-p-v-id"},
@@ -88,6 +123,14 @@ def test_registered_tools_forward_parameters():
     with patch.object(client, "get_codebase_source", return_value={"ok": True}) as source:
         assert json.loads(server.tools["list_codebase_files"]("v1", "f1", "*.c", 10, 20)) == {"ok": True}
         source.assert_called_with("v1", "f1", {"operation": "list", "pattern": "*.c", "offset": 10, "limit": 20})
+        server.tools["list_codebase_files"]("v1", "mount:src", "*.c", 0, 5, "build/tmp")
+        source.assert_called_with("v1", "mount:src", {
+            "operation": "list", "pattern": "*.c", "offset": 0, "limit": 5, "folder": "build/tmp",
+        })
+        server.tools["search_codebase"]("v1", "mount:src", "needle", "*", 3, "build/tmp")
+        source.assert_called_with("v1", "mount:src", {
+            "operation": "search", "query": "needle", "pattern": "*", "max_results": 3, "folder": "build/tmp",
+        })
         server.tools["read_codebase_file"]("v1", "f1", "a.c", 3, 5)
         source.assert_called_with("v1", "f1", {
             "operation": "read", "path": "a.c", "start_line": 3, "max_lines": 5,
@@ -96,3 +139,40 @@ def test_registered_tools_forward_parameters():
         source.assert_called_with("v1", "f1", {
             "operation": "search", "query": "needle", "pattern": "*.c", "max_results": 3,
         })
+
+
+def test_merged_context_lists_mount_file_ids():
+    result = _fmt_merged_context({"mounts": [
+        {"alias": "src", "file_id": "mount:src", "host_path": "/work/app", "created_at": "2026-01-01T00:00:00Z"},
+    ]})
+    line = next(line for line in result.splitlines() if line.startswith("mounts="))
+    assert json.loads(line.split("=", 1)[1]) == [{"alias": "src", "file_id": "mount:src"}]
+    assert "mounts=[]" in _fmt_merged_context({})
+
+
+@pytest.mark.parametrize("operation", ["list", "read", "search"])
+def test_client_targets_one_mount_alias(operation):
+    with respx.mock:
+        route = respx.get(f"{BASE_URL}/api/variants/v1/context/files/mount%3Asrc/source").mock(
+            return_value=httpx.Response(200, json={"file_id": "mount:src", "matches": []}),
+        )
+        result = _codebase_source_impl(VulnScoutClient(BASE_URL), "v1", "mount:src", {"operation": operation})
+        assert json.loads(result)["file_id"] == "mount:src"
+        assert route.called
+
+
+def test_helper_unavailability_is_reported():
+    with respx.mock:
+        respx.get(f"{BASE_URL}/api/variants/v1/context/files/mount%3Asrc/source").mock(
+            return_value=httpx.Response(503, json={"error": "Host folder helper is not running."}),
+        )
+        result = _codebase_source_impl(VulnScoutClient(BASE_URL), "v1", "mount:src", {})
+        assert result == "Error: Host folder helper is not running."
+
+
+def test_mount_scope_rejected_before_request():
+    client = ScopedVulnScoutClient(BASE_URL, {"project_ids": ["p1"], "variant_ids": ["v1"]})
+    with patch.object(VulnScoutClient, "get_codebase_source") as source:
+        with pytest.raises(VulnScoutError, match="outside"):
+            client.get_codebase_source("v2", "mount:src", {})
+        source.assert_not_called()
