@@ -3050,6 +3050,31 @@ class TestProcessSBOMBackgroundEpss:
 
 class TestProcessSBOMBackgroundRefreshIsolation:
 
+    def test_explicit_no_refresh_preserves_latest_run(self, app, client, monkeypatch):
+        from src.extensions import db
+        from src.helpers.refresh_runs import create_run, finish_source
+        from src.models import Project, Scan, Variant
+        from src.models.refresh_run import RefreshRun
+        from src.routes.settings import _process_sbom_background
+
+        monkeypatch.setattr("src.bin.cmd_process.read_inputs", lambda *a, **k: None)
+        monkeypatch.setattr("src.bin.cmd_process.populate_observations", lambda *a, **k: None)
+
+        with app.app_context():
+            project = Project.create("NoRefreshProject")
+            variant = Variant.create("NoRefreshVariant", project.id)
+            scan = Scan.create("", variant.id)
+            previous = create_run({"epss": ["CVE-2020-35492"]})
+            finish_source(previous, "epss")
+            run_count = db.session.query(RefreshRun).count()
+
+            ctx = _register_upload_operation("upload:no-refresh")
+            _process_sbom_background(ctx, [], scan.id, variant.id, set())
+            ctx.flush()
+
+            assert db.session.query(RefreshRun).count() == run_count
+        assert client.get("/api/refresh-runs/latest").get_json()["run_id"] == previous
+
     def test_provider_reported_failure_reaches_the_operation(self, app, monkeypatch):
         """A provider that swallows a lookup failure still marks its refresh incomplete."""
         from src.routes.settings import _process_sbom_background

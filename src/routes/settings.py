@@ -206,17 +206,17 @@ def _process_sbom_background(
         def update_refresh_status(label: str, step: int, total: int) -> None:
             ctx.report(2, 3, f"Refreshing {label} data… ({step}/{total})")
 
-        failed_sources = refresh_vulnerability_sources(
-            controllers,
-            vulnCtrl._encountered_this_run,
-            refresh_sources,
-            update_refresh_status,
-        )
-
         done_message = "SBOM imported successfully."
-        if failed_sources:
-            unique_failed = list(dict.fromkeys(failed_sources))
-            done_message += f" ({', '.join(unique_failed)} refresh failed; check server logs.)"
+        if refresh_sources:
+            failed_sources = refresh_vulnerability_sources(
+                controllers,
+                vulnCtrl._encountered_this_run,
+                refresh_sources,
+                update_refresh_status,
+            )
+            if failed_sources:
+                unique_failed = list(dict.fromkeys(failed_sources))
+                done_message += f" ({', '.join(unique_failed)} refresh failed; check server logs.)"
 
         ctx.report(3, 3, done_message)
         ctx.log(done_message)
