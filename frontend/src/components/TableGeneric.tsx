@@ -61,6 +61,7 @@ type Props<DataType> = {
     selected?: RowSelectionState;
     updateSelected?: OnChangeFn<RowSelectionState>;
     hasPagination?: boolean;
+    clampPageOnFilter?: boolean;
     onFilteredDataChange?: (filteredData: DataType[]) => void;
     onFocusedRowChange?: (rowIndex: number | null) => void;
     onHoverData?: (item: DataType) => Promise<DataType | null | undefined>;
@@ -95,6 +96,7 @@ function TableGeneric<DataType> ({
     selected = undefined,
     updateSelected = () => {},
     hasPagination = true,
+    clampPageOnFilter = false,
     onFilteredDataChange,
     onFocusedRowChange,
     onHoverData,
@@ -228,10 +230,10 @@ function TableGeneric<DataType> ({
     const pageCount = Math.ceil(filteredData.length / itemsPerPage)
     const lastPageIndex = Math.max(0, pageCount - 1)
     useEffect(() => {
-        if (pageIndex > lastPageIndex) {
+        if (clampPageOnFilter && pageIndex > lastPageIndex) {
             setPagination(prev => ({ ...prev, pageIndex: lastPageIndex }))
         }
-    }, [pageIndex, lastPageIndex, setPagination])
+    }, [clampPageOnFilter, pageIndex, lastPageIndex, setPagination])
 
     const table = useReactTable({
         columns,
