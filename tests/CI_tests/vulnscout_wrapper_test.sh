@@ -80,12 +80,19 @@ PY
         ;;
     run)
         log_call "$@"
+        if [[ "${3:-}" = --entrypoint && "${4:-}" = cat ]]; then
+            cat "$VULNSCOUT_TEST_IMAGE_HELPER"
+        fi
         # Like 'run -d': the new container's ID on stdout.
         [ "${2:-}" != -d ] || echo 0123456789ab
         ;;
     inspect)
         log_call "$@"
         echo "${VULNSCOUT_TEST_IMAGE_VERSION:-v0.24}"
+        ;;
+    image)
+        [[ "$2" = inspect ]] || exit 99
+        printf 'sha256:%064d\n' 1
         ;;
     *)
         echo "Unexpected podman command: $*" >&2
@@ -100,6 +107,7 @@ printf '{}\n' > "$SBOM"
 export PATH="$TEST_DIR/bin:/usr/bin:/bin"
 export VULNSCOUT_BUILD_DIR="$TEST_DIR/build"
 export VULNSCOUT_TEST_LOG="$TEST_DIR/container.log"
+export VULNSCOUT_TEST_IMAGE_HELPER="$ROOT_DIR/src/helpers/host_mount_helper.py"
 : > "$VULNSCOUT_TEST_LOG"
 
 reset_log() {
@@ -781,6 +789,7 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     trap 'VULNSCOUT_HOST_ROOTS="" "$ROOT_DIR/vulnscout" ai-context helper stop > /dev/null 2>&1 || true; rm -rf "$TEST_DIR"' EXIT
 
     run_ok ai-context attach -p demo -v x86 "src=$roots/app/../app" "build=$roots/build"
+    assert_log "/scan/src/helpers/host_mount_helper.py"
     assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-attach --host-permit permit."
     assert_log "src=$roots/app build=$roots/build"
     assert_stdout "Host folder helper running as"

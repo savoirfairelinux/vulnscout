@@ -622,9 +622,9 @@ only local operator requests, and browser requests must be same-origin.
 - The wrapper starts or reuses, for CLI attachments or configured picker roots,
   an **unprivileged helper process on the host, as
   the invoking user** (never root; it refuses to run as root). It needs `python3`
-  3.9 or newer on the host and uses only its standard library. From a source
-  checkout the wrapper runs `src/helpers/host_mount_helper.py`; otherwise it
-  extracts that file from the configured image once per image ID. `vulnscout stop`
+  3.9 or newer on the host and uses only its standard library. Even in dev mode
+  the wrapper extracts the helper from the trusted configured image into host-only
+  state, once per image ID; rebuild the image to test helper changes. `vulnscout stop`
   and `ai-context helper stop` stop it.
 - It listens on a **private Unix socket** `host-helper/helper.sock` inside
   `VULNSCOUT_CACHE_DIR`, which the container already mounts at
