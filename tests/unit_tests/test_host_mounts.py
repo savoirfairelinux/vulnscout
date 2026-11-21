@@ -358,7 +358,7 @@ class TestAttachDetach:
 
     def test_status_full_unicode_attachment_set(self, client, variant, helper_server, monkeypatch):
         # Exercise the socket framing independently of OS-specific filesystem path limits.
-        monkeypatch.setattr(helper_server, "_open_folder", lambda path: os.open(os.devnull, os.O_RDONLY))
+        monkeypatch.setattr(helper_server, "_open_folder", lambda path: os.open(helper_server.state_dir, os.O_RDONLY))
         path = "/" + "\U0001f600" * (hh.MAX_PATH_CHARS - 1)
         aliases = [f"s{i:031d}" for i in range(hh.MAX_ATTACHMENTS_PER_VARIANT)]
         for alias in aliases:
@@ -679,7 +679,11 @@ class TestCli:
         assert refreshed
         assert not (permit / "src").exists()
         restarted = hh.Helper(helper_server.state_dir)
-        assert restarted.dispatch({"op": "list", "variant_id": str(variant.id), "alias": "src"})["ok"]
+        restored = restarted.dispatch({"op": "list", "variant_id": str(variant.id), "alias": "src"})
+        if HostMount.get(variant.id, "src").approval_proof.startswith("s"):
+            assert not restored["ok"] and "reattach" in restored["error"]
+        else:
+            assert restored["ok"]
         assert _source(client, variant, "mount:src").status_code == 200
         assert helper_server.dispatch({"op": "detach", "variant_id": str(variant.id), "alias": "src",
                                        "attachment_id": str(uuid.uuid4())})["result"]["removed"] is False

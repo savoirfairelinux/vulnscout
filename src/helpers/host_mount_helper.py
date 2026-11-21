@@ -19,7 +19,9 @@ attached folder; the helper only writes its own registry file.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import errno
+import hashlib
 import hmac
 import io
 import json
@@ -35,12 +37,13 @@ import sys
 import threading
 import time
 import uuid
+import weakref
 from contextlib import closing
 from datetime import datetime, timezone
 from fnmatch import fnmatchcase, translate
 from typing import Any, Callable, Iterator
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 SOCKET_NAME = "helper.sock"
 REGISTRY_NAME = "registry.json"
 
@@ -62,6 +65,8 @@ MAX_PATTERN_WILDCARDS = 16
 MIN_PYTHON = (3, 9)
 MAX_PATH_CHARS = 4096
 MAX_ATTACHMENTS_PER_VARIANT = 32
+MAX_SESSION_PINS = 128
+STAGED_PIN_SECONDS = 300
 # Allow a JSON-escaped mount path plus a scoped member path, pattern and request envelope.
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_CONNECTIONS = 8
@@ -208,6 +213,48 @@ def _sync_directory(path: str) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+class _FileHandle(ctypes.Structure):
+    # Linux struct file_handle, with room for MAX_HANDLE_SZ opaque bytes.
+    _fields_ = [("size", ctypes.c_uint), ("kind", ctypes.c_int), ("data", ctypes.c_ubyte * 128)]
+
+
+_NAME_TO_HANDLE_AT = getattr(ctypes.CDLL(None), "name_to_handle_at", None)
+
+
+def _boot_id() -> bytes | None:
+    try:
+        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as handle:
+            return uuid.UUID(handle.read(64).strip()).bytes
+    except (OSError, ValueError):
+        return None
+
+
+def _directory_handle(fd: int, boot: bytes | None) -> str | None:
+    """Digest an exportable handle scoped to a non-recycled mount ID within this boot."""
+    if boot is None or _NAME_TO_HANDLE_AT is None:
+        return None
+    handle = _FileHandle()
+    handle.size = len(handle.data)
+    mount = ctypes.c_uint64()
+    # AT_EMPTY_PATH | AT_HANDLE_MNT_ID_UNIQUE: identify this fd, not a second path lookup.
+    if _NAME_TO_HANDLE_AT(fd, b"", ctypes.byref(handle), ctypes.byref(mount), 0x1000 | 0x001) != 0:
+        return None
+    if not 0 < handle.size <= len(handle.data):
+        return None
+    identity = boot + struct.pack("!Qi", mount.value, handle.kind) + bytes(handle.data[:handle.size])
+    return "h" + hashlib.sha256(identity).hexdigest()
+
+
+class _SessionPin:
+    """Own an exact directory descriptor until activation is abandoned or the grant is detached."""
+
+    def __init__(self, fd: int, attachment_id: str):
+        self.fd = os.dup(fd)
+        self.close = weakref.finalize(self, os.close, self.fd)
+        self.attachment_id = attachment_id
+        self.expires = time.monotonic() + STAGED_PIN_SECONDS
 
 
 def _proof_key(directory: str) -> bytes:
@@ -523,6 +570,9 @@ class Helper:
         self.state_dir = state_dir
         self.registry = Registry(state_dir)
         self._key = _proof_key(state_dir)
+        self._boot = _boot_id()
+        self._pins: dict[str, _SessionPin] = {}
+        self._pin_lock = threading.RLock()
         self.operations: dict[str, Callable[[dict], dict]] = {
             "status": self.status, "detach": self.detach,
             "source": self.source, "stage": self.stage, "activate": self.activate,
@@ -559,20 +609,47 @@ class Helper:
                 raise HelperError("unavailable", _MOVED) from None
             raise HelperError("unavailable", "Host folder cannot be opened.") from None
 
-    @staticmethod
-    def _identity(fd: int) -> str:
-        info = os.fstat(fd)
-        return f"{info.st_dev:x}:{info.st_ino:x}"
+    def expire_pending_pins(self) -> None:
+        with self._pin_lock:
+            now = time.monotonic()
+            for key, pin in list(self._pins.items()):
+                if pin.expires <= now:
+                    self._pins.pop(key).close()
+
+    def _approval_identity(self, fd: int, attachment_id: str) -> str:
+        durable = _directory_handle(fd, self._boot)
+        if durable is not None:
+            return durable
+        with self._pin_lock:
+            self.expire_pending_pins()
+            info = os.fstat(fd)
+            for key, pin in self._pins.items():
+                if pin.attachment_id == attachment_id and os.path.samestat(info, os.fstat(pin.fd)):
+                    pin.expires = max(pin.expires, time.monotonic() + STAGED_PIN_SECONDS)
+                    return key
+            if len(self._pins) >= MAX_SESSION_PINS:
+                raise HelperError("limit", "Session-only folder limit reached; detach unused folders and retry.")
+            key = "s" + uuid.uuid4().hex
+            self._pins[key] = _SessionPin(fd, attachment_id)
+            return key
 
     def _open_approved(self, path: str, identity: str) -> int:
         fd = self._open_folder(path)
         try:
-            if self._identity(fd) != identity:
-                raise HelperError("unavailable", _MOVED)
-            return fd
-        except BaseException:
+            if identity.startswith("s"):
+                with self._pin_lock:
+                    pin = self._pins.get(identity)
+                    if pin is None or pin.expires <= time.monotonic():
+                        raise HelperError("unavailable", "Session-only approval expired; reattach with the host CLI.")
+                    info = os.fstat(pin.fd)
+                    if info.st_nlink and os.path.samestat(info, os.fstat(fd)):
+                        # Serve the pinned object, never merely one reporting the same inode.
+                        return os.open(".", _DIRECTORY_FLAGS, dir_fd=pin.fd)
+            elif _directory_handle(fd, self._boot) == identity:
+                return os.dup(fd)
+            raise HelperError("unavailable", _MOVED)
+        finally:
             os.close(fd)
-            raise
 
     def _attachment_fd(self, request: dict) -> int:
         variant_id = _variant_id(request)
@@ -608,7 +685,7 @@ class Helper:
     def status(self, request: dict) -> dict:
         return {"protocol": PROTOCOL_VERSION, "read_only": True}
 
-    def _validate_attach(self, request: dict) -> dict:
+    def _validate_attach(self, request: dict, attachment_id: str) -> dict:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
         path = _string(request, "path")
@@ -629,23 +706,23 @@ class Helper:
             raise HelperError("forbidden", "Hidden or sensitive folders cannot be attached.")
         fd = self._open_folder(path)
         try:
-            identity = self._identity(fd)
+            try:
+                os.unlink(permit_file)
+            except FileNotFoundError:
+                raise HelperError("forbidden", "Host attachment permit has expired.") from None
+            identity = self._approval_identity(fd, attachment_id)
         finally:
             os.close(fd)
-        try:
-            os.unlink(permit_file)
-        except FileNotFoundError:
-            raise HelperError("forbidden", "Host attachment permit has expired.") from None
         return {"variant_id": variant_id, "alias": alias, "path": path, "identity": identity}
 
     def _proof(self, attachment_id: str, variant_id: str, alias: str, path: str, identity: str) -> str:
-        binding = json.dumps(["approval-v2", attachment_id, variant_id, alias, path, identity], separators=(",", ":"))
+        binding = json.dumps(["approval-v4", attachment_id, variant_id, alias, path, identity], separators=(",", ":"))
         return identity + ":" + hmac.digest(self._key, binding.encode("ascii"), "sha256").hex()
 
     def stage(self, request: dict) -> dict:
         """Validate before the backend transaction; never make the folder accessible here."""
         attachment_id = _string(request, "attachment_id", maximum=36)
-        result = self._validate_attach(request)
+        result = self._validate_attach(request, attachment_id)
         result["approval_proof"] = self._proof(attachment_id, **result)
         return result
 
@@ -656,18 +733,30 @@ class Helper:
         attachment_id = _string(request, "attachment_id", maximum=36)
         proof = request.get("approval_proof")
         if (not isinstance(proof, str)
-                or not (match := re.fullmatch(r"([a-f0-9]{1,16}:[a-f0-9]{1,16}):[a-f0-9]{64}", proof))
+                or not (match := re.fullmatch(r"(h[a-f0-9]{64}|s[a-f0-9]{32}):[a-f0-9]{64}", proof))
                 or not hmac.compare_digest(proof, self._proof(attachment_id, variant_id, alias, path, match[1]))):
             raise HelperError("forbidden", "No valid host approval; reattach this folder with the host CLI.")
-        os.close(self._open_approved(path, match[1]))
-        self.registry.set(variant_id, alias, path, attachment_id=attachment_id, identity=match[1])
+        identity = match[1]
+        with self._pin_lock:
+            os.close(self._open_approved(path, identity))
+            self.registry.set(variant_id, alias, path, attachment_id=attachment_id, identity=identity)
+            for key, pin in list(self._pins.items()):
+                if key == identity:
+                    pin.expires = float("inf")
+                elif pin.attachment_id == attachment_id and pin.expires == float("inf"):
+                    self._pins.pop(key).close()
         return {"path": path}
 
     def detach(self, request: dict) -> dict:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
-        return {"removed": self.registry.remove(variant_id, alias, attachment_id=_string(
-            request, "attachment_id", maximum=36), retire=True)}
+        attachment_id = _string(request, "attachment_id", maximum=36)
+        with self._pin_lock:
+            removed = self.registry.remove(variant_id, alias, attachment_id=attachment_id, retire=True)
+            for key, pin in list(self._pins.items()):
+                if pin.attachment_id == attachment_id:
+                    self._pins.pop(key).close()
+        return {"removed": removed}
 
     def source(self, request: dict) -> dict:
         """Require the current host-approved alias to match the database mount path."""
@@ -947,6 +1036,10 @@ def _short_path(path: str) -> tuple[str, int | None]:
 class HelperServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     request_queue_size = 32
+
+    def service_actions(self) -> None:
+        super().service_actions()
+        self.helper.expire_pending_pins()
 
     def __init__(self, socket_path: str, helper: Helper):
         self.helper = helper

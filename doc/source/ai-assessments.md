@@ -669,11 +669,17 @@ to manage attachments.
   host-only `VULNSCOUT_HOST_HELPER_STATE_DIR` (default `.vulnscout/host-helper`,
   outside the cache mount). Before a database write, the helper checks the folder
   and signs a CLI approval for its attachment ID, variant, alias, path and the
-  opened directory's device and inode. Replacing the root directory, unlike
-  editing files inside it, requires running the attach command again. Older
-  path-only approvals also require a fresh attach after upgrade. The
-  database saves that proof so activation can retry after a restart without a
-  second host command. If the CLI reports `activation pending`, the attachment
+  opened directory's identity. On Linux kernels and filesystems supporting
+  exportable file handles and unique mount IDs (Linux 6.12+), that identity
+  includes the directory generation. Approval survives a helper restart on
+  the same mount within the same boot. Elsewhere the helper holds the approved
+  directory open: run the attach command again after a helper restart. At most
+  128 session-only directory descriptors are kept; unactivated approvals
+  expire after five minutes and detaching releases an active descriptor.
+  Replacing the root directory requires fresh approval even if its inode is
+  reused; editing files inside it does not. Older path-only or device/inode
+  approvals require a fresh attach after upgrade. The database saves the proof
+  so activation can retry. If the CLI reports `activation pending`, the attachment
   was saved. Run `ai-context list` to retry and check availability. Keep the
   private helper state: if its signing key is
   lost, repeat the host command. An offline detach is recorded for retry and
