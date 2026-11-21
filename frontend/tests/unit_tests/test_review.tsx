@@ -1980,16 +1980,20 @@ describe('Review — filters, search and keyboard', () => {
 
         await screen.findByText('CVE-2020-OLD');
         const selector = screen.getByRole('combobox', { name: 'Outdated' });
+        expect(selector).toHaveClass('border-transparent');
         await user.selectOptions(selector, 'Outdated');
+        expect(selector).toHaveClass('border-cyan-400');
         await waitFor(() => {
             expect(screen.queryByText('CVE-2020-1111')).not.toBeInTheDocument();
         });
 
         await user.selectOptions(selector, 'Not outdated');
+        expect(selector).toHaveClass('border-cyan-400');
         await screen.findByText('CVE-2020-1111');
         expect(screen.queryByText('CVE-2020-OLD')).not.toBeInTheDocument();
 
         await user.selectOptions(selector, 'All');
+        expect(selector).toHaveClass('border-transparent');
         await screen.findByText('CVE-2020-OLD');
         expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
     });

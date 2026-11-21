@@ -1731,13 +1731,15 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         <label className="flex items-center gap-2 text-white">
                             Outdated
                             <select
-                                className="rounded bg-slate-700 px-2 py-1"
+                                className={`rounded border bg-sky-900 px-2 py-1 hover:bg-sky-950 ${
+                                    outdatedFilter === 'all' ? 'border-transparent' : 'border-cyan-400'
+                                }`}
                                 value={outdatedFilter}
                                 onChange={event => setOutdatedFilter(event.target.value as OutdatedFilter)}
                             >
-                                <option value="all">All</option>
-                                <option value="only">Outdated</option>
-                                <option value="hide">Not outdated</option>
+                                <option className="bg-sky-900 text-white" value="all">All</option>
+                                <option className="bg-sky-900 text-white" value="only">Outdated</option>
+                                <option className="bg-sky-900 text-white" value="hide">Not outdated</option>
                             </select>
                         </label>
                         <div className="flex items-center mx-3">
