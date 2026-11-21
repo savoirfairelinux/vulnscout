@@ -1,6 +1,8 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 VALID_STATUS_OPENVEX = ["under_investigation", "not_affected", "affected", "fixed"]
+APPROVAL_EDIT_FIELDS = ("status_notes", "justification", "impact_statement", "workaround")
+APPROVAL_CONTENT_FIELDS = ("status", *APPROVAL_EDIT_FIELDS)
 VALID_STATUS_CDX_VEX = ["in_triage", "false_positive", "not_affected", "exploitable",
                         "resolved", "resolved_with_pedigree"]
 STATUS_CDX_VEX_TO_OPENVEX = {
@@ -449,6 +453,11 @@ class Assessment(Base):
     # Serialisation
     # ==================================================================
 
+    def approval_fingerprint(self) -> str:
+        values = [getattr(self, field) or "" for field in APPROVAL_CONTENT_FIELDS]
+        pairs = sorted((str(t.variant_id), str(t.finding_id)) for t in self.target_rows)
+        return hashlib.sha256(json.dumps([values, pairs], separators=(",", ":")).encode()).hexdigest()
+
     def to_dict(self) -> dict:
         ts = ensure_utc_iso(self.timestamp)
         variant_ids = sorted({str(t.variant_id) for t in self.target_rows})
@@ -456,6 +465,7 @@ class Assessment(Base):
             "id": str(self.id),
             "source": self.source or "",
             "origin": self.origin or "sbom",
+            **({"approval_fingerprint": self.approval_fingerprint()} if self.origin == "ai" else {}),
             "vuln_id": self.vuln_id,
             "packages": list(self.packages),
             "variant_id": str(self.single_variant_id) if self.single_variant_id else None,
