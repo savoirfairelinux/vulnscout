@@ -6,7 +6,10 @@ import pytest
 import respx
 
 from vulnscout_mcp.client import ScopedVulnScoutClient, VulnScoutClient, VulnScoutError
-from vulnscout_mcp.tools.context import _codebase_source_impl, _fmt_merged_context, register_tools
+from vulnscout_mcp.tools import context as context_tools
+from vulnscout_mcp.tools.context import (
+    _codebase_source_impl, _fmt_merged_context, _read_codebase_files_impl, register_tools,
+)
 
 BASE_URL = "http://vulnscout.test"
 
@@ -60,6 +63,32 @@ def test_scope_rejected_before_request(file_id):
         source.assert_not_called()
         client.get_codebase_source("v1", file_id, {"operation": "list"})
         source.assert_called_once_with("v1", file_id, {"operation": "list"})
+
+
+def test_read_codebase_files_reads_in_order_and_isolates_errors():
+    client = VulnScoutClient(BASE_URL)
+
+    def fake(variant_id, file_id, params):
+        if params["path"] == "bad.c":
+            raise VulnScoutError("Source file not found or excluded.")
+        return {"path": params["path"], "content": "x\n", "start_line": params["start_line"]}
+
+    with patch.object(client, "get_codebase_source", side_effect=fake) as source:
+        result = json.loads(_read_codebase_files_impl(client, "v1", "mount:src", ["a.c", "bad.c", "b.c"], 2, 5))
+    assert [entry["path"] for entry in result["files"]] == ["a.c", "bad.c", "b.c"]
+    assert result["files"][1] == {"path": "bad.c", "error": "Source file not found or excluded."}
+    assert result["files"][0]["start_line"] == 2 and source.call_count == 3
+    source.assert_any_call("v1", "mount:src", {"operation": "read", "path": "a.c", "start_line": 2, "max_lines": 5})
+
+
+def test_read_codebase_files_validates_paths_and_caps_the_response(monkeypatch):
+    client = VulnScoutClient(BASE_URL)
+    assert _read_codebase_files_impl(client, "v1", "f", [], 1, 10).startswith("Error:")
+    assert "at most" in _read_codebase_files_impl(client, "v1", "f", [f"{i}.c" for i in range(9)], 1, 10)
+    monkeypatch.setattr(context_tools, "MAX_BATCH_BYTES", 100)
+    with patch.object(client, "get_codebase_source", return_value={"content": "y" * 80}):
+        files = json.loads(_read_codebase_files_impl(client, "v1", "f", ["a.c", "b.c"], 1, 10))["files"]
+    assert "content" in files[0] and "budget" in files[1]["error"]
 
 
 def test_directory_metadata_exposes_the_bounded_tool_id():

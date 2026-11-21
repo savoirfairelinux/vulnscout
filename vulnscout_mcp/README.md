@@ -124,6 +124,7 @@ python vulnscout_mcp/server.py
 | `get_package_source_files`     | Paginate an exact package's recorded SPDX files and build associations within one variant, retaining coverage and provenance |
 | `list_codebase_files`          | List paths/sizes in a variant upload; follow `next_offset` for pagination |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
+| `read_codebase_files`          | Read up to 8 files in parallel with the same line range (128 KB combined response) |
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |
 | `get_ai_context_form_guide`    | Return the static AI Context form guide (fields, tables, STRIDE categories, limits) and the copy-ready reply format for helping users fill it |
 | `get_project_context`          | Get context fields for a project by UUID                             |

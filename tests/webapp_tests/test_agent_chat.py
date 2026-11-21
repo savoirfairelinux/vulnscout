@@ -103,7 +103,7 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
         agent.Conversation(), "Inspect uploaded source", agent._mcp_path(), "model", scope,
     ))
     assert response == "Source inspected"
-    source_tools = {"list_codebase_files", "read_codebase_file", "search_codebase"}
+    source_tools = {"list_codebase_files", "read_codebase_file", "read_codebase_files", "search_codebase"}
     assert source_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
     assert {f"mcp:vulnscout-{name}" for name in source_tools} <= set(captured["available_tools"])
     assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])
