@@ -25,7 +25,11 @@ The columns include:
 
 ## Search and Filters
 
-The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state. A **Reset Filters** button clears everything back to defaults. See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
+The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state.
+
+On the **Assessments** and **AI Assessments** tabs, the **Outdated** selector defaults to **All**. Choose **Outdated** to show only rows with at least one target marked outdated or, for AI assessments, an outdated AI context. Choose **Not outdated** to exclude those rows. **Reset Filters** restores **All** and the other filter defaults.
+
+See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
 
 Select rows in **Assessments**, then click **Review selected with AI** to queue
 an independent review of each selected custom assessment, each in its own

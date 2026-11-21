@@ -226,6 +226,12 @@ function TableGeneric<DataType> ({
     }, [filteredData.length]);
 
     const pageCount = Math.ceil(filteredData.length / itemsPerPage)
+    const lastPageIndex = Math.max(0, pageCount - 1)
+    useEffect(() => {
+        if (pageIndex > lastPageIndex) {
+            setPagination(prev => ({ ...prev, pageIndex: lastPageIndex }))
+        }
+    }, [pageIndex, lastPageIndex, setPagination])
 
     const table = useReactTable({
         columns,

@@ -8,7 +8,6 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
-import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation, faRobot } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
@@ -233,6 +232,13 @@ function hasOutdatedAssessment(row: ReviewRow): boolean {
     return row.targets.some(t => t.outdated) || row.context_outdated;
 }
 
+type OutdatedFilter = 'all' | 'only' | 'hide';
+
+function matchesOutdatedFilter(row: ReviewRow, filter: OutdatedFilter): boolean {
+    if (filter === 'all') return true;
+    return hasOutdatedAssessment(row) === (filter === 'only');
+}
+
 function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
@@ -249,7 +255,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [selectedAiReviews, setSelectedAiReviews] = useState<string[]>([]);
-    const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
+    const [outdatedFilter, setOutdatedFilter] = useState<OutdatedFilter>('all');
     const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
@@ -553,7 +559,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const hasSupplierInfo = useMemo(() => supplierList.length > 0, [supplierList]);
 
     const filteredAssessments = useMemo(() => assessments.filter((a) => {
-        if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
+        if (!matchesOutdatedFilter(a, outdatedFilter)) {
             return false;
         }
         if (selectedAiReviews.length) {
@@ -571,7 +577,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedAiReviews, showOnlyOutdated, reviews]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedAiReviews, outdatedFilter, reviews]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -601,7 +607,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
         setSelectedAiReviews([]);
-        setShowOnlyOutdated(false);
+        setOutdatedFilter('all');
     };
 
     const transferProjectId = projectId ?? allVariants.find(v => v.id === variantId)?.project_id;
@@ -1591,7 +1597,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     }
 
     const filterReviewRows = (list: ReviewRow[]) => list.filter((a) => {
-        if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
+        if (!matchesOutdatedFilter(a, outdatedFilter)) {
             return false;
         }
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
@@ -1721,11 +1727,18 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                             />
                         )}
 
-                        <ToggleSwitch
-                            enabled={showOnlyOutdated}
-                            setEnabled={setShowOnlyOutdated}
-                            label="Outdated"
-                        />
+                        <label className="flex items-center gap-2 text-white">
+                            Outdated
+                            <select
+                                className="rounded bg-slate-700 px-2 py-1"
+                                value={outdatedFilter}
+                                onChange={event => setOutdatedFilter(event.target.value as OutdatedFilter)}
+                            >
+                                <option value="all">All</option>
+                                <option value="only">Outdated</option>
+                                <option value="hide">Not outdated</option>
+                            </select>
+                        </label>
                         <div className="flex items-center mx-3">
                             <div className="border-l h-8 dark:border-neutral-300"></div>
                         </div>

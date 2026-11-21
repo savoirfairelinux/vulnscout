@@ -1236,13 +1236,13 @@ describe('Review — AI Assessments tab', () => {
 
         await screen.findByTitle('Edit assessment');
         expect(screen.getByRole('button', { name: /AI review/ })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: 'Outdated' })).toHaveDisplayValue('All');
 
         await user.click(screen.getByText('AI Assessments'));
         await screen.findByTitle('Approve AI suggestion');
 
         expect(screen.queryByRole('button', { name: /AI review/ })).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: 'Outdated' })).toHaveDisplayValue('All');
     });
 
     test('shows the AI assessments empty state when there are none pending', async () => {
@@ -1917,7 +1917,7 @@ describe('Review — filters, search and keyboard', () => {
         expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
     });
 
-    test('the outdated toggle includes rows with mixed current and outdated assessments', async () => {
+    test('Outdated includes rows with mixed current and outdated assessments', async () => {
         const mixedRow = makeMultiTargetAssessment('mixed-1', 'CVE-2020-MIXED', [
             { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
             { variantId: 'v2', pkg: 'pkgB@1.0.0', outdated: false },
@@ -1927,7 +1927,7 @@ describe('Review — filters, search and keyboard', () => {
         const user = userEvent.setup();
 
         await screen.findByText('CVE-2020-MIXED');
-        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Outdated');
 
         await waitFor(() => {
             expect(screen.queryByText('CVE-2020-1111')).not.toBeInTheDocument();
@@ -1935,7 +1935,7 @@ describe('Review — filters, search and keyboard', () => {
         expect(screen.getByText('CVE-2020-MIXED')).toBeInTheDocument();
     });
 
-    test('the outdated toggle on the AI Assessments tab includes rows whose context is outdated', async () => {
+    test('Outdated on the AI Assessments tab includes rows whose context is outdated', async () => {
         mockNetwork([], {
             aiReviewList: [
                 { ...makeAssessment('ai1', 'v1'), vuln_id: 'CVE-CTX-OUTDATED', context_outdated: true },
@@ -1946,9 +1946,91 @@ describe('Review — filters, search and keyboard', () => {
 
         await user.click(await screen.findByText('AI Assessments'));
         await screen.findByText('CVE-CTX-OUTDATED');
-        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Outdated');
 
         expect(screen.getByText('CVE-CTX-OUTDATED')).toBeInTheDocument();
+    });
+
+    test('Not outdated hides rows with any outdated assessment', async () => {
+        const mixedRow = makeMultiTargetAssessment('mixed-1', 'CVE-2020-MIXED', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v2', pkg: 'pkgB@1.0.0', outdated: false },
+        ]);
+        mockNetwork([mixedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-MIXED');
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Not outdated');
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-MIXED')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+    });
+
+    test('switching outdated modes updates the visible rows', async () => {
+        const outdatedRow = makeMultiTargetAssessment('old-1', 'CVE-2020-OLD', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+        ]);
+        mockNetwork([outdatedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-OLD');
+        const selector = screen.getByRole('combobox', { name: 'Outdated' });
+        await user.selectOptions(selector, 'Outdated');
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-1111')).not.toBeInTheDocument();
+        });
+
+        await user.selectOptions(selector, 'Not outdated');
+        await screen.findByText('CVE-2020-1111');
+        expect(screen.queryByText('CVE-2020-OLD')).not.toBeInTheDocument();
+
+        await user.selectOptions(selector, 'All');
+        await screen.findByText('CVE-2020-OLD');
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+    });
+
+    test('Not outdated on the AI Assessments tab hides rows whose context is outdated', async () => {
+        mockNetwork([], {
+            aiReviewList: [
+                { ...makeAssessment('ai1', 'v1'), vuln_id: 'CVE-CTX-OUTDATED', context_outdated: true },
+                { ...makeAssessment('ai2', 'v1'), vuln_id: 'CVE-CTX-CURRENT' },
+            ],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText('AI Assessments'));
+        await screen.findByText('CVE-CTX-OUTDATED');
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Not outdated');
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-CTX-OUTDATED')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-CTX-CURRENT')).toBeInTheDocument();
+    });
+
+    test('reset filters restores the outdated selector to All', async () => {
+        const outdatedRow = makeMultiTargetAssessment('old-1', 'CVE-2020-OLD', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+        ]);
+        mockNetwork([outdatedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-OLD');
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Not outdated');
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-OLD')).not.toBeInTheDocument();
+        });
+
+        await user.click(screen.getByText('Reset Filters'));
+        await screen.findByText('CVE-2020-OLD');
+        expect(screen.getByRole('combobox', { name: 'Outdated' })).toHaveDisplayValue('All');
     });
 
     test('filtering by status hides non-matching rows', async () => {
