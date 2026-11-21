@@ -71,12 +71,13 @@ def _seed():
 
 
 @pytest.fixture()
-def app(tmp_path, monkeypatch):
+def app(tmp_path, monkeypatch, request):
     scan_file = tmp_path / "scan_status.txt"
     scan_file.write_text("__END_OF_SCAN_SCRIPT__")
     config = tmp_path / "config.env"
     config.write_text("AI_PROVIDER=github\nAI_AUTH_CREDENTIALS=gho_test\nAI_MODEL=test-model\n")
-    monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
+    database = tmp_path / request.param if hasattr(request, "param") else ":memory:"
+    monkeypatch.setenv("FLASK_SQLALCHEMY_DATABASE_URI", f"sqlite:///{database}")
     monkeypatch.setenv("VULNSCOUT_CONFIG", str(config))
     for key in ("AI_PROVIDER", "AI_AUTH_CREDENTIALS", "AI_MODEL", "AI_BASE_URL", "VULNSCOUT_MCP_SERVER_PATH"):
         monkeypatch.delenv(key, raising=False)

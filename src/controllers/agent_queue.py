@@ -3,12 +3,12 @@
 """The AI queue of the serve process, shared by every browser tab and the CLI.
 
 ``AgentQueue`` owns the agent conversations (the ``main`` chat plus one conversation per action key)
-and the requests that run turns in them. Requests run in two lanes, one turn at a time each: the
-``action`` lane runs assess and review actions, the ``chat`` lane runs chat messages, so a chat never
+and the requests that run turns in them. The ``action`` lane runs up to five independent actions
+of any kind; the ``chat`` lane runs one chat message, so a chat never
 waits behind an action. Within both lanes a request waits until the earlier requests of its own
 conversation have run; a failed request blocks nothing and stays listed for retry or removal.
 
-Each lane has one worker thread that runs a turn in its own event loop, so ``stop`` can cancel the
+Each worker thread runs a turn in its own event loop, so ``stop`` can cancel the
 turn from any thread. Every change is published on ``agent_events`` (a private, localhost-only bus;
 transcripts never travel on the public operations stream):
 
@@ -29,8 +29,10 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, Literal
 from uuid import UUID
 
@@ -53,6 +55,7 @@ Kind = Literal["assess", "review", "message", "context-import"]
 Status = Literal["queued", "running", "failed", "done", "cancelled"]
 
 LANES: tuple[Lane, ...] = ("action", "chat")
+ACTION_WORKERS = 5
 MAIN = "main"
 PER_ACTION = "per-action"
 MAIN_TITLE = "Agent chat"
@@ -140,6 +143,23 @@ class AgentRequest:
     result: dict | None = None  # actions: the turn's TurnResult
     import_revision: str | None = None
 
+    @cached_property
+    def _target_pairs(self) -> frozenset[tuple[str, str]]:
+        if self.spec is None:
+            return frozenset()
+        if self.spec.kind == "review":
+            return frozenset((str(t.variant_id), str(t.finding_id)) for t in self.spec.review_targets)
+        return frozenset((t.variant_id, t.finding_id) for t in self.spec.assess_targets)
+
+    def conflicts_with(self, other: AgentRequest) -> bool:
+        if self.kind == other.kind == "review":
+            # Distinct custom assessments have distinct review records, even for the same finding.
+            return self.assessment_id == other.assessment_id
+        if self.kind == other.kind == "context-import":
+            assert self.scope and other.scope  # imports are planned for exactly one variant
+            return json.loads(self.scope)["variant_ids"] == json.loads(other.scope)["variant_ids"]
+        return not self._target_pairs.isdisjoint(other._target_pairs)
+
     def to_dict(self, position: int | None = None, *, full: bool = True) -> dict[str, Any]:
         """JSON-able record; without *full* the result omits the agent's reply (already in the transcript)."""
         result = self.result
@@ -191,7 +211,7 @@ class AgentConversationState:
 
 @dataclass
 class _Running:
-    request_id: str
+    request: AgentRequest
     loop: asyncio.AbstractEventLoop | None = None
     task: asyncio.Task | None = None
     stop_requested: bool = False
@@ -227,8 +247,12 @@ async def default_runner(call: TurnCall) -> tuple[str, dict]:
     """Run *call* with the agent: actions through ``ai_actions.run_turn``, messages through ``_reply``."""
     if call.turn is not None:
         assert call.api is not None
-        return await ai_actions.run_turn(call.turn, call.session, call.model, call.path, call.api, call.publish,
-                                         ephemeral=False, on_session=call.on_session)
+        call.api.start()
+        try:
+            return await ai_actions.run_turn(call.turn, call.session, call.model, call.path, call.api, call.publish,
+                                             ephemeral=False, on_session=call.on_session)
+        finally:
+            call.api.stop()
     options: dict[str, Any] = {"profile": call.profile} if call.profile else {}
     return await _agent()._reply(call.session, call.prompt, call.path, call.model, call.scope, call.publish,
                                  timeout=call.timeout, on_session=call.on_session, **options)
@@ -319,16 +343,19 @@ class AgentQueue:
         self._history: list[AgentRequest] = []
         self._finished: OrderedDict[str, AgentRequest] = OrderedDict()
         self._conversations: dict[str, AgentConversationState] = {MAIN: self._new_main()}
-        self._running: dict[str, _Running | None] = {lane: None for lane in LANES}
+        self._running: dict[str, _Running] = {}
         self._paused: dict[str, str] | None = None
         self._changing = False
         self._generation = 0  # bumped when a connection change starts; a turn's credentials must predate none
+        self._readiness_epoch = 0  # a wake also invalidates probes without changing the connection
+        self._checks: dict[
+            tuple[Lane, int, str], Future[tuple[AgentCredentials | None, dict[str, str] | None, str | None]]
+        ] = {}
         self._revision = 0  # bumped when the connection or model changed; tabs reload their setup on a change
         self._stopping = False
         self._verified_token: str | None = None
         self._verified_logged_in = False
         self._threads: dict[str, threading.Thread] = {}
-        self._guarded: GuardedApi | None = None
 
     def init_app(self, app: Flask) -> None:
         """Bind the app whose database and API the turns use; workers start with the first request."""
@@ -422,6 +449,9 @@ class AgentQueue:
         """
         from ..bin._ai_runner import GITHUB_SIGNED_OUT, NO_AI_CONFIG
 
+        with self._lock:
+            epoch = self._readiness_epoch
+            logged_in, verified_token = self._verified_logged_in, self._verified_token
         agent = _agent()
         root = agent.Conversation()
         error = agent._load_env_credentials(root)
@@ -431,7 +461,7 @@ class AgentQueue:
         if not credentials.token and not credentials.provider:
             if strict:
                 return None, {"code": "no_ai_config", "error": NO_AI_CONFIG}
-            if not self._verified_logged_in:
+            if not logged_in:
                 try:
                     auth = asyncio.run(agent._auth_status(None))
                 except Exception:
@@ -439,10 +469,12 @@ class AgentQueue:
                     auth = {"authenticated": False}
                 if not auth["authenticated"]:
                     return None, {"code": "no_ai_config", "error": NO_AI_CONFIG}
-                self._verified_logged_in = True
+                with self._lock:
+                    if epoch == self._readiness_epoch:
+                        self._verified_logged_in = True
             return credentials, None
         token = credentials.token
-        if token and not credentials.provider and token != self._verified_token:
+        if token and not credentials.provider and token != verified_token:
             try:
                 auth = asyncio.run(agent._token_status(token))
             except Exception:
@@ -451,7 +483,9 @@ class AgentQueue:
                 return credentials, None
             if not auth["authenticated"]:
                 return None, {"code": "github_signed_out", "error": GITHUB_SIGNED_OUT}
-            self._verified_token = token
+            with self._lock:
+                if epoch == self._readiness_epoch:
+                    self._verified_token = token
         return credentials, None
 
     def readiness(self) -> dict[str, str] | None:
@@ -772,8 +806,7 @@ class AgentQueue:
             if request.status != "running":
                 self.remove(request_id)
                 return "removed"
-            running = self._running[request.lane]
-            assert running is not None and running.request_id == request.id
+            running = self._running[request.id]
             self._cancel(running)
             return "stopping"
 
@@ -892,8 +925,7 @@ class AgentQueue:
         return failed
 
     def _any_running(self) -> bool:
-        return any(running is not None for running in self._running.values()) or any(
-            request.status == "running" for request in self._requests)
+        return bool(self._running)
 
     def _reset_connection_locked(self) -> None:
         previous = self._conversations
@@ -942,6 +974,7 @@ class AgentQueue:
                 raise QueueBusy(BUSY)
             self._changing = True
             self._generation += 1
+            self._readiness_epoch += 1
         change = ConnectionChange()
         try:
             yield change
@@ -969,6 +1002,7 @@ class AgentQueue:
     def wake(self) -> None:
         """Resume a paused queue (after sign-in, a provider or model change): requests are retried."""
         with self._cond:
+            self._readiness_epoch += 1
             self._verified_token = None
             self._verified_logged_in = False
             if self._paused is not None:
@@ -983,14 +1017,21 @@ class AgentQueue:
 
     def _next(self, lane: Lane) -> AgentRequest | None:
         """The lane's first eligible request (P12): queued, and no earlier request of its conversation waits or runs."""
-        if self._paused or self._changing or self._stopping or self._running[lane] is not None:
+        if self._paused or self._changing or self._stopping:
             return None
-        busy = {request.conversation_id for request in self._requests if request.status == "running"}
+        # A finished request still owns its reservations until _execute returns from cleanup.
+        running = [attempt.request for attempt in self._running.values()]
+        peers = [r for r in running if r.lane == lane]
+        if len(peers) >= (ACTION_WORKERS if lane == "action" else 1):
+            return None
+        busy = {r.conversation_id for r in running}
         for request in self._requests:
             if request.status != "queued":
                 continue
             if request.lane == lane and request.conversation_id not in busy:
-                return request
+                # A retry can already be queued while the failed attempt cleans up its sessions.
+                if request.id not in self._running and not any(request.conflicts_with(r) for r in peers):
+                    return request
             busy.add(request.conversation_id)
         return None
 
@@ -1000,27 +1041,61 @@ class AgentQueue:
             request = self._next(lane)
         if request is None:
             return None
-        return request.id if self._attempt(lane, request.id) else None
+        return self._attempt(lane, request.id)
 
-    def _attempt(self, lane: Lane, request_id: str) -> bool:
+    def _attempt(self, lane: Lane, request_id: str) -> str | None:
         with self._cond:
-            generation = self._generation
-            unresolved = any(request.id == request_id and request.model is None for request in self._requests)
-        credentials, problem = self._load_credentials()
-        model = self._configured_model()[0] if unresolved else None
+            candidate = self._next(lane)
+            if candidate is None or candidate.id != request_id:
+                return None
+            epoch = self._readiness_epoch
+            key = (lane, epoch, request_id)
+            check = self._checks.get(key)
+            owner = check is None
+            if check is None:
+                self._checks[key] = check = Future()
+                unresolved = any(r.lane == lane and r.status == "queued" and r.model is None for r in self._requests)
+        if owner:
+            try:
+                credentials, problem = self._load_credentials()
+                model = self._configured_model()[0] if unresolved and problem is None else None
+            except Exception:
+                _logger.exception("The AI queue readiness check failed")
+                credentials, problem, model = None, {"code": "error", "error": WORKER_ERROR}, None
+            except BaseException as exc:
+                with self._cond:
+                    check.set_exception(exc)
+                    del self._checks[key]
+                    self._cond.notify_all()
+                raise
         with self._cond:
-            if self._generation != generation:
-                return False  # the connection changed while loading: the worker reloads them
+            if owner:
+                check.set_result((credentials, problem, model))
+                del self._checks[key]
+                self._cond.notify_all()
+            else:
+                # Resume or removal can free peers before the old provider call returns.
+                self._cond.wait_for(lambda: check.done() or self._readiness_epoch != epoch
+                                    or self._next(lane) is not candidate)
+            if not check.done() or self._stopping or self._readiness_epoch != epoch:
+                return None
+            credentials, problem, model = check.result()
+            request = self._next(lane)
+            if request is None:
+                return None
+            if request.id != request_id:
+                # A successful action probe can also serve another eligible action in this lane.
+                if owner or problem is not None or request_id not in self._running or lane != "action":
+                    return None
             if problem is not None:
                 self._pause(problem["code"], problem["error"])
-                return False
-            request = self._next(lane)
-            if request is None or request.id != request_id or (request.model is None and model is None):
-                return False
+                return None
+            if request.model is None and model is None:
+                return None
             assert credentials is not None
             conversation = self._conversations[request.conversation_id]
-            running = _Running(request.id)
-            self._running[lane] = running
+            running = _Running(request)
+            self._running[request.id] = running
             request.status, request.started_at = "running", time.time()
             if request.model is None:
                 request.model = model
@@ -1033,9 +1108,9 @@ class AgentQueue:
             self._execute(request, conversation, credentials, running)
         finally:
             with self._cond:
-                self._running[lane] = None
+                self._running.pop(request.id)
                 self._cond.notify_all()
-        return True
+        return request.id
 
     def _ensure_workers(self) -> None:
         if self._autostart:
@@ -1045,12 +1120,13 @@ class AgentQueue:
         """Start the lane workers (once); the first enqueue does it unless ``autostart`` is off."""
         with self._cond:
             for lane in LANES:
-                thread = self._threads.get(lane)
-                if thread is None or not thread.is_alive():
-                    thread = threading.Thread(target=self._work, args=(lane,), name=f"agent-queue-{lane}",
-                                              daemon=True)
-                    self._threads[lane] = thread
-                    thread.start()
+                for index in range(ACTION_WORKERS if lane == "action" else 1):
+                    name = f"agent-queue-{lane}-{index}"
+                    thread = self._threads.get(name)
+                    if thread is None or not thread.is_alive():
+                        thread = threading.Thread(target=self._work, args=(lane,), name=name, daemon=True)
+                        self._threads[name] = thread
+                        thread.start()
 
     def _work(self, lane: Lane) -> None:
         while True:
@@ -1067,33 +1143,25 @@ class AgentQueue:
                     self._pause("error", WORKER_ERROR)
 
     def shutdown(self, timeout: float = 10) -> None:
-        """Stop the running turns and the workers, and the guarded API; the queue keeps its state."""
+        """Stop the running turns and the workers; the queue keeps its state."""
         with self._cond:
             self._stopping = True
             for running in self._running.values():
-                if running is not None:
-                    self._cancel(running)
+                self._cancel(running)
             self._cond.notify_all()
             threads, self._threads = list(self._threads.values()), {}
         for thread in threads:
             thread.join(timeout)
         with self._cond:
-            guarded, self._guarded = self._guarded, None
             self._stopping = False
-        if guarded is not None:
-            guarded.stop()
 
     # ------------------------------------------------------------ one turn
 
     def _guarded_api(self) -> GuardedApi:
         from .guarded_api import GuardedApi
 
-        with self._lock:
-            if self._guarded is None:
-                assert self._app is not None
-                self._guarded = GuardedApi(self._app)
-                self._guarded.start()
-            return self._guarded
+        assert self._app is not None
+        return GuardedApi(self._app)
 
     @staticmethod
     def _with_model(credentials: AgentCredentials, model: str) -> AgentCredentials:
@@ -1286,7 +1354,7 @@ class AgentQueue:
 
     def _emit_progress(self, running: _Running, conversation: AgentConversationState) -> None:
         running.progress_at, running.progress_pending = time.monotonic(), False
-        self.events.publish("request_progress", {"request_id": running.request_id,
+        self.events.publish("request_progress", {"request_id": running.request.id,
                                                  "conversation_id": conversation.id,
                                                  "live": _copy_live(conversation.live)})
 
@@ -1294,7 +1362,7 @@ class AgentQueue:
         with self._lock:
             running.flush_scheduled = False
             live = conversation.live
-            if running.progress_pending and live is not None and live["request_id"] == running.request_id:
+            if running.progress_pending and live is not None and live["request_id"] == running.request.id:
                 self._emit_progress(running, conversation)
 
 
