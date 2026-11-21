@@ -1641,6 +1641,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 forAllValues={(row) => row.packages}
                 estimateRowHeight={50}
                 hasPagination={true}
+                clampPageOnFilter
                 hoverField="texts"
                 hoverIdField="vuln_id"
                 onFilteredDataChange={onFilteredDataChange}
