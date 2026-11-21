@@ -1653,6 +1653,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 setSelected={setSelectedPackages}
                 searchable
                 formatLabel={formatPkgId}
+                showSelectAll
             />
 
             {/* Published Date Filter Dropdown */}

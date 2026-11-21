@@ -30,6 +30,11 @@ VulnScout provides several filter categories, each accessible from a dedicated d
   updating one package does not hide another package's status. Status filters
   match any listed status, and a vulnerability remains active while any current
   target is active.
+- **Packages**: restrict the table to vulnerabilities affecting one or more of the selected packages.
+  Use **Select all** to check every package or **Deselect all** to clear even a partial selection.
+  Type in the search box to narrow the list. **Select all matching** and **Deselect all matching**
+  affect only the packages shown; hidden selections stay unchanged.
+  Clearing the last selected package removes the Packages filter without changing other filters.
 - **Published Date**: filter vulnerabilities by their NVD publication date. The dropdown supports exact-date matching, before/after comparisons, date ranges, and a "within the last N days" shorthand. This filter becomes active once the NVD sync has completed.
 - **More Filters**: groups less common filters together:
   - **EPSS Range**: a percentage-based range slider that narrows the list to vulnerabilities whose Exploit Prediction Scoring System score falls within the specified band.
