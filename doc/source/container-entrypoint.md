@@ -166,6 +166,9 @@ The previous `--perform-grype-scan`, `--perform-nvd-scan`, `--perform-osv-scan`,
 | `--use-current-timestamps` | With either custom import, use the current system time |
 | `--match-condition <expr>` | Exit with code 2 if expression matches stored data for any in-scope vulnerability; it does not refresh EPSS. A project without a variant includes all its variants. Incompatible with `--serve` |
 | `--ai-assess <options>` | Run `flask ai-assess` with the remaining arguments (`--cve <id>`… or `--filter <expr>`, not both; `--variant <name>`… to select several variants, `--model`, `--timeout`, `--dry-run`, `--json`) on the `--project`/`--variant` scope. Must come after `--project`/`--variant`. Exits 1 unless every selected vulnerability is `assessed` or `planned`. With `VULNSCOUT_RUN_ID` set (by the host wrapper), it writes its PID to `$TMPDIR/vulnscout-ai-assess-<id>.pid` so that Ctrl-C can be forwarded to it |
+| `--ai-context-attach <alias>=<host path>...` | Run `flask ai-context-attach` on the `--project`/`--variant` scope (default `default`/`default`): validate each host folder with the host folder helper and store it as a read-only AI context attachment. Exits 1 if any folder is rejected or the helper is not running. Must come after `--project`/`--variant` |
+| `--ai-context-list [--json]` | Run `flask ai-context-list`: list the scope's attached host folders and whether each is available |
+| `--ai-context-detach <alias>...` | Run `flask ai-context-detach`: remove attachments; agents lose access immediately |
 | `--ai-review <options>` | Run `flask ai-review` with the remaining arguments (`--assessment-id <uuid>`… or `--cve <id>`…, not both; `--variant <name>`… with `--cve` only, `--re-review`, `--model`, `--timeout`, `--dry-run`, `--json`) on the `--project` scope, which is required. Must come after `--project`/`--variant`. Exits 1 on a resolution or usage error, when any target has a failing outcome (`changed`, `no_write`, `failed`, `timeout`, `interrupted`), or when the run is interrupted; exits 0 when every target is reviewed, skipped (fresh) or planned (`--dry-run`) and the run was not interrupted. Uses the same `VULNSCOUT_RUN_ID` PID file as `--ai-assess` |
 | `--export-context` | Export selected project/variant AI context to `/scan/outputs/context-export.json` |
 | `--import-context <path>` | Import context into existing scopes named in the file; use `--retarget-context` to override the destination |
@@ -202,7 +205,7 @@ confirmation; direct entrypoint calls do not.
 
 | Flag | Description |
 |------|-------------|
-| `--config <key> <value>` | Set a persistent config value in `/etc/vulnscout/config.env` |
+| `--config <key> <value>` | Set a persistent application setting in `$VULNSCOUT_CONFIG` (default `/etc/vulnscout/config.env`) |
 | `--config-list` | Show current configuration (sensitive values masked) |
 | `--config-clear <key>` | Remove a config key |
 
@@ -294,7 +297,7 @@ The following paths inside the container are relevant:
 | `/cache/vulnscout/templates/` | Custom report templates (user-installed, persisted via cache volume) |
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
-| `/etc/vulnscout/config.env` | Persistent configuration file |
+| `/etc/vulnscout/config.env` | Default configuration file; the wrapper sets `VULNSCOUT_CONFIG=/cache/vulnscout/config.env` instead |
 | `/cache/vulnscout/local_databases/` | Shared NVD/local and sbom-cve-check advisory clones (`nvd-fkie` + `cvelist`), persisted in the cache. Set `SBOM_CVE_CHECK_DATABASES_DIR` and mount another directory to override |
 | `/scan/status.txt` | Scan progress status (used by the web UI) |
 

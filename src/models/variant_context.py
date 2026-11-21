@@ -8,7 +8,7 @@ import logging
 import typing
 from datetime import datetime, timezone
 
-from ..extensions import db, Base
+from ..extensions import db, Base, hold_write_lock
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.stride_model import (
     SYSTEM_KEYS,
@@ -21,6 +21,7 @@ from ..helpers.stride_model import (
 )
 import sqlalchemy as sa
 from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, Text, event
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -329,17 +330,25 @@ class VariantContext(Base):
         return vc
 
     @staticmethod
-    def touch(variant_id: uuid.UUID, commit: bool = True) -> "VariantContext | None":
-        """Mark an existing variant context as changed without altering its fields.
+    def touch(variant_id: uuid.UUID, commit: bool = True) -> "VariantContext":
+        """Mark a variant context as changed, creating its revision row if needed.
 
         Used by callers that mutate context outside the text-field set covered by
         `upsert` (e.g. supplemental context files), so `context_outdated` still
         reflects the change.
         """
-        existing = VariantContext.get_by_variant(variant_id)
-        if existing is None:
-            return None
-        existing.updated_at = datetime.now(timezone.utc)
+        is_sqlite = db.session.get_bind().dialect.name == "sqlite"
+        if is_sqlite:
+            hold_write_lock()
+        insert = (sqlite.insert if is_sqlite else postgresql.insert)(VariantContext)
+        # On PostgreSQL, sample the clock after any conflict wait, not at transaction start.
+        revision = datetime.now(timezone.utc) if is_sqlite else sa.func.clock_timestamp()
+        statement = insert.values(variant_id=variant_id, updated_at=revision).on_conflict_do_update(
+            index_elements=[VariantContext.variant_id], set_={"updated_at": revision},
+        )
+        existing = db.session.scalars(
+            statement.returning(VariantContext), execution_options={"populate_existing": True},
+        ).one()
         if commit:
             db.session.commit()
         return existing

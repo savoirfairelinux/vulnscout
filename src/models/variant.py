@@ -16,6 +16,7 @@ if typing.TYPE_CHECKING:
 
     from ..models import Project, Scan, TimeEstimate, Metrics
     from .variant_context import VariantContext
+    from .host_mount import HostMount
 
 
 class Variant(Base):
@@ -49,6 +50,10 @@ class Variant(Base):
         back_populates="variant",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+    host_mounts: Mapped[list["HostMount"]] = relationship(
+        back_populates="variant",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:

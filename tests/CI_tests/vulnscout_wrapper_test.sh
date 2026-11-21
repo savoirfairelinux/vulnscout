@@ -55,6 +55,22 @@ case "$1" in
             esac
         fi
         case " $* " in
+            *" --variant-id-only "*) echo "00000000-0000-4000-8000-000000000001" ;;
+            *" --ai-context-attach --host-permit "*)
+                while [[ "$1" != --host-permit ]]; do shift; done
+                python3 - "$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock" "${@:2}" <<'PY'
+import json, socket, sys
+for mapping in sys.argv[3:]:
+    alias, path = mapping.split("=", 1)
+    with socket.socket(socket.AF_UNIX) as client:
+        client.connect(sys.argv[1])
+        payload = dict(op="attach", variant_id="00000000-0000-4000-8000-000000000001",
+                       alias=alias, path=path, host_permit=sys.argv[2])
+        client.sendall(json.dumps(payload).encode() + b"\n")
+        reply = json.loads(client.makefile("rb").readline())
+        assert reply["ok"] and reply["result"]["path"] == path, reply
+PY
+                ;;
             *" --ai-assess "*" --json "*|*" --ai-review "*" --json "*) echo '{"results": []}' ;;
         esac
         exit "${VULNSCOUT_TEST_EXEC_EXIT:-0}"
@@ -64,12 +80,22 @@ case "$1" in
         ;;
     run)
         log_call "$@"
+        if [[ "${3:-}" = --entrypoint && "${4:-}" = cat ]]; then
+            cat "$VULNSCOUT_TEST_IMAGE_HELPER"
+        fi
         # Like 'run -d': the new container's ID on stdout.
         [ "${2:-}" != -d ] || echo 0123456789ab
         ;;
     inspect)
         log_call "$@"
+        if [[ "${*: -1}" == '{{.Image}}' && -n "${VULNSCOUT_TEST_RUNNING_IMAGE:-}" ]]; then
+            echo "$VULNSCOUT_TEST_RUNNING_IMAGE"; exit 0
+        fi
         echo "${VULNSCOUT_TEST_IMAGE_VERSION:-v0.24}"
+        ;;
+    image)
+        [[ "$2" = inspect ]] || exit 99
+        printf 'sha256:%064d\n' "${VULNSCOUT_TEST_IMAGE_GENERATION:-1}"
         ;;
     *)
         echo "Unexpected podman command: $*" >&2
@@ -84,6 +110,7 @@ printf '{}\n' > "$SBOM"
 export PATH="$TEST_DIR/bin:/usr/bin:/bin"
 export VULNSCOUT_BUILD_DIR="$TEST_DIR/build"
 export VULNSCOUT_TEST_LOG="$TEST_DIR/container.log"
+export VULNSCOUT_TEST_IMAGE_HELPER="$ROOT_DIR/src/helpers/host_mount_helper.py"
 : > "$VULNSCOUT_TEST_LOG"
 
 reset_log() {
@@ -703,5 +730,120 @@ expect_fail "usage: vulnscout config set <key> <value>" config set ONLY_KEY
 expect_fail "'config' does not accept --project or --variant." config list -p demo
 expect_fail "unknown config action 'show'." config show
 expect_fail "'config' needs get, set, unset, or list." config
+
+# --- ai-context: attached host folders ---
+# Neither executable lines nor launcher settings from the shared config are host input.
+app_config="$VULNSCOUT_BUILD_DIR/cache/config.env"
+printf 'exit 87\nVULNSCOUT_HOST_ROOTS=/unapproved\nVULNSCOUT_IMAGE=cache-image\nVULNSCOUT_OUTPUTS_DIR=/unapproved\n' >> "$app_config"
+expect_fail "config key not set: VULNSCOUT_HOST_ROOTS" config get VULNSCOUT_HOST_ROOTS
+run_ok config set VULNSCOUT_IMAGE operator-image
+run_ok start
+assert_log "operator-image daemon"
+refute_log "/unapproved"
+refute_log "cache-image"
+VULNSCOUT_IMAGE=exported-image run_ok version
+assert_log exported-image
+run_ok config set VULNSCOUT_HOST_ROOTS "$TEST_DIR/with spaces"
+run_ok config get VULNSCOUT_HOST_ROOTS
+grep -Fxq "$TEST_DIR/with spaces" "$TEST_DIR/stdout"
+run_ok config list
+assert_stdout "VULNSCOUT_HOST_ROOTS=$TEST_DIR/with spaces"
+refute_stdout "/unapproved"
+if grep -Fq "$TEST_DIR/with spaces" "$app_config"; then exit 1; fi
+run_ok config unset VULNSCOUT_HOST_ROOTS
+run_ok config unset VULNSCOUT_IMAGE
+expect_fail "config key not set: VULNSCOUT_HOST_ROOTS" config get VULNSCOUT_HOST_ROOTS
+expect_fail "outside container mounts" config set VULNSCOUT_OUTPUTS_DIR "$VULNSCOUT_BUILD_DIR"
+# A substituted cache file must not turn the config command into a host-policy writer.
+mv "$app_config" "$app_config.saved"
+ln -s "$VULNSCOUT_BUILD_DIR/launcher.env" "$app_config"
+expect_fail "refusing unsafe application config" config set PLAIN_KEY bad
+mv -Tf "$app_config.saved" "$app_config"
+
+expect_fail "'ai-context' needs attach, list, detach, or helper." ai-context
+expect_fail "unknown ai-context action 'mount'." ai-context mount
+expect_fail "invalid alias 'Bad'" ai-context attach -p demo "Bad=$TEST_DIR"
+expect_fail "expected <alias>=<host path>, got 'src'." ai-context attach src
+expect_fail "host folder not found: $TEST_DIR/missing" ai-context attach "src=$TEST_DIR/missing"
+expect_fail "alias 'src' is given twice." ai-context attach "src=$TEST_DIR" "src=$TEST_DIR"
+expect_fail "cannot attach the host root directory" ai-context attach "src=/"
+expect_fail "'ai-context helper' does not accept --project or --variant." ai-context helper status -p demo
+expect_fail "invalid alias '../x'" ai-context detach ../x
+expect_fail "'ai-context list' does not accept option --all." ai-context list --all
+
+run_ok ai-context list -p demo -v x86 --json
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-list --json"
+run_ok ai-context detach -p demo src build
+assert_log "/scan/src/entrypoint.sh --project demo --ai-context-detach src build"
+
+# A host python3 older than 3.9 (here a stub failing the version check) cannot run the helper.
+mkdir -p "$TEST_DIR/oldpython"
+printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/oldpython/python3"
+chmod +x "$TEST_DIR/oldpython/python3"
+if [ "$(id -u)" -ne 0 ]; then
+    PATH="$TEST_DIR/oldpython:$PATH" VULNSCOUT_HOST_ROOTS="$TEST_DIR" \
+        expect_fail "host folders need python3 (3.9 or newer)" ai-context attach "src=$TEST_DIR"
+fi
+
+if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
+    roots="$TEST_DIR/roots"
+    mkdir -p "$roots/app" "$roots/build"
+    socket="$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock"
+    trap 'VULNSCOUT_HOST_ROOTS="" "$ROOT_DIR/vulnscout" ai-context helper stop > /dev/null 2>&1 || true; rm -rf "$TEST_DIR"' EXIT
+
+    run_ok ai-context attach -p demo -v x86 "src=$roots/app/../app" "build=$roots/build"
+    assert_log "/scan/src/helpers/host_mount_helper.py"
+    assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-attach --host-permit permit."
+    assert_log "src=$roots/app build=$roots/build"
+    assert_stdout "Host folder helper running as"
+    if [ ! -S "$socket" ] || [ "$(stat -c %a "$socket")" != 600 ] ||
+        [ "$(stat -c %a "$(dirname "$socket")")" != 700 ]; then
+        echo "The helper socket must be owner-only inside a private directory." >&2
+        ls -la "$(dirname "$socket")" >&2
+        exit 1
+    fi
+
+    run_ok ai-context helper status
+    refute_stdout "$roots"
+
+    # An unchanged configuration reuses the running helper.
+    pid="$(cat "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid")"
+    run_ok ai-context list
+    if [ "$(cat "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid")" != "$pid" ]; then
+        echo "The helper must not restart when its roots are unchanged." >&2
+        exit 1
+    fi
+
+    # A rebuilt image with unchanged roots also needs a matching daemon.
+    export VULNSCOUT_TEST_IMAGE_GENERATION=2 VULNSCOUT_TEST_RUNNING_IMAGE=previous
+    run_ok update
+    assert_log "/scan/src/helpers/host_mount_helper.py"
+    [[ "$(cat "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid")" != "$pid" ]]
+    run_ok ai-context helper status
+
+    # Changing the approved roots restarts it.
+    export VULNSCOUT_HOST_ROOTS="$roots/app"
+    run_ok ai-context helper start
+    run_ok ai-context helper status
+    assert_stdout "$roots/app"
+    refute_stdout "$roots/build"
+
+    # Clearing the roots stops the old helper instead of leaving its policy active.
+    run_ok config set VULNSCOUT_HOST_ROOTS ""
+    if [ -S "$socket" ] || [ -f "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid" ]; then
+        echo "Clearing approved roots must stop the host folder helper." >&2
+        exit 1
+    fi
+
+    run_ok stop
+    if [ -S "$socket" ] || [ -f "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid" ]; then
+        echo "'vulnscout stop' must stop the host folder helper." >&2
+        exit 1
+    fi
+    expect_fail "" ai-context helper status
+    unset VULNSCOUT_HOST_ROOTS
+else
+    echo "python3 not found or running as root; skipping the host folder helper tests." >&2
+fi
 
 echo "Host wrapper scope tests passed."

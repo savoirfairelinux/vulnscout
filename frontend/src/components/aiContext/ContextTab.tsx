@@ -1,6 +1,7 @@
 import type { VariantDraft } from "../../handlers/context";
 import CodebaseDirectory from "./CodebaseDirectory";
 import FieldErrorText from "./FieldErrorText";
+import HostFolders from "./HostFolders";
 import { describeField } from "./fieldErrors";
 import { LABEL, TEXTAREA } from "./styles";
 
@@ -40,6 +41,11 @@ function ContextTab({ draft, onDraftChange, variantId, fieldErrors, disabled = f
             <div>{textArea('variant_description', 'Variant description')}</div>
             <CodebaseDirectory
                 key={variantId}
+                variantId={variantId}
+                disabled={disabled || locked}
+            />
+            <HostFolders
+                key={`host-folders-${variantId}`}
                 variantId={variantId}
                 disabled={disabled || locked}
             />

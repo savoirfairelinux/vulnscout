@@ -431,6 +431,27 @@ SCHEMAS: dict[str, Any] = {
         "file_count": {**_COUNT, "nullable": True},
         "directory_count": {**_COUNT, "nullable": True},
     }, ("file_id", "path", "status", "message", "file_count", "directory_count")),
+    "HostMount": _object({
+        "alias": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
+        "file_id": {"type": "string", "example": "mount:src"},
+        "host_path": _STRING, "created_at": _DATE,
+        "status": {"type": "string", "enum": ["available", "unavailable"]},
+        "message": _STRING,
+    }, ("alias", "file_id", "host_path", "created_at", "status", "message")),
+    "HostMountList": _object({
+        "helper": _object({"available": _BOOL, "message": _TEXT}, ("available", "message")),
+        "mounts": _array(_ref("HostMount")),
+    }, ("helper", "mounts")),
+    "HostMountDetached": _object({
+        "alias": _STRING, "detached": _BOOL, "warning": _TEXT,
+    }, ("alias", "detached", "warning")),
+    "HostHelperStatus": _object({
+        "available": _BOOL, "message": _TEXT, "roots": _STRINGS,
+    }, ("available", "message", "roots")),
+    "HostFolderListing": _object({
+        "path": _TEXT, "root": _TEXT, "parent": _TEXT, "truncated": _BOOL,
+        "directories": _array(_object({"name": _STRING, "path": _STRING}, ("name", "path"))),
+    }, ("path", "root", "parent", "truncated", "directories")),
     "ProjectContext": _object({
         "project_id": _UUID, "description": _TEXT,
     }, ("project_id", "description")),
@@ -474,6 +495,10 @@ SCHEMAS: dict[str, Any] = {
         "project_id": _UUID, "description": _TEXT, "variant_id": _UUID,
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
         "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
+        "mounts": _array(_object({
+            "alias": _STRING, "file_id": _STRING,
+        }, ("alias", "file_id")),
+            description="Host folders attached read-only; browse them with file_id mount:<alias>."),
         "editor": _ref("VariantContextEditor"),
     }, ("project_id", "variant_id", "description", "files")),
     "ScanConfiguration": _object({

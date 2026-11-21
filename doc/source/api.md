@@ -509,6 +509,47 @@ or separate editor save is required.
 See [administrator directory setup](ai-assessments.md#administrator-provided-codebase-directories)
 for naming, retention, copying, read-only mounts and permissions.
 
+### Attach Host Folders
+
+```
+GET /api/context/host-roots
+GET /api/context/host-roots/browse[?path=<absolute host folder>]
+GET /api/variants/<variant_id>/context/mounts
+POST /api/variants/<variant_id>/context/mounts
+DELETE /api/variants/<variant_id>/context/mounts/<alias>
+GET /api/variants/<variant_id>/context/files/mount:<alias>/source
+```
+
+`host-roots` returns `{"available": bool, "message": str|null, "roots": [...]}`: whether the
+host folder helper answers and the operator-approved roots (`VULNSCOUT_HOST_ROOTS`).
+`browse` lists the approved roots without `path`, otherwise the subfolders (at most 500,
+`truncated` beyond) of a folder inside a root, with its `parent` (`null` at a root); hidden or
+sensitive names and links are omitted. `POST` takes `{"alias": "src", "host_path": "/work/app"}`
+and returns `201` with `{"alias", "file_id": "mount:src", "host_path", "created_at", "status", "message"}`
+(`200` when the same folder is already attached under that alias). `GET .../mounts` returns
+`{"helper": {"available", "message"}, "mounts": [...]}` with each folder's `status`
+(`available` or `unavailable`) and `message`. `DELETE` returns
+`{"alias", "detached": true, "warning": str|null}`; access ends immediately even if the helper
+could not be updated. The backend records pending cleanup in the same transaction
+and retries it when the helper is reachable. Cleanup is scoped to the deleted
+attachment ID, not just its alias. `GET /api/context` lists only `alias` and `file_id` for each mount;
+absolute host paths are available only through the operator endpoints.
+
+Host-folder management, browsing and source reads are restricted to local operator requests.
+Browser requests must be same-origin; remote clients and cross-origin browser requests receive
+`403`. This does not change local Agent or MCP access.
+
+The source route accepts the same `operation=list|read|search` parameters as uploads and the
+codebase directory. Host listings and searches return `engine="python"` and mark results
+`truncated` with a `message` when a budget or I/O error limits coverage. Searches report
+`bytes_read` (including nonmatches), `io_errors`, `skipped_binary_files` and `skipped_large_files`.
+
+Errors: `400` invalid alias, path or parameters (including a `pattern` over 512 characters or
+with more than 16 `*`/`?` wildcards); `403` access denied or path outside the approved roots;
+`404` unknown variant, alias or folder; `409` alias already attached to another folder, or folder
+unavailable (missing, unreadable, moved or replaced by a link); `503` helper not running.
+See [Attached host folders](ai-assessments.md#attached-host-folders).
+
 ### Browse Codebase Source
 
 ```

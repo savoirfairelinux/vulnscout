@@ -78,8 +78,9 @@ in `config.env`. Copilot may also keep SDK session state in its local directory.
 Without `VULNSCOUT_CONFIG`, standalone Flask stores configuration in
 `$XDG_CONFIG_HOME/vulnscout/config.env` (default `~/.config/vulnscout/config.env`);
 no root access is needed. Set `VULNSCOUT_CONFIG` to use another writable file.
-The container entrypoint explicitly uses `/etc/vulnscout/config.env`, bind-mounted
-from the host cache. Persisted configuration is owner-readable/writable only
+The wrapper sets `VULNSCOUT_CONFIG=/cache/vulnscout/config.env` inside the
+container, so the settings persist in the mounted cache. Without the wrapper,
+the entrypoint defaults to `/etc/vulnscout/config.env`. Persisted configuration is owner-readable/writable only
 (`0600`); both CLI `--config-list` paths redact `AI_AUTH_CREDENTIALS`.
 
 AI settings are read from this file on restart, not copied into container
