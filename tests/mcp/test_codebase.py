@@ -85,10 +85,16 @@ def test_read_codebase_files_validates_paths_and_caps_the_response(monkeypatch):
     client = VulnScoutClient(BASE_URL)
     assert _read_codebase_files_impl(client, "v1", "f", [], 1, 10).startswith("Error:")
     assert "at most" in _read_codebase_files_impl(client, "v1", "f", [f"{i}.c" for i in range(9)], 1, 10)
-    monkeypatch.setattr(context_tools, "MAX_BATCH_BYTES", 100)
+    monkeypatch.setattr(context_tools, "MAX_BATCH_BYTES", 210)
     with patch.object(client, "get_codebase_source", return_value={"content": "y" * 80}):
-        files = json.loads(_read_codebase_files_impl(client, "v1", "f", ["a.c", "b.c"], 1, 10))["files"]
+        response = _read_codebase_files_impl(client, "v1", "f", ["a.c", "b.c"], 1, 10)
+    assert len(response.encode()) <= 210
+    files = json.loads(response)["files"]
     assert "content" in files[0] and "budget" in files[1]["error"]
+    with patch.object(client, "get_codebase_source", return_value={"content": "\u00e9" * 40}):
+        response = _read_codebase_files_impl(client, "v1", "f", ["a.c"], 1, 10)
+    assert len(response.encode()) <= 210 and "budget" in json.loads(response)["files"][0]["error"]
+    assert "budget" in _read_codebase_files_impl(client, "v1", "f", ["x" * 210], 1, 10)
 
 
 def test_directory_metadata_exposes_the_bounded_tool_id():
@@ -140,7 +146,7 @@ def test_merged_context_lists_mount_file_ids():
         {"alias": "src", "file_id": "mount:src", "host_path": "/work/app", "created_at": "2026-01-01T00:00:00Z"},
     ]})
     line = next(line for line in result.splitlines() if line.startswith("mounts="))
-    assert json.loads(line.split("=", 1)[1]) == [{"alias": "src", "file_id": "mount:src", "host_path": "/work/app"}]
+    assert json.loads(line.split("=", 1)[1]) == [{"alias": "src", "file_id": "mount:src"}]
     assert "mounts=[]" in _fmt_merged_context({})
 
 

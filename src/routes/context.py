@@ -308,7 +308,8 @@ def init_app(app):
             "files": variant_part["files"],
             "editor": variant_part["editor"],
             "codebase_directory": variant_part.get("codebase_directory"),
-            "mounts": [mount.to_dict() for mount in HostMount.get_by_variant(variant_uuid)],
+            "mounts": [{"alias": mount.alias, "file_id": mount.file_id}
+                       for mount in HostMount.get_by_variant(variant_uuid)],
         })
 
     @app.route('/api/variants/<variant_id>/context/directory', methods=['GET', 'POST'])

@@ -21,18 +21,15 @@ from __future__ import annotations
 
 import argparse
 import errno
-import functools
 import io
 import json
 import os
 import re
-import shutil
 import signal
 import socket
 import socketserver
 import stat
 import struct
-import subprocess
 import sys
 import threading
 import time
@@ -45,7 +42,6 @@ PROTOCOL_VERSION = 1
 SOCKET_NAME = "helper.sock"
 REGISTRY_NAME = "registry.json"
 
-MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 512 * 1024
 MAX_CONTENT_BYTES = 64 * 1024
 MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -62,11 +58,12 @@ MAX_PATTERN_CHARS = 512
 # Few wildcards keep glob matching linear enough: a regex match cannot be interrupted by the time limits.
 MAX_PATTERN_WILDCARDS = 16
 MIN_PYTHON = (3, 9)
-ENGINE_ENV = "VULNSCOUT_HOST_HELPER_ENGINE"
-RG_READ_CHUNK = 64 * 1024
 MAX_PATH_CHARS = 4096
 MAX_BROWSE_ENTRIES = 500
 MAX_ATTACHMENTS_PER_VARIANT = 32
+# A sync path can use 12 ASCII bytes per character (JSON surrogate pairs).
+# Allow 32 bytes per alias, JSON punctuation, and the variant/request envelope.
+MAX_REQUEST_BYTES = MAX_ATTACHMENTS_PER_VARIANT * (12 * MAX_PATH_CHARS + 40) + 128
 MAX_CONNECTIONS = 8
 CONNECTION_TIMEOUT = 30.0
 
@@ -320,6 +317,7 @@ class _Walk:
         self.started = time.monotonic()
         self.deadline = self.started + time_limit
         self.visited = 0
+        self.io_errors = 0
         self.engine = "python"
         self.matcher = matcher
         self.literal = literal
@@ -330,29 +328,34 @@ class _Walk:
 
     def files(self) -> Iterator[tuple[str, int]]:
         yield from self._walk(self.root_fd, "")
+        self.check_time()
+
+    def check_time(self) -> None:
+        if time.monotonic() > self.deadline:
+            raise _Exhausted("time")
 
     def _may_contain(self, directory: str) -> bool:
         return self.literal.startswith(directory) or directory.startswith(self.literal)
 
     def _walk(self, directory_fd: int, prefix: str) -> Iterator[tuple[str, int]]:
+        entries = []
         try:
             with os.scandir(directory_fd) as iterator:
-                entries = []
                 for entry in iterator:
                     self._tick()
                     entries.append(entry)
-        except PermissionError:
-            return
+        except OSError:
+            self.io_errors += 1
         entries.sort(key=lambda item: item.name)
         for entry in entries:
-            if time.monotonic() > self.deadline:
-                raise _Exhausted("time")
+            self.check_time()
             if _excluded(entry.name) or not _printable(entry.name):
                 continue
             try:
                 is_dir = entry.is_dir(follow_symlinks=False)
                 is_file = not is_dir and entry.is_file(follow_symlinks=False)
             except OSError:
+                self.io_errors += 1
                 continue
             if is_dir:
                 directory = f"{prefix}{entry.name}/"
@@ -361,6 +364,7 @@ class _Walk:
                 try:
                     child = os.open(entry.name, _DIRECTORY_FLAGS, dir_fd=directory_fd)
                 except OSError:
+                    self.io_errors += 1
                     continue
                 try:
                     yield from self._walk(child, directory)
@@ -373,210 +377,15 @@ class _Walk:
                 try:
                     yield path, entry.stat(follow_symlinks=False).st_size
                 except OSError:
+                    self.io_errors += 1
                     continue
 
     def _tick(self) -> None:
-        self.visited += 1
-        if self.visited > MAX_WALK_ENTRIES:
+        if self.visited >= MAX_WALK_ENTRIES:
             raise _Exhausted("entries")
-        if self.visited % 256 == 0 and time.monotonic() > self.deadline:
-            raise _Exhausted("time")
-
-
-@functools.lru_cache(maxsize=1)
-def _gnu_grep() -> str | None:
-    path = shutil.which("grep")
-    if path is None:
-        return None
-    try:
-        banner = subprocess.run([path, "--version"], stdin=subprocess.DEVNULL, capture_output=True, timeout=5,
-                                check=False).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return path if b"GNU grep" in banner else None
-
-
-def _grep_binary() -> str | None:
-    """GNU grep, unless the operator forced the pure-Python engine (BSD grep is not supported)."""
-    if os.environ.get(ENGINE_ENV, "auto").lower() == "python":
-        return None
-    return _gnu_grep()
-
-
-class _GrepWalk(_Walk):
-    """Content search that lets GNU grep pre-filter candidate files, then re-validates every result.
-
-    grep only names files that contain the query: it runs without a shell, with a fixed argument
-    list, from the already opened folder, and does not follow links found in the tree. Each reported
-    path is checked again here (excluded names, glob, links, regular file) by opening every parent
-    without following links, and the helper re-reads the file itself, so the safety rules are exactly
-    those of the Python walk, which is the fallback.
-    """
-
-    def __init__(self, root_fd: int, time_limit: float, matcher: Callable[[str], bool] | None,
-                 literal: str, grep: str, query: str):
-        super().__init__(root_fd, time_limit, matcher, literal)
-        self.grep = grep
-        self.query = query
-        self.engine = "grep"
-        self._parent_key: str | None = None
-        self._parent_fd = root_fd
-        self._parent_ok = False
-        self._parts: dict[str, bool] = {}
-
-    def _root_path(self) -> str | None:
-        try:
-            path = os.readlink(f"/proc/self/fd/{self.root_fd}")
-        except OSError:
-            return None
-        return path if path.startswith("/") and os.path.isdir(path) else None
-
-    def _command(self, start: str) -> list[str]:
-        command = [self.grep, "-r", "-I", "-l", "-Z", "-F", "--exclude-dir=.?*", "--exclude=.*"]
-        for name in _SENSITIVE_NAMES:
-            command += [f"--exclude-dir={name}", f"--exclude={name}"]
-        command += ["-e", self.query, "--"]
-        if start:
-            command.append(start)
-        return command
-
-    def _start(self) -> str | None:
-        """Folder holding the literal pattern prefix; None when no path can match."""
-        directory = self.literal.rpartition("/")[0]
-        if not directory:
-            return ""
-        parts = directory.split("/")
-        if any(part in ("", ".", "..") or _excluded(part) or not _printable(part) for part in parts):
-            return None
-        return directory if self._open_parent(parts) else None
-
-    def _open_parent(self, parts: list[str]) -> bool:
-        """Open (and cache the last) parent folder, one component at a time, without following links."""
-        key = "/".join(parts)
-        if key == self._parent_key:
-            return self._parent_ok
-        self._close_parent()
-        self._parent_key = key
-        current = self.root_fd
-        try:
-            for part in parts:
-                child = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
-                if current != self.root_fd:
-                    os.close(current)
-                current = child
-        except OSError:
-            if current != self.root_fd:
-                os.close(current)
-            self._parent_ok = False
-            return False
-        self._parent_fd = current
-        self._parent_ok = True
-        return True
-
-    def _close_parent(self) -> None:
-        if self._parent_fd != self.root_fd:
-            os.close(self._parent_fd)
-        self._parent_fd = self.root_fd
-        self._parent_key = None
-        self._parent_ok = False
-
-    def _regular_size(self, parts: list[str]) -> int | None:
-        if not self._open_parent(parts[:-1]):
-            return None
-        try:
-            info = os.stat(parts[-1], dir_fd=self._parent_fd, follow_symlinks=False)
-        except OSError:
-            return None
-        return info.st_size if stat.S_ISREG(info.st_mode) else None
-
-    def _enumerate(self, root: str, start: str) -> tuple[list[str], bool]:
-        """Matching relative paths reported by grep and whether the time limit stopped it."""
-        process = subprocess.Popen(
-            self._command(start), cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C"})
-        timed_out = threading.Event()
-
-        def stop() -> None:
-            timed_out.set()
-            process.kill()
-
-        timer = threading.Timer(max(0.0, self.deadline - time.monotonic()), stop)
-        timer.start()
-        found: list[str] = []
-        pending = b""
-        try:
-            assert process.stdout is not None
-            while True:
-                chunk = process.stdout.read1(RG_READ_CHUNK)  # type: ignore[attr-defined]
-                if not chunk:
-                    break
-                pending += chunk
-                *names, pending = pending.split(b"\0")
-                for raw in names:
-                    self._collect(raw, found)
-                if self.visited > MAX_WALK_ENTRIES:
-                    process.kill()
-                    break
-        finally:
-            timer.cancel()
-            process.kill()
-            process.wait()
-            if process.stdout:
-                process.stdout.close()
-        return found, timed_out.is_set()
-
-    def _eligible(self, part: str) -> bool:
-        known = self._parts.get(part)
-        if known is None:
-            known = self._parts[part] = part not in ("", ".", "..") and not _excluded(part) and _printable(part)
-        return known
-
-    def _collect(self, raw: bytes, found: list[str]) -> None:
         self.visited += 1
-        try:
-            path = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            return
-        if (self.matcher is None or self.matcher(path)) and all(self._eligible(part) for part in path.split("/")):
-            found.append(path)
-
-    def files(self) -> Iterator[tuple[str, int]]:
-        root = self._root_path()
-        start = self._start() if root else None
-        if root is None:
-            self.engine = "python"
-            yield from super().files()
-            return
-        if start is None:
-            return
-        try:
-            found, timed_out = self._enumerate(root, start)
-        except OSError:
-            self.engine = "python"
-            yield from super().files()
-            return
-        try:
-            found.sort()
-            for path in found:
-                if time.monotonic() > self.deadline:
-                    raise _Exhausted("time")
-                size = self._regular_size(path.split("/"))
-                if size is not None:
-                    yield path, size
-            if self.visited > MAX_WALK_ENTRIES:
-                raise _Exhausted("entries")
-            if timed_out:
-                raise _Exhausted("time")
-        finally:
-            self._close_parent()
-
-
-def _new_walk(fd: int, time_limit: float, matcher: Callable[[str], bool], literal: str,
-              query: str | None = None) -> _Walk:
-    grep = _grep_binary() if query is not None else None
-    if grep and query is not None:
-        return _GrepWalk(fd, time_limit, matcher, literal, grep, query)
-    return _Walk(fd, time_limit, matcher, literal)
+        if self.visited % 256 == 0:
+            self.check_time()
 
 
 def _exhausted_message(reason: str, operation: str, walk: "_Walk | None" = None) -> str:
@@ -586,9 +395,18 @@ def _exhausted_message(reason: str, operation: str, walk: "_Walk | None" = None)
     if reason == "entries":
         return f"The {operation} stopped after visiting {MAX_WALK_ENTRIES} entries{detail}; {advice}"
     if reason == "bytes":
-        mebibytes = SEARCH_BYTE_BUDGET // (1024 * 1024)
-        return f"The {operation} stopped after reading {mebibytes} MiB{detail}; narrow the pattern."
+        mebibytes = SEARCH_BYTE_BUDGET / (1024 * 1024)
+        return f"The next file would exceed the {mebibytes:g} MiB search byte budget{detail}; narrow the pattern."
+    if reason == "results":
+        return f"The {operation} reached its match limit{detail}; narrow the query or pattern."
     return f"The {operation} stopped at its time limit{detail}; {advice}"
+
+
+def _with_io_errors(message: str | None, walk: _Walk) -> str | None:
+    if not walk.io_errors:
+        return message
+    warning = f"Incomplete: {walk.io_errors} I/O error(s) while accessing files or folders."
+    return f"{message} {warning}" if message else warning
 
 
 class Helper:
@@ -794,7 +612,7 @@ class Helper:
         offset = _integer(request, "offset", 0, 0, MAX_WALK_ENTRIES)
         limit = _integer(request, "limit", MAX_LIST_LIMIT, 1, MAX_LIST_LIMIT)
         fd, base = self._scoped_fd(request)
-        walk = _new_walk(fd, LIST_TIME_LIMIT, matches_pattern, literal)
+        walk = _Walk(fd, LIST_TIME_LIMIT, matches_pattern, literal)
         files: list[dict] = []
         total = 0
         message = None
@@ -807,6 +625,7 @@ class Helper:
             message = _exhausted_message(str(exc), "listing", walk)
         finally:
             os.close(fd)
+        message = _with_io_errors(message, walk)
         result: dict[str, Any] = {
             "files": files, "total": total, "truncated": message is not None, "engine": walk.engine,
             "visited_entries": walk.visited, "elapsed_seconds": round(walk.elapsed, 2),
@@ -833,20 +652,30 @@ class Helper:
         finally:
             for item in opened:
                 os.close(item)
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            os.close(fd)
-            raise HelperError("invalid", "Directories, links and special files cannot be read.")
-        with io.FileIO(fd) as source:
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise HelperError("invalid", "Directories, links and special files cannot be read.")
             if info.st_size > MAX_FILE_BYTES:
                 raise HelperError("limit", "Source file exceeds the maximum readable file size of 10 MiB.")
             if budget is not None and info.st_size > budget[0]:
                 raise _Exhausted("bytes")
-            content = source.read(MAX_FILE_BYTES + 1)
+            limit = MAX_FILE_BYTES + 1
+            if budget is not None:
+                limit = min(limit, budget[0])
+            content = os.read(fd, limit)
+            if budget is not None:
+                budget[0] -= len(content)
+                # A growing file must not spend past the budget, or be searched as if complete.
+                if len(content) == limit and budget[0] == 0 and (
+                        not limit or len(content) != os.fstat(fd).st_size):
+                    raise _Exhausted("bytes")
+            if len(content) < info.st_size:
+                raise HelperError("unavailable", "Source file could not be read in full.")
+        finally:
+            os.close(fd)
         if len(content) > MAX_FILE_BYTES:
             raise HelperError("limit", "Source file exceeds the maximum readable file size of 10 MiB.")
-        if budget is not None:
-            budget[0] -= len(content)
         return content
 
     @staticmethod
@@ -893,13 +722,11 @@ class Helper:
         query = _string(request, "query", maximum=MAX_QUERY_CHARS)
         matches_pattern, literal = _pattern(request)
         max_results = _integer(request, "max_results", MAX_SEARCH_RESULTS, 1, MAX_SEARCH_RESULTS)
-        needle = query.encode("utf-8")
         fd, base = self._scoped_fd(request)
         matches: list[dict] = []
         searched = skipped_binary = skipped_large = 0
         budget = [SEARCH_BYTE_BUDGET]
-        walk = _new_walk(fd, SEARCH_TIME_LIMIT, matches_pattern, literal, query)
-        truncated = False
+        walk = _Walk(fd, SEARCH_TIME_LIMIT, matches_pattern, literal)
         message = None
         try:
             for path, size in walk.files():
@@ -912,13 +739,10 @@ class Helper:
                     if exc.code == "limit":
                         skipped_large += 1
                     else:
-                        skipped_binary += 1
+                        walk.io_errors += 1
                     continue
-                if b"\x00" in content:
-                    skipped_binary += 1
-                    continue
-                if needle not in content:
-                    searched += 1
+                except OSError:
+                    walk.io_errors += 1
                     continue
                 try:
                     text = self._text(content)
@@ -926,7 +750,11 @@ class Helper:
                     skipped_binary += 1
                     continue
                 searched += 1
+                if query not in text:
+                    continue
                 for number, line in enumerate(io.StringIO(text), 1):
+                    if number % 256 == 0:
+                        walk.check_time()
                     if query not in line:
                         continue
                     if len(matches) == max_results:
@@ -934,14 +762,14 @@ class Helper:
                     snippet = line.rstrip("\r\n")[:MAX_SNIPPET_CHARS]
                     matches.append({"path": base + path, "line": number, "text": snippet})
         except _Exhausted as exc:
-            truncated = True
-            if str(exc) != "results":
-                message = _exhausted_message(str(exc), "search", walk)
+            message = _exhausted_message(str(exc), "search", walk)
         finally:
             os.close(fd)
+        message = _with_io_errors(message, walk)
         result: dict[str, Any] = {
-            "matches": matches, "truncated": truncated, "searched_files": searched, "engine": walk.engine,
+            "matches": matches, "truncated": message is not None, "searched_files": searched, "engine": walk.engine,
             "skipped_binary_files": skipped_binary, "skipped_large_files": skipped_large,
+            "io_errors": walk.io_errors, "bytes_read": SEARCH_BYTE_BUDGET - budget[0],
             "visited_entries": walk.visited, "elapsed_seconds": round(walk.elapsed, 2),
         }
         if message:

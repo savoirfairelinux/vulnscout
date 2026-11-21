@@ -205,7 +205,7 @@ confirmation; direct entrypoint calls do not.
 
 | Flag | Description |
 |------|-------------|
-| `--config <key> <value>` | Set a persistent config value in `/etc/vulnscout/config.env` |
+| `--config <key> <value>` | Set a persistent application setting in `$VULNSCOUT_CONFIG` (default `/etc/vulnscout/config.env`) |
 | `--config-list` | Show current configuration (sensitive values masked) |
 | `--config-clear <key>` | Remove a config key |
 
@@ -297,7 +297,7 @@ The following paths inside the container are relevant:
 | `/cache/vulnscout/templates/` | Custom report templates (user-installed, persisted via cache volume) |
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
-| `/etc/vulnscout/config.env` | Persistent configuration file |
+| `/etc/vulnscout/config.env` | Default configuration file; the wrapper sets `VULNSCOUT_CONFIG=/cache/vulnscout/config.env` instead |
 | `/cache/vulnscout/local_databases/` | Shared NVD/local and sbom-cve-check advisory clones (`nvd-fkie` + `cvelist`), persisted in the cache. Set `SBOM_CVE_CHECK_DATABASES_DIR` and mount another directory to override |
 | `/scan/status.txt` | Scan progress status (used by the web UI) |
 

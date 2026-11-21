@@ -4,10 +4,15 @@
 
 import os
 import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.orm import scoped_session, sessionmaker
 
 from src.bin.webapp import create_app
+from src.controllers import host_mounts
 from src.extensions import db as _db
 from src.helpers import host_mount_helper as hh
 from src.models.host_mount import HostMount
@@ -170,11 +175,36 @@ class TestAttachDetach:
 
     def test_reattach_is_idempotent_but_aliases_are_unique(self, client, variant, host, helper_server):
         assert _attach(client, variant, "src", host["app"]).status_code == 201
+        context = VariantContext.get_by_variant(variant.id)
+        revision = context.updated_at
         assert _attach(client, variant, "src", host["app"]).status_code == 200
+        _db.session.refresh(context)
+        assert context.updated_at == revision
         conflict = _attach(client, variant, "src", host["build"])
         assert conflict.status_code == 409 and "detach it first" in conflict.get_json()["error"]
         assert HostMount.get(variant.id, "src").host_path == str(host["app"])
         assert helper_server.registry.get(str(variant.id), "src") == str(host["app"])
+
+    def test_exact_reattach_without_helper(self, client, variant, host, helper_server, monkeypatch):
+        assert _attach(client, variant, "src", host["app"]).status_code == 201
+        context = VariantContext.get_by_variant(variant.id)
+        revision = context.updated_at
+        monkeypatch.setenv("VULNSCOUT_HOST_HELPER_SOCKET", str(host["tmp"] / "missing.sock"))
+        assert _attach(client, variant, "src", host["app"]).status_code == 503
+        _db.session.refresh(context)
+        assert context.updated_at == revision
+        assert HostMount.get(variant.id, "src").host_path == str(host["app"])
+
+    def test_status_full_unicode_attachment_set(self, client, variant, helper_server, monkeypatch):
+        # Exercise the socket framing independently of OS-specific filesystem path limits.
+        monkeypatch.setattr(helper_server, "_validated_folder", lambda path: path)
+        path = "/" + "\U0001f600" * (hh.MAX_PATH_CHARS - 1)
+        aliases = [f"s{i:031d}" for i in range(hh.MAX_ATTACHMENTS_PER_VARIANT)]
+        _db.session.add_all([HostMount(variant_id=variant.id, alias=alias, host_path=path) for alias in aliases])
+        _db.session.commit()
+        listed = client.get(f"/api/variants/{variant.id}/context/mounts").get_json()
+        assert listed["helper"]["available"]
+        assert [(m["alias"], m["status"]) for m in listed["mounts"]] == [(a, "available") for a in aliases]
 
     def test_mount_mutations_create_and_advance_context_revision(self, client, variant, host, helper_server):
         assert VariantContext.get_by_variant(variant.id) is None
@@ -225,6 +255,44 @@ class TestAttachDetach:
         assert _db.session.execute(_db.select(HostMount)).scalars().all() == []
 
 
+def test_first_concurrent_attaches_preserve_both_aliases(postgres_uri, monkeypatch):
+    schema = f"mount_test_{uuid.uuid4().hex}"
+    engine = sa.create_engine(postgres_uri, connect_args={"options": f"-csearch_path={schema}"})
+    sessions = scoped_session(sessionmaker(bind=engine))
+    monkeypatch.setattr(_db, "session", sessions)
+    monkeypatch.setattr(host_mounts.helper, "call", lambda op, **params: params)
+    with engine.begin() as conn:
+        conn.execute(sa.schema.CreateSchema(schema))
+    try:
+        models = (Project, Variant, HostMount, VariantContext)
+        _db.metadata.create_all(engine, tables=[model.__table__ for model in models])
+        variant_id = Variant.create("x86", Project.create("Demo").id).id
+        sessions.remove()
+        barrier = threading.Barrier(2, timeout=10)
+
+        @sa.event.listens_for(engine, "before_cursor_execute")
+        def synchronize_revision_inserts(conn, cursor, stmt, params, context, executemany):
+            # Both transactions reach the first revision insert before either can commit.
+            if context.isinsert and context.compiled.statement.table.name == VariantContext.__tablename__:
+                barrier.wait()
+
+        def attach(alias):
+            try:
+                return host_mounts.attach(variant_id, alias, f"/{alias}")[1]
+            finally:
+                sessions.remove()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert list(pool.map(attach, ["src", "build"])) == [True, True]
+        assert [mount.alias for mount in HostMount.get_by_variant(variant_id)] == ["build", "src"]
+        assert VariantContext.get_by_variant(variant_id).updated_at is not None
+    finally:
+        sessions.remove()
+        with engine.begin() as conn:
+            conn.execute(sa.schema.DropSchema(schema, cascade=True))
+        engine.dispose()
+
+
 class TestSourceBrowsing:
 
     def test_agents_target_one_alias(self, client, variant, host, helper_server):
@@ -257,9 +325,8 @@ class TestSourceBrowsing:
         _attach(client, variant, "src", host["app"])
         body = client.get("/api/context", query_string={
             "project_id": str(variant.project_id), "variant_id": str(variant.id),
-        }).get_json()
-        assert [(m["alias"], m["file_id"], m["host_path"]) for m in body["mounts"]] == [
-            ("src", "mount:src", str(host["app"]))]
+        }, environ_overrides={"REMOTE_ADDR": "192.0.2.1"}).get_json()
+        assert body["mounts"] == [{"alias": "src", "file_id": "mount:src"}]
 
     @pytest.mark.parametrize("file_id, params, status", [
         ("mount:nope", {}, 404),
@@ -306,6 +373,8 @@ class TestSourceBrowsing:
         moved = host["root"] / "moved"
         host["app"].rename(moved)
         host["app"].symlink_to(moved)
+        assert _attach(client, variant, "src", host["app"]).status_code == 409
+        assert helper_server.registry.get(str(variant.id), "src") == str(host["app"])
         response = _source(client, variant, "mount:src")
         assert response.status_code == 409 and "moved" in response.get_json()["error"]
 

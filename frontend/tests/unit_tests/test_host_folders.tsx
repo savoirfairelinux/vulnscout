@@ -13,6 +13,7 @@ type Server = {
     mounts: Mount[];
     requests: { url: string; method: string; body: string | null }[];
     attachError?: { status: number; error: string };
+    attachPending?: Promise<void>;
 };
 
 const json = (body: unknown, status = 200) => ({ status, body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
@@ -55,6 +56,7 @@ function serve(overrides: Partial<Server> = {}): Server {
                     : { ...mount, status: "unavailable", message: UNAVAILABLE }) });
         }
         if (mounts && request.method === "POST") {
+            await server.attachPending;
             if (server.attachError) return json({ error: server.attachError.error }, server.attachError.status);
             const { alias, host_path } = JSON.parse(body ?? "{}");
             const mount = { alias, file_id: `mount:${alias}`, host_path, created_at: "2026-01-01T00:00:00Z",
@@ -93,7 +95,8 @@ test("lists attached folders with their availability and detaches one", async ()
 });
 
 test("attach folder browses approved roots only and sends the chosen folder and alias", async () => {
-    const server = serve();
+    let complete!: () => void;
+    const server = serve({ attachPending: new Promise<void>(resolve => { complete = resolve; }) });
     render(<HostFolders variantId="v1" disabled={false} />);
     expect(await screen.findByText("No host folders attached.")).toBeVisible();
 
@@ -112,7 +115,8 @@ test("attach folder browses approved roots only and sends the chosen folder and 
     fireEvent.change(within(panel).getByLabelText("Alias"), { target: { value: "src" } });
     await waitFor(() => expect(attach).toBeEnabled());
     fireEvent.click(attach);
-
+    expect(within(panel).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    complete();
     expect(await screen.findByText("Attached src (mount:src).")).toBeVisible();
     const post = server.requests.find(r => r.method === "POST");
     expect(JSON.parse(post?.body ?? "{}")).toEqual({ alias: "src", host_path: "/work/app" });

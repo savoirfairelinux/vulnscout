@@ -705,6 +705,35 @@ expect_fail "unknown config action 'show'." config show
 expect_fail "'config' needs get, set, unset, or list." config
 
 # --- ai-context: attached host folders ---
+# Neither executable lines nor launcher settings from the shared config are host input.
+app_config="$VULNSCOUT_BUILD_DIR/cache/config.env"
+printf 'exit 87\nVULNSCOUT_HOST_ROOTS=/unapproved\nVULNSCOUT_IMAGE=cache-image\nVULNSCOUT_OUTPUTS_DIR=/unapproved\n' >> "$app_config"
+expect_fail "config key not set: VULNSCOUT_HOST_ROOTS" config get VULNSCOUT_HOST_ROOTS
+run_ok config set VULNSCOUT_IMAGE operator-image
+run_ok start
+assert_log "operator-image daemon"
+refute_log "/unapproved"
+refute_log "cache-image"
+VULNSCOUT_IMAGE=exported-image run_ok version
+assert_log exported-image
+run_ok config set VULNSCOUT_HOST_ROOTS "$TEST_DIR/with spaces"
+run_ok config get VULNSCOUT_HOST_ROOTS
+grep -Fxq "$TEST_DIR/with spaces" "$TEST_DIR/stdout"
+run_ok config list
+assert_stdout "VULNSCOUT_HOST_ROOTS=$TEST_DIR/with spaces"
+refute_stdout "/unapproved"
+if grep -Fq "$TEST_DIR/with spaces" "$app_config"; then exit 1; fi
+VULNSCOUT_HOST_ROOTS="" expect_fail "no approved host roots" ai-context helper start
+run_ok config unset VULNSCOUT_HOST_ROOTS
+run_ok config unset VULNSCOUT_IMAGE
+expect_fail "config key not set: VULNSCOUT_HOST_ROOTS" config get VULNSCOUT_HOST_ROOTS
+expect_fail "outside container mounts" config set VULNSCOUT_OUTPUTS_DIR "$VULNSCOUT_BUILD_DIR"
+# A substituted cache file must not turn the config command into a host-policy writer.
+mv "$app_config" "$app_config.saved"
+ln -s "$VULNSCOUT_BUILD_DIR/launcher.env" "$app_config"
+expect_fail "refusing unsafe application config" config set PLAIN_KEY bad
+mv -Tf "$app_config.saved" "$app_config"
+
 expect_fail "'ai-context' needs attach, list, detach, or helper." ai-context
 expect_fail "unknown ai-context action 'mount'." ai-context mount
 expect_fail "invalid alias 'Bad'" ai-context attach -p demo "Bad=$TEST_DIR"
@@ -733,7 +762,7 @@ fi
 if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     roots="$TEST_DIR/roots"
     mkdir -p "$roots/app" "$roots/build"
-    export VULNSCOUT_HOST_ROOTS="$roots"
+    run_ok config set VULNSCOUT_HOST_ROOTS "$roots"
     socket="$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock"
     trap 'VULNSCOUT_HOST_ROOTS="" "$ROOT_DIR/vulnscout" ai-context helper stop > /dev/null 2>&1 || true; rm -rf "$TEST_DIR"' EXIT
 

@@ -530,15 +530,17 @@ and returns `201` with `{"alias", "file_id": "mount:src", "host_path", "created_
 `{"helper": {"available", "message"}, "mounts": [...]}` with each folder's `status`
 (`available` or `unavailable`) and `message`. `DELETE` returns
 `{"alias", "detached": true, "warning": str|null}`; access ends immediately even if the helper
-could not be updated. `GET /api/context` also lists `mounts` without availability.
+could not be updated. `GET /api/context` lists only `alias` and `file_id` for each mount;
+absolute host paths are available only through the operator endpoints.
 
 Host-folder management, browsing and source reads are restricted to local operator requests.
 Browser requests must be same-origin; remote clients and cross-origin browser requests receive
 `403`. This does not change local Agent or MCP access.
 
 The source route accepts the same `operation=list|read|search` parameters as uploads and the
-codebase directory; listings and searches may add `truncated` and `message` when a time, entry or
-byte budget stopped them, and searches add `skipped_large_files`.
+codebase directory. Host listings and searches return `engine="python"` and mark results
+`truncated` with a `message` when a budget or I/O error limits coverage. Searches report
+`bytes_read` (including nonmatches), `io_errors`, `skipped_binary_files` and `skipped_large_files`.
 
 Errors: `400` invalid alias, path or parameters (including a `pattern` over 512 characters or
 with more than 16 `*`/`?` wildcards); `403` access denied or path outside the approved roots;

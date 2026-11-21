@@ -41,14 +41,36 @@ Check the web interface's version after restarting to confirm the active backend
 
 ### Configuration Commands
 
-Persistent configuration is stored in `.vulnscout/cache/config.env` and is automatically loaded on each run.
+`config get`, `set`, `unset`, and `list` manage two stores. Application settings
+live in `$VULNSCOUT_CACHE_DIR/config.env`, shared with the container. Launcher
+settings, including `VULNSCOUT_HOST_ROOTS`, live in
+`$VULNSCOUT_BUILD_DIR/launcher.env` on the host. Keep the build directory and
+helper state under operator control, outside any directory shared with a
+container. The default cache and outputs are *children* of the build directory.
 
-On a fresh installation, run `./vulnscout start` **before the first `config set`**.
+**Upgrading:** use the updated wrapper to stop any old helper
+(`./vulnscout ai-context helper stop`). The wrapper ignores these launcher
+settings in the old `cache/config.env`; it does not copy them into host policy:
+
+- `VULNSCOUT_HOST_ROOTS`, `VULNSCOUT_HOST_HELPER_STATE_DIR`
+- `VULNSCOUT_CONTAINER`, `VULNSCOUT_IMAGE`
+- `VULNSCOUT_CACHE_DIR`, `VULNSCOUT_OUTPUTS_DIR`, `VULNSCOUT_SBOM_CVE_CHECK_DB_DIR`
+- `VITE_API_URL` (the host dev frontend's backend URL)
+
+Re-enter only values you have independently verified, for example
+`./vulnscout config set VULNSCOUT_HOST_ROOTS /work:/srv/sources`, or export
+them on the host. `VULNSCOUT_BUILD_DIR` must be exported if non-default; a cache
+entry cannot select the build directory. Existing application settings stay in
+place and do not need migration.
+
+On a fresh installation, run `./vulnscout start` **before setting application keys**.
 Startup generates defaults only when `config.env` does not exist; setting a
 single key first creates a partial file without the Flask host/port settings.
 If a partial file already exists, add `FLASK_RUN_HOST=0.0.0.0` and
 `FLASK_RUN_PORT=7275` with `config set`, then restart. Keep configuration
-values shell-compatible because the file is sourced as shell configuration.
+values in the application file shell-compatible because the **container**
+entrypoint sources it. The host wrapper never sources either file. Launcher
+values are single-line literals; quote spaces for your command shell.
 
 Rootless Podman maps the host owner to container root with
 `--userns=keep-id:uid=0,gid=0 --user=0:0`. The entrypoint uses this same identity
@@ -90,15 +112,12 @@ Use `config set` for application settings such as API keys, proxy values, and
 report metadata. Arbitrary host environment variables are **not** automatically
 forwarded into the container.
 
-Export host launcher settings before invocation. In particular, export
-`VULNSCOUT_CONTAINER`, `VULNSCOUT_BUILD_DIR`, and `VULNSCOUT_CACHE_DIR` before
-the first run: container identity and initial config-file lookup are determined
-before the stored configuration is loaded. `VULNSCOUT_IMAGE` and
-`VULNSCOUT_OUTPUTS_DIR` can also be configured persistently.
-
-Stored configuration is sourced after host variables, so stored values override
-same-named exports (except settings such as the container name that were already
-resolved before sourcing). The launcher explicitly forwards host `GRYPE_MEMLIMIT` and
+Export `VULNSCOUT_BUILD_DIR` to select a different launcher configuration.
+Container name, image, host mount directories, approved roots, helper state
+directory, and `VITE_API_URL` can be set persistently. Explicit host environment
+values override these saved settings, including an empty `VULNSCOUT_HOST_ROOTS`
+to disable the helper. `config get` and `list` show stored values, not environment
+overrides. The launcher explicitly forwards host `GRYPE_MEMLIMIT` and
 `SBOM_CVE_CHECK_AUTO_UPDATE` at container creation, but does not inject later
 host changes into `docker exec`/`podman exec`. Restart after environment, mount,
 or web-listener changes. Scan commands reload persistent application settings;

@@ -16,22 +16,6 @@ from src.helpers import host_mount_helper as hh
 VARIANT = str(uuid.uuid4())
 
 
-@pytest.fixture(autouse=True)
-def python_engine(monkeypatch):
-    """Existing tests exercise the pure-Python walk; GNU grep has its own tests below."""
-    monkeypatch.setenv(hh.ENGINE_ENV, "python")
-
-
-@pytest.fixture()
-def grep_engine(monkeypatch):
-    monkeypatch.delenv(hh.ENGINE_ENV)
-    hh._gnu_grep.cache_clear()
-    if hh._grep_binary() is None:
-        pytest.skip("GNU grep is not installed")
-    yield
-    hh._gnu_grep.cache_clear()
-
-
 @pytest.fixture()
 def tree(tmp_path):
     root = tmp_path / "approved"
@@ -574,50 +558,67 @@ def test_folder_rejects_traversal_links_hidden_and_missing_folders(helper, tree)
     assert err(helper, "list", variant_id=VARIANT, alias="src", folder="README")[0] == "invalid"
 
 
-def test_grep_engine_searches_only_eligible_text_files(helper, tree, grep_engine):
+def test_nonmatching_content_spends_the_byte_budget(helper, tree, monkeypatch):
     attached(helper, tree)
-    (tree["app"] / "docs").mkdir()
-    (tree["app"] / "docs" / "guide.txt").write_text("a needle here\n")
+    folder = tree["app"] / "docs"
+    folder.mkdir()
+    (folder / "a").write_bytes(b"xxxx")
+    (folder / "b").write_bytes(b"yyyy")
+    monkeypatch.setattr(hh, "SEARCH_BYTE_BUDGET", 4)
+    result = ok(helper, "search", variant_id=VARIANT, alias="src", folder="docs", query="absent")
+    assert result["engine"] == "python" and result["matches"] == []
+    assert result["truncated"] and "byte budget" in result["message"]
+    assert result["searched_files"] == 1 and result["bytes_read"] == 4
+    (folder / "b").unlink()
+    assert not ok(helper, "search", variant_id=VARIANT, alias="src", folder="docs", query="absent")["truncated"]
+
+
+def test_growing_file_cannot_overread_remaining_budget(helper, tree, monkeypatch):
+    attached(helper, tree)
+    path = tree["app"] / "README"
+    path.write_bytes(b"x")
+    monkeypatch.setattr(hh, "SEARCH_BYTE_BUDGET", 3)
+    read_sizes = []
+
+    read = hh.os.read
+
+    def read_after_growth(fd, size):
+        path.write_bytes(b"later match")
+        data = read(fd, size)
+        read_sizes.append(len(data))
+        return data
+
+    monkeypatch.setattr(hh.os, "read", read_after_growth)
+    result = ok(helper, "search", variant_id=VARIANT, alias="src", pattern="README", query="match")
+    assert result["truncated"] and "byte budget" in result["message"]
+    assert result["searched_files"] == 0 and result["bytes_read"] == 3 and read_sizes == [3]
+
+
+@pytest.mark.parametrize("limit,value,reason", [
+    ("MAX_WALK_ENTRIES", 2, "entries"),
+    ("SEARCH_TIME_LIMIT", -1.0, "time limit"),
+])
+def test_no_match_still_reports_walk_limits(helper, tree, monkeypatch, limit, value, reason):
+    attached(helper, tree)
+    monkeypatch.setattr(hh, limit, value)
+    result = ok(helper, "search", variant_id=VARIANT, alias="src", query="absent")
+    assert not result["matches"] and result["truncated"] and reason in result["message"]
+    assert result["visited_entries"] <= hh.MAX_WALK_ENTRIES
+
+
+def test_search_reports_file_and_subtree_io_errors_alongside_matches(helper, tree, monkeypatch):
+    attached(helper, tree)
+    (tree["app"] / "unreadable").mkdir()
+    (tree["app"] / "invalid.txt").write_bytes(b"\xff")
+    real_open = hh.os.open
+
+    def deny(path, *args, **kwargs):
+        if path in ("README", "unreadable"):
+            raise PermissionError()
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(hh.os, "open", deny)
     result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")
-    assert result["engine"] == "grep"
-    assert [(item["path"], item["line"]) for item in result["matches"]] == [("docs/guide.txt", 1), ("src/main.c", 2)]
-    scoped = ok(helper, "search", variant_id=VARIANT, alias="src", folder="src", pattern="*.c", query="needle")
-    assert [item["path"] for item in scoped["matches"]] == ["src/main.c"]
-    assert scoped["engine"] == "grep"
-
-
-def test_grep_engine_matches_the_python_walk(helper, tree, grep_engine, monkeypatch):
-    attached(helper, tree)
-    grep_result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")
-    monkeypatch.setenv(hh.ENGINE_ENV, "python")
-    python_result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")
-    assert python_result["engine"] == "python"
-    assert grep_result["matches"] == python_result["matches"]
-
-
-def test_grep_engine_does_not_follow_a_symlinked_literal_folder(helper, tree, grep_engine):
-    attached(helper, tree)
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", pattern="escape_dir/*", query="needle")
-    assert result["matches"] == []
-    assert ok(helper, "search", variant_id=VARIANT, alias="src", query="needle outside")["matches"] == []
-
-
-def test_grep_engine_reports_the_time_limit(helper, tree, grep_engine, monkeypatch):
-    attached(helper, tree)
-    monkeypatch.setattr(hh, "SEARCH_TIME_LIMIT", -1.0)
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")
-    assert result["truncated"] is True and "time limit" in result["message"]
-
-
-def test_missing_gnu_grep_falls_back_to_the_python_walk(helper, tree, monkeypatch):
-    monkeypatch.setenv(hh.ENGINE_ENV, "auto")
-    hh._gnu_grep.cache_clear()
-    monkeypatch.setattr(hh.shutil, "which", lambda name: None)
-    attached(helper, tree)
-    assert ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")["engine"] == "python"
-    hh._gnu_grep.cache_clear()
-
-
-def test_list_always_uses_the_python_walk(helper, tree, grep_engine):
-    attached(helper, tree)
-    assert ok(helper, "list", variant_id=VARIANT, alias="src")["engine"] == "python"
+    assert [item["path"] for item in result["matches"]] == ["src/main.c"]
+    assert result["truncated"] and "I/O" in result["message"] and result["io_errors"] == 2
+    assert result["skipped_binary_files"] == 2 and result["searched_files"] == 1

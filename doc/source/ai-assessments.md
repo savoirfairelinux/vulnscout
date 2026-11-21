@@ -585,7 +585,7 @@ example the application source as `src` and a Yocto build tree as `build`,
 without copying files, uploading archives or restarting the container. Agents
 browse, read and search each one read-only with `file_id="mount:<alias>"`, so a
 search of `src` never scans `build`. `get_merged_context` lists them under
-`mounts` (`alias`, `file_id`, `host_path`); the provisioned codebase directory
+`mounts` (`alias`, `file_id`); the provisioned codebase directory
 keeps working unchanged alongside them.
 
 **Operator setup.** Approve the host roots under which folders may be attached,
@@ -665,7 +665,7 @@ only local operator requests, and browser requests must be same-origin.
 - Bounds: listings visit at most **500,000 entries** or **10 s**, return pages of
   200 files and report `truncated=true` (with `total` as a lower bound) when a
   budget stops them; reads are limited to **10 MiB/file**, 200 lines and
-  **64 KiB**; searches stop after **100 matches**, **100 MiB** read or **20 s**
+  **64 KiB**; searches are limited to **500,000 entries**, **100 matches**, **100 MiB** read or **20 s**
   (`truncated=true` with a message), skip binary files and count files over
   10 MiB as `skipped_large_files`. File patterns are limited to 512 characters
   and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
@@ -681,17 +681,14 @@ only local operator requests, and browser requests must be same-origin.
   - Without `folder`, start `pattern` with a literal path
     (`build/tmp/work/*/curl/*`) instead of `*curl*`: folders that cannot match the
     literal prefix are never opened and non-matching files are never stat'ed.
-  - Content search uses **GNU grep** (present on any Linux host) as a pre-filter
-    when it is on the helper host's `PATH`. It runs without a shell, with a fixed
-    argument list and no link following, and only names candidate files; every
-    path it reports is re-validated and re-read by the helper, so the exclusions
-    and symlink rules are identical. Without GNU grep (for example BSD grep), or
-    with `VULNSCOUT_HOST_HELPER_ENGINE=python`, the helper uses its pure-Python
-    walk. Listings always use the Python walk. Responses report `engine`,
-    `visited_entries` and `elapsed_seconds`; with grep, `skipped_*` counters only
-    cover the files grep reported as candidates.
-  - A "time limit" or "entry limit" message means the result is incomplete: narrow
-    `folder` or `pattern` and repeat. It is not evidence that nothing matches.
+  - Listing and search use the same bounded Python walk (`engine="python"`).
+    `visited_entries` includes nonmatching and excluded entries encountered during
+    traversal. Search `bytes_read` includes nonmatching and binary content; the
+    helper does not read a file known to exceed the remaining budget.
+  - A budget limit or I/O error sets `truncated=true` with a message. Search
+    reports `io_errors` separately from binary and oversized skips and keeps
+    matches it could verify. Narrow `folder` or `pattern` for a budget limit;
+    check access and retry for an I/O error. An incomplete search cannot establish absence.
 
 **Unavailability is explicit.** When the helper is not running, the AI Context
 page shows **Host folder helper unavailable** and each folder as

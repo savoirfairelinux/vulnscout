@@ -51,9 +51,10 @@ def attach(variant_id: uuid.UUID, alias: str, host_path: str) -> tuple[HostMount
     if existing is None and len(HostMount.get_by_variant(variant_id)) >= MAX_MOUNTS_PER_VARIANT:
         raise HostMountConflict(f"A variant can have at most {MAX_MOUNTS_PER_VARIANT} attached folders.")
     if existing is not None:
-        # Only resolve the path, without changing the helper registry, before refusing a different folder.
-        canonical = _canonical(existing, host_path)
-        if canonical != existing.host_path:
+        if host_path == existing.host_path:
+            # Revalidate the stored path without following a moved folder to a new target.
+            helper.call("attach", variant_id=str(variant_id), alias=alias, path=existing.host_path, exact=True)
+        elif helper.call("browse", path=host_path)["path"] != existing.host_path:
             raise HostMountConflict(
                 f"Alias '{alias}' is already attached to {existing.host_path}; detach it first."
             )
@@ -77,13 +78,6 @@ def attach(variant_id: uuid.UUID, alias: str, host_path: str) -> tuple[HostMount
         _forget(variant_id, alias)
         raise
     return mount, True
-
-
-def _canonical(existing: HostMount, host_path: str) -> str:
-    if host_path == existing.host_path:
-        return host_path
-    result = helper.call("browse", path=host_path)
-    return str(result.get("path") or host_path)
 
 
 def _forget(variant_id: uuid.UUID, alias: str) -> None:

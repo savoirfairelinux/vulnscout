@@ -117,14 +117,14 @@ python vulnscout_mcp/server.py
 | `find_project_id`              | Resolve a project name to its UUID                                   |
 | `find_variant_id`              | Resolve a project/variant name pair to a variant UUID                |
 | `list_variants`                | List all variants across every project (id, name, project_id)        |
-| `get_merged_context`           | Get the merged project + variant context: `codebase_directory` (`file_id="directory"` and server path), attached host folders (`mounts`: `alias`, `file_id="mount:<alias>"`, `host_path`), environment, other info, attachment metadata, and the threat model and risks rendered as text from the variant's STRIDE model (`C#` components, `I#` interactions, `T#` threats). Responses are paginated in 12 KiB UTF-8 pages; follow `next_offset` until `null` and concatenate page contents before analysis. With `include_model=true`, also the editable System text and STRIDE rows as JSON with their IDs |
+| `get_merged_context`           | Get the merged project + variant context: `codebase_directory` (`file_id="directory"` and server path), attached host folders (`mounts`: `alias`, `file_id="mount:<alias>"`), environment, other info, attachment metadata, and the threat model and risks rendered as text from the variant's STRIDE model (`C#` components, `I#` interactions, `T#` threats). Responses are paginated in 12 KiB UTF-8 pages; follow `next_offset` until `null` and concatenate page contents before analysis. With `include_model=true`, also the editable System text and STRIDE rows as JSON with their IDs |
 | `list_dependency_documents`    | Paginate active SBOM sources and relationship-recording coverage for a variant |
 | `list_dependency_packages`     | Search/paginate the complete SBOM inventory, including isolated packages and per-document version evidence |
 | `get_package_dependencies`     | Traverse direct/transitive dependencies or reverse dependents with paths and source provenance |
 | `get_package_source_files`     | Paginate an exact package's recorded SPDX files and build associations within one variant, retaining coverage and provenance |
 | `list_codebase_files`          | List paths/sizes in a variant upload; follow `next_offset` for pagination |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
-| `read_codebase_files`          | Read up to 8 files in parallel with the same line range (128 KB combined response) |
+| `read_codebase_files`          | Read up to 8 files in parallel with the same line range (128 KiB combined response) |
 | `search_codebase`              | Literal case-sensitive search with path globs; reports truncation and binary skips |
 | `get_ai_context_form_guide`    | Return the static AI Context form guide (fields, tables, STRIDE categories, limits) and the copy-ready reply format for helping users fill it |
 | `get_project_context`          | Get context fields for a project by UUID                             |

@@ -496,8 +496,8 @@ SCHEMAS: dict[str, Any] = {
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
         "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
         "mounts": _array(_object({
-            "alias": _STRING, "file_id": _STRING, "host_path": _STRING, "created_at": _DATE,
-        }, ("alias", "file_id", "host_path", "created_at")),
+            "alias": _STRING, "file_id": _STRING,
+        }, ("alias", "file_id")),
             description="Host folders attached read-only; browse them with file_id mount:<alias>."),
         "editor": _ref("VariantContextEditor"),
     }, ("project_id", "variant_id", "description", "files")),

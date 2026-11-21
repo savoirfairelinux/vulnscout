@@ -27,6 +27,7 @@ function AttachFolderPanel({ variantId, takenAliases, onCancel, onAttached }: Re
     const [aliasEdited, setAliasEdited] = useState(false);
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(true);
+    const [submitting, setSubmitting] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -68,13 +69,13 @@ function AttachFolderPanel({ variantId, takenAliases, onCancel, onAttached }: Re
 
     const attach = async () => {
         if (!selected || !alias || aliasError) return;
-        setBusy(true);
+        setSubmitting(true);
         setError('');
         try {
             onAttached(await Context.attachMount(variantId, alias, selected));
         } catch (failure) {
             setError(message(failure, 'Could not attach this folder.'));
-            setBusy(false);
+            setSubmitting(false);
         }
     };
 
@@ -93,7 +94,7 @@ function AttachFolderPanel({ variantId, takenAliases, onCancel, onAttached }: Re
                         {selected ? <>Selected folder: <code>{selected}</code></> : 'Approved host folders'}
                     </p>
                     {selected && (
-                        <button type="button" className={BUTTON_SECONDARY} disabled={busy}
+                        <button type="button" className={BUTTON_SECONDARY} disabled={busy || submitting}
                             onClick={() => void open(listing.parent)}>
                             Up
                         </button>
@@ -102,7 +103,7 @@ function AttachFolderPanel({ variantId, takenAliases, onCancel, onAttached }: Re
                         {listing.directories.map(entry => (
                             <li key={entry.path}>
                                 <button type="button" className="text-sm text-cyan-300 hover:underline break-all text-left"
-                                    disabled={busy} onClick={() => void open(entry.path)}>
+                                    disabled={busy || submitting} onClick={() => void open(entry.path)}>
                                     {selected ? entry.name : entry.path}
                                 </button>
                             </li>
@@ -115,18 +116,19 @@ function AttachFolderPanel({ variantId, takenAliases, onCancel, onAttached }: Re
             <div>
                 <label className={LABEL} htmlFor={`host-folder-alias-${variantId}`}>Alias</label>
                 <input id={`host-folder-alias-${variantId}`} className={FIELD} value={alias}
-                    placeholder="src" maxLength={32}
+                    placeholder="src" maxLength={32} disabled={submitting}
                     onChange={event => { setAlias(event.target.value); setAliasEdited(true); }} />
                 {aliasError && <p className={ERROR}>{aliasError}</p>}
             </div>
             {busy && <p role="status" className={HELP}>Loading host folders...</p>}
+            {submitting && <p role="status" className={HELP}>Attaching folder...</p>}
             {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
             <div className="flex gap-2">
                 <button type="button" className={BUTTON_PRIMARY}
-                    disabled={busy || !selected || !alias || Boolean(aliasError)} onClick={() => void attach()}>
+                    disabled={busy || submitting || !selected || !alias || Boolean(aliasError)} onClick={() => void attach()}>
                     Attach selected folder
                 </button>
-                <button type="button" className={BUTTON_SECONDARY} onClick={onCancel}>Cancel</button>
+                <button type="button" className={BUTTON_SECONDARY} disabled={submitting} onClick={onCancel}>Cancel</button>
             </div>
         </div>
     );

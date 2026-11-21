@@ -220,13 +220,58 @@ if [ "${1:-}" = "completion" ]; then
     exit 0
 fi
 
-CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.25.1}"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 VULNSCOUT_BUILD_DIR="${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}"
+HOST_CONFIG_FILE="$VULNSCOUT_BUILD_DIR/launcher.env"
+
+host_config_key() {
+    case "$1" in
+        VULNSCOUT_CONTAINER|VULNSCOUT_IMAGE|VULNSCOUT_CACHE_DIR|VULNSCOUT_OUTPUTS_DIR|\
+        VULNSCOUT_HOST_ROOTS|VULNSCOUT_HOST_HELPER_STATE_DIR|VULNSCOUT_SBOM_CVE_CHECK_DB_DIR|VITE_API_URL)
+            return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Refuse custom mounts that would expose host policy or helper state.
+check_host_paths() {
+    local mount protected policy state
+    policy="$(realpath -m -- "$HOST_CONFIG_FILE")"
+    state="$(realpath -m -- "${VULNSCOUT_HOST_HELPER_STATE_DIR:-$VULNSCOUT_BUILD_DIR/host-helper}")"
+    for mount in "${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}" \
+        "${VULNSCOUT_OUTPUTS_DIR:-$VULNSCOUT_BUILD_DIR/outputs}" "${VULNSCOUT_SBOM_CVE_CHECK_DB_DIR:-}" \
+        "$SCRIPT_DIR/src" "$SCRIPT_DIR/vulnscout_mcp" "$SCRIPT_DIR/.github/skills"; do
+        [[ -n "$mount" ]] || continue
+        mount="$(realpath -m -- "$mount")"
+        for protected in "$policy" "$state"; do
+            if [[ "$protected/" == "${mount%/}/"* || "$mount/" == "${protected%/}/"* ]]; then
+                console_err error "Error: host configuration and helper state must be outside container mounts ($mount)."
+                exit 1
+            fi
+        done
+    done
+}
+
+# Only known launcher settings can affect the host. Values are literal, not shell syntax.
+if [[ -e "$HOST_CONFIG_FILE" || -L "$HOST_CONFIG_FILE" ]]; then
+    check_host_paths
+    if [[ ! -f "$HOST_CONFIG_FILE" || -L "$HOST_CONFIG_FILE" ]]; then
+        console_err error "Error: expected a regular host configuration file: $HOST_CONFIG_FILE"
+        exit 1
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        key="${line%%=*}"
+        [[ "$line" == *=* ]] || continue
+        host_config_key "$key" || continue
+        [[ -v "$key" ]] || printf -v "$key" '%s' "${line#*=}"
+    done < "$HOST_CONFIG_FILE"
+fi
+CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.25.1}"
 VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
 VULNSCOUT_OUTPUTS_DIR="${VULNSCOUT_OUTPUTS_DIR:-$VULNSCOUT_BUILD_DIR/outputs}"
 VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
+check_host_paths
 
 if command -v podman &> /dev/null; then
     CONTAINER_ENGINE="podman"
@@ -250,12 +295,12 @@ if [[ -d "$VULNSCOUT_CACHE_DIR" && ! -x "$VULNSCOUT_CACHE_DIR" ]]; then
     fi
 fi
 
-# Source config early so stored values (e.g. VULNSCOUT_BUILD_DIR) take effect
-if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
+# Never source the application config: the container can change its contents.
+if [[ ! -L "$VULNSCOUT_CONFIG_FILE" && -f "$VULNSCOUT_CONFIG_FILE" ]]; then
     # Older rootless Podman containers chowned the cache to a subordinate host UID.
     if [ ! -r "$VULNSCOUT_CONFIG_FILE" ]; then
         if [[ "$CONTAINER_ENGINE" != "podman" ]] ||
-            ! podman unshare chown 0:0 "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_CONFIG_FILE"; then
+            ! podman unshare chown -h 0:0 "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_CONFIG_FILE"; then
             console_err error "Error: cannot restore host ownership of $VULNSCOUT_CONFIG_FILE. Restore its ownership to $(id -u):$(id -g) before retrying."
             exit 1
         fi
@@ -264,12 +309,25 @@ if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
             exit 1
         fi
     fi
-    # shellcheck source=/dev/null
-    . "$VULNSCOUT_CONFIG_FILE"
 fi
-# Re-derive VULNSCOUT_CONFIG_FILE in case VULNSCOUT_CACHE_DIR was updated by config
-VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-$DOCKER_IMAGE}"
+
+# Pin a regular file before reading, chmodding or rewriting it. A rename or
+# symlink in the shared cache must not redirect a host operation to another file.
+open_app_config() {
+    local path="$VULNSCOUT_CACHE_DIR/config.env"
+    if [[ ! -e "$path" && ! -L "$path" ]]; then
+        [[ "${1:-}" == create ]] || return 1
+        mkdir -p -- "$VULNSCOUT_CACHE_DIR"
+        (umask 077; dd of="$path" conv=excl count=0 status=none) || return 1
+    fi
+    [[ -f "$path" && ! -L "$path" ]] && exec {app_fd}< "$path" &&
+        [[ -f "/proc/self/fd/$app_fd" &&
+           "$(stat -c '%d:%i' -- "$path")" == "$(stat -Lc '%d:%i' "/proc/self/fd/$app_fd")" ]] || {
+        console_err error "Error: refusing unsafe application config: $path"
+        exit 1
+    }
+    VULNSCOUT_CONFIG_FILE="/proc/self/fd/$app_fd"
+}
 
 # Run a container command using the detected container engine on the host (podman or docker)
 call_container_engine() {
@@ -568,7 +626,8 @@ Usage: vulnscout config get <key>
        vulnscout config unset <key>
        vulnscout config list
 
-Read or change the host config file (.vulnscout/cache/config.env).
+Read or change application settings (cache/config.env) and host settings
+(launcher.env in the host build directory).
 'list' masks sensitive values.
 
 Examples:
@@ -898,17 +957,45 @@ reject_removed_syntax() {
     done
 }
 
+select_config_file() {
+    if host_config_key "$1"; then
+        VULNSCOUT_CONFIG_FILE="$HOST_CONFIG_FILE"
+        if [[ "${2:-}" == create ]]; then
+            mkdir -p -- "$VULNSCOUT_BUILD_DIR"
+            (umask 077; touch -- "$HOST_CONFIG_FILE")
+        fi
+    else
+        open_app_config "${2:-}"
+    fi
+}
+
+write_config() {
+    local key="$1" line
+    local -a lines
+    select_config_file "$key" create
+    mapfile -t lines < "$VULNSCOUT_CONFIG_FILE"
+    {
+        for line in "${lines[@]}"; do
+            [[ "$line" == "$key="* ]] || printf '%s\n' "$line"
+        done
+        if [[ $# == 2 ]]; then printf '%s=%s\n' "$key" "$2"; fi
+    } > "$VULNSCOUT_CONFIG_FILE"
+}
+
+check_proposed_host_setting() {
+    local "$1=$2"
+    check_host_paths
+}
+
 config_set() {
-    local key="$1"
-    local value="$2"
-    mkdir -p "$(dirname "$VULNSCOUT_CONFIG_FILE")"
-    touch "$VULNSCOUT_CONFIG_FILE"
-    local tmp
-    tmp=$(mktemp)
-    grep -v "^${key}=" "$VULNSCOUT_CONFIG_FILE" > "$tmp" || true
-    echo "${key}=${value}" >> "$tmp"
-    cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
-    rm -f "$tmp"
+    local key="$1" value="$2"
+    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "config values must be single-line."
+    [[ "$key" != VULNSCOUT_BUILD_DIR ]] || die "export VULNSCOUT_BUILD_DIR on the host."
+    # Validate proposed mounts before persisting them.
+    if host_config_key "$key"; then
+        check_proposed_host_setting "$key" "$value"
+    fi
+    write_config "$key" "$value"
     if [ "$key" = "VULNSCOUT_HOST_ROOTS" ]; then
         VULNSCOUT_HOST_ROOTS="$value"
         host_helper_paths
@@ -923,19 +1010,14 @@ config_set() {
     # Restart the container so volume mounts reflect the new cache dir
     if [ "$key" = "VULNSCOUT_CACHE_DIR" ] && call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         console_out info "Restarting container to apply new VULNSCOUT_CACHE_DIR..."
-        VULNSCOUT_CACHE_DIR="$value"
+        VULNSCOUT_CACHE_DIR="${value:-$VULNSCOUT_BUILD_DIR/cache}"
         do_start
     fi
 }
 
 config_clear() {
     local key="$1"
-    touch "$VULNSCOUT_CONFIG_FILE"
-    local tmp
-    tmp=$(mktemp)
-    grep -v "^${key}=" "$VULNSCOUT_CONFIG_FILE" > "$tmp" || true
-    cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
-    rm -f "$tmp"
+    write_config "$key"
     console_out success "Config cleared: $key"
     if [ "$key" = "VULNSCOUT_HOST_ROOTS" ]; then
         stop_host_helper
@@ -1010,6 +1092,7 @@ start_host_helper() {
     local -a roots=() root_args=()
     host_helper_paths
     if [ -z "${VULNSCOUT_HOST_ROOTS:-}" ]; then
+        [[ ! -f "$HOST_HELPER_PID_FILE" ]] || stop_host_helper
         console_err error "Error: no approved host roots. Set them first, e.g. 'vulnscout config set VULNSCOUT_HOST_ROOTS /work:/srv/sources'."
         return 1
     fi
@@ -1054,13 +1137,17 @@ start_host_helper() {
 
 # Keep attached host folders available when roots are configured; never fail the calling command.
 ensure_host_helper() {
-    [ -n "${VULNSCOUT_HOST_ROOTS:-}" ] || return 0
+    if [[ -z "${VULNSCOUT_HOST_ROOTS:-}" ]]; then
+        host_helper_paths
+        [[ ! -f "$HOST_HELPER_PID_FILE" ]] || stop_host_helper
+        return 0
+    fi
     start_host_helper || console_err warning "Warning: attached host folders are unavailable until the helper runs."
 }
 
 do_start() {
     call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
-    mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR" "$(dirname "$VULNSCOUT_CONFIG_FILE")"
+    mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR"
 
     if [[ $CONTAINER_ENGINE = "docker" ]]; then
         # Docker bind-mounts create root-owned directories on the host when a path
@@ -1076,7 +1163,8 @@ do_start() {
             -c "[ -f /mnt/cache/config.env ] && [ \"\$(stat -c %u /mnt/cache/config.env)\" = '0' ] && rm -f /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
             2>/dev/null || true
     fi
-    if [ ! -f "$VULNSCOUT_CONFIG_FILE" ]; then
+    if ! open_app_config; then
+        open_app_config create
         cat > "$VULNSCOUT_CONFIG_FILE" <<EOF
 FLASK_RUN_PORT=7275
 FLASK_RUN_HOST=0.0.0.0
@@ -1084,7 +1172,6 @@ IGNORE_PARSING_ERRORS=false
 VERBOSE_MODE=false
 USER_UID=$(id -u)
 USER_GID=$(id -g)
-VITE_API_URL=
 REFRESH_REMOTE_DELAY=2w
 # GRYPE_MEMLIMIT — cap RAM used by the grype binary (Go soft memory limit).
 # Unset = auto (~80 % of the container/cgroup memory limit, recommended).
@@ -1092,7 +1179,7 @@ REFRESH_REMOTE_DELAY=2w
 # Set to "off" to disable the limit entirely.
 #GRYPE_MEMLIMIT=
 EOF
-        console_out success "Created default config at $VULNSCOUT_CONFIG_FILE"
+        console_out success "Created default config at $VULNSCOUT_CACHE_DIR/config.env"
     fi
     chmod 600 "$VULNSCOUT_CONFIG_FILE"
     # The sbom-cve-check advisory databases (NVD-FKIE + CVEList) live inside the
@@ -1105,13 +1192,16 @@ EOF
 
     local -a env_args=()
     while IFS='=' read -r key value; do
-        [ -z "$key" ] && continue
-        [ "${key#\#}" = "$key" ] || continue
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        host_config_key "$key" && continue
         case "$key" in
             AI_PROVIDER|AI_AUTH_CREDENTIALS|AI_MODEL|AI_BASE_URL|AI_CONTEXT_TIER|AI_REASONING_EFFORT) continue ;;
         esac
         env_args+=(-e "${key}=${value}")
     done < "$VULNSCOUT_CONFIG_FILE"
+    # Resolve the application file inside the container's cache mount, not as
+    # a separate host bind source that a cache symlink could redirect.
+    env_args+=(-e VULNSCOUT_CONFIG=/cache/vulnscout/config.env)
     # Pass SBOM_CVE_CHECK_AUTO_UPDATE from the host environment so the operator can
     # override the container default (1 = on) e.g. to run offline (SBOM_CVE_CHECK_AUTO_UPDATE=0).
     [[ -n "${SBOM_CVE_CHECK_AUTO_UPDATE:-}" ]] && env_args+=(-e "SBOM_CVE_CHECK_AUTO_UPDATE=$SBOM_CVE_CHECK_AUTO_UPDATE")
@@ -1121,7 +1211,6 @@ EOF
     local -a vol_args=(
         -v "$VULNSCOUT_CACHE_DIR:/cache/vulnscout:Z"
         -v "$VULNSCOUT_OUTPUTS_DIR:/scan/outputs:Z"
-        -v "$VULNSCOUT_CONFIG_FILE:/etc/vulnscout/config.env:Z"
     )
     if [[ -n "$_sbom_cve_check_host_db" ]]; then
         mkdir -p "$_sbom_cve_check_host_db"
@@ -2004,7 +2093,10 @@ verb_config() {
                 die "usage: vulnscout config get <key>"
             fi
             validate_config_key "$2"
-            line="$(grep "^$2=" "$VULNSCOUT_CONFIG_FILE" 2>/dev/null | tail -n 1 || true)"
+            line=""
+            if select_config_file "$2"; then
+                line="$(grep "^$2=" "$VULNSCOUT_CONFIG_FILE" 2>/dev/null | tail -n 1 || true)"
+            fi
             if [ -z "$line" ]; then
                 die "config key not set: $2"
             fi
@@ -2025,11 +2117,15 @@ verb_config() {
             if [ $# -gt 1 ]; then
                 reject_option "config list" "$2"
             fi
-            if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
-                sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET|AI_AUTH_CREDENTIALS)[A-Za-z0-9_]*)=.+/\1=****/' "$VULNSCOUT_CONFIG_FILE"
-            else
+            if open_app_config; then
+                while IFS= read -r line || [[ -n "$line" ]]; do
+                    host_config_key "${line%%=*}" || printf '%s\n' "$line"
+                done < "$VULNSCOUT_CONFIG_FILE" |
+                    sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET|AI_AUTH_CREDENTIALS)[A-Za-z0-9_]*)=.+/\1=****/'
+            elif [[ ! -f "$HOST_CONFIG_FILE" ]]; then
                 console_out info "No config file found."
-            fi ;;
+            fi
+            if [[ -f "$HOST_CONFIG_FILE" ]]; then cat "$HOST_CONFIG_FILE"; fi ;;
         "")
             die "'config' needs get, set, unset, or list." ;;
         *)
