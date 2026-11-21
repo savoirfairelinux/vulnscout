@@ -115,6 +115,18 @@ def test_unapproved_legacy_registry_never_grants_access(helper, tree):
     assert err(restarted, "activate", **binding)[0] == "forbidden"
 
 
+def test_upgrade_requires_reapproval_for_path_only_grants(helper, tree):
+    binding = grant(helper, tree["app"])
+    path = tree["tmp"] / "state" / hh.REGISTRY_NAME
+    path.write_text(json.dumps({"version": 2, "attachments": {VARIANT: {"src": {
+        "path": binding["path"], "attachment_id": binding["attachment_id"], "host_approved": "yes"}}}}))
+    restarted = hh.Helper(helper.state_dir)
+    assert err(restarted, "list", variant_id=VARIANT, alias="src")[0] == "not_found"
+    assert err(restarted, "activate", **binding, approval_proof="a" * 64)[0] == "forbidden"
+    staged = ok(restarted, "stage", **binding)
+    ok(restarted, "activate", attachment_id=binding["attachment_id"], **staged)
+
+
 def test_attachment_replaced_by_a_link_becomes_unavailable(helper, tree):
     attached(helper, tree)
     moved = tree["root"] / "moved"
@@ -122,6 +134,38 @@ def test_attachment_replaced_by_a_link_becomes_unavailable(helper, tree):
     tree["app"].symlink_to(moved)
     code, message = err(helper, "list", variant_id=VARIANT, alias="src")
     assert code == "unavailable" and "moved" in message
+
+
+def test_real_directory_replacement_requires_new_permit(helper, tree):
+    binding = attached(helper, tree)
+    scope = dict(variant_id=VARIANT, alias="src")
+    tree["app"].rename(tree["root"] / "previous")
+    tree["app"].mkdir()
+    (tree["app"] / "README").write_text("replacement")
+    restarted = hh.Helper(helper.state_dir)
+    assert err(restarted, "activate", **binding)[0] == "unavailable"
+    assert err(restarted, "read", **scope, path="README")[0] == "unavailable"
+    permit = host_permit(restarted, VARIANT, src=tree["app"])
+    approved = ok(restarted, "stage", **binding, host_permit=permit)
+    ok(restarted, "activate", **{**binding, **approved})
+    assert ok(restarted, "read", **scope, path="README")["content"] == "replacement"
+
+
+def test_special_file_is_never_opened_for_io(helper, tree, monkeypatch):
+    attached(helper, tree)
+    os.mkfifo(tree["app"] / "pipe")
+    original = os.open
+    flags_used = []
+
+    def track(path, flags, *args, **kwargs):
+        if path == "pipe":
+            flags_used.append(flags)
+            assert flags & os.O_PATH
+        return original(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", track)
+    assert err(helper, "read", variant_id=VARIANT, alias="src", path="pipe")[0] == "invalid"
+    assert len(flags_used) == 1
 
 
 def test_ancestor_replaced_by_symlink_after_validation_is_not_followed(tree, monkeypatch):
@@ -313,7 +357,7 @@ def test_retirements_survive_migration_and_restart(helper, tree):
     assert restored.get(VARIANT, "src") is None
     for generation in (old_id, new_id):
         with pytest.raises(hh.HelperError, match="detached or replaced"):
-            restored.set(VARIANT, "src", str(tree["app"]), attachment_id=generation)
+            restored.set(VARIANT, "src", str(tree["app"]), attachment_id=generation, identity="1:1")
 
 
 def test_attachments_per_variant_are_bounded(helper, tree, monkeypatch):

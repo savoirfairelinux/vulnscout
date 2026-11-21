@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from fnmatch import fnmatchcase, translate
 from typing import Any, Callable, Iterator
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 SOCKET_NAME = "helper.sock"
 REGISTRY_NAME = "registry.json"
 
@@ -78,9 +78,8 @@ _SENSITIVE_NAMES = (
 )
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | _CLOEXEC
-_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _CLOEXEC
 _LINK_ERRNOS = (errno.ELOOP, errno.ENOTDIR)
-_MOVED = "Attached folder was moved or replaced by a link; attach it again."
+_MOVED = "Attached folder was moved or replaced; attach it again."
 
 
 class HelperError(Exception):
@@ -269,7 +268,7 @@ class Registry:
                     # Also discard approvals fenced before a crash interrupted their JSON removal.
                     for alias, entry in list(self.data[variant_id].items()):
                         if (loaded.get("version") != PROTOCOL_VERSION or entry.get("host_approved") != "yes"
-                                or not entry.get("attachment_id")
+                                or not entry.get("attachment_id") or not entry.get("identity")
                                 or self._retired(entry["attachment_id"])):
                             del self.data[variant_id][alias]
                             rewrite = True
@@ -284,12 +283,16 @@ class Registry:
         with closing(sqlite3.connect(self._fences)) as conn:
             return conn.execute("SELECT 1 FROM retired WHERE id=?", (attachment_id,)).fetchone() is not None
 
-    def get(self, variant_id: str, alias: str) -> str | None:
+    def binding(self, variant_id: str, alias: str) -> dict[str, str] | None:
         with self.lock:
             entry = self.data.get(variant_id, {}).get(alias)
-            return entry["path"] if entry else None
+            return entry.copy() if entry else None
 
-    def set(self, variant_id: str, alias: str, path: str, *, attachment_id: str) -> None:
+    def get(self, variant_id: str, alias: str) -> str | None:
+        entry = self.binding(variant_id, alias)
+        return entry["path"] if entry else None
+
+    def set(self, variant_id: str, alias: str, path: str, *, attachment_id: str, identity: str) -> None:
         with self.lock:
             aliases = self.data.get(variant_id, {})
             if alias not in aliases and len(aliases) >= MAX_ATTACHMENTS_PER_VARIANT:
@@ -299,15 +302,18 @@ class Registry:
             if self._retired(attachment_id) or (previous and (
                     previous["attachment_id"] != attachment_id or previous["path"] != path)):
                 raise HelperError("unavailable", "Attachment has been detached or replaced.")
-            if previous:
+            if previous.get("identity") == identity:
                 return
             self.data[variant_id] = aliases
             aliases[alias] = {"path": path, "created_at": datetime.now(timezone.utc).isoformat(),
-                              "attachment_id": attachment_id, "host_approved": "yes"}
+                              "attachment_id": attachment_id, "host_approved": "yes", "identity": identity}
             try:
                 self._save()
             except OSError:
-                del aliases[alias]
+                if previous:
+                    aliases[alias] = previous
+                else:
+                    del aliases[alias]
                 raise
 
     def remove(self, variant_id: str, alias: str, *, attachment_id: str,
@@ -553,15 +559,31 @@ class Helper:
                 raise HelperError("unavailable", _MOVED) from None
             raise HelperError("unavailable", "Host folder cannot be opened.") from None
 
+    @staticmethod
+    def _identity(fd: int) -> str:
+        info = os.fstat(fd)
+        return f"{info.st_dev:x}:{info.st_ino:x}"
+
+    def _open_approved(self, path: str, identity: str) -> int:
+        fd = self._open_folder(path)
+        try:
+            if self._identity(fd) != identity:
+                raise HelperError("unavailable", _MOVED)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
     def _attachment_fd(self, request: dict) -> int:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
-        path = self.registry.get(variant_id, alias)
-        if path is None:
+        entry = self.registry.binding(variant_id, alias)
+        if entry is None:
             raise HelperError("not_found", f"No folder is attached as '{alias}' for this variant.")
+        path = entry["path"]
         if request.get("mount_path", path) != path:
             raise HelperError("forbidden", "Folder does not match the host-approved attachment.")
-        return self._open_folder(path)
+        return self._open_approved(path, entry["identity"])
 
     def _scoped_fd(self, request: dict) -> tuple[int, str]:
         """Attachment (or its optional ``folder``) opened without following links, plus the path prefix."""
@@ -605,16 +627,20 @@ class Helper:
             raise HelperError("forbidden", "Host attachment permit does not authorize this folder.")
         if any(_excluded(part) for part in path.split("/") if part):
             raise HelperError("forbidden", "Hidden or sensitive folders cannot be attached.")
-        os.close(self._open_folder(path))
+        fd = self._open_folder(path)
+        try:
+            identity = self._identity(fd)
+        finally:
+            os.close(fd)
         try:
             os.unlink(permit_file)
         except FileNotFoundError:
             raise HelperError("forbidden", "Host attachment permit has expired.") from None
-        return {"variant_id": variant_id, "alias": alias, "path": path}
+        return {"variant_id": variant_id, "alias": alias, "path": path, "identity": identity}
 
-    def _proof(self, attachment_id: str, variant_id: str, alias: str, path: str) -> str:
-        binding = json.dumps(["approval-v1", attachment_id, variant_id, alias, path], separators=(",", ":"))
-        return hmac.digest(self._key, binding.encode("ascii"), "sha256").hex()
+    def _proof(self, attachment_id: str, variant_id: str, alias: str, path: str, identity: str) -> str:
+        binding = json.dumps(["approval-v2", attachment_id, variant_id, alias, path, identity], separators=(",", ":"))
+        return identity + ":" + hmac.digest(self._key, binding.encode("ascii"), "sha256").hex()
 
     def stage(self, request: dict) -> dict:
         """Validate before the backend transaction; never make the folder accessible here."""
@@ -629,11 +655,12 @@ class Helper:
         path = _string(request, "path")
         attachment_id = _string(request, "attachment_id", maximum=36)
         proof = request.get("approval_proof")
-        if (not isinstance(proof, str) or not re.fullmatch("[a-f0-9]{64}", proof)
-                or not hmac.compare_digest(proof, self._proof(attachment_id, variant_id, alias, path))):
+        if (not isinstance(proof, str)
+                or not (match := re.fullmatch(r"([a-f0-9]{1,16}:[a-f0-9]{1,16}):[a-f0-9]{64}", proof))
+                or not hmac.compare_digest(proof, self._proof(attachment_id, variant_id, alias, path, match[1]))):
             raise HelperError("forbidden", "No valid host approval; reattach this folder with the host CLI.")
-        os.close(self._open_folder(path))
-        self.registry.set(variant_id, alias, path, attachment_id=attachment_id)
+        os.close(self._open_approved(path, match[1]))
+        self.registry.set(variant_id, alias, path, attachment_id=attachment_id, identity=match[1])
         return {"path": path}
 
     def detach(self, request: dict) -> dict:
@@ -690,7 +717,13 @@ class Helper:
             for part in parts[:-1]:
                 directory_fd = os.open(part, _DIRECTORY_FLAGS, dir_fd=directory_fd)
                 opened.append(directory_fd)
-            fd = os.open(parts[-1], _FILE_FLAGS, dir_fd=directory_fd)
+            entry = os.open(parts[-1], os.O_PATH | os.O_NOFOLLOW | _CLOEXEC, dir_fd=directory_fd)
+            try:
+                if not stat.S_ISREG(os.fstat(entry).st_mode):
+                    raise HelperError("invalid", "Directories, links and special files cannot be read.")
+                fd = os.open(f"/proc/self/fd/{entry}", os.O_RDONLY | _CLOEXEC)
+            finally:
+                os.close(entry)
         except FileNotFoundError:
             raise HelperError("not_found", "Source file not found or excluded.") from None
         except OSError as exc:
@@ -702,8 +735,6 @@ class Helper:
                 os.close(item)
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode):
-                raise HelperError("invalid", "Directories, links and special files cannot be read.")
             if info.st_size > MAX_FILE_BYTES:
                 raise HelperError("limit", "Source file exceeds the maximum readable file size of 10 MiB.")
             if budget is not None and info.st_size > budget[0]:
