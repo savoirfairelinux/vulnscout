@@ -3,12 +3,12 @@
 """The AI queue of the serve process, shared by every browser tab and the CLI.
 
 ``AgentQueue`` owns the agent conversations (the ``main`` chat plus one conversation per action key)
-and the requests that run turns in them. Requests run in two lanes, one turn at a time each: the
-``action`` lane runs assess and review actions, the ``chat`` lane runs chat messages, so a chat never
+and the requests that run turns in them. The ``action`` lane runs up to five independent reviews
+or one other action; the ``chat`` lane runs one chat message, so a chat never
 waits behind an action. Within both lanes a request waits until the earlier requests of its own
 conversation have run; a failed request blocks nothing and stays listed for retry or removal.
 
-Each lane has one worker thread that runs a turn in its own event loop, so ``stop`` can cancel the
+Each worker thread runs a turn in its own event loop, so ``stop`` can cancel the
 turn from any thread. Every change is published on ``agent_events`` (a private, localhost-only bus;
 transcripts never travel on the public operations stream):
 
@@ -53,6 +53,7 @@ Kind = Literal["assess", "review", "message", "context-import"]
 Status = Literal["queued", "running", "failed", "done", "cancelled"]
 
 LANES: tuple[Lane, ...] = ("action", "chat")
+REVIEW_WORKERS = 5
 MAIN = "main"
 PER_ACTION = "per-action"
 MAIN_TITLE = "Agent chat"
@@ -227,8 +228,12 @@ async def default_runner(call: TurnCall) -> tuple[str, dict]:
     """Run *call* with the agent: actions through ``ai_actions.run_turn``, messages through ``_reply``."""
     if call.turn is not None:
         assert call.api is not None
-        return await ai_actions.run_turn(call.turn, call.session, call.model, call.path, call.api, call.publish,
-                                         ephemeral=False, on_session=call.on_session)
+        call.api.start()
+        try:
+            return await ai_actions.run_turn(call.turn, call.session, call.model, call.path, call.api, call.publish,
+                                             ephemeral=False, on_session=call.on_session)
+        finally:
+            call.api.stop()
     options: dict[str, Any] = {"profile": call.profile} if call.profile else {}
     return await _agent()._reply(call.session, call.prompt, call.path, call.model, call.scope, call.publish,
                                  timeout=call.timeout, on_session=call.on_session, **options)
@@ -319,7 +324,7 @@ class AgentQueue:
         self._history: list[AgentRequest] = []
         self._finished: OrderedDict[str, AgentRequest] = OrderedDict()
         self._conversations: dict[str, AgentConversationState] = {MAIN: self._new_main()}
-        self._running: dict[str, _Running | None] = {lane: None for lane in LANES}
+        self._running: dict[str, _Running] = {}
         self._paused: dict[str, str] | None = None
         self._changing = False
         self._generation = 0  # bumped when a connection change starts; a turn's credentials must predate none
@@ -328,7 +333,6 @@ class AgentQueue:
         self._verified_token: str | None = None
         self._verified_logged_in = False
         self._threads: dict[str, threading.Thread] = {}
-        self._guarded: GuardedApi | None = None
 
     def init_app(self, app: Flask) -> None:
         """Bind the app whose database and API the turns use; workers start with the first request."""
@@ -772,8 +776,7 @@ class AgentQueue:
             if request.status != "running":
                 self.remove(request_id)
                 return "removed"
-            running = self._running[request.lane]
-            assert running is not None and running.request_id == request.id
+            running = self._running[request.id]
             self._cancel(running)
             return "stopping"
 
@@ -892,8 +895,7 @@ class AgentQueue:
         return failed
 
     def _any_running(self) -> bool:
-        return any(running is not None for running in self._running.values()) or any(
-            request.status == "running" for request in self._requests)
+        return bool(self._running)
 
     def _reset_connection_locked(self) -> None:
         previous = self._conversations
@@ -983,14 +985,22 @@ class AgentQueue:
 
     def _next(self, lane: Lane) -> AgentRequest | None:
         """The lane's first eligible request (P12): queued, and no earlier request of its conversation waits or runs."""
-        if self._paused or self._changing or self._stopping or self._running[lane] is not None:
+        if self._paused or self._changing or self._stopping:
             return None
-        busy = {request.conversation_id for request in self._requests if request.status == "running"}
+        running = [r for r in self._requests if r.status == "running"]
+        peers = [r for r in running if r.lane == lane]
+        if peers and (lane == "chat" or len(peers) >= REVIEW_WORKERS or any(r.kind != "review" for r in peers)):
+            return None
+        busy = {r.conversation_id for r in running}
+        assessments = {r.assessment_id for r in peers}
         for request in self._requests:
             if request.status != "queued":
                 continue
             if request.lane == lane and request.conversation_id not in busy:
-                return request
+                if peers and request.kind != "review":
+                    return None  # do not let later reviews starve an exclusive action
+                if request.assessment_id not in assessments:
+                    return request
             busy.add(request.conversation_id)
         return None
 
@@ -1020,7 +1030,7 @@ class AgentQueue:
             assert credentials is not None
             conversation = self._conversations[request.conversation_id]
             running = _Running(request.id)
-            self._running[lane] = running
+            self._running[request.id] = running
             request.status, request.started_at = "running", time.time()
             if request.model is None:
                 request.model = model
@@ -1033,7 +1043,7 @@ class AgentQueue:
             self._execute(request, conversation, credentials, running)
         finally:
             with self._cond:
-                self._running[lane] = None
+                self._running.pop(request.id)
                 self._cond.notify_all()
         return True
 
@@ -1045,12 +1055,13 @@ class AgentQueue:
         """Start the lane workers (once); the first enqueue does it unless ``autostart`` is off."""
         with self._cond:
             for lane in LANES:
-                thread = self._threads.get(lane)
-                if thread is None or not thread.is_alive():
-                    thread = threading.Thread(target=self._work, args=(lane,), name=f"agent-queue-{lane}",
-                                              daemon=True)
-                    self._threads[lane] = thread
-                    thread.start()
+                for index in range(REVIEW_WORKERS if lane == "action" else 1):
+                    name = f"agent-queue-{lane}-{index}"
+                    thread = self._threads.get(name)
+                    if thread is None or not thread.is_alive():
+                        thread = threading.Thread(target=self._work, args=(lane,), name=name, daemon=True)
+                        self._threads[name] = thread
+                        thread.start()
 
     def _work(self, lane: Lane) -> None:
         while True:
@@ -1067,33 +1078,25 @@ class AgentQueue:
                     self._pause("error", WORKER_ERROR)
 
     def shutdown(self, timeout: float = 10) -> None:
-        """Stop the running turns and the workers, and the guarded API; the queue keeps its state."""
+        """Stop the running turns and the workers; the queue keeps its state."""
         with self._cond:
             self._stopping = True
             for running in self._running.values():
-                if running is not None:
-                    self._cancel(running)
+                self._cancel(running)
             self._cond.notify_all()
             threads, self._threads = list(self._threads.values()), {}
         for thread in threads:
             thread.join(timeout)
         with self._cond:
-            guarded, self._guarded = self._guarded, None
             self._stopping = False
-        if guarded is not None:
-            guarded.stop()
 
     # ------------------------------------------------------------ one turn
 
     def _guarded_api(self) -> GuardedApi:
         from .guarded_api import GuardedApi
 
-        with self._lock:
-            if self._guarded is None:
-                assert self._app is not None
-                self._guarded = GuardedApi(self._app)
-                self._guarded.start()
-            return self._guarded
+        assert self._app is not None
+        return GuardedApi(self._app)
 
     @staticmethod
     def _with_model(credentials: AgentCredentials, model: str) -> AgentCredentials:

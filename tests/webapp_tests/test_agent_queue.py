@@ -1143,7 +1143,7 @@ def test_the_default_runner_uses_reply_and_run_turn(env, monkeypatch):
     env.q.run_once("action")
     env.q.run_once("chat")
     (prompt, model, scope, kwargs), (text, _, follow_scope, follow_kwargs) = calls
-    assert model == "m" and kwargs["api_url"] == env.q._guarded.url and kwargs["ephemeral"] is False
+    assert model == "m" and kwargs["api_url"].startswith("http://127.0.0.1:") and kwargs["ephemeral"] is False
     assert text == "more" and follow_scope == scope and follow_kwargs["profile"].action == "assess"
     assert "api_url" not in follow_kwargs and follow_kwargs["timeout"] == action_timeout()
     [main], _ = env.q.enqueue("main", "web", [_message("plain")], model="m")
@@ -1156,6 +1156,34 @@ def action_timeout():
     from src.routes import agent_skills
 
     return agent_skills.ACTION_TIMEOUT
+
+
+def test_five_reviews_run_with_isolated_guards_and_stop_independently(env, monkeypatch):
+    from src.routes import agent
+
+    urls = set()
+    release = threading.Event()
+
+    async def wait_for_release(conversation, message, path, model, scope, publish=None, **kwargs):
+        urls.add(kwargs["api_url"])
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+        return "done", dict(USAGE)
+
+    monkeypatch.setattr(agent, "_reply", wait_for_release)
+    env.q._runner = aq.default_runner
+    actions = [{"kind": "review", "assessment_id": _custom(env, [("arm", "openssl")])} for _ in range(6)]
+    created, _ = env.q.enqueue("per-action", "web", actions, model="m")
+    env.q.start()
+    try:
+        _wait(lambda: len(urls) == 5)
+        assert [_status(env, r["id"]) for r in created] == ["running"] * 5 + ["queued"]
+        env.q.stop(created[2]["id"])
+        _wait(lambda: _status(env, created[2]["id"]) == "cancelled" and _status(env, created[5]["id"]) == "running")
+        assert all(_status(env, created[i]["id"]) == "running" for i in (0, 1, 3, 4))
+    finally:
+        release.set()
+        env.q.shutdown()
 
 
 def test_workers_run_requests_in_threads_until_shutdown(app, env, monkeypatch):  # noqa: F811

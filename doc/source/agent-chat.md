@@ -256,8 +256,8 @@ text response is not proof of persistence.
 ## AI Queue and Streaming
 
 The server keeps one AI queue per process (`agent_queue`), shared by every tab
-and CLI run. Requests run on two lanes, each with one worker thread: `action`
-(assess and review, one at a time) and `chat` (messages), so a chat never waits
+and CLI run. The `action` lane runs up to five reviews of different assessments
+at once, or one other action. The `chat` lane runs one message, so a chat never waits
 behind an action. A request also waits for the earlier requests of its own
 conversation. A failed request blocks nothing and stays listed for retry or
 removal; **Stop** cancels a running turn's task, which ends `cancelled` with

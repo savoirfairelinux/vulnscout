@@ -111,8 +111,8 @@ it was queued. Unsaved form text and API keys are not sent automatically.
 All requests go to one **AI queue** kept by the VulnScout server and shared by
 every browser tab and by `./vulnscout assess`/`review` (see
 [Assess from the CLI or CI](#assess-from-the-cli-or-ci)). Every tab shows the
-same requests and their live progress. The queue has two lanes: assess and
-review actions run one at a time in submission order, while chat messages run
+same requests and their live progress. The action lane runs up to five reviews
+of different assessments at once, or one other action. Chat messages run
 in their own lane and never wait behind an action. The requests of one
 conversation always run in order. A failed request does not block the queue:
 later requests keep running, and the failed one stays listed until you retry or
@@ -606,7 +606,7 @@ an independent second opinion on an existing **user-authored** assessment
 (`origin = "custom"`), not a scan-imported assessment or pending AI suggestion.
 Use **Review with AI** on a custom assessment in the vulnerability
 modal, or select assessments on the **Review** page and click **Review selected
-with AI**. Requests run one at a time with the other actions of the AI queue,
+with AI**. Up to five independent reviews can run at once,
 one complete assessment per conversation; every target is reviewed even when the table is scoped
 to one variant. You can close and reopen the chat while it works, inspect errors,
 stop the running review, and remove queued requests without altering your selection.
