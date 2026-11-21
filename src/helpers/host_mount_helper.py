@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import functools
 import io
 import json
 import os
@@ -382,28 +383,42 @@ class _Walk:
             raise _Exhausted("time")
 
 
-def _rg_binary() -> str | None:
-    """The ripgrep executable, unless the operator forced the pure-Python engine."""
+@functools.lru_cache(maxsize=1)
+def _gnu_grep() -> str | None:
+    path = shutil.which("grep")
+    if path is None:
+        return None
+    try:
+        banner = subprocess.run([path, "--version"], stdin=subprocess.DEVNULL, capture_output=True, timeout=5,
+                                check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return path if b"GNU grep" in banner else None
+
+
+def _grep_binary() -> str | None:
+    """GNU grep, unless the operator forced the pure-Python engine (BSD grep is not supported)."""
     if os.environ.get(ENGINE_ENV, "auto").lower() == "python":
         return None
-    return shutil.which("rg")
+    return _gnu_grep()
 
 
-class _RgWalk(_Walk):
-    """Walk that lets ripgrep enumerate (or pre-filter) files, then re-validates every result.
+class _GrepWalk(_Walk):
+    """Content search that lets GNU grep pre-filter candidate files, then re-validates every result.
 
-    ripgrep is only a fast, parallel enumerator: it runs without a shell, with a fixed argument
-    list, from the already opened folder, and never follows links. Each reported path is checked
-    again here (excluded names, glob, links, regular file) by opening every parent without following
-    links, so the safety rules are exactly those of the Python walk, which is the fallback.
+    grep only names files that contain the query: it runs without a shell, with a fixed argument
+    list, from the already opened folder, and does not follow links found in the tree. Each reported
+    path is checked again here (excluded names, glob, links, regular file) by opening every parent
+    without following links, and the helper re-reads the file itself, so the safety rules are exactly
+    those of the Python walk, which is the fallback.
     """
 
     def __init__(self, root_fd: int, time_limit: float, matcher: Callable[[str], bool] | None,
-                 literal: str, rg: str, query: str | None = None):
+                 literal: str, grep: str, query: str):
         super().__init__(root_fd, time_limit, matcher, literal)
-        self.rg = rg
+        self.grep = grep
         self.query = query
-        self.engine = "rg"
+        self.engine = "grep"
         self._parent_key: str | None = None
         self._parent_fd = root_fd
         self._parent_ok = False
@@ -417,15 +432,10 @@ class _RgWalk(_Walk):
         return path if path.startswith("/") and os.path.isdir(path) else None
 
     def _command(self, start: str) -> list[str]:
-        command = [self.rg, "--no-config", "--no-ignore", "--no-messages", "--no-mmap", "--null"]
+        command = [self.grep, "-r", "-I", "-l", "-Z", "-F", "--exclude-dir=.?*", "--exclude=.*"]
         for name in _SENSITIVE_NAMES:
-            command += ["--iglob", f"!{name}"]
-        if self.query is None:
-            command.append("--files")
-        else:
-            command += ["--files-with-matches", "--fixed-strings", "--max-filesize", str(MAX_FILE_BYTES),
-                        "-e", self.query]
-        command.append("--")
+            command += [f"--exclude-dir={name}", f"--exclude={name}"]
+        command += ["-e", self.query, "--"]
         if start:
             command.append(start)
         return command
@@ -480,10 +490,10 @@ class _RgWalk(_Walk):
         return info.st_size if stat.S_ISREG(info.st_mode) else None
 
     def _enumerate(self, root: str, start: str) -> tuple[list[str], bool]:
-        """Matching relative paths reported by ripgrep and whether the time limit stopped it."""
+        """Matching relative paths reported by grep and whether the time limit stopped it."""
         process = subprocess.Popen(
             self._command(start), cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+            stderr=subprocess.DEVNULL, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C"})
         timed_out = threading.Event()
 
         def stop() -> None:
@@ -563,9 +573,9 @@ class _RgWalk(_Walk):
 
 def _new_walk(fd: int, time_limit: float, matcher: Callable[[str], bool], literal: str,
               query: str | None = None) -> _Walk:
-    rg = _rg_binary()
-    if rg:
-        return _RgWalk(fd, time_limit, matcher, literal, rg, query)
+    grep = _grep_binary() if query is not None else None
+    if grep and query is not None:
+        return _GrepWalk(fd, time_limit, matcher, literal, grep, query)
     return _Walk(fd, time_limit, matcher, literal)
 
 

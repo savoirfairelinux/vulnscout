@@ -681,14 +681,15 @@ only local operator requests, and browser requests must be same-origin.
   - Without `folder`, start `pattern` with a literal path
     (`build/tmp/work/*/curl/*`) instead of `*curl*`: folders that cannot match the
     literal prefix are never opened and non-matching files are never stat'ed.
-  - When `rg` (ripgrep) is on the helper host's `PATH`, the helper uses it as a
-    fast parallel enumerator (and as a pre-filter for content search). It runs
-    without a shell, with a fixed argument list, no config file, no link
-    following and no ignore files; every path it reports is re-validated by the
-    helper, so the exclusions and symlink rules are identical. Without `rg`, or
+  - Content search uses **GNU grep** (present on any Linux host) as a pre-filter
+    when it is on the helper host's `PATH`. It runs without a shell, with a fixed
+    argument list and no link following, and only names candidate files; every
+    path it reports is re-validated and re-read by the helper, so the exclusions
+    and symlink rules are identical. Without GNU grep (for example BSD grep), or
     with `VULNSCOUT_HOST_HELPER_ENGINE=python`, the helper uses its pure-Python
-    walk. Responses report `engine`, `visited_entries` and `elapsed_seconds`;
-    with `rg`, `skipped_*` counters only cover the files it reported as candidates.
+    walk. Listings always use the Python walk. Responses report `engine`,
+    `visited_entries` and `elapsed_seconds`; with grep, `skipped_*` counters only
+    cover the files grep reported as candidates.
   - A "time limit" or "entry limit" message means the result is incomplete: narrow
     `folder` or `pattern` and repeat. It is not evidence that nothing matches.
 
