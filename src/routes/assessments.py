@@ -12,7 +12,7 @@ from ..models import Assessment as DBAssessment, Package, Finding
 from ..models.assessment import STATUS_TO_SIMPLIFIED
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
-from ..extensions import db, batch_session
+from ..extensions import db, batch_session, hold_write_lock
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
@@ -198,6 +198,7 @@ def _approve_row(
         if "status" in edits:
             values["simplified_status"] = STATUS_TO_SIMPLIFIED.get(edits["status"], "Pending Assessment")
     with batch_session():
+        hold_write_lock()
         result = db.session.execute(
             db.update(DBAssessment)
             .where(DBAssessment.id == row.id, DBAssessment.origin == "ai")
