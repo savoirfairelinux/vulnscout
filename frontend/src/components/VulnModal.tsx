@@ -846,8 +846,9 @@ type PendingAiEditTransition =
 
     /** Reflect an approved AI assessment in the modal state. */
     const applyApprovedAiAssessment = (row: Assessment, approved: Assessment[], edits?: AiAssessmentEdits) => {
-        // A pre-approval full-history response still contains the pending row.
-        ++generations.current.full;
+        // Replace any pre-approval request, even if the initial history
+        // hasn't arrived yet and there is nothing to update optimistically.
+        void refreshAllVulnAssessments();
         const approvedById = new Map(approved.map(a => [a.id, a]));
 
         setAllVulnAssessments(prev => prev.map(a => {

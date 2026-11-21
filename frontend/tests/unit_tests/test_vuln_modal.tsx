@@ -2839,6 +2839,7 @@ describe('Vulnerability Modal', () => {
         isEditing?: boolean;
         patchVuln?: jest.Mock;
         pendingAssessments?: typeof pendingAiAssessment[];
+        fullHistory?: () => Promise<string>;
     }) => {
         fetchMock.resetMocks();
         fetchMock.mockResponse((req) => {
@@ -2859,6 +2860,7 @@ describe('Vulnerability Modal', () => {
                 ]));
             }
             if (req.url.includes(`/api/vulnerabilities/${encodeURIComponent(vulnerability.id)}/assessments`)) {
+                if (options?.fullHistory) return options.fullHistory();
                 return Promise.resolve(JSON.stringify(options?.pendingAssessments ?? [pendingAiAssessment]));
             }
             return Promise.resolve(JSON.stringify([]));
@@ -2930,7 +2932,9 @@ describe('Vulnerability Modal', () => {
             .mockResolvedValueOnce([pendingAiAssessment])
             .mockResolvedValue([]);
 
-        renderWithPendingAiAssessment({ patchVuln, isEditing: true });
+        const fullHistory = jest.fn().mockResolvedValueOnce(JSON.stringify([pendingAiAssessment]))
+            .mockResolvedValue(JSON.stringify([{ ...pendingAiAssessment, origin: 'custom' }]));
+        renderWithPendingAiAssessment({ patchVuln, isEditing: true, fullHistory });
         const user = userEvent.setup();
 
         await screen.findByText(/AI-generated/i);
@@ -2992,7 +2996,9 @@ describe('Vulnerability Modal', () => {
             .mockResolvedValue([approved]);
         const approval = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([approved]);
         try {
-            renderWithPendingAiAssessment({ isEditing: true });
+            const fullHistory = jest.fn().mockResolvedValueOnce(JSON.stringify([pendingAiAssessment]))
+                .mockResolvedValue(JSON.stringify([approved]));
+            renderWithPendingAiAssessment({ isEditing: true, fullHistory });
             await screen.findByText(/AI-generated/i);
             await userEvent.setup().click(within(aiPanel()).getByRole('button', { name: 'Approve' }));
             await screen.findByText('AI assessment approved!');
@@ -3001,6 +3007,28 @@ describe('Vulnerability Modal', () => {
         } finally {
             approval.mockRestore();
             history.mockRestore();
+        }
+    });
+
+    test('loads per-target status when approval beats the initial full history', async () => {
+        const approved = { ...pendingAiAssessment, origin: 'custom', status_notes: 'Approved target notes' };
+        let finish!: (body: string) => void;
+        const fullHistory = jest.fn()
+            .mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve; }))
+            .mockResolvedValue(JSON.stringify([approved]));
+        const grouped = jest.spyOn(Assessments, 'listByVuln')
+            .mockResolvedValueOnce([pendingAiAssessment]).mockResolvedValue([approved]);
+        const approval = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([approved]);
+        try {
+            renderWithPendingAiAssessment({ isEditing: true, fullHistory });
+            await screen.findByText(/AI-generated/i);
+            await userEvent.setup().click(within(aiPanel()).getByRole('button', { name: 'Approve' }));
+            await screen.findByRole('cell', { name: approved.status_notes });
+            await act(async () => finish(JSON.stringify([pendingAiAssessment])));
+            expect(screen.getByRole('cell', { name: approved.status_notes })).toBeInTheDocument();
+        } finally {
+            grouped.mockRestore();
+            approval.mockRestore();
         }
     });
 
@@ -3013,7 +3041,9 @@ describe('Vulnerability Modal', () => {
             .mockResolvedValueOnce([pendingAiAssessment])
             .mockResolvedValue([]);
 
-        renderWithPendingAiAssessment({ patchVuln, isEditing: true });
+        const fullHistory = jest.fn().mockResolvedValueOnce(JSON.stringify([pendingAiAssessment]))
+            .mockResolvedValue(JSON.stringify([{ ...pendingAiAssessment, status_notes: 'edited notes', origin: 'custom' }]));
+        renderWithPendingAiAssessment({ patchVuln, isEditing: true, fullHistory });
         const user = userEvent.setup();
 
         await screen.findByText(/AI-generated/i);
