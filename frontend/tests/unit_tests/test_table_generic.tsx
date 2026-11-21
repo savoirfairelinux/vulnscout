@@ -159,6 +159,26 @@ describe('TableGeneric component (direct tests to raise coverage)', () => {
     });
   }, 15000);
 
+  test('filtering keeps a valid page and clamps a missing page to the last one', async () => {
+    const table = (count: number) => (
+      <TableGeneric columns={columns} data={DATA.slice(0, count)} tableHeight="auto" />
+    );
+    const { rerender } = render(table(150));
+    await userEvent.setup().click(screen.getByRole('button', { name: '3' }));
+
+    rerender(table(110));
+    expect(screen.getByText('101-110 / 110')).toBeInTheDocument();
+
+    rerender(table(60));
+    expect(screen.getByText('51-60 / 60')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'row59' })).toBeInTheDocument();
+
+    rerender(table(0));
+    expect(screen.getByText('0-0 / 0')).toBeInTheDocument();
+    rerender(table(150));
+    expect(screen.getByText('1-50 / 150')).toBeInTheDocument();
+  });
+
   test('changing items per page resets page index (lines 322-323)', async () => {
     render(
       <TableGeneric
