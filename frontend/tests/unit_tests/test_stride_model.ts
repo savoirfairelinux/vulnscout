@@ -196,7 +196,7 @@ describe('Context error replies', () => {
     test.each([
         ['get', () => Context.get('p1', 'v1'), 'Failed to load context (502)'],
         ['getProject', () => Context.getProject('p1'), 'Failed to load project context (502)'],
-        ['saveProject', () => Context.saveProject('p1', 'd'), 'Failed to save project context (502)'],
+        ['saveProject', () => Context.saveProject('p1', { description: 'd' }), 'Failed to save project context (502)'],
         ['uploadFile', () => Context.uploadFile('v1', file, ''), 'Failed to upload reference (502)'],
         ['deleteFile', () => Context.deleteFile('v1', 'f1'), 'Failed to delete reference (502)'],
         ['exportAll', () => Context.exportAll(), 'Failed to export context (502)'],

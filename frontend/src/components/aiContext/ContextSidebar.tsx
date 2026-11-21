@@ -1,7 +1,7 @@
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faLock } from "@fortawesome/free-solid-svg-icons";
 
-export type SidebarSelection = { kind: 'project' } | { kind: 'format' } | { kind: 'variant'; id: string };
+export type SidebarSelection = { kind: 'project' } | { kind: 'variant'; id: string };
 
 type Props = {
     projectName: string;
@@ -16,7 +16,6 @@ const ITEM = "w-full rounded px-3 py-2 text-left text-sm flex items-center gap-2
 
 function ContextSidebar({ projectName, variants, inScopeIds, selected, onSelect }: Readonly<Props>) {
     const projectSelected = selected?.kind === 'project';
-    const formatSelected = selected?.kind === 'format';
     const hasLocked = variants.some(v => !inScopeIds.includes(v.id));
 
     return (
@@ -28,15 +27,7 @@ function ContextSidebar({ projectName, variants, inScopeIds, selected, onSelect 
                 onClick={() => onSelect({ kind: 'project' })}
                 className={`${ITEM} ${projectSelected ? 'bg-sky-900 text-white' : 'text-zinc-200 hover:bg-slate-700'}`}
             >
-                Project description
-            </button>
-            <button
-                type="button"
-                aria-current={formatSelected ? 'true' : undefined}
-                onClick={() => onSelect({ kind: 'format' })}
-                className={`${ITEM} mt-0.5 ${formatSelected ? 'bg-sky-900 text-white' : 'text-zinc-200 hover:bg-slate-700'}`}
-            >
-                Assessment format
+                Project scope
             </button>
             <div className="mt-4 mb-1 flex items-baseline justify-between px-3">
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Variants</h2>

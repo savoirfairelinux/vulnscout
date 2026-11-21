@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faArrowDown, faArrowUp, faSpinner } from "@fortawesome/free-solid-svg-icons";
+import { faArrowDown, faArrowUp } from "@fortawesome/free-solid-svg-icons";
 import {
     MAX_LABEL, MAX_STYLE_NOTES, SECTION_NAMES, DEFAULT_FORMAT_DRAFT, formatPreview, moveSection,
     type AssessmentFormatDraft, type FormatSectionDraft,
@@ -9,16 +9,13 @@ import type { AssessmentFormatLayout } from "../../handlers/context";
 import FieldErrorText from "./FieldErrorText";
 import { describeField } from "./fieldErrors";
 import {
-    BADGE_PROJECT, BUTTON_PRIMARY, BUTTON_SECONDARY, ERROR, FIELD, HELP, LABEL, PANEL, TEXTAREA,
+    BUTTON_SECONDARY, ERROR, FIELD, HELP, LABEL, PANEL, TEXTAREA,
 } from "./styles";
 
 type Props = {
-    projectName: string;
     value: AssessmentFormatDraft;
     onChange: (value: AssessmentFormatDraft) => void;
-    onSave: () => void;
     saving: boolean;
-    dirty: boolean;
     /** True while the saved format is being loaded. */
     loading: boolean;
     /** True when there is no loaded format to edit (still loading, or the load failed). */
@@ -43,7 +40,7 @@ function inlinePaths(sections: FormatSectionDraft[]): Set<string> {
 }
 
 function AssessmentFormatPanel({
-    projectName, value, onChange, onSave, saving, dirty, loading, disabled, fieldErrors,
+    value, onChange, saving, loading, disabled, fieldErrors,
 }: Readonly<Props>) {
     const [moved, setMoved] = useState<{ id: string; direction: 'up' | 'down'; message: string } | null>(null);
     const moveButtons = useRef(new Map<string, HTMLButtonElement | null>());
@@ -77,29 +74,15 @@ function AssessmentFormatPanel({
         <section aria-labelledby="ai-format-heading" className={`${PANEL} space-y-4`}>
             <div className="flex flex-wrap items-center gap-3">
                 <h2 id="ai-format-heading" className="text-xl font-bold text-white">Assessment format</h2>
-                <span className={BADGE_PROJECT}>Project</span>
-                <span className="text-sm text-zinc-400 truncate">{projectName}</span>
-                <div className="ml-auto flex items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => onChange(DEFAULT_FORMAT_DRAFT)}
-                        disabled={!value.custom || saving || disabled}
-                        className={BUTTON_SECONDARY}
-                    >
-                        Reset to default
-                    </button>
-                    <button type="button" onClick={onSave} disabled={!dirty || saving} className={BUTTON_PRIMARY}>
-                        {saving && <FontAwesomeIcon icon={faSpinner} spin />}
-                        Save changes
-                    </button>
-                </div>
+                <button
+                    type="button"
+                    onClick={() => onChange(DEFAULT_FORMAT_DRAFT)}
+                    disabled={!value.custom || saving || disabled}
+                    className={`${BUTTON_SECONDARY} ml-auto`}
+                >
+                    Reset to default
+                </button>
             </div>
-            <p className={HELP}>
-                How AI assessment notes are presented for every variant of this project: the order, labels and
-                layout of their parts, and their tone. It never changes a verdict, the confidence rules or the
-                evidence the agent needs, and the confidence level is always included. Saving it does not mark
-                AI assessments as outdated.
-            </p>
             {loading && <p className="text-sm text-zinc-400">Loading assessment format…</p>}
             {!value.custom && !disabled && (
                 <p role="note" className="text-sm text-zinc-300">Using the default presentation. Edit any setting to customize it.</p>
@@ -197,6 +180,14 @@ function AssessmentFormatPanel({
                 <FieldErrorText path={`${ROOT}.layout`} errors={fieldErrors} />
             </fieldset>
 
+            <figure aria-labelledby="ai-format-preview-heading" className="border-l-4 border-cyan-700 pl-3">
+                <figcaption id="ai-format-preview-heading" className={LABEL}>Sample status notes</figcaption>
+                <blockquote data-testid="assessment-format-preview" className="whitespace-pre-line text-sm text-zinc-200">
+                    {formatPreview(value)}
+                </blockquote>
+                <p className={HELP}>This sample shows the section order, labels and layout, not the agent’s style choices.</p>
+            </figure>
+
             <div>
                 <label className={LABEL} htmlFor="ai-format-style-notes">Style notes</label>
                 <textarea
@@ -219,21 +210,6 @@ function AssessmentFormatPanel({
                     </span>
                 </div>
                 <FieldErrorText path={`${ROOT}.style_notes`} errors={fieldErrors} />
-            </div>
-
-            <div>
-                <h3 id="ai-format-preview-heading" className={LABEL}>Preview</h3>
-                <p className={`${HELP} mb-1`}>
-                    Sample status notes{value.custom ? '' : ' in the default presentation'}; style notes are applied by the agent.
-                </p>
-                <div
-                    role="region"
-                    aria-labelledby="ai-format-preview-heading"
-                    data-testid="assessment-format-preview"
-                    className="whitespace-pre-line rounded border border-slate-600 bg-slate-900/60 px-3 py-2 text-sm text-zinc-200"
-                >
-                    {formatPreview(value)}
-                </div>
             </div>
         </section>
     );

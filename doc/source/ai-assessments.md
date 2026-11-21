@@ -311,9 +311,9 @@ When `./vulnscout serve` is running, `assess` and `review` submit their agent tu
 ## AI Context page
 
 The **AI Context** page uses a settings-style layout. The sidebar lists
-**Project description**, **Assessment format** and the variants of the selected project. Variants that
+**Project scope** and the variants of the selected project. Variants that
 are not ticked in the top-bar selector stay listed but locked. The page opens on
-**Project description**, and returns to it when the open variant leaves the
+**Project scope** (description and assessment format), and returns to it when the open variant leaves the
 scope. Selecting an item
 opens its page; there is one **Save changes** button per page and no auto-save.
 Leaving a page with unsaved changes asks to Save, Discard or Cancel.
@@ -379,8 +379,8 @@ assessment notes are presented, without editing the assessment skill:
 Agents receive the setting as `assessment_format` in `get_merged_context` and
 `get_project_context`; no MCP tool can change it. The `cve-assessment` and
 `assessment-review` skills apply it only to the order, labels, line layout and
-tone of `status_notes` (and the labels and tone of `impact_statement` and
-`workaround`). It never changes the status, justification, confidence gate,
+tone of `status_notes`. Neither skill restyles `impact_statement` or
+`workaround`, which are compared verbatim for agreement. It never changes the status, justification, confidence gate,
 required evidence or assessed targets, and the confidence level
 (`confidence level: <level>`) is always written, even when its section is
 left out. Style notes are treated as data, not instructions, and are ignored

@@ -25,7 +25,7 @@ const AI_ROW = {
     origin: 'ai', packages: [], responses: [],
 };
 const DIRTY_VARIANT_TEXT = "The agent updated the variant context. Your unsaved edits were kept; saving replaces the agent's change.";
-const DIRTY_PROJECT_TEXT = "The agent updated the project description. Your unsaved edits were kept; saving replaces the agent's change.";
+const DIRTY_PROJECT_TEXT = "The agent updated the project description. Your unsaved edits were kept; only saving an edited description replaces the agent's change.";
 
 type Request = { url: string; method: string; body: string | null };
 type FileRow = { id: string; original_name: string; description: string | null };
@@ -184,7 +184,7 @@ function renderPage(scope: AiContextScope, onAgentContextChange?: (context: Agen
 const sidebarItem = (name: string) => screen.getByRole('button', { name });
 
 async function openProjectDescription() {
-    fireEvent.click(await screen.findByRole('button', { name: 'Project description' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Project scope' }));
     await waitFor(() => expect(screen.getByLabelText('Project description')).toHaveValue('Desc'));
 }
 
@@ -232,7 +232,7 @@ describe('AIContext page', () => {
         );
         expect(sidebarItem('Variant 1')).not.toHaveAttribute('aria-disabled');
         expect(screen.getByText('1 of 2 in scope')).toBeInTheDocument();
-        expect(sidebarItem('Project description')).toBeInTheDocument();
+        expect(sidebarItem('Project scope')).toBeInTheDocument();
     });
 
     test('locked variant cannot be selected by click or keyboard', async () => {
@@ -240,14 +240,14 @@ describe('AIContext page', () => {
         const user = userEvent.setup();
         renderPage({ projectId: 'p1', variantIds: ['v1'] });
         const locked = await screen.findByRole('button', { name: 'Variant 2' });
-        await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
+        await waitFor(() => expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true'));
 
         await user.click(locked);
         locked.focus();
         await user.keyboard('{Enter}');
         await user.keyboard(' ');
 
-        expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true');
+        expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true');
         expect(locked).not.toHaveAttribute('aria-current');
         expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(0);
     });
@@ -257,7 +257,7 @@ describe('AIContext page', () => {
         const { setScope } = renderPage({ projectId: 'p1', variantIds: ['v2'] });
 
         await waitFor(() => expect(screen.getByLabelText('Project description')).toHaveValue('Desc'));
-        expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true');
+        expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true');
         expect(requestsTo(backend, 'variant_id=')).toHaveLength(0);
 
         // Widening the scope keeps the open item.
@@ -272,7 +272,7 @@ describe('AIContext page', () => {
         mockBackend();
         renderPage({ projectId: 'p1', variantIds: [] });
         await waitFor(() => expect(screen.getByLabelText('Project description')).toHaveValue('Desc'));
-        expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true');
+        expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true');
     });
 
     test('switching sidebar item with unsaved edits asks Save/Discard/Cancel', async () => {
@@ -289,7 +289,7 @@ describe('AIContext page', () => {
         fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
         await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
         expect(screen.getByLabelText('Project description')).toHaveValue('Edited');
-        expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true');
+        expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true');
 
         fireEvent.click(sidebarItem('Variant 2'));
         fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
@@ -312,7 +312,7 @@ describe('AIContext page', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
         await waitFor(() => expect(screen.queryByText('Mark AI assessments as outdated?')).not.toBeInTheDocument());
         expect(requestsTo(backend, '/api/projects/p1/context', 'PUT')).toHaveLength(0);
-        expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true');
+        expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true');
         expect(screen.getByLabelText('Project description')).toHaveValue('New desc');
 
         // Confirming saves, then the switch goes ahead.
@@ -442,20 +442,20 @@ describe('AIContext page', () => {
         };
 
         async function openFormat() {
-            fireEvent.click(await screen.findByRole('button', { name: 'Assessment format' }));
+            fireEvent.click(await screen.findByRole('button', { name: 'Project scope' }));
             await waitFor(() => expect(screen.getByRole('heading', { name: 'Assessment format' })).toBeInTheDocument());
             await waitFor(() => expect(screen.getByLabelText('Style notes')).toBeEnabled());
         }
 
-        test('is a project-level sidebar item reported to the agent', async () => {
+        test('shares the project scope with the description', async () => {
             mockBackend();
             const onAgentContextChange = jest.fn();
             renderPage({ projectId: 'p1' }, onAgentContextChange);
             await openFormat();
-            expect(sidebarItem('Assessment format')).toHaveAttribute('aria-current', 'true');
-            expect(sidebarItem('Project description')).not.toHaveAttribute('aria-current');
+            expect(screen.queryByRole('button', { name: 'Assessment format' })).not.toBeInTheDocument();
+            expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true');
             await waitFor(() => expect(onAgentContextChange).toHaveBeenLastCalledWith(expect.objectContaining({
-                selectedProjectId: 'p1', selectedVariantId: undefined, section: 'assessment_format',
+                selectedProjectId: 'p1', selectedVariantId: undefined, section: 'project_description',
             })));
             expect(screen.getByRole('note')).toHaveTextContent('Using the default presentation.');
         });
@@ -468,7 +468,7 @@ describe('AIContext page', () => {
             fireEvent.click(screen.getByRole('button', { name: 'Move Verdict up' }));
             fireEvent.click(screen.getByLabelText('One section per line'));
             fireEvent.change(screen.getByLabelText('Style notes'), { target: { value: ' Neutral. ' } });
-            expect(screen.getByText('Unsaved changes in the assessment format')).toBeInTheDocument();
+            expect(screen.getByText('Unsaved changes in Project A')).toBeInTheDocument();
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
             await waitFor(() => expect(screen.getByText('Saved.')).toHaveAttribute('role', 'status'));
@@ -484,7 +484,7 @@ describe('AIContext page', () => {
             });
             expect(backend.description).toBe('Desc');
             expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-            expect(screen.queryByText('Unsaved changes in the assessment format')).not.toBeInTheDocument();
+            expect(screen.queryByText('Unsaved changes in Project A')).not.toBeInTheDocument();
         });
 
         test('loads the saved format and resets it to the default', async () => {
@@ -504,6 +504,26 @@ describe('AIContext page', () => {
             await waitFor(() => expect(screen.getByRole('note')).toHaveTextContent('Using the default presentation.'));
         });
 
+        test('keeps both project edits on cancel and saves them together on confirmation', async () => {
+            const backend = mockBackend({ assessmentFormat: SAVED_FORMAT, aiRows: [AI_ROW] });
+            renderPage({ projectId: 'p1' });
+            await openFormat();
+            fireEvent.change(screen.getByLabelText('Project description'), { target: { value: 'New scope' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+            expect(requestsTo(backend, '/api/projects/p1/context', 'PUT')).toHaveLength(0);
+            expect(screen.getByLabelText('Project description')).toHaveValue('New scope');
+            expect(screen.getByRole('note')).toHaveTextContent('Using the default presentation.');
+
+            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+            fireEvent.click(await screen.findByRole('button', { name: 'Save and mark outdated' }));
+            await screen.findByText('Saved.');
+            const puts = requestsTo(backend, '/api/projects/p1/context', 'PUT');
+            expect(puts).toHaveLength(1);
+            expect(JSON.parse(puts[0].body ?? '{}')).toEqual({ description: 'New scope', assessment_format: null });
+        });
+
         test('shows server field errors next to the fields', async () => {
             const backend = mockBackend({ projectPutError: {
                 error: 'assessment_format.style_notes: must be at most 500 characters',
@@ -518,7 +538,7 @@ describe('AIContext page', () => {
             expect(screen.getByLabelText('Style notes')).toHaveAccessibleDescription(/must be at most 500 characters/);
             expect(await screen.findByText('Fix the highlighted fields before saving.')).toBeInTheDocument();
             expect(backend.assessmentFormat).toBeUndefined();
-            expect(screen.getByText('Unsaved changes in the assessment format')).toBeInTheDocument();
+            expect(screen.getByText('Unsaved changes in Project A')).toBeInTheDocument();
         });
 
         test('leaving with unsaved format edits asks first', async () => {
@@ -527,9 +547,9 @@ describe('AIContext page', () => {
             await openFormat();
             fireEvent.click(screen.getByRole('checkbox', { name: 'Include Remediation' }));
 
-            fireEvent.click(sidebarItem('Project description'));
+            fireEvent.click(sidebarItem('Variant 1'));
             const dialog = await screen.findByRole('alertdialog', { name: 'Unsaved changes' });
-            expect(dialog).toHaveTextContent('You have unsaved changes in the assessment format.');
+            expect(dialog).toHaveTextContent('You have unsaved changes in Project A.');
             fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
             await openProjectDescription();
         });
@@ -538,12 +558,12 @@ describe('AIContext page', () => {
     test('scope change removing the selected variant falls back to the project description', async () => {
         mockBackend();
         const { setScope } = renderPage({ projectId: 'p1' });
-        await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
+        await waitFor(() => expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true'));
         fireEvent.click(sidebarItem('Variant 2'));
         await waitFor(() => expect(sidebarItem('Variant 2')).toHaveAttribute('aria-current', 'true'));
 
         setScope({ projectId: 'p1', variantIds: ['v1'] });
-        await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
+        await waitFor(() => expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true'));
         expect(sidebarItem('Variant 2')).toHaveAttribute('aria-disabled', 'true');
 
         // A scope applied after "Discard" drops the open item's edits.
@@ -588,7 +608,7 @@ describe('AIContext page', () => {
         await waitFor(() => expect(requestsTo(backend, '/api/projects/p2/variants')).toHaveLength(1));
         await act(async () => { p2List.resolve(); });
 
-        await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
+        await waitFor(() => expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true'));
         await waitFor(() => expect(requestsTo(backend, '/api/projects/p2/context')).toHaveLength(1));
         expect(requestsTo(backend, 'project_id=p2&variant_id=')).toHaveLength(0);
     });
@@ -916,7 +936,7 @@ describe('AIContext page', () => {
             await waitFor(() => expect(screen.queryByText('Invalid variant context')).not.toBeInTheDocument());
             await act(async () => { p2List.resolve(); });
             expect(await screen.findByText('Failed to load variants (500)')).toBeInTheDocument();
-            await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
+            await waitFor(() => expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true'));
             expect(screen.getByText('Failed to load variants (500)')).toBeInTheDocument();
         });
 
@@ -1197,7 +1217,7 @@ describe('AIContext page', () => {
 
             setScope({ projectId: 'p1', variantIds: ['v2'] });
 
-            await waitFor(() => expect(sidebarItem('Project description')).toHaveAttribute('aria-current', 'true'));
+            await waitFor(() => expect(sidebarItem('Project scope')).toHaveAttribute('aria-current', 'true'));
             expect(screen.queryByText('must be text')).not.toBeInTheDocument();
             fireEvent.click(sidebarItem('Variant 2'));
             expect(await screen.findByRole('tab', { name: 'Context' })).toHaveAttribute('aria-selected', 'true');
