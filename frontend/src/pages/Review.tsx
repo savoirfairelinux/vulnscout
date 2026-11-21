@@ -422,8 +422,9 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     }, [editVariants, editingRow]);
 
     const refreshReviews = useCallback(async () => {
+        const version = reviewScopeVersion.current;
         const data = await AssessmentReviews.fetchForScope(variantId, projectId);
-        setReviews(data);
+        if (version === reviewScopeVersion.current) setReviews(data);
     }, [variantId, projectId]);
 
     useEffect(() => {
@@ -435,6 +436,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     }, [variantId, projectId]);
 
     useEffect(() => {
+        const version = reviewScopeVersion.current;
         setLoading(true);
         setError(null);
         Promise.all([
@@ -444,6 +446,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
             .then(([reviewRows, aiRows, teData, cvssData]) => {
+                if (version !== reviewScopeVersion.current) return;
                 // Build tooltip descriptions from vuln_texts included in the response.
                 const descMap: Record<string, { title: string; content: string }[]> = {};
                 for (const a of [...reviewRows, ...aiRows]) {
@@ -471,6 +474,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 setVulnDescriptions(descMap);
             })
             .catch(err => {
+                if (version !== reviewScopeVersion.current) return;
                 console.error(err);
                 setError("Failed to load review data");
                 setLoading(false);
@@ -842,17 +846,21 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
      * approving/rejecting a pending AI assessment from the AI Assessments
      * table, since approving moves a row from one list to the other). */
     const refreshAssessmentLists = useCallback(async () => {
+        const version = reviewScopeVersion.current;
         const [reviewRows, aiRows] = await Promise.allSettled([
             Assessments.listForReview(variantId, projectId, 'custom'),
             Assessments.listForReview(variantId, projectId, 'ai'),
         ]);
+        if (version !== reviewScopeVersion.current) return;
         if (reviewRows.status === 'rejected') throw reviewRows.reason;
         if (aiRows.status === 'rejected') throw aiRows.reason;
         setAssessments(reviewRows.value.map(a => toReviewRow(a, vulnDescriptions)));
         setAiAssessments(aiRows.value.map(a => toReviewRow(a, vulnDescriptions)));
     }, [variantId, projectId, vulnDescriptions]);
 
-    useAgentWriteRefresh(() => Promise.allSettled([refreshAssessmentLists(), refreshReviews()]));
+    useAgentWriteRefresh(() => Promise.allSettled([refreshAssessmentLists(), refreshReviews()]), {
+        scopeKey: JSON.stringify([projectId, variantId]),
+    });
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;

@@ -19,7 +19,7 @@ const merge = (first: AgentWriteDetail, next: AgentWriteDetail): AgentWriteDetai
  */
 export default function useAgentWriteRefresh(
     refresh: (detail: AgentWriteDetail, announcedRevision?: number | null) => unknown,
-    revision?: RefObject<number>,
+    { revision, scopeKey }: { revision?: RefObject<number>; scopeKey?: string } = {},
 ) {
     const refreshRef = useRef(refresh);
     useEffect(() => { refreshRef.current = refresh; });
@@ -54,5 +54,5 @@ export default function useAgentWriteRefresh(
             active = false;
             window.removeEventListener(AGENT_WRITE_EVENT, onWrite);
         };
-    }, [revision]);
+    }, [revision, scopeKey]);
 }
