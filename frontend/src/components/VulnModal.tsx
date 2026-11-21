@@ -172,6 +172,7 @@ type VariantScopedSnapshot = {
     const [variantPackageMapError, setVariantPackageMapError] = useState<string | null>(null);
     const [statusSort, setStatusSort] = useState<{ key: StatusSortKey; dir: 'asc' | 'desc' } | null>(null);
     const [snapshotVersion, setSnapshotVersion] = useState(0);
+    const snapshotController = useRef<AbortController | null>(null);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
     const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
@@ -353,11 +354,6 @@ type VariantScopedSnapshot = {
         }
     }, [vuln.id, projectId]);
 
-    useAgentWriteRefresh(() => {
-        setSnapshotVersion(version => version + 1);
-        return Promise.all([refreshAllVulnAssessments(), refreshAssessmentRows(), refreshReviews()]);
-    });
-
     useEffect(() => {
         const controller = new AbortController();
         setAssessmentRows([]);
@@ -390,8 +386,10 @@ type VariantScopedSnapshot = {
 
     // Build per-variant snapshots so the modal can show where custom CVSS and
     // effort differ across variants directly in all-variants mode.
-    useEffect(() => {
+    const refreshSnapshots = useCallback(() => {
+        snapshotController.current?.abort();
         const controller = new AbortController();
+        snapshotController.current = controller;
         const signal = controller.signal;
         if (variantId || availableVariants.length === 0) {
             setVariantSnapshots([]);
@@ -401,7 +399,7 @@ type VariantScopedSnapshot = {
             return;
         }
 
-        (async () => {
+        return (async () => {
             try {
                 const url = new URL(
                     import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/variant-snapshots`,
@@ -459,11 +457,16 @@ type VariantScopedSnapshot = {
             }
         })();
 
-        return () => { controller.abort(); };
-    // availableVariants is read inside but the fetch is intentionally keyed off
-    // the stable variantIdsKey memo, not the array identity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [variantId, variantIdsKey, variantsLoadedForVulnId, vuln.id, projectId, snapshotVersion]);
+    }, [variantId, availableVariants, variantNameById, variantsLoadedForVulnId, vuln.id, projectId]);
+
+    useEffect(() => {
+        void refreshSnapshots();
+        return () => snapshotController.current?.abort();
+    }, [refreshSnapshots, snapshotVersion]);
+
+    useAgentWriteRefresh(() => Promise.allSettled([
+        refreshAllVulnAssessments(), refreshAssessmentRows(), refreshReviews(), refreshSnapshots(),
+    ]));
 
     useEffect(() => {
         const controller = new AbortController();
