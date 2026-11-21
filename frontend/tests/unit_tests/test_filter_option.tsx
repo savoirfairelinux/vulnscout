@@ -36,7 +36,7 @@ function Harness({ options, initial = [], showSelectAll, searchable, onChange, s
 const OPTIONS = ['openssl@3.0.0', 'busybox@1.36.1', 'zlib@1.3'];
 
 describe('FilterOption select all', () => {
-    test('does not render the button unless opted in', async () => {
+    test('does not render bulk actions unless opted in', async () => {
         const user = userEvent.setup();
         render(<Harness options={OPTIONS} />);
 
@@ -45,16 +45,18 @@ describe('FilterOption select all', () => {
         expect(screen.queryByRole('button', { name: /select all/i })).not.toBeInTheDocument();
     });
 
-    test('renders the button above the options', async () => {
+    test('renders both buttons above the options', async () => {
         const user = userEvent.setup();
         render(<Harness options={OPTIONS} showSelectAll />);
 
         await user.click(screen.getByRole('button', { name: 'Packages' }));
 
-        const button = screen.getByRole('button', { name: 'Select all' });
-        expect(button).toHaveAttribute('type', 'button');
         const firstCheckbox = screen.getAllByRole('checkbox')[0];
-        expect(button.compareDocumentPosition(firstCheckbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        for (const name of ['Select all', 'Deselect all']) {
+            const button = screen.getByRole('button', { name });
+            expect(button).toHaveAttribute('type', 'button');
+            expect(button.compareDocumentPosition(firstCheckbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        }
     });
 
     test('selects every option, then deselects them all', async () => {
@@ -79,15 +81,15 @@ describe('FilterOption select all', () => {
         expect(screen.getByRole('button', { name: 'Select all' })).toBeInTheDocument();
     });
 
-    test('label follows manual checkbox changes', async () => {
+    test('deselects directly from a partial selection', async () => {
         const user = userEvent.setup();
-        render(<Harness options={OPTIONS} initial={OPTIONS} showSelectAll />);
+        render(<Harness options={OPTIONS} showSelectAll />);
 
         await user.click(screen.getByRole('button', { name: 'Packages' }));
-        expect(screen.getByRole('button', { name: 'Deselect all' })).toBeInTheDocument();
-
         await user.click(screen.getByRole('checkbox', { name: 'zlib@1.3' }));
-        expect(screen.getByRole('button', { name: 'Select all' })).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', { name: 'zlib@1.3' })).toBeChecked();
+        await user.click(screen.getByRole('button', { name: 'Deselect all' }));
+        expect(screen.queryByRole('checkbox', { checked: true })).not.toBeInTheDocument();
     });
 
     test('is keyboard operable', async () => {
@@ -100,6 +102,8 @@ describe('FilterOption select all', () => {
         await user.keyboard('{Enter}');
         expect(onChange).toHaveBeenLastCalledWith(OPTIONS);
 
+        await user.tab();
+        expect(screen.getByRole('button', { name: 'Deselect all' })).toHaveFocus();
         await user.keyboard(' ');
         expect(onChange).toHaveBeenLastCalledWith([]);
     });
@@ -107,12 +111,15 @@ describe('FilterOption select all', () => {
     test('only affects options matching the search and keeps other selections', async () => {
         const user = userEvent.setup();
         const onChange = jest.fn<void, [string[]]>();
-        render(<Harness options={OPTIONS} initial={['zlib@1.3']} showSelectAll searchable onChange={onChange} />);
+        render(<Harness options={OPTIONS} initial={['openssl@3.0.0', 'zlib@1.3']} showSelectAll searchable onChange={onChange} />);
 
         await user.click(screen.getByRole('button', { name: 'Packages' }));
         await user.type(screen.getByRole('searchbox', { name: 'Search packages' }), 'o');
 
         // "openssl" and "busybox" match, "zlib" is hidden but stays selected
+        await user.click(screen.getByRole('button', { name: 'Deselect all matching' }));
+        expect(onChange).toHaveBeenLastCalledWith(['zlib@1.3']);
+
         await user.click(screen.getByRole('button', { name: 'Select all matching' }));
         expect(onChange).toHaveBeenLastCalledWith(['zlib@1.3', 'openssl@3.0.0', 'busybox@1.36.1']);
 
