@@ -73,6 +73,15 @@ class TestNormalizeAssessmentFormat:
         normalize_assessment_format(raw)
         assert raw == {"sections": [{"id": "verdict", "label": " V "}], "layout": "lines"}
 
+    def test_rejects_unencodable_text_at_each_field(self):
+        assert _errors({
+            "sections": [{"id": "evidence", "label": "\ud800"}],
+            "style_notes": "broken \udfff",
+        }) == {
+            "assessment_format.sections[0].label": "must be valid UTF-8 text",
+            "assessment_format.style_notes": "must be valid UTF-8 text",
+        }
+
     @pytest.mark.parametrize("raw", ["text", 3, ["sections"], True])
     def test_rejects_non_objects(self, raw):
         assert _errors(raw) == {"assessment_format": "must be an object or null"}

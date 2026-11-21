@@ -205,7 +205,7 @@ def extract_entries(body) -> list:
             record = {
                 "project_name": project_name,
                 "description": project_description,
-                **variant,
+                **{key: variant[key] for key in VariantEntry.__required_keys__ if key in variant},
             }
             # Files without the key (before 3.1) keep the destination's format.
             if "assessment_format" in project:

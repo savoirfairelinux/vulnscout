@@ -18,7 +18,7 @@ def _fmt_assessment_format(ctx: dict) -> str:
     value = ctx.get("assessment_format")
     if value is None:
         return "None"
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 
 def _fmt_merged_context(ctx: dict) -> str:

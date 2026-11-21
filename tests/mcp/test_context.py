@@ -177,17 +177,17 @@ class TestGetMergedContextImpl:
             "sections": [{"id": "confidence", "enabled": True, "label": "Confiance"},
                          {"id": "verdict", "enabled": False}],
             "layout": "lines",
-            "style_notes": "Ton neutre.\nPas de jargon.",
+            "style_notes": "Ton neutre.\nLegacy surrogate: \udfff",
         }
         with respx.mock:
-            respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(200, json={
+            respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(200, content=json.dumps({
                 "project_id": "p1", "description": "d", "assessment_format": assessment_format,
                 "variant_id": "v1", "files": [],
-            }))
+            })))
             result = _get_merged_context_impl(client, "p1", "v1")
         line = next(line for line in result.splitlines() if line.startswith("assessment_format="))
         assert json.loads(line.split("=", 1)[1]) == assessment_format
-        assert line == "assessment_format=" + json.dumps(assessment_format, ensure_ascii=False, separators=(",", ":"))
+        assert line == "assessment_format=" + json.dumps(assessment_format, ensure_ascii=True, separators=(",", ":"))
         assert "description=d\nassessment_format=" in result
 
     def test_returns_no_files_placeholder_when_empty(self, client):
