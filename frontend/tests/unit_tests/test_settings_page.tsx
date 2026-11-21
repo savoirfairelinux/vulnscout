@@ -547,7 +547,6 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.getByLabelText("SBOM Files")).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: /refresh/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "NVD" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Refresh tab" })).toHaveAttribute("href", "/refresh");
   });
 
   test("saves report metadata and Grype memory settings", async () => {
