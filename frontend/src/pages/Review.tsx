@@ -1,8 +1,8 @@
-import { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import { useEffect, useLayoutEffect, useState, useMemo, useRef, useCallback } from "react";
 import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
-import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
+import type { AiAssessmentEdits, Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
 import { asAssessment, isMultiTarget, reconcileTargetPairs } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
@@ -14,6 +14,7 @@ import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimesta
 import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
+import EditAiAssessment from '../components/EditAiAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
@@ -62,6 +63,7 @@ export type { AssessmentMutation };
  *  and search, and a hover-tooltip `texts` field. */
 type ReviewRow = {
     id: string;
+    approval_fingerprint?: string;
     vuln_id: string;
     status: string;
     simplified_status: string;
@@ -86,10 +88,7 @@ type ReviewRow = {
 
 /** Adapt a server-returned Assessment into the flattened shape the table
  *  columns and edit/delete/approve flows consume. */
-function toReviewRow(
-    assessment: Assessment,
-    vulnDescriptions: Record<string, { title: string; content: string }[]>,
-): ReviewRow {
+function toReviewRow(assessment: Assessment): ReviewRow {
     const targets = assessment.targets ?? [];
     const packages = [...new Set(targets.map(t => t.package))];
     const variant_ids = [...new Set(
@@ -97,6 +96,7 @@ function toReviewRow(
     )];
     return {
         id: assessment.id,
+        approval_fingerprint: assessment.approval_fingerprint,
         vuln_id: assessment.vuln_id,
         status: assessment.status,
         simplified_status: assessment.simplified_status,
@@ -111,7 +111,8 @@ function toReviewRow(
         targets,
         packages,
         variant_ids,
-        texts: vulnDescriptions[assessment.vuln_id] ?? [],
+        texts: assessment.vuln_texts?.length ? assessment.vuln_texts
+            : [{ title: "description", content: "No description available" }],
         extractedSuppliers: [...new Set(
             packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
         )],
@@ -271,6 +272,31 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [editHasUnsavedChanges, setEditHasUnsavedChanges] = useState(false);
     const [showDiscardEditConfirmation, setShowDiscardEditConfirmation] = useState(false);
     const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
+    const [aiEditingRow, setAiEditingRow] = useState<ReviewRow | null>(null);
+    const [aiEditSaving, setAiEditSaving] = useState(false);
+    const [aiEditError, setAiEditError] = useState<string | null>(null);
+    const listScope = useMemo(() => ({ projectId, variantId }), [projectId, variantId]);
+    const activeListScope = useRef<typeof listScope | null>(null);
+    const listGeneration = useRef(0);
+    const installedGeneration = useRef(0);
+    useLayoutEffect(() => {
+        activeListScope.current = listScope;
+        setLoading(true);
+        setAssessments([]);
+        setAiAssessments([]);
+        setAiEditingRow(null);
+        setAiEditSaving(false);
+        setAiEditError(null);
+        return () => { activeListScope.current = null; };
+    }, [listScope]);
+    const beginListRequest = useCallback(() => {
+        const generation = ++listGeneration.current;
+        return (install = false) => {
+            if (activeListScope.current !== listScope || generation < installedGeneration.current) return false;
+            if (install) installedGeneration.current = generation;
+            return true;
+        };
+    }, [listScope]);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowKey, setCopiedRowKey] = useState<string | null>(null);
@@ -442,9 +468,9 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     }, [variantId, projectId]);
 
     useEffect(() => {
-        const version = reviewScopeVersion.current;
         setLoading(true);
         setError(null);
+        const current = beginListRequest();
         Promise.all([
             Assessments.listForReview(variantId, projectId, 'custom'),
             Assessments.listForReview(variantId, projectId, 'ai'),
@@ -452,7 +478,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
             .then(([reviewRows, aiRows, teData, cvssData]) => {
-                if (version !== reviewScopeVersion.current) return;
+                if (activeListScope.current !== listScope) return;
                 // Build tooltip descriptions from vuln_texts included in the response.
                 const descMap: Record<string, { title: string; content: string }[]> = {};
                 for (const a of [...reviewRows, ...aiRows]) {
@@ -472,20 +498,22 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         descMap[c.vuln_id] = c.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
-                setAssessments(reviewRows.map(a => toReviewRow(a, descMap)));
-                setAiAssessments(aiRows.map(a => toReviewRow(a, descMap)));
+                if (current(true)) {
+                    setAssessments(reviewRows.map(toReviewRow));
+                    setAiAssessments(aiRows.map(toReviewRow));
+                }
                 setTimeEstimates(teData);
                 setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
                 setVulnDescriptions(descMap);
             })
             .catch(err => {
-                if (version !== reviewScopeVersion.current) return;
+                if (activeListScope.current !== listScope) return;
                 console.error(err);
                 setError("Failed to load review data");
                 setLoading(false);
             });
-    }, [variantId, projectId]);
+    }, [variantId, projectId, listScope, beginListRequest]);
 
     const applySearch = () => setSearch(draftSearch.trim());
 
@@ -754,7 +782,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 .then(result => {
                     if (result.status === 'success') {
                         Assessments.listForReview(variantId, projectId, 'custom')
-                            .then(rows => setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions))));
+                            .then(rows => setAssessments(rows.map(toReviewRow)));
                         showMessage('Assessments imported successfully!', 'success');
                     } else {
                         showMessage(`Import error: ${result.error || 'Unknown error'}`, 'error');
@@ -811,7 +839,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
 
                 if (data.status === 'success') {
                     Assessments.listForReview(variantId, projectId, 'custom')
-                        .then(rows => setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions))));
+                        .then(rows => setAssessments(rows.map(toReviewRow)));
                     const assessmentsImported = data.assessments_imported ?? 0;
                     const assessmentsSkipped = data.assessments_skipped ?? 0;
                     const cvssImported = data.cvss_imported ?? 0;
@@ -839,30 +867,30 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             }
         };
         reader.readAsText(file);
-    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy, vulnDescriptions]);
+    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy]);
 
     /** Refetch just the handmade-assessments list (used after edits/deletes
      * that don't touch the AI-pending list). */
     const refreshAssessments = useCallback(async () => {
         const rows = await Assessments.listForReview(variantId, projectId, 'custom');
-        setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions)));
-    }, [variantId, projectId, vulnDescriptions]);
+        setAssessments(rows.map(toReviewRow));
+    }, [variantId, projectId]);
 
     /** Refetch both the handmade and AI-pending assessment lists (used after
      * approving/rejecting a pending AI assessment from the AI Assessments
      * table, since approving moves a row from one list to the other). */
-    const refreshAssessmentLists = useCallback(async () => {
-        const version = reviewScopeVersion.current;
+    const refreshAssessmentLists = useCallback(async (current = beginListRequest()) => {
         const [reviewRows, aiRows] = await Promise.allSettled([
             Assessments.listForReview(variantId, projectId, 'custom'),
             Assessments.listForReview(variantId, projectId, 'ai'),
         ]);
-        if (version !== reviewScopeVersion.current) return;
+        if (!current()) return;
         if (reviewRows.status === 'rejected') throw reviewRows.reason;
         if (aiRows.status === 'rejected') throw aiRows.reason;
-        setAssessments(reviewRows.value.map(a => toReviewRow(a, vulnDescriptions)));
-        setAiAssessments(aiRows.value.map(a => toReviewRow(a, vulnDescriptions)));
-    }, [variantId, projectId, vulnDescriptions]);
+        if (!current(true)) return;
+        setAssessments(reviewRows.value.map(toReviewRow));
+        setAiAssessments(aiRows.value.map(toReviewRow));
+    }, [variantId, projectId, beginListRequest]);
 
     useAgentWriteRefresh(() => Promise.allSettled([refreshAssessmentLists(), refreshReviews()]), {
         scopeKey: JSON.stringify([projectId, variantId]),
@@ -914,6 +942,47 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             showMessage(`Failed to approve AI assessment: ${String(e)}`, 'error');
         }
     }, [refreshAssessmentLists, showMessage]);
+
+    const openAiAssessmentEditor = useCallback((row: ReviewRow) => {
+        setAiEditError(null);
+        setShowBanner(false);
+        setAiEditingRow(row);
+    }, []);
+
+    const closeAiAssessmentEditor = useCallback(() => {
+        if (aiEditSaving) return;
+        setAiEditError(null);
+        setAiEditingRow(null);
+    }, [aiEditSaving]);
+
+    const handleConfirmAiEdit = useCallback(async (edits: AiAssessmentEdits) => {
+        if (!aiEditingRow || aiEditSaving) return;
+        setAiEditSaving(true);
+        setAiEditError(null);
+        try {
+            await Assessments.approveAi(aiEditingRow.id, edits);
+        } catch (e) {
+            if (activeListScope.current !== listScope) return;
+            // Stay in edit mode so the user keeps their changes and can retry.
+            const message = e instanceof Error ? e.message : String(e);
+            setAiEditError(`Failed to approve AI assessment: ${message}`);
+            setAiEditSaving(false);
+            return;
+        }
+        if (activeListScope.current !== listScope) return;
+        setAiEditingRow(null);
+        setAiEditSaving(false);
+        const current = beginListRequest();
+        // The POST committed. Older list requests must not restore this row.
+        current(true);
+        setAiAssessments(rows => rows.filter(row => row.id !== aiEditingRow.id));
+        try {
+            await refreshAssessmentLists(current);
+        } catch {
+            // The approval succeeded; the lists refresh on the next load.
+        }
+        if (current()) showMessage('AI assessment approved!', 'success');
+    }, [aiEditingRow, aiEditSaving, refreshAssessmentLists, showMessage, beginListRequest, listScope]);
 
     const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
         try {
@@ -1418,6 +1487,13 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                     <FontAwesomeIcon icon={faCheck} className="w-4 h-4" />
                 </button>
                 <button
+                    onClick={() => openAiAssessmentEditor(info.row.original)}
+                    className="text-blue-400 hover:text-blue-300 transition-colors"
+                    title="Edit AI suggestion"
+                >
+                    <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
+                </button>
+                <button
                     onClick={() => handleRejectAiRow(info.row.original)}
                     className="text-red-400 hover:text-red-300 transition-colors"
                     title="Reject AI suggestion"
@@ -1427,7 +1503,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
             </div>
         ),
-    }), [handleApproveAiRow, handleRejectAiRow, copiedRowKey, copyRowId]);
+    }), [handleApproveAiRow, openAiAssessmentEditor, handleRejectAiRow, copiedRowKey, copyRowId]);
 
     const aiColumns = useMemo(
         () => columns.map(c => (c.id === 'actions' ? aiActionsColumn : c)),
@@ -2084,6 +2160,29 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                             findingsError={editCompatibilityError}
                         />
                     )}
+                </ModalShell>
+            )}
+
+            {aiEditingRow && (
+                <ModalShell
+                    isOpen={true}
+                    title={aiEditingRow.vuln_id}
+                    onClose={closeAiAssessmentEditor}
+                    closeLabel="Close AI assessment editor"
+                    closeDisabled={aiEditSaving}
+                    closeOnEscape={!aiEditSaving}
+                    closeOnBackdrop={false}
+                    size="large"
+                    contentClassName="overflow-y-auto p-6 md:p-6"
+                >
+                    <EditAiAssessment
+                        assessment={aiEditingRow}
+                        onConfirm={edits => { void handleConfirmAiEdit(edits); }}
+                        onCancel={closeAiAssessmentEditor}
+                        triggerBanner={showMessage}
+                        saving={aiEditSaving}
+                        errorMessage={aiEditError}
+                    />
                 </ModalShell>
             )}
 

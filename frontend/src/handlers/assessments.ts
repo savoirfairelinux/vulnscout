@@ -53,6 +53,7 @@ type Assessment = {
     outdated?: boolean;
     /** Pending AI assessments only: the variant context changed after it was written. */
     context_outdated?: boolean;
+    approval_fingerprint?: string;
     superseded_by?: string[];
     stale_packages?: string[];
     superseded_map?: Record<string, string[]>;
@@ -170,6 +171,23 @@ type BatchResult = {
 export type { BatchAssessmentItem, BatchResult };
 export { reconcileTargetPairs };
 
+/** Some imports store notes in the impact field for non-impact statuses. */
+export function initialStatusNotes(assessment: Assessment) {
+    const hasImpactField = ['not_affected', 'false_positive'].includes(assessment.status);
+    return assessment.status_notes || (!hasImpactField ? assessment.impact_statement || "" : "");
+}
+
+/** Content edits applied to a pending AI assessment as it is approved. */
+type AiAssessmentEdits = {
+    expected_fingerprint?: string;
+    justification?: string;
+    impact_statement?: string;
+    status_notes?: string;
+    workaround?: string;
+};
+
+export type { AiAssessmentEdits };
+
 type ReviewTimeEstimate = {
     id: string;
     vuln_id: string;
@@ -269,6 +287,7 @@ const asAssessment = (data: any): Assessment | [] => {
     if (Array.isArray(data?.vuln_texts)) item.vuln_texts = data.vuln_texts;
     if (data?.outdated === true) item.outdated = true;
     if (data?.context_outdated === true) item.context_outdated = true;
+    if (typeof data?.approval_fingerprint === "string") item.approval_fingerprint = data.approval_fingerprint;
     if (Array.isArray(data?.superseded_by)) item.superseded_by = data.superseded_by.filter((s: any) => typeof s === "string");
     if (Array.isArray(data?.stale_packages)) item.stale_packages = data.stale_packages.filter((s: any) => typeof s === "string");
     if (data?.superseded_map && typeof data.superseded_map === "object" && !Array.isArray(data.superseded_map)) {
@@ -450,13 +469,20 @@ class Assessments {
         if (!response.ok) throw new Error(`Failed to delete assessment: ${response.status}`);
     }
 
-    /** Approve a pending AI-origin assessment. */
-    static async approveAi(assessmentId: string): Promise<Assessment[]> {
+    /** Approve a pending AI-origin assessment. When `edits` is given, the
+     *  edited content is saved and approved in one atomic request. */
+    static async approveAi(assessmentId: string, edits?: AiAssessmentEdits): Promise<Assessment[]> {
         const url = new URL(
             import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/approve`,
             window.location.href
         );
-        const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
+        const init: RequestInit = { method: 'POST', mode: 'cors' };
+        if (edits) {
+            init.headers = { 'Content-Type': 'application/json' };
+            const { expected_fingerprint, justification, impact_statement, status_notes, workaround } = edits;
+            init.body = JSON.stringify({ expected_fingerprint, justification, impact_statement, status_notes, workaround });
+        }
+        const response = await fetch(url.toString(), init);
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             throw new Error(err.error || `HTTP ${response.status}`);

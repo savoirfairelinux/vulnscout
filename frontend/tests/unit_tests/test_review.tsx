@@ -95,7 +95,7 @@ jest.mock('../../src/components/TableGeneric', () => {
     const ReactMock = require('react');
     return {
         __esModule: true,
-        default: ({ data, columns, search, onFilteredDataChange, selected, updateSelected }: any) => {
+        default: ({ data, columns, search, onFilteredDataChange, selected, updateSelected, hoverField }: any) => {
             const val = (row: any, col: any) => (col.accessorKey ? row[col.accessorKey] : undefined);
             // Simulate TableGeneric emitting its filtered+sorted rows in display
             // order. The real component applies the text search internally; here
@@ -148,7 +148,8 @@ jest.mock('../../src/components/TableGeneric', () => {
                     </thead>
                     <tbody>
                         {data.map((row: any, i: number) => (
-                            <tr key={i} data-testid="mock-table-row">
+                            <tr key={i} data-testid="mock-table-row"
+                                title={row[hoverField]?.map((text: { content: string }) => text.content).join('\n')}>
                                 {columns.map((col: any, ci: number) => (
                                     <td key={ci}>
                                         {col.cell ? col.cell({ row: rowFor(row), getValue: () => val(row, col) }) : null}
@@ -203,7 +204,7 @@ jest.mock('../../src/helpers/exportJson', () => ({
 
 import Review from '../../src/pages/Review';
 import { downloadJson } from '../../src/helpers/exportJson';
-import { STATUS_VEX_TO_GRAPH } from '../../src/handlers/assessments';
+import Assessments, { STATUS_VEX_TO_GRAPH } from '../../src/handlers/assessments';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 
 const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
@@ -232,6 +233,7 @@ function toAssessments(list: any[], vulnTextsMap: Record<string, unknown[]>): an
         }));
         return {
             id: a.id,
+            approval_fingerprint: a.approval_fingerprint,
             vuln_id: a.vuln_id,
             status: a.status,
             simplified_status: STATUS_VEX_TO_GRAPH[a.status] ?? `[invalid status] ${a.status}`,
@@ -1267,6 +1269,186 @@ describe('Review — AI Assessments tab', () => {
 
         await screen.findByText('AI assessment approved!');
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
+    });
+
+    test('editing a pending AI row approves it with the edited content in one request', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], {
+            aiReviewList: [{ ...makeAssessment('ai1', 'v1'), origin: 'ai', approval_fingerprint: 'original' }],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+
+        const notes = await screen.findByPlaceholderText(/Free text notes/);
+        expect(notes).toHaveValue('shared note');
+        const editor = within(notes.closest('fieldset')!);
+        expect(editor.getByText('affected')).toBeVisible();
+        expect(editor.queryByRole('combobox')).not.toBeInTheDocument();
+        await user.clear(notes);
+        await user.type(notes, 'Edited message');
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+
+        await screen.findByText('AI assessment approved!');
+        const approveCalls = postCalls().filter(c => String(c[0]).includes('/api/assessments/ai1/approve'));
+        expect(approveCalls).toHaveLength(1);
+        expect(JSON.parse(String((approveCalls[0][1] as RequestInit).body))).toEqual({
+            status_notes: 'Edited message',
+            expected_fingerprint: 'original',
+        });
+        expect(screen.queryByRole('button', { name: 'Confirm and approve' })).not.toBeInTheDocument();
+    });
+
+    test('a failed refresh and an older response cannot restore approved row actions', async () => {
+        const pending = { ...makeAssessment('ai1', 'v1'), simplified_status: 'Exploitable' };
+        mockNetwork([], { aiReviewList: [pending] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const list = jest.spyOn(Assessments, 'listForReview')
+            .mockResolvedValueOnce([])
+            .mockImplementationOnce(async () => { await gate; return [pending]; })
+            .mockRejectedValue(new Error('refresh failed'));
+        try {
+            await act(async () => { window.dispatchEvent(new Event(AGENT_WRITE_EVENT)); });
+            await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+            await screen.findByText('AI assessment approved!');
+            expect(screen.queryByTitle('Approve AI suggestion')).not.toBeInTheDocument();
+            await act(async () => finish());
+            expect(screen.queryByTitle('Edit AI suggestion')).not.toBeInTheDocument();
+            expect(screen.queryByTitle('Reject AI suggestion')).not.toBeInTheDocument();
+        } finally {
+            finish();
+            list.mockRestore();
+        }
+    });
+
+    test.each(['project', 'variant'])('late approval refresh cannot replace the next %s list', async change => {
+        mockNetwork([], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        const { rerender } = render(<Review projectId="proj1" variantId="v1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const old = { ...makeAssessment('old', 'v1'), simplified_status: 'Exploitable', vuln_id: 'CVE-OLD' };
+        const next = { ...old, id: 'next', vuln_id: 'CVE-NEXT' };
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const list = jest.spyOn(Assessments, 'listForReview').mockImplementation(async (variant, project, origin) => {
+            if (variant === 'v1' && project === 'proj1') {
+                await gate;
+                return origin === 'ai' ? [old] : [];
+            }
+            return origin === 'ai' ? [next] : [];
+        });
+        try {
+            await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+            await waitFor(() => expect(list).toHaveBeenCalledWith('v1', 'proj1', 'ai'));
+            rerender(<Review projectId={change === 'project' ? 'proj2' : 'proj1'}
+                variantId={change === 'variant' ? 'v2' : 'v1'} />);
+            await screen.findByText('CVE-NEXT');
+            await act(async () => finish());
+            expect(screen.getByText('CVE-NEXT')).toBeInTheDocument();
+            expect(screen.queryByText('CVE-OLD')).not.toBeInTheDocument();
+            expect(screen.queryByText('AI assessment approved!')).not.toBeInTheDocument();
+        } finally {
+            list.mockRestore();
+        }
+    });
+
+    test('a refresh that wins the new scope load uses its own tooltip for a shared CVE', async () => {
+        const row = (id: string, content: string) => ({
+            ...makeAssessment(id, 'v1'), simplified_status: 'Exploitable',
+            vuln_texts: [{ title: 'observation', content }],
+        });
+        mockNetwork([], { aiReviewList: [row('a', 'Project A observation')] });
+        const { rerender } = render(<Review projectId="proj1" />);
+        await userEvent.setup().click(await screen.findByText('AI Assessments'));
+        await screen.findByTitle('Project A observation');
+
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const list = jest.spyOn(Assessments, 'listForReview')
+            .mockResolvedValueOnce([])
+            .mockImplementationOnce(async () => { await gate; return [row('b', 'Initial B observation')]; })
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([row('b', 'Refreshed B observation')]);
+        try {
+            rerender(<Review projectId="proj2" />);
+            await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+            await act(async () => { window.dispatchEvent(new Event(AGENT_WRITE_EVENT)); });
+            expect(list).toHaveBeenCalledTimes(4);
+            await act(async () => finish());
+            expect(await screen.findByTitle('Refreshed B observation')).toBeInTheDocument();
+            expect(screen.queryByTitle('Project A observation')).not.toBeInTheDocument();
+        } finally {
+            finish();
+            list.mockRestore();
+        }
+    });
+
+    test('a failed background refresh does not supersede the initial load of the next scope', async () => {
+        mockNetwork([], { aiReviewList: [{ ...makeAssessment('old', 'v1'), vuln_id: 'CVE-OLD' }] });
+        const { rerender } = render(<Review projectId="proj1" />);
+        await userEvent.setup().click(await screen.findByText('AI Assessments'));
+        await screen.findByText('CVE-OLD');
+
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const next = { ...makeAssessment('next', 'v2'), vuln_id: 'CVE-NEXT', simplified_status: 'Exploitable' };
+        const list = jest.spyOn(Assessments, 'listForReview')
+            .mockResolvedValueOnce([])
+            .mockImplementationOnce(async () => { await gate; return [next]; })
+            .mockRejectedValue(new Error('refresh failed'));
+        try {
+            rerender(<Review projectId="proj2" />);
+            await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+            await act(async () => { window.dispatchEvent(new Event(AGENT_WRITE_EVENT)); });
+            expect(list).toHaveBeenCalledTimes(4);
+            await act(async () => finish());
+            expect(await screen.findByText('CVE-NEXT')).toBeInTheDocument();
+            expect(screen.queryByText('CVE-OLD')).not.toBeInTheDocument();
+        } finally {
+            list.mockRestore();
+        }
+    });
+
+    test('cancelling a pending AI row edit discards it without approving', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        await user.type(await screen.findByPlaceholderText(/Free text notes/), ' changed');
+        await user.click(screen.getByRole('button', { name: 'Cancel changes' }));
+
+        expect(screen.queryByPlaceholderText(/Free text notes/)).not.toBeInTheDocument();
+        expect(screen.getByTitle('Approve AI suggestion')).toBeInTheDocument();
+        expect(postCalls().some(c => String(c[0]).includes('/approve'))).toBe(false);
+    });
+
+    test('a failed edited approval keeps the AI row editor open with the error', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')], mutationOk: false });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const notes = await screen.findByPlaceholderText(/Free text notes/);
+        await user.clear(notes);
+        await user.type(notes, 'Edited message');
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+
+        expect(await screen.findByText('Failed to approve AI assessment: HTTP 500')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(/Free text notes/)).toHaveValue('Edited message');
+        expect(screen.getByRole('button', { name: 'Confirm and approve' })).toBeEnabled();
     });
 
     test('rejecting a pending AI row calls the reject endpoint with its own id', async () => {

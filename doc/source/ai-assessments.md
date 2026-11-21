@@ -759,17 +759,34 @@ Pending AI assessments must be reviewed by a human before they become official.
    the same details as a normal assessment (status, justification, impact
    statement, notes, packages, and variant).
 3. Click **Edit** on the vulnerability modal to enter editing mode — the
-   **Approve** / **Reject** buttons only appear on the panel once editing mode
-   is active.
+   **Approve** / **Edit** / **Reject** buttons only appear on the panel once
+   editing mode is active.
 4. Use the panel's action buttons:
    - **Approve** — promotes the assessment to an official (`custom`)
      assessment. It now affects the vulnerability's status and is included in
      the OpenVEX export.
+   - **Edit** — lets you amend the suggestion's notes, justification, impact
+     statement and workaround before approving it. Its status, packages and
+     variants are read-only. If the verdict is wrong, reject the suggestion
+     rather than approving it with different wording. In edit mode the actions
+     become:
+     - **Confirm and approve** — saves your changes and approves the
+       assessment in a single step, exactly like **Approve** but with the
+       edited content. The message (notes, or the impact statement for
+       *Not applicable* / *False positive*) cannot be empty. If the save fails,
+       the editor stays open with your changes and shows the error.
+       If someone changed the suggestion while you were editing, reload and
+       review their changes before approving.
+       If a refresh removes the suggestion from the vulnerability modal, your
+       draft stays visible for copying or cancellation and cannot be approved.
+     - **Cancel changes** — discards your changes and restores the
+       **Approve** / **Edit** / **Reject** buttons.
    - **Reject** — deletes the pending AI assessment.
 
 Until it is approved, a pending AI assessment has no effect on the
 vulnerability's status, on scan history/diffs, or on any exported VEX.
-You can also inspect pending suggestions in **Review → AI Assessments**.
+You can also inspect pending suggestions in **Review → AI Assessments**, where
+each row offers the same **Approve**, **Edit** and **Reject** actions.
 
 ## AI Review of Custom Assessments
 
