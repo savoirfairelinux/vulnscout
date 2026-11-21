@@ -27,7 +27,7 @@ import { formatSourceName } from '../helpers/sourceNames';
 import { useDocUrl } from '../helpers/useDocUrl';
 import { splitPkgId, formatPkgId, extractSupplierName } from '../helpers/pkgId';
 import type { Variant } from '../handlers/variant';
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { refreshIndividual } from "../handlers/individualRefresh";
 import ModalShell, { ModalActions, ModalButton } from "./ModalShell";
 import { agentActionState as queueActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
@@ -256,24 +256,37 @@ type PendingAiEditTransition =
         return () => document.removeEventListener('mousedown', closeCpeHint);
     }, [showCpeHint]);
 
+    // Each visit has its own identity, including when navigating A -> B -> A.
+    const assessmentScope = useMemo(() => ({ vulnId: vuln.id, projectId, variantId }),
+        [vuln.id, projectId, variantId]);
+    const activeScope = useRef<typeof assessmentScope | null>(null);
+    const generations = useRef({ reviews: 0, rows: 0, full: 0, edit: 0 });
+    useLayoutEffect(() => {
+        activeScope.current = assessmentScope;
+        return () => { activeScope.current = null; };
+    }, [assessmentScope]);
+    const beginRequest = useCallback((kind: keyof typeof generations.current) => {
+        if (activeScope.current !== assessmentScope) return () => false;
+        const generation = ++generations.current[kind];
+        return () => activeScope.current === assessmentScope && generations.current[kind] === generation;
+    }, [assessmentScope]);
+
     // Reviews are keyed by assessment ID and rendered beneath their assessment.
     // Re-run after any assessment mutation, not just on scope change: a
     // review's `is_stale` flag is derived server-side from the assessment's
     // current content, so an edit/delete/approve leaves the previously
     // fetched review stale-flag stale (pun intended) until this refetches.
     const refreshReviews = useCallback(() => {
+        const current = beginRequest("reviews");
         AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
-            .then(data => setReviews(data))
-            .catch(() => setReviews({}));
-    }, [variantId, projectId, vuln.id]);
+            .then(data => { if (current()) setReviews(data); })
+            .catch(() => { if (current()) setReviews({}); });
+    }, [beginRequest, variantId, projectId, vuln.id]);
 
     useEffect(() => {
-        let cancelled = false;
-        AssessmentReviews.fetchForScope(variantId, projectId, vuln.id)
-            .then(data => { if (!cancelled) setReviews(data); })
-            .catch(() => { if (!cancelled) setReviews({}); });
-        return () => { cancelled = true; };
-    }, [variantId, projectId, vuln.id]);
+        setReviews({});
+        refreshReviews();
+    }, [refreshReviews]);
 
     // Fetch variants that have a finding for this specific vulnerability,
     // filtered to the current project when a projectId is provided.
@@ -297,12 +310,13 @@ type PendingAiEditTransition =
     // its history remains complete when the Explorer is variant-scoped.
     useEffect(() => {
         const controller = new AbortController();
+        const current = beginRequest("full");
         setAllVulnAssessments([]);
         const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
         fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments${projectQuery}`, { mode: 'cors', signal: controller.signal })
             .then(r => r.json())
             .then((data: any[]) => {
-                if (Array.isArray(data)) {
+                if (current() && !controller.signal.aborted && Array.isArray(data)) {
                     const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
                     const fullById = new Map(fullAssessments.map(a => [a.id, a]));
                     // Keep the Explorer's current scope, but replace its compact
@@ -313,7 +327,7 @@ type PendingAiEditTransition =
             })
             .catch(() => {});
         return () => controller.abort();
-    }, [vuln, projectId]);
+    }, [beginRequest, vuln, projectId]);
 
     // Re-fetch the full assessment list after an assessment mutation (reconcile,
     // approve/reject, delete) so vuln.assessments/allVulnAssessments — and
@@ -324,11 +338,12 @@ type PendingAiEditTransition =
     // scoped the way the modal is scoped, which is what callers must use to
     // recompute the vulnerability status summary.
     const refreshAllVulnAssessments = useCallback(async (): Promise<Assessment[] | null> => {
+        const current = beginRequest("full");
         const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
         try {
             const r = await fetch(import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vuln.id)}/assessments${projectQuery}`, { mode: 'cors' });
             const data = await r.json();
-            if (Array.isArray(data)) {
+            if (current() && Array.isArray(data)) {
                 const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
                 const scopedAssessments = variantId
                     ? fullAssessments.filter(a => appliesToVariant(a, variantId))
@@ -341,21 +356,22 @@ type PendingAiEditTransition =
             // Keep whatever was previously loaded.
         }
         return null;
-    }, [vuln, projectId, variantId]);
+    }, [beginRequest, vuln, projectId, variantId]);
 
     // Fetch server-built assessment rows for this vulnerability (Task 8/11),
     // replacing the old client-side grouping heuristic. When this request is
     // still pending, empty, or fails, the render below falls back to building
     // rows from allVulnAssessments/vuln.assessments locally so history still renders.
     const refreshAssessmentRows = useCallback(async () => {
+        const current = beginRequest("rows");
         try {
             const rows = await Assessments.listByVuln(vuln.id, projectId);
-            setAssessmentRows(Array.isArray(rows) ? rows : []);
+            if (current()) setAssessmentRows(Array.isArray(rows) ? rows : []);
         } catch {
             // Keep whatever was previously loaded; the render's fallback path
             // covers the case where nothing ever loaded successfully.
         }
-    }, [vuln.id, projectId]);
+    }, [beginRequest, vuln.id, projectId]);
 
     useEffect(() => {
         const refresh = () => {
@@ -369,15 +385,9 @@ type PendingAiEditTransition =
     }, [refreshAllVulnAssessments, refreshAssessmentRows, refreshReviews]);
 
     useEffect(() => {
-        const controller = new AbortController();
         setAssessmentRows([]);
-        Assessments.listByVuln(vuln.id, projectId)
-            .then(rows => {
-                if (!controller.signal.aborted) setAssessmentRows(Array.isArray(rows) ? rows : []);
-            })
-            .catch(() => {});
-        return () => controller.abort();
-    }, [vuln.id, projectId]);
+        void refreshAssessmentRows();
+    }, [refreshAssessmentRows]);
 
     // In all-variants mode, default to all variant targets for custom CVSS/time edits.
     useEffect(() => {
@@ -595,9 +605,11 @@ type PendingAiEditTransition =
 
     useEffect(() => {
         setEditingAiId(null);
+        setAiEditSaving(false);
         setAiEditError(null);
         setHasAiEditChanges(false);
-    }, [vuln.id, isEditing]);
+        setPendingAiEditTransition(null);
+    }, [assessmentScope, isEditing]);
 
     const showMessage = (message: string, type: "error" | "success") => {
         setBannerMessage(message);
@@ -834,6 +846,8 @@ type PendingAiEditTransition =
 
     /** Reflect an approved AI assessment in the modal state. */
     const applyApprovedAiAssessment = (row: Assessment, approved: Assessment[], edits?: AiAssessmentEdits) => {
+        // A pre-approval full-history response still contains the pending row.
+        ++generations.current.full;
         const approvedById = new Map(approved.map(a => [a.id, a]));
 
         setAllVulnAssessments(prev => prev.map(a => {
@@ -863,8 +877,10 @@ type PendingAiEditTransition =
     const handleApproveAiAssessment = async (row: Assessment) => {
         try {
             const approved = await Assessments.approveAi(row.id);
+            if (activeScope.current !== assessmentScope) return;
             applyApprovedAiAssessment(row, approved);
         } catch (e) {
+            if (activeScope.current !== assessmentScope) return;
             showMessage(`Failed to approve AI assessment: ${escape(String(e))}`, "error");
         }
     };
@@ -904,18 +920,21 @@ type PendingAiEditTransition =
 
     const handleConfirmAiEdit = async (row: Assessment, edits: AiAssessmentEdits) => {
         if (aiEditSaving) return;
+        const current = beginRequest("edit");
         setAiEditSaving(true);
         setAiEditError(null);
         try {
             const approved = await Assessments.approveAi(row.id, edits);
+            if (!current()) return;
             resetAiEdit();
             applyApprovedAiAssessment(row, approved, edits);
         } catch (e) {
+            if (!current()) return;
             // Stay in edit mode so the user keeps their changes and can retry.
             const message = e instanceof Error ? e.message : String(e);
             setAiEditError(`Failed to approve AI assessment: ${message}`);
         } finally {
-            setAiEditSaving(false);
+            if (current()) setAiEditSaving(false);
         }
     };
 
