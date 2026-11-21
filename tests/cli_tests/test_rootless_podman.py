@@ -88,7 +88,7 @@ def test_real_daemon_reads_private_config_and_preserves_mounts(rootless_image, t
                 "-e", "SBOM_CVE_CHECK_AUTO_UPDATE=0",
                 "-v", f"{cache}:/cache/vulnscout:Z",
                 "-v", f"{outputs}:/scan/outputs:Z",
-                "-v", f"{config}:/etc/vulnscout/config.env:Z",
+                "-e", "VULNSCOUT_CONFIG=/cache/vulnscout/config.env",
                 "-v", f"{entrypoint}:/scan/src/entrypoint.sh:ro,Z",
                 rootless_image, "daemon",
             ],

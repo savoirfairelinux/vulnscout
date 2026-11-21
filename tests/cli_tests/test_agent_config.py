@@ -70,7 +70,9 @@ def test_wrapper_uses_mounted_file_instead_of_agent_environment(config_environme
         cwd=ROOT, capture_output=True, text=True, check=True,
     )
     arguments = Path(environment["ENGINE_LOG"]).read_text().splitlines()
-    assert any(f"{config}:/etc/vulnscout/config.env" in arg for arg in arguments)
+    assert f"{config.parent}:/cache/vulnscout:Z" in arguments
+    assert "VULNSCOUT_CONFIG=/cache/vulnscout/config.env" in arguments
+    assert not any(arg.startswith(f"{config}:") for arg in arguments)
     assert not any(arg.startswith((
         "AI_PROVIDER=", "AI_AUTH_CREDENTIALS=", "AI_MODEL=", "AI_BASE_URL=",
         "AI_CONTEXT_TIER=", "AI_REASONING_EFFORT=",
@@ -94,7 +96,7 @@ def test_wrapper_preserves_host_ids_for_rootless_podman(config_environment, root
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="Root can read files without owner read permission")
 @pytest.mark.parametrize("recover", [True, False])
-def test_wrapper_recovers_unreadable_config_before_sourcing(config_environment, recover):
+def test_wrapper_recovers_unreadable_config(config_environment, recover):
     config, environment = config_environment
     original = config.read_bytes()
     config.chmod(0o000)
@@ -105,7 +107,7 @@ def test_wrapper_recovers_unreadable_config_before_sourcing(config_environment, 
             cwd=ROOT, capture_output=True, text=True,
         )
         arguments = Path(environment["ENGINE_LOG"]).read_text().splitlines()
-        assert arguments == ["unshare", "chown", "0:0", str(config.parent), str(config)]
+        assert arguments == ["unshare", "chown", "-h", "0:0", str(config.parent), str(config)]
         assert result.returncode == (0 if recover else 1)
         assert "private key" not in result.stdout + result.stderr
         if recover:

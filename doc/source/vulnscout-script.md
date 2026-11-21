@@ -33,6 +33,9 @@ v0.25; see [Migrating from Legacy CLI Flags](cli-migration.md).
 | `import custom-data <path> [--timestamps original\|current]` | Import custom VulnScout JSON data. | default `default` | rejected (the file names its variants) |
 | `import custom-openvex <path> [--timestamps original\|current]` | Import custom OpenVEX assessments. | default `default` | optional; the project's only variant when omitted |
 | `import context <path>` | Import project and variant context. | optional; retargets the file | optional; needs `-p` |
+| `ai-context attach <alias>=<host path>...` | Approve and attach the named host folders to this variant, read-only; see [Attached host folders](ai-assessments.md#attached-host-folders). | default `default` | default `default` |
+| `ai-context list [--json]` \| `ai-context detach <alias>...` | List attached folders with their availability, or detach them. | default `default` | default `default` |
+| `ai-context helper start\|stop\|restart\|status` | Manage the host folder helper. | rejected | rejected |
 | `delete scan <id>\|outdated\|empty-scans\|orphaned-vulns [--dry-run] [--yes]` | Remove data from every project. | rejected | rejected |
 | `list projects\|scans [--json]` | List projects and variants, or past scans. | rejected | rejected |
 | `config get <key>\|set <key> <value>\|unset <key>\|list` | Read and write `.vulnscout/cache/config.env`. | rejected | rejected |
@@ -156,6 +159,26 @@ Direct Python deployments can use
 (or `--last-refresh` instead of `--since`).
 See [Vulnerability History](api.md#vulnerability-history) for the corresponding
 HTTP export.
+
+## Attach host folders to the AI context
+
+Agents can browse, read and search folders from the container host without
+copying files, uploading archives or restarting the container. The host command
+itself approves the selected folder for that variant and alias. First select
+a [compatible image](ai-assessments.md#attached-host-folders); the `v0.25.1`
+release does not include this feature.
+
+```bash
+./vulnscout ai-context attach -p demo -v x86 src=/work/app build=/work/build/tmp/work
+./vulnscout ai-context list -p demo -v x86
+./vulnscout ai-context detach -p demo -v x86 build
+```
+
+Agents target one folder with `file_id="mount:<alias>"`, so they can search `src`
+without scanning `build`. The first command that needs it starts an unprivileged
+helper on this host, as the current user. See
+[Attached host folders](ai-assessments.md#attached-host-folders) for the security
+model and the list, refresh, and detach actions on the AI Context page.
 
 ## Source evidence and CVE refinement
 
