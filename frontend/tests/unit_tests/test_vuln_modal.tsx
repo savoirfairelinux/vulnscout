@@ -2975,11 +2975,9 @@ describe('Vulnerability Modal', () => {
         await user.click(within(panel).getByRole('button', { name: 'Confirm and approve' }));
 
         await waitFor(() => {
-            expect(approveAiSpy).toHaveBeenCalledWith('assessment-ai-1', expect.objectContaining({
-                status: 'affected',
+            expect(approveAiSpy).toHaveBeenCalledWith('assessment-ai-1', {
                 status_notes: 'edited notes',
-                workaround: 'ai workaround',
-            }));
+            });
         });
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import type { Assessment, AssessmentTargetPair } from "../handlers/assessments";
+import { initialStatusNotes } from "../handlers/assessments";
 import type { Variant } from '../handlers/variant';
 import MessageBanner from './MessageBanner';
 import { formatPkgId } from '../helpers/pkgId';
@@ -85,11 +86,10 @@ function EditAssessment({
     const [justification, setJustification] = useState(assessment.justification || "none");
     // For non-impact statuses (fixed, affected, …) Yocto stores its notes in impact_statement.
     // Pre-fill status_notes with that value so users see it in the right field.
-    const [statusNotes, setStatusNotes] = useState(
-        assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : "")
-    );
+    const [statusNotes, setStatusNotes] = useState(initialStatusNotes(assessment));
     const [workaround, setWorkaround] = useState(assessment.workaround || "");
-    const [impact, setImpact] = useState(isImpactStatus ? (assessment.impact_statement || "") : "");
+    const initialImpact = contentOnly || isImpactStatus ? assessment.impact_statement || "" : "";
+    const [impact, setImpact] = useState(initialImpact);
     const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(
         defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : [])
     );
@@ -254,7 +254,6 @@ function EditAssessment({
 
     // Check if fields have changes compared to original assessment
     useEffect(() => {
-        const initialStatusNotes = assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : "");
         const initialVariantIds = defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []);
         const initialPackages = defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []);
         const hasSameValues = (current: string[], initial: string[]) =>
@@ -262,9 +261,9 @@ function EditAssessment({
         const hasChanges = (
             status !== assessment.status ||
             justification !== (assessment.justification || "none") ||
-            statusNotes !== initialStatusNotes ||
+            statusNotes !== initialStatusNotes(assessment) ||
             workaround !== (assessment.workaround || "") ||
-            impact !== (isImpactStatus ? (assessment.impact_statement || "") : "") ||
+            impact !== initialImpact ||
             !hasSameValues(selectedVariantIds, initialVariantIds) ||
             !hasSameValues(selectedPackages, initialPackages) ||
             (exactTargetMode && !hasSameValues(
@@ -276,7 +275,7 @@ function EditAssessment({
             !keepCurrentTimestamp
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, selectedVariantIds, selectedPackages, selectedTargetKeys, exactTargetMode, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus, defaultSelectedVariantIds, availableVariants, defaultSelectedPackages, defaultSelectedTargets, availablePackages, targetKey]);
+    }, [status, justification, statusNotes, workaround, impact, selectedVariantIds, selectedPackages, selectedTargetKeys, exactTargetMode, keepCurrentTimestamp, onFieldsChange, assessment, initialImpact, defaultSelectedVariantIds, availableVariants, defaultSelectedPackages, defaultSelectedTargets, availablePackages, targetKey]);
 
     // Auto-select single variant when availableVariants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {
@@ -341,9 +340,9 @@ function EditAssessment({
     const resetToOriginal = useCallback(() => {
         setStatus(assessment.status || "under_investigation");
         setJustification(assessment.justification || "none");
-        setStatusNotes(assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : ""));
+        setStatusNotes(initialStatusNotes(assessment));
         setWorkaround(assessment.workaround || "");
-        setImpact(isImpactStatus ? (assessment.impact_statement || "") : "");
+        setImpact(initialImpact);
         setIncludeOutdatedPackages(hasSelectedOutdatedFinding);
         setKeepCurrentTimestamp(true);
         setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
@@ -351,7 +350,7 @@ function EditAssessment({
         setSelectedTargetKeys(new Set((defaultSelectedTargets ?? []).flatMap(target =>
             target.variant_id ? [targetKey(target.variant_id, target.package)] : []
         )));
-    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, defaultSelectedTargets, availableVariants, availablePackages, hasSelectedOutdatedFinding, targetKey]);
+    }, [assessment, initialImpact, defaultSelectedVariantIds, defaultSelectedPackages, defaultSelectedTargets, availableVariants, availablePackages, hasSelectedOutdatedFinding, targetKey]);
 
     useEffect(() => {
         if (shouldClearFields) {

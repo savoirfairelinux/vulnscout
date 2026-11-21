@@ -1,4 +1,5 @@
 import EditAssessment from "./EditAssessment";
+import { initialStatusNotes } from "../handlers/assessments";
 import type { EditAssessmentData } from "./EditAssessment";
 import type { AiAssessmentEdits, Assessment } from "../handlers/assessments";
 
@@ -14,14 +15,16 @@ type Props = {
     triggerBanner?: (message: string, type: "error" | "success") => void;
 }
 
-function toAiAssessmentEdits(data: EditAssessmentData): AiAssessmentEdits {
-    return {
-        status: data.status,
-        justification: data.justification,
-        impact_statement: data.impact_statement,
-        status_notes: data.status_notes,
-        workaround: data.workaround,
-    };
+function toAiAssessmentEdits(data: EditAssessmentData, original: Assessment): AiAssessmentEdits {
+    const edits: AiAssessmentEdits = {};
+    if (data.status !== original.status) edits.status = data.status;
+    if (data.justification !== undefined && data.justification !== original.justification)
+        edits.justification = data.justification;
+    if (['not_affected', 'false_positive'].includes(data.status) && data.impact_statement !== (original.impact_statement || ""))
+        edits.impact_statement = data.impact_statement;
+    if (data.status_notes !== initialStatusNotes(original)) edits.status_notes = data.status_notes;
+    if (data.workaround !== (original.workaround || "")) edits.workaround = data.workaround;
+    return edits;
 }
 
 /** Edit the content of a pending AI assessment before approving it.
@@ -38,7 +41,7 @@ function EditAiAssessment({
     return (
         <EditAssessment
             assessment={assessment}
-            onSaveAssessment={data => onConfirm(toAiAssessmentEdits(data))}
+            onSaveAssessment={data => onConfirm(toAiAssessmentEdits(data, assessment))}
             onCancel={onCancel}
             onFieldsChange={onFieldsChange}
             triggerBanner={triggerBanner}

@@ -141,7 +141,7 @@ _APPROVAL_REQUEST_MAX_BYTES = 64 * 1024
 
 
 def _validate_content_edit(
-    existing: "DBAssessment", payload: dict[str, Any],
+    existing: "DBAssessment", payload: dict[str, Any], *, preserve_omitted: bool = False,
 ) -> "tuple[DBAssessment | None, str | None]":
     """Apply a partial content edit to a copy of *existing* and validate it.
 
@@ -153,7 +153,7 @@ def _validate_content_edit(
     if "status" in payload and isinstance(payload["status"], str):
         if not mem_assess.set_status(payload["status"]):
             return None, "Invalid status"
-        if mem_assess.status not in ["not_affected", "false_positive"]:
+        if not preserve_omitted and mem_assess.status not in ["not_affected", "false_positive"]:
             mem_assess.justification = ""
             mem_assess.impact_statement = ""
 
@@ -182,28 +182,21 @@ def _validate_content_edit(
 
 
 def _approve_row(
-    row: "DBAssessment", content: "DBAssessment | None" = None,
+    row: "DBAssessment", edits: dict[str, Any] | None = None,
 ) -> ResponseReturnValue:
     """Turn a pending AI row into a custom assessment.
 
-    When *content* is given, its validated fields replace the suggestion's in
+    When *edits* are given, only those validated fields are replaced in
     the same transaction, so the row is never left edited but still pending.
     """
     values: dict[str, Any] = {
         "origin": "custom",
         "timestamp": datetime.now(timezone.utc),
     }
-    if content is not None:
-        values.update(
-            status=content.status,
-            simplified_status=STATUS_TO_SIMPLIFIED.get(
-                content.status or "", "Pending Assessment"
-            ),
-            status_notes=content.status_notes,
-            justification=content.justification,
-            impact_statement=content.impact_statement,
-            workaround=getattr(content, "workaround", None),
-        )
+    if edits:
+        values.update(edits)
+        if "status" in edits:
+            values["simplified_status"] = STATUS_TO_SIMPLIFIED.get(edits["status"], "Pending Assessment")
     with batch_session():
         result = db.session.execute(
             db.update(DBAssessment)
@@ -1849,10 +1842,10 @@ def init_app(app: Flask) -> None:
             return {"error": "Internal error"}, 500
         if not any(field in payload for field in _CONTENT_EDIT_FIELDS):
             return _approve_row(row)
-        content, content_error = _validate_content_edit(row, payload)
+        content, content_error = _validate_content_edit(row, payload, preserve_omitted=True)
         if content is None:
             return {"error": content_error or "Invalid request data"}, 400
-        return _approve_row(row, content)
+        return _approve_row(row, {key: getattr(content, key) for key in _CONTENT_EDIT_FIELDS if key in payload})
 
     @app.route("/api/assessments/<assessment_id>/reject", methods=["POST"])
     def reject_ai_assessment(assessment_id: str) -> ResponseReturnValue:

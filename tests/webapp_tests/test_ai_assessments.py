@@ -650,17 +650,20 @@ def test_approve_with_edits_applies_content_and_promotes_atomically(client, app)
     assert any(a["id"] == aid and a["status_notes"] == "Edited message" for a in listed)
 
 
-def test_approve_with_partial_edit_keeps_other_fields(client, app):
+@pytest.mark.parametrize("status_edit", [{}, {"status": "affected"}, {"status": "fixed"}])
+def test_approve_with_partial_edit_keeps_other_fields(client, app, status_edit):
     aid = json.loads(_post_ai(
         client, status_notes="AI rationale", workaround="AI workaround",
+        impact_statement="Original impact",
     ).data)["assessment"]["id"]
 
-    resp = client.post(f"/api/assessments/{aid}/approve", json={"status_notes": "Edited message"})
+    resp = client.post(f"/api/assessments/{aid}/approve", json={**status_edit, "status_notes": "Edited message"})
 
     assert resp.status_code == 200
     stored = _stored(app, aid)
     assert stored["origin"] == "custom"
-    assert stored["status"] == "affected"
+    assert stored["status"] == status_edit.get("status", "affected")
+    assert stored["impact_statement"] == "Original impact"
     assert stored["status_notes"] == "Edited message"
     assert stored["workaround"] == "AI workaround"
 

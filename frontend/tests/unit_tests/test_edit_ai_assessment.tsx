@@ -15,7 +15,7 @@ describe('EditAiAssessment', () => {
         status: 'affected',
         simplified_status: 'Exploitable',
         justification: '',
-        impact_statement: '',
+        impact_statement: 'Original impact',
         status_notes: 'AI rationale',
         workaround: 'AI workaround',
         timestamp: '2023-01-01T00:00:00Z',
@@ -46,11 +46,7 @@ describe('EditAiAssessment', () => {
 
         expect(onConfirm).toHaveBeenCalledTimes(1);
         expect(onConfirm.mock.calls[0][0]).toEqual({
-            status: 'affected',
-            justification: undefined,
-            impact_statement: '',
             status_notes: 'Edited message',
-            workaround: 'AI workaround',
         });
     });
 
@@ -94,12 +90,7 @@ describe('EditAiAssessment', () => {
 
         await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
 
-        expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
-            status: 'not_affected',
-            justification: 'component_not_present',
-            impact_statement: 'AI impact',
-            status_notes: '',
-        }));
+        expect(onConfirm).toHaveBeenCalledWith({});
     });
 
     test('disables the actions while saving and shows the save error', async () => {

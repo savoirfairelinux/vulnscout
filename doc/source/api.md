@@ -938,8 +938,8 @@ The body is optional. Without one (or with `{}`), the suggestion is approved
 unchanged. A JSON object containing any of `status`, `status_notes`,
 `justification`, `impact_statement` and `workaround` edits the suggestion's
 content and approves it in the same transaction. Omitted fields keep the
-suggested value, and the edits are validated exactly like a content update
-(`PATCH /api/assessments/<assessment_id>`); targets cannot be changed here.
+suggested value even when `status` is supplied. To clear an optional text
+field, send an empty string explicitly. Targets cannot be changed here.
 
 **Request body (optional):**
 ```json

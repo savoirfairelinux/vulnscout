@@ -170,9 +170,15 @@ type BatchResult = {
 export type { BatchAssessmentItem, BatchResult };
 export { reconcileTargetPairs };
 
+/** Some imports store notes in the impact field for non-impact statuses. */
+export function initialStatusNotes(assessment: Assessment) {
+    const hasImpactField = ['not_affected', 'false_positive'].includes(assessment.status);
+    return assessment.status_notes || (!hasImpactField ? assessment.impact_statement || "" : "");
+}
+
 /** Content edits applied to a pending AI assessment as it is approved. */
 type AiAssessmentEdits = {
-    status: string;
+    status?: string;
     justification?: string;
     impact_statement?: string;
     status_notes?: string;

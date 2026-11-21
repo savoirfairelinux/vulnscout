@@ -1231,7 +1231,6 @@ describe('Review — AI Assessments tab', () => {
         const approveCalls = postCalls().filter(c => String(c[0]).includes('/api/assessments/ai1/approve'));
         expect(approveCalls).toHaveLength(1);
         expect(JSON.parse(String((approveCalls[0][1] as RequestInit).body))).toEqual(expect.objectContaining({
-            status: 'affected',
             status_notes: 'Edited message',
         }));
         expect(screen.queryByRole('button', { name: 'Confirm and approve' })).not.toBeInTheDocument();
