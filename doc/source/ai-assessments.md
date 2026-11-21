@@ -775,8 +775,9 @@ Pending AI assessments must be reviewed by a human before they become official.
        edited content. The message (notes, or the impact statement for
        *Not applicable* / *False positive*) cannot be empty. If the save fails,
        the editor stays open with your changes and shows the error.
-       When Notes displays an imported impact statement, editing it replaces
-       that statement rather than adding a second message to the export.
+       When Notes displays an imported impact statement, editing it moves the
+       corrected message to notes and clears the old impact statement so both
+       OpenVEX and CycloneDX include the correction exactly once.
        If someone changed the suggestion while you were editing, reload and
        review their changes before approving.
        If a refresh removes the suggestion from the vulnerability modal, your

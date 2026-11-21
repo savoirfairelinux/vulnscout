@@ -79,7 +79,8 @@ describe('EditAiAssessment', () => {
         await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
         expect(onConfirm).toHaveBeenLastCalledWith({
             expected_fingerprint: 'original',
-            impact_statement: 'Corrected message',
+            status_notes: 'Corrected message',
+            impact_statement: '',
         });
     });
 

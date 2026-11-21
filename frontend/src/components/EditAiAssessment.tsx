@@ -25,10 +25,9 @@ function toAiAssessmentEdits(data: EditAssessmentData, original: Assessment): Ai
     if (hasImpactField &&
         data.impact_statement !== (original.impact_statement || "")) edits.impact_statement = data.impact_statement;
     if (data.status_notes !== initialStatusNotes(original)) {
+        edits.status_notes = data.status_notes;
         if (!hasImpactField && !original.status_notes && original.impact_statement)
-            edits.impact_statement = data.status_notes;
-        else
-            edits.status_notes = data.status_notes;
+            edits.impact_statement = "";
     }
     if (data.workaround !== (original.workaround || "")) edits.workaround = data.workaround;
     return edits;

@@ -748,11 +748,12 @@ def test_approve_replaced_imported_message_exports_only_corrected_detail(client,
     pending = _post_ai(client, impact_statement="Original impact", status_notes="").json["assessment"]
     resp = client.post(f"/api/assessments/{pending['id']}/approve", json={
         "expected_fingerprint": pending["approval_fingerprint"],
-        "impact_statement": "Corrected message",
+        "status_notes": "Corrected message", "impact_statement": "",
     })
     assert resp.status_code == 200
     with app.app_context():
         approved = DBAssessment.get_by_id(pending["id"])
+        assert approved.to_openvex_dict()["status_notes"] == "Corrected message"
         assert approved.to_cdx_vex_dict()["analysis"]["detail"] == "Corrected message"
 
 
