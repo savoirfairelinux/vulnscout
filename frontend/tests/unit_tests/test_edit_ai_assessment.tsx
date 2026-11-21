@@ -50,6 +50,25 @@ describe('EditAiAssessment', () => {
         });
     });
 
+    test('keeps prefilled notes when their impact source is cleared', async () => {
+        const onConfirm = jest.fn();
+        render(<EditAiAssessment assessment={{ ...aiAssessment, status_notes: '' }}
+            onConfirm={onConfirm} onCancel={jest.fn()} />);
+        const user = userEvent.setup();
+        expect(notes()).toHaveValue('Original impact');
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+        expect(onConfirm).toHaveBeenLastCalledWith({});
+
+        await user.selectOptions(screen.getByRole('combobox'), 'not_affected');
+        await user.selectOptions(screen.getByDisplayValue(/No justification/i), 'component_not_present');
+        await user.clear(screen.getByPlaceholderText(/Why this vulnerability is not exploitable/i));
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+        expect(onConfirm).toHaveBeenLastCalledWith({
+            status: 'not_affected', justification: 'component_not_present',
+            impact_statement: '', status_notes: 'Original impact',
+        });
+    });
+
     test('cancel changes calls onCancel without confirming', async () => {
         const onConfirm = jest.fn();
         const onCancel = jest.fn();

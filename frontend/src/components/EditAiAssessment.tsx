@@ -22,7 +22,9 @@ function toAiAssessmentEdits(data: EditAssessmentData, original: Assessment): Ai
         edits.justification = data.justification;
     if (['not_affected', 'false_positive'].includes(data.status) && data.impact_statement !== (original.impact_statement || ""))
         edits.impact_statement = data.impact_statement;
-    if (data.status_notes !== initialStatusNotes(original)) edits.status_notes = data.status_notes;
+    // Compare against what the edited row would display without a notes override.
+    // A status or impact edit can remove the fallback that prefilled the form.
+    if (data.status_notes !== initialStatusNotes({ ...original, ...edits })) edits.status_notes = data.status_notes;
     if (data.workaround !== (original.workaround || "")) edits.workaround = data.workaround;
     return edits;
 }
