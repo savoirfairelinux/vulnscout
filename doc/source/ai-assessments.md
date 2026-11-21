@@ -668,7 +668,10 @@ to manage attachments.
   The **helper is the enforcement point**: it keeps its own alias registry in the
   host-only `VULNSCOUT_HOST_HELPER_STATE_DIR` (default `.vulnscout/host-helper`,
   outside the cache mount). Before a database write, the helper checks the folder
-  and signs a CLI approval for its attachment ID, variant, alias and path. The
+  and signs a CLI approval for its attachment ID, variant, alias, path and the
+  opened directory's device and inode. Replacing the root directory, unlike
+  editing files inside it, requires running the attach command again. Older
+  path-only approvals also require a fresh attach after upgrade. The
   database saves that proof so activation can retry after a restart without a
   second host command. If the CLI reports `activation pending`, the attachment
   was saved. Run `ai-context list` to retry and check availability. Keep the
