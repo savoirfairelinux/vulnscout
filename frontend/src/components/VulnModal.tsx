@@ -903,6 +903,7 @@ type PendingAiEditTransition =
     };
 
     const handleToggleEditing = () => {
+        if (aiEditSaving) return;
         if (isEditing && hasAiEditChanges) {
             setPendingNavigation(null);
             setPendingAiEditTransition({ kind: "exit" });
@@ -1788,6 +1789,7 @@ type PendingAiEditTransition =
             {!readOnly && (
                 <button
                     onClick={handleToggleEditing}
+                    disabled={aiEditSaving}
                     type="button"
                     className={`rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors ${isEditing ? "bg-blue-700 hover:bg-blue-800" : "bg-blue-600 hover:bg-blue-700"}`}
                     title={isEditing ? "Exit editing mode" : "Enter editing mode"}
