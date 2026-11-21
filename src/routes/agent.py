@@ -147,9 +147,13 @@ def _response(payload, status=200):
     return response
 
 
+_LOOPBACK_PUBLICATION = Path("/run/vulnscout-loopback-published")
+
+
 def _access_error():
     trusted = {"127.0.0.1", "::1"}
-    gateway = _container_gateway()
+    # Both direct folder reads and Agent turns can access host evidence.
+    gateway = _container_gateway() if _LOOPBACK_PUBLICATION.is_mount() else None
     if gateway:
         trusted.add(gateway)
         host_forward_ip = _container_host_forward_ip(gateway)
@@ -157,8 +161,14 @@ def _access_error():
             trusted.add(host_forward_ip)
     if request.remote_addr not in trusted:
         return jsonify(error="Agent chat is available only on localhost."), 403
-    if urlsplit(request.host_url).hostname not in ("127.0.0.1", "localhost", "::1"):
-        return jsonify(error="Agent chat requires a localhost host."), 403
+    host = urlsplit(request.host_url).hostname
+    if host not in ("localhost", "::1"):
+        try:
+            loopback = ipaddress.IPv4Address(host).is_loopback
+        except ipaddress.AddressValueError:
+            loopback = False
+        if not loopback:
+            return jsonify(error="Agent chat requires a localhost host."), 403
     # Reads too: the connection and queue are process-wide, and the app allows any CORS origin.
     origin = request.headers.get("Origin")
     if origin and origin.rstrip("/") != request.host_url.rstrip("/"):

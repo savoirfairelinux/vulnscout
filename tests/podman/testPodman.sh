@@ -45,6 +45,7 @@ function main() {
 
     chmod +x ./test_1_normal_operation.sh
     ./test_1_normal_operation.sh "127.0.0.1:$flask_port"
+    curl -fsS --max-time 60 "http://127.0.0.1:$flask_port/api/agent" | jq -e '.configured == true'
 
     echo "[OK, FINAL] All tests passed"
 }
@@ -85,7 +86,8 @@ function start_daemon() {
         -e "FLASK_RUN_PORT=$flask_port" \
         -e "FLASK_RUN_HOST=0.0.0.0" \
         -e "IGNORE_PARSING_ERRORS=$ignore_errors" \
-        -p "$flask_port:$flask_port" \
+        -p "127.0.0.1:$flask_port:$flask_port" \
+        --tmpfs /run/vulnscout-loopback-published:ro,size=4k \
         "$podmanimage" daemon)"
 
     echo "$container_id"

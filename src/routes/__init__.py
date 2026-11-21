@@ -19,6 +19,7 @@ from .settings import init_app as init_settings_app
 from .openapi import init_app as init_openapi_app
 from .frontpage import init_app as init_front_app
 from .context import init_app as init_context_app
+from .host_mounts import init_app as init_host_mounts_app
 from .agent import init_app as init_agent_app
 from .agent_queue import init_app as init_agent_queue_app
 
@@ -40,6 +41,7 @@ def init_app(app):
     init_config_app(app)
     init_settings_app(app)
     init_context_app(app)
+    init_host_mounts_app(app)
     init_agent_app(app)
     init_agent_queue_app(app)
     init_openapi_app(app)
