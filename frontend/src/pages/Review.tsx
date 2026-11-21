@@ -8,7 +8,6 @@ import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
-import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation, faRobot } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
@@ -1728,16 +1727,18 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                             />
                         )}
 
-                        <ToggleSwitch
-                            enabled={outdatedFilter === 'only'}
-                            setEnabled={(enabled) => setOutdatedFilter(enabled ? 'only' : 'all')}
-                            label="Outdated"
-                        />
-                        <ToggleSwitch
-                            enabled={outdatedFilter === 'hide'}
-                            setEnabled={(enabled) => setOutdatedFilter(enabled ? 'hide' : 'all')}
-                            label="Not outdated"
-                        />
+                        <label className="flex items-center gap-2 text-white">
+                            Outdated
+                            <select
+                                className="rounded bg-slate-700 px-2 py-1"
+                                value={outdatedFilter}
+                                onChange={event => setOutdatedFilter(event.target.value as OutdatedFilter)}
+                            >
+                                <option value="all">All</option>
+                                <option value="only">Outdated</option>
+                                <option value="hide">Not outdated</option>
+                            </select>
+                        </label>
                         <div className="flex items-center mx-3">
                             <div className="border-l h-8 dark:border-neutral-300"></div>
                         </div>
