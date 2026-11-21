@@ -175,6 +175,7 @@ class TestAttachDetach:
         assert "post" not in paths["/api/variants/{variant_id}/context/mounts"]
 
     def test_attach_response_survives_detach_before_activation(self, client, variant, host, helper_server, monkeypatch):
+        monkeypatch.setattr(hh, "_NAME_TO_HANDLE_AT", None)
         owner = variant.id
         original = host_mounts.helper.call
 
