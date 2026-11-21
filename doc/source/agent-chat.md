@@ -257,13 +257,23 @@ text response is not proof of persistence.
 ## AI Queue and Streaming
 
 The server keeps one AI queue per process (`agent_queue`), shared by every tab
-and CLI run. Requests run on two lanes, each with one worker thread: `action`
-(assess and review, one at a time) and `chat` (messages), so a chat never waits
-behind an action. A request also waits for the earlier requests of its own
-conversation. A failed request blocks nothing and stays listed for retry or
+and CLI run. Assessments, reviews and context imports share five `action` slots.
+Independent actions can run together. An assessment waits for an assessment or
+review on an overlapping variant/finding target; reviews of the same assessment
+and imports into the same variant also run one at a time.
+The `chat` lane runs one message, so a chat never waits
+behind an action in a different conversation. Each turn holds its lane slot,
+conversation and target reservations until session cleanup finishes.
+A failed request then blocks nothing and stays listed for retry or
 removal; **Stop** cancels a running turn's task, which ends `cancelled` with
-what it saved. When no request can run (no AI configuration, invalid
-configuration, GitHub signed out), the queue is paused with a reason; sign-in,
+what it saved. Action workers waiting on the same successful readiness check
+can each start an eligible action without repeating provider discovery.
+Chat checks readiness independently of actions. Resuming the queue or removing
+the request being checked frees waiting workers to check the next eligible
+request without waiting for the old provider call to return.
+A failed check pauses the queue only if the request still
+qualifies to run on that connection. The pause includes a reason (no AI
+configuration, invalid configuration, or GitHub signed out); sign-in,
 provider and model changes resume it.
 
 Clients mirror the queue through `GET /api/agent/queue/stream` (server-sent
