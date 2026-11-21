@@ -9,10 +9,11 @@ type Props = {
     onSave: () => void;
     saving: boolean;
     dirty: boolean;
+    disabled: boolean;
     error: string;
 };
 
-function ProjectDescriptionPanel({ projectName, value, onChange, onSave, saving, dirty, error }: Readonly<Props>) {
+function ProjectDescriptionPanel({ projectName, value, onChange, onSave, saving, dirty, disabled, error }: Readonly<Props>) {
     return (
         <section aria-labelledby="ai-project-heading" className={`${PANEL} space-y-3`}>
             <div className="flex flex-wrap items-center gap-3">
@@ -34,6 +35,7 @@ function ProjectDescriptionPanel({ projectName, value, onChange, onSave, saving,
                     id="ai-project-description"
                     className={`${TEXTAREA} min-h-[160px]`}
                     value={value}
+                    disabled={disabled}
                     onChange={e => onChange(e.target.value)}
                     aria-invalid={error ? true : undefined}
                     aria-describedby={error ? "ai-project-description-error" : undefined}

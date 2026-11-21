@@ -85,18 +85,15 @@ describe('assessment format helpers', () => {
     });
 });
 
-function Harness({ initial, onSave, fieldErrors = {} }: Readonly<{
-    initial: AssessmentFormatDraft; onSave?: (draft: AssessmentFormatDraft) => void; fieldErrors?: Record<string, string>;
+function Harness({ initial, onEdit, fieldErrors = {} }: Readonly<{
+    initial: AssessmentFormatDraft; onEdit?: (draft: AssessmentFormatDraft) => void; fieldErrors?: Record<string, string>;
 }>) {
     const [draft, setDraft] = useState(initial);
     return (
         <AssessmentFormatPanel
-            projectName="Project A"
             value={draft}
-            onChange={setDraft}
-            onSave={() => onSave?.(draft)}
+            onChange={next => { setDraft(next); onEdit?.(next); }}
             saving={false}
-            dirty={!formatDraftsEqual(draft, initial)}
             loading={false}
             disabled={false}
             fieldErrors={fieldErrors}
@@ -110,11 +107,10 @@ const order = () => within(screen.getByRole('list')).getAllByRole('listitem')
 
 describe('AssessmentFormatPanel', () => {
     test('starts on the default presentation and any edit customizes it', () => {
-        const onSave = jest.fn();
-        render(<Harness initial={DEFAULT_FORMAT_DRAFT} onSave={onSave} />);
+        const onEdit = jest.fn();
+        render(<Harness initial={DEFAULT_FORMAT_DRAFT} onEdit={onEdit} />);
         expect(screen.getByRole('note')).toHaveTextContent('Using the default presentation.');
         expect(screen.getByRole('button', { name: 'Reset to default' })).toBeDisabled();
-        expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
         expect(preview()).toHaveClass('whitespace-pre-line');
 
         fireEvent.click(screen.getByLabelText('One section per line'));
@@ -127,8 +123,7 @@ describe('AssessmentFormatPanel', () => {
             expect.stringMatching(/^Reachability: /),
             expect.stringMatching(/^Remediation: /),
         ]);
-        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-        expect(formatPayload(onSave.mock.calls[0][0])).toEqual({
+        expect(formatPayload(onEdit.mock.lastCall[0])).toEqual({
             sections: ['confidence', 'verdict', 'evidence', 'reachability', 'remediation'].map(id => ({ id, enabled: true })),
             layout: 'lines',
         });
@@ -155,8 +150,8 @@ describe('AssessmentFormatPanel', () => {
     });
 
     test('toggles and labels sections; confidence cannot be excluded', () => {
-        const onSave = jest.fn();
-        render(<Harness initial={DEFAULT_FORMAT_DRAFT} onSave={onSave} />);
+        const onEdit = jest.fn();
+        render(<Harness initial={DEFAULT_FORMAT_DRAFT} onEdit={onEdit} />);
         const confidence = screen.getByRole('checkbox', { name: 'Include Confidence' });
         expect(confidence).toBeChecked();
         expect(confidence).toBeDisabled();
@@ -168,8 +163,7 @@ describe('AssessmentFormatPanel', () => {
         expect(screen.getByRole('textbox', { name: 'Remediation label' })).toHaveAttribute('maxLength', '40');
 
         expect(preview()).toHaveTextContent('confidence level: high; Not affected; Fix: upgrade libfoo to 1.2.4 with the next release');
-        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-        expect(formatPayload(onSave.mock.calls[0][0])?.sections).toEqual([
+        expect(formatPayload(onEdit.mock.lastCall[0])?.sections).toEqual([
             { id: 'confidence', enabled: true },
             { id: 'verdict', enabled: true },
             { id: 'evidence', enabled: false },
@@ -181,6 +175,9 @@ describe('AssessmentFormatPanel', () => {
     test('style notes have a character counter and limit', () => {
         render(<Harness initial={DEFAULT_FORMAT_DRAFT} />);
         const notes = screen.getByLabelText('Style notes');
+        const sample = screen.getByRole('figure', { name: 'Sample status notes' });
+        expect(sample.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(within(sample).queryByRole('textbox')).not.toBeInTheDocument();
         expect(notes).toHaveAttribute('maxLength', '500');
         expect(screen.getByText('0/500')).toBeInTheDocument();
         fireEvent.change(notes, { target: { value: 'Plain words.' } });
@@ -189,8 +186,8 @@ describe('AssessmentFormatPanel', () => {
     });
 
     test('reset to default goes back to the default presentation', () => {
-        const onSave = jest.fn();
-        render(<Harness initial={CUSTOM} onSave={onSave} />);
+        const onEdit = jest.fn();
+        render(<Harness initial={CUSTOM} onEdit={onEdit} />);
         expect(screen.getByLabelText('One section per line')).toBeChecked();
         expect(screen.getByLabelText('Style notes')).toHaveValue('Neutral tone.');
 
@@ -200,8 +197,7 @@ describe('AssessmentFormatPanel', () => {
         expect(screen.getByLabelText('Inline (one paragraph)')).toBeChecked();
         expect(screen.getByLabelText('Style notes')).toHaveValue('');
         expect(preview()).toHaveTextContent(/confidence level: high$/);
-        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-        expect(formatPayload(onSave.mock.calls[0][0])).toBeNull();
+        expect(formatPayload(onEdit.mock.lastCall[0])).toBeNull();
     });
 
     test('shows server field errors next to their fields and lists the others', () => {

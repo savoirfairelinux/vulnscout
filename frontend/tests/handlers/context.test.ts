@@ -20,7 +20,7 @@ describe("Context project assessment format", () => {
     it("saves only the assessment format", async () => {
         mockFetch.mockResolvedValueOnce(reply(200, { project_id: 'p 1', description: 'kept', assessment_format: FORMAT }));
 
-        const saved = await Context.saveAssessmentFormat('p 1', FORMAT);
+        const saved = await Context.saveProject('p 1', { assessment_format: FORMAT });
 
         const [url, init] = mockFetch.mock.calls[0];
         expect(url).toMatch(/\/api\/projects\/p%201\/context$/);
@@ -32,7 +32,7 @@ describe("Context project assessment format", () => {
 
     it("sends null to reset to the default presentation", async () => {
         mockFetch.mockResolvedValueOnce(reply(200, { project_id: 'p1', description: null, assessment_format: null }));
-        await Context.saveAssessmentFormat('p1', null);
+        await Context.saveProject('p1', { assessment_format: null });
         expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ assessment_format: null });
     });
 
@@ -40,7 +40,7 @@ describe("Context project assessment format", () => {
         const fields = { 'assessment_format.sections[1].label': 'must be at most 40 characters' };
         mockFetch.mockResolvedValueOnce(reply(400, { error: 'invalid', fields }));
 
-        const error = await Context.saveAssessmentFormat('p1', FORMAT).catch((e: unknown) => e);
+        const error = await Context.saveProject('p1', { assessment_format: FORMAT }).catch((e: unknown) => e);
 
         expect(error).toBeInstanceOf(ContextSaveError);
         expect((error as ContextSaveError).status).toBe(400);
@@ -50,12 +50,12 @@ describe("Context project assessment format", () => {
 
     it("falls back to a status message when the error reply is not JSON", async () => {
         mockFetch.mockResolvedValueOnce({ ok: false, status: 502, json: async () => { throw new Error('html'); } } as unknown as Response);
-        await expect(Context.saveAssessmentFormat('p1', null)).rejects.toThrow('Failed to save the assessment format (502)');
+        await expect(Context.saveProject('p1', { assessment_format: null })).rejects.toThrow('Failed to save project context (502)');
     });
 
     it("the project description save leaves the format out of the request", async () => {
         mockFetch.mockResolvedValueOnce(reply(200, { project_id: 'p1', description: 'd', assessment_format: FORMAT }));
-        const saved = await Context.saveProject('p1', 'd');
+        const saved = await Context.saveProject('p1', { description: 'd' });
         expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ description: 'd' });
         expect(saved.assessment_format).toEqual(FORMAT);
     });

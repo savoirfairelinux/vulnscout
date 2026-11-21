@@ -310,34 +310,20 @@ class Context {
         return jsonOrThrow<ProjectContext>(res, 'Failed to load project context');
     }
 
-    static async saveProject(projectId: string, description: string | null): Promise<ProjectContext> {
+    static async saveProject(projectId: string, changes: Partial<Omit<ProjectContext, 'project_id'>>): Promise<ProjectContext> {
         const res = await fetch(
             `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/context`,
             {
                 mode: 'cors',
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description }),
-            }
-        );
-        return jsonOrThrow<ProjectContext>(res, 'Failed to save project context');
-    }
-
-    /** Saves only the assessment format (null resets it); the description is left as stored. */
-    static async saveAssessmentFormat(projectId: string, format: AssessmentFormat | null): Promise<ProjectContext> {
-        const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/projects/${encodeURIComponent(projectId)}/context`,
-            {
-                mode: 'cors',
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ assessment_format: format }),
+                body: JSON.stringify(changes),
             }
         );
         if (!res.ok) {
             const data = await errorReply(res);
             throw new ContextSaveError(
-                data.error || `Failed to save the assessment format (${res.status})`,
+                data.error || `Failed to save project context (${res.status})`,
                 res.status,
                 data.fields ?? {},
             );

@@ -82,9 +82,11 @@ HTTPS (TLS 1.2+) [confirm: certificate pinning]
 ```
 ````
 
-## Project description (sidebar item)
+## Project scope
 
-**Project description** (required to save): what the product is, who uses it,
+### Project description
+
+**Project description** (cannot be blank when edited): what the product is, who uses it,
 where it is deployed and what matters most if it is compromised. It applies to
 every variant. Example:
 
@@ -94,7 +96,7 @@ Operated by plant technicians; updated over the air. Safety-relevant: it can sen
 write commands to PLCs.
 ```
 
-## Assessment format (sidebar item)
+### Assessment format
 
 Optional, project-level: how AI assessment notes are presented. **Sections**
 (Confidence, Verdict, Evidence, Reachability, Remediation) can be reordered with
