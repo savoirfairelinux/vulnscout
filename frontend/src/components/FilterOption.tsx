@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCaretDown } from '@fortawesome/free-solid-svg-icons';
 
@@ -27,6 +27,7 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
     const [maxHeight, setMaxHeight] = useState<string>('500px'); 
     const [optionSearch, setOptionSearch] = useState('');
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const selectedSet = useMemo(() => new Set(selected), [selected]);
     const isActive = selected.length > 0 || showCustomFilterComponent;
 
     const displayLabel = (value: string) => formatLabel ? formatLabel(value) : value;
@@ -40,7 +41,7 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
         : options;
 
     const toggleOption = (value: string) => {
-        if (selected.includes(value)) {
+        if (selectedSet.has(value)) {
             setSelected(selected.filter(item => item !== value));
         } else {
             setSelected([...selected, value]);
@@ -132,7 +133,7 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
                             <label key={option} className="flex items-center space-x-2">
                                 <input
                                     type="checkbox"
-                                    checked={selected.includes(option)}
+                                    checked={selectedSet.has(option)}
                                     onChange={() => {
                                         toggleOption(option)
                                         setShowCustomFilterComponent?.(false); // Uncheck custom when any option is toggled

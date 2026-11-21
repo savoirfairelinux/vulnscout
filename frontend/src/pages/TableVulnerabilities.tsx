@@ -426,6 +426,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
     const [selectedStatuses, setSelectedStatuses] = useLocalStorageState<string[]>(`${preferenceKey}.statuses`, [], { skipInitialRead: isFilterJump });
     const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, [], { skipInitialRead: isFilterJump });
     const [selectedPackages, setSelectedPackages] = useLocalStorageState<string[]>(`${preferenceKey}.packages`, [], { skipInitialRead: isFilterJump });
+    const selectedPackageSet = useMemo(() => new Set(selectedPackages), [selectedPackages]);
     const [publishedDateFilterType, setPublishedDateFilterType] = useLocalStorageState(`${preferenceKey}.publishedDate.type`, '', { skipInitialRead: isFilterJump });
     const [publishedDateValue, setPublishedDateValue] = useLocalStorageState(`${preferenceKey}.publishedDate.value`, '', { skipInitialRead: isFilterJump });
     const [publishedDaysValue, setPublishedDaysValue] = useLocalStorageState(`${preferenceKey}.publishedDate.days`, '', { skipInitialRead: isFilterJump });
@@ -1261,7 +1262,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
                 if (!selectedStatuses.some(status => statusKeys.has(status))) return false;
             }
             if (selectedSources.length && !selectedSources.some(src => el.found_by.includes(src))) return false;
-            if (selectedPackages.length && !selectedPackages.some(pkg => el.packages_current.includes(pkg))) return false;
+            if (selectedPackageSet.size && !el.packages_current.some(pkg => selectedPackageSet.has(pkg))) return false;
 
             // Published date filter
             if (publishedDateFilterType && el.published) {
@@ -1353,7 +1354,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
 
             return true;
         });
-    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackages, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
+    }, [vulnerabilities, filterVulnerabilityIds, selectedSeverities, selectedStatuses, selectedSources, selectedPackageSet, publishedDateFilterType, publishedDateValue, publishedDaysValue, publishedDateFrom, publishedDateTo, showCustomSeverityFilter, severityRange, showCustomEpssFilter, epssRange, selectedAttackVectors, selectedFirstScanDates, aiSuggestionFilter, aiSuggestionVulnIds]);
 
     const searchableData = useMemo(() => dataToDisplay.map(vuln => ({
         ...vuln,
