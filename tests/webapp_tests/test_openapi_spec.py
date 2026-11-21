@@ -331,6 +331,16 @@ def _assert_payload_matches(spec, schema, payload):
     OAS30Validator({"allOf": [schema], "components": spec["components"]}).validate(payload)
 
 
+def test_approval_body_accepts_rationale_but_not_status(client):
+    spec = client.get("/api/openapi").get_json()
+    schema = spec["paths"]["/api/assessments/{assessment_id}/approve"]["post"][
+        "requestBody"
+    ]["content"]["application/json"]["schema"]
+    _assert_payload_matches(spec, schema, {"status_notes": "Reviewed", "expected_fingerprint": "abc"})
+    with pytest.raises(ValidationError, match="status"):
+        _assert_payload_matches(spec, schema, {"status": "affected"})
+
+
 def test_review_body_requires_verdict_rationale_target_and_fingerprint(client):
     spec = client.get("/api/openapi").get_json()
     schema = spec["paths"]["/api/assessments/{assessment_id}/review"]["put"][

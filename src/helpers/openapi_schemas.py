@@ -201,7 +201,8 @@ SCHEMAS: dict[str, Any] = {
         "timestamp": _DATE, "last_update": _STRING,
         **{name: _STRING for name in ("status", "status_notes", "justification", "impact_statement", "workaround")},
         "responses": _STRINGS, "outdated": _BOOL, "context_outdated": _BOOL,
-        "assessment_fingerprint": _STRING, "project_id": _NULL_UUID, "has_review": _BOOL,
+        "assessment_fingerprint": _STRING, "approval_fingerprint": _STRING,
+        "project_id": _NULL_UUID, "has_review": _BOOL,
         "vuln_texts": _array(_ref("VulnerabilityText")),
         "reviews": _array(_ref("AssessmentReviewRecord")),
         "target_reviews": _array(_object({
@@ -257,6 +258,14 @@ SCHEMAS: dict[str, Any] = {
         **_VEX_FIELDS, "timestamp": _STRING, "update_timestamp": _BOOL,
         "allowed_variant_ids": _array(_UUID, minItems=1),
     }, description="Partial content update; targeting is changed through reconcile."),
+    "AssessmentApproval": _object({
+        **{name: _VEX_FIELDS[name]
+           for name in ("status_notes", "justification", "impact_statement", "workaround")},
+        "expected_fingerprint": _STRING,
+    }, additionalProperties=False, description=(
+        "Optional rationale edits applied in the same transaction as approval. "
+        "Status cannot be supplied, even if unchanged. Omit every field to approve unchanged."
+    )),
     "AssessmentBatch": _object({
         "assessments": _array(_object({
             **_VEX_FIELDS, "vuln_id": _VULN_ID, "packages": _array(_PACKAGE_ID, minItems=1),

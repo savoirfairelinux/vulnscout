@@ -981,6 +981,29 @@ Converts a pending AI assessment to `custom` origin.
 POST /api/assessments/<assessment_id>/approve
 ```
 
+The body is optional. Without one (or with `{}`), the suggestion is approved
+unchanged. You may amend `status_notes`, `justification`, `impact_statement`
+and `workaround` in the same transaction as approval. Omitted fields keep
+their suggested values. To clear an optional text field, send an empty
+string. For `not_affected`, the edited result must have a valid justification
+or a nonblank impact statement. The suggested verdict and targets are fixed:
+do not send `status`, even if it matches the stored verdict.
+
+Editors send the pending suggestion's `approval_fingerprint` as
+`expected_fingerprint`, including when confirming without edits. If any content
+field or variant/finding target pair changed since the user opened the editor,
+approval returns `409` and leaves the newer suggestion pending. The
+precondition is optional for existing clients.
+
+**Request body (optional):**
+```json
+{
+  "justification": "component_not_present",
+  "impact_statement": "The vulnerable module is not built.",
+  "status_notes": "Reviewed and edited before approval."
+}
+```
+
 **Response:**
 ```json
 {
@@ -989,12 +1012,17 @@ POST /api/assessments/<assessment_id>/approve
 }
 ```
 
-`400` if the assessment is not a pending AI assessment. `404` if it does not
-exist.
+`400` if the assessment is not a pending AI assessment, the JSON body is not
+an object, or the edits are invalid (including a supplied `status` field).
+Invalid edits leave the pending suggestion unchanged.
+`404` if it does not exist. `409` if another write changes the content
+being validated, the fingerprinted targets change, or the row is no longer
+pending at promotion time; reload the assessment and review it again.
 
 ### Reject an AI Assessment
 
-Deletes a pending AI assessment.
+Deletes a pending AI assessment. Approval and rejection are serialized for the
+same assessment: a rejection cannot remove a row that has just been approved.
 
 ```
 POST /api/assessments/<assessment_id>/reject

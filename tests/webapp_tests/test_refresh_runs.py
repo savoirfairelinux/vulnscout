@@ -13,8 +13,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from flask import Flask
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import event, text
 
 from src.bin.webapp import create_app
 from src.controllers.job_context import CancelledError, JobContext
@@ -58,33 +57,6 @@ def _change(run_id, score, *, source="epss"):
         record.epss_score = score
         target_result(source, CVE)
         db.session.commit()
-
-
-@pytest.fixture()
-def postgres_app(postgres_uri):
-    engine = create_engine(postgres_uri)
-    schema = f"vulnscout_refresh_{uuid.uuid4().hex}"
-    with engine.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    application = Flask(__name__)
-    application.config.update(
-        SQLALCHEMY_DATABASE_URI=postgres_uri,
-        SQLALCHEMY_ENGINE_OPTIONS={
-            "connect_args": {"options": f"-csearch_path={schema} -cstatement_timeout=10000"},
-        },
-    )
-    db.init_app(application)
-    try:
-        with application.app_context():
-            db.create_all()
-        yield application
-    finally:
-        with application.app_context():
-            db.session.remove()
-            db.engine.dispose()
-        with engine.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        engine.dispose()
 
 
 @pytest.mark.parametrize("length", [39, 128])

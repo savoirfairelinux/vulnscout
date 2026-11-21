@@ -5,13 +5,14 @@ import gzip
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Literal, overload
+from typing import Any, Literal, cast, overload
 from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding
+from ..models.assessment import APPROVAL_CONTENT_FIELDS, APPROVAL_EDIT_FIELDS
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
-from ..extensions import db, batch_session
+from ..extensions import db, batch_session, hold_write_lock
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
@@ -44,7 +45,9 @@ from ._assessment_write import (
 
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
+from sqlalchemy.engine import CursorResult
+from werkzeug.exceptions import RequestEntityTooLarge
 
 _SCANNER_AUTHORS = {
     "nvd",
@@ -72,6 +75,14 @@ def _is_scanner_author(author: str | None) -> bool:
     return False
 
 
+def _lock_target_writes() -> None:
+    hold_write_lock()
+    if db.session.get_bind().dialect.name == "sqlite":
+        # SQLite ignores FOR UPDATE. Reserve its database writer before
+        # reading membership, including against writers in other processes.
+        db.session.execute(db.update(DBAssessment).where(false()).values(origin=DBAssessment.origin))
+
+
 def _replace_pending_ai(
     vuln_id: str, targets: list[tuple[UUID, UUID]]
 ) -> list[dict[str, Any]]:
@@ -90,9 +101,11 @@ def _replace_pending_ai(
     """
     replacing = set(targets)
     replaced: list[dict[str, Any]] = []
-    for row in DBAssessment.get_by_vulnerability(vuln_id):
-        if row.origin != "ai":
-            continue
+    _lock_target_writes()
+    pending = db.select(DBAssessment).join(AssessmentTarget).join(Finding).where(
+        Finding.vulnerability_id == vuln_id.upper(), DBAssessment.origin == "ai",
+    ).order_by(DBAssessment.id).with_for_update(of=DBAssessment).execution_options(populate_existing=True)
+    for row in db.session.scalars(pending).unique().all():
         overlap = [t for t in row.target_rows if (t.variant_id, t.finding_id) in replacing]
         if not overlap:
             continue
@@ -125,7 +138,7 @@ def _assessments_for_vulnerability(
 def _resolve_pending_ai_row(
     assessment_id: str,
 ) -> "tuple[DBAssessment | None, ResponseReturnValue | None]":
-    """Resolve the pending AI row an approve/reject request applies to."""
+    """Read the suggestion to validate before the conditional approval write."""
     existing = DBAssessment.get_by_id(assessment_id)
     if existing is None:
         return None, ({"error": "Assessment not found"}, 404)
@@ -134,19 +147,105 @@ def _resolve_pending_ai_row(
     return existing, None
 
 
-def _approve_row(row: "DBAssessment") -> ResponseReturnValue:
-    """Turn a pending AI row into a custom assessment."""
+_APPROVAL_REQUEST_MAX_BYTES = 64 * 1024
+
+
+def _validate_content_edit(
+    existing: "DBAssessment", payload: dict[str, Any], *, preserve_omitted: bool = False,
+) -> "tuple[DBAssessment | None, str | None]":
+    """Apply a partial content edit to a copy of *existing* and validate it.
+
+    Returns the validated in-memory assessment, or an error message. The
+    stored row is never modified, so a rejected edit leaves it untouched.
+    """
+    mem_assess = DBAssessment.from_dict(existing.to_dict())
+
+    if "status" in payload and isinstance(payload["status"], str):
+        if not mem_assess.set_status(payload["status"]):
+            return None, "Invalid status"
+        if mem_assess.status not in ["not_affected", "false_positive"]:
+            mem_assess.justification = ""
+            mem_assess.impact_statement = ""
+
+    if "status_notes" in payload and isinstance(payload["status_notes"], str):
+        mem_assess.set_status_notes(payload["status_notes"], False)
+
+    if "justification" in payload and isinstance(payload["justification"], str):
+        if payload["justification"] == "":
+            mem_assess.justification = ""
+        elif not mem_assess.set_justification(payload["justification"]):
+            return None, "Invalid justification"
+    elif not preserve_omitted and mem_assess.is_justification_required():
+        return None, "Justification required"
+
+    if "impact_statement" in payload and isinstance(payload["impact_statement"], str):
+        if payload["impact_statement"] == "":
+            mem_assess.impact_statement = ""
+        else:
+            mem_assess.set_not_affected_reason(payload["impact_statement"], False)
+
+    if "workaround" in payload and isinstance(payload["workaround"], str):
+        mem_assess.set_workaround(payload["workaround"])
+
+    if (preserve_omitted and mem_assess.is_justification_required()
+            and not mem_assess.get_justification_openvex() and not (mem_assess.impact_statement or "").strip()):
+        return None, "Justification required"
+
+    return mem_assess, None
+
+
+def _approve_row(
+    row: "DBAssessment", payload: dict[str, Any],
+) -> ResponseReturnValue:
+    """Turn a pending AI row into a custom assessment.
+
+    Apply edits only if the validated snapshot still matches.
+    """
+    values: dict[str, Any] = {
+        "origin": "custom",
+        "timestamp": datetime.now(timezone.utc),
+    }
+    condition = (DBAssessment.id == row.id) & (DBAssessment.origin == "ai")
+    conflict = "Assessment changed before approval; reload and review it again"
+    expected_targets = None
+    if "expected_fingerprint" in payload:
+        if payload["expected_fingerprint"] != row.approval_fingerprint():
+            return {"error": conflict}, 409
+        expected_targets = {(t.variant_id, t.finding_id) for t in row.target_rows}
+    has_edits = any(key in payload for key in APPROVAL_EDIT_FIELDS)
+    if has_edits or "expected_fingerprint" in payload:
+        # The omitted fields used during validation must still match at write time.
+        for field in APPROVAL_CONTENT_FIELDS:
+            condition &= getattr(DBAssessment, field) == getattr(row, field)
+    if has_edits:
+        content, error = _validate_content_edit(row, payload, preserve_omitted=True)
+        if content is None:
+            return {"error": error or "Invalid request data"}, 400
+        values.update({key: getattr(content, key) for key in APPROVAL_EDIT_FIELDS if key in payload})
     with batch_session():
-        row.update(origin="custom")
+        if expected_targets is not None:
+            # Target writers take the same parent lock before changing membership.
+            _lock_target_writes()
+            if db.session.scalar(db.select(DBAssessment.id).where(condition).with_for_update()) is None:
+                return {"error": conflict}, 409
+            pairs = db.session.execute(
+                db.select(AssessmentTarget.variant_id, AssessmentTarget.finding_id)
+                .where(AssessmentTarget.assessment_id == row.id).with_for_update()
+            ).tuples()
+            if set(pairs) != expected_targets:
+                return {"error": conflict}, 409
+        else:
+            hold_write_lock()
+        result = db.session.execute(
+            db.update(DBAssessment)
+            .where(condition)
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if cast(CursorResult[Any], result).rowcount != 1:
+            return {"error": conflict}, 409
+        db.session.refresh(row)
     return {"status": "success", "assessments": [row.to_dict()]}, 200
-
-
-def _reject_row(row: "DBAssessment") -> ResponseReturnValue:
-    """Delete a rejected pending AI row."""
-    deleted_id = str(row.id)
-    with batch_session():
-        row.delete()
-    return {"status": "success", "deleted": [deleted_id]}, 200
 
 
 def _parse_batch_record_ids() -> tuple[list[UUID] | None, str | None]:
@@ -1167,17 +1266,21 @@ def init_app(app: Flask) -> None:
         if req.vuln_id.upper() != (existing.vuln_id or "").upper():
             return {"error": "vuln_id does not match this assessment's vulnerability"}, 400
 
-        existing_by_key = index_targets(existing)
-        targets, target_err = resolve_targets(req, existing_by_key)
-        if target_err:
-            return target_err, 400
-
-        deletion_err = validate_deletions(existing, targets)
-        if deletion_err:
-            return deletion_err, 400
-
         try:
             with batch_session():
+                _lock_target_writes()
+                existing = db.session.scalar(
+                    db.select(DBAssessment).where(DBAssessment.id == assessment_uuid).with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if existing is None:
+                    return {"error": "Assessment not found"}, 404
+                targets, target_err = resolve_targets(req, index_targets(existing))
+                if target_err:
+                    return target_err, 400
+                deletion_err = validate_deletions(existing, targets)
+                if deletion_err:
+                    return deletion_err, 400
                 result = apply_reconcile(req, existing, targets)
         except GroupInvariantError as e:
             return {"error": str(e)}, 400
@@ -1677,35 +1780,9 @@ def init_app(app: Flask) -> None:
         # explicitly approves/rejects it via the dedicated endpoints.
         new_origin = "ai" if existing.origin == "ai" else "custom"
 
-        # Reconstruct Assessment DTO for validation
-        mem_assess = DBAssessment.from_dict(existing.to_dict())
-
-        if "status" in payload_data and isinstance(payload_data["status"], str):
-            if not mem_assess.set_status(payload_data["status"]):
-                return {"error": "Invalid status"}, 400
-            if mem_assess.status not in ["not_affected", "false_positive"]:
-                mem_assess.justification = ""
-                mem_assess.impact_statement = ""
-
-        if "status_notes" in payload_data and isinstance(payload_data["status_notes"], str):
-            mem_assess.set_status_notes(payload_data["status_notes"], False)
-
-        if "justification" in payload_data and isinstance(payload_data["justification"], str):
-            if payload_data["justification"] == "":
-                mem_assess.justification = ""
-            elif not mem_assess.set_justification(payload_data["justification"]):
-                return {"error": "Invalid justification"}, 400
-        elif mem_assess.is_justification_required():
-            return {"error": "Justification required"}, 400
-
-        if "impact_statement" in payload_data and isinstance(payload_data["impact_statement"], str):
-            if payload_data["impact_statement"] == "":
-                mem_assess.impact_statement = ""
-            else:
-                mem_assess.set_not_affected_reason(payload_data["impact_statement"], False)
-
-        if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
-            mem_assess.set_workaround(payload_data["workaround"])
+        mem_assess, content_error = _validate_content_edit(existing, payload_data)
+        if mem_assess is None:
+            return {"error": content_error or "Invalid request data"}, 400
 
         update_timestamp = payload_data.get("update_timestamp", True)
         if not isinstance(update_timestamp, bool):
@@ -1763,17 +1840,46 @@ def init_app(app: Flask) -> None:
     def approve_ai_assessment(assessment_id: str) -> ResponseReturnValue:
         """Approve a pending AI assessment, converting it to custom.
 
+        An optional body edits the suggestion's rationale in the same
+        transaction. Approval cannot change the suggested status.
+
         OpenAPI:
-        response 200 Assessment Approved assessment.
-        response 400 Error Not a pending AI assessment.
+        body AssessmentApproval optional Rationale edits applied before approval.
+        response 200 AssessmentWriteResult Approved assessment.
+        response 400 Error Not a pending AI assessment, or invalid content edits.
         response 404 Error Assessment not found.
+        response 409 Error Assessment changed before approval.
+        response 413 Error Request body exceeds the approval size limit.
         """
+        # Only a JSON body carries edits; any other body is ignored as before.
+        payload: Any = {}
+        current_limit = request.max_content_length
+        limit = min(
+            current_limit, _APPROVAL_REQUEST_MAX_BYTES
+        ) if current_limit is not None else _APPROVAL_REQUEST_MAX_BYTES
+        # Werkzeug can stop a terminated, lengthless stream at its limit
+        # without signalling overflow. Read at most one extra byte to tell.
+        request.max_content_length = limit + 1 if request.content_length is None else limit
+        try:
+            body = request.get_data(cache=True) if request.is_json else b""
+            if len(body) > limit:
+                raise RequestEntityTooLarge()
+            if body:
+                payload = request.get_json(silent=True)
+                if not isinstance(payload, dict):
+                    return {"error": "Invalid request data"}, 400
+        except RequestEntityTooLarge:
+            return {"error": "Request body exceeds the approval size limit"}, 413
+        if payload.keys() - (*APPROVAL_EDIT_FIELDS, "expected_fingerprint"):
+            return {"error": "Approval accepts only rationale fields and expected_fingerprint"}, 400
+        if any(not isinstance(value, str) for value in payload.values()):
+            return {"error": "Assessment edit fields must be strings"}, 400
         row, err = _resolve_pending_ai_row(assessment_id)
         if err is not None:
             return err
         if row is None:
             return {"error": "Internal error"}, 500
-        return _approve_row(row)
+        return _approve_row(row, payload)
 
     @app.route("/api/assessments/<assessment_id>/reject", methods=["POST"])
     def reject_ai_assessment(assessment_id: str) -> ResponseReturnValue:
@@ -1784,12 +1890,24 @@ def init_app(app: Flask) -> None:
         response 400 Error Not a pending AI assessment.
         response 404 Error Assessment not found.
         """
-        row, err = _resolve_pending_ai_row(assessment_id)
-        if err is not None:
-            return err
-        if row is None:
-            return {"error": "Internal error"}, 500
-        return _reject_row(row)
+        try:
+            aid = UUID(assessment_id)
+        except ValueError:
+            return {"error": "Assessment not found"}, 404
+        session = db.session()
+        with session.begin():
+            # Match approval's parent-first ordering before cascading to targets.
+            _lock_target_writes()
+            row = session.scalar(
+                db.select(DBAssessment).where(DBAssessment.id == aid).with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                return {"error": "Assessment not found"}, 404
+            if row.origin != "ai":
+                return {"error": "Not a pending AI assessment"}, 400
+            session.delete(row)
+        return {"status": "success", "deleted": [str(aid)]}, 200
 
 
 def payload_to_assessment(
