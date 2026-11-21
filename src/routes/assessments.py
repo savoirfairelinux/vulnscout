@@ -1821,11 +1821,17 @@ def init_app(app: Flask) -> None:
         # Only a JSON body carries edits; any other body is ignored as before.
         payload: Any = {}
         current_limit = request.max_content_length
-        request.max_content_length = min(
+        limit = min(
             current_limit, _APPROVAL_REQUEST_MAX_BYTES
         ) if current_limit is not None else _APPROVAL_REQUEST_MAX_BYTES
+        # Werkzeug can stop a terminated, lengthless stream at its limit
+        # without signalling overflow. Read at most one extra byte to tell.
+        request.max_content_length = limit + 1 if request.content_length is None else limit
         try:
-            if request.is_json and request.get_data(cache=True):
+            body = request.get_data(cache=True) if request.is_json else b""
+            if len(body) > limit:
+                raise RequestEntityTooLarge()
+            if body:
                 payload = request.get_json(silent=True)
                 if not isinstance(payload, dict):
                     return {"error": "Invalid request data"}, 400

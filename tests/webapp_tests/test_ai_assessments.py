@@ -775,25 +775,22 @@ def test_approve_rejects_non_object_or_malformed_body(client, app):
 
 
 @pytest.mark.parametrize("without_length", [False, True])
-def test_approve_rejects_oversized_request_body(client, app, without_length):
+@pytest.mark.parametrize("extra_byte", [False, True])
+def test_approve_request_body_limit(client, app, without_length, extra_byte):
     aid = _get_first_ai_id(client)
-    payload = json.dumps({"status_notes": "x" * (64 * 1024)}).encode()
+    payload = b"{}".ljust(64 * 1024 + int(extra_byte))
     url = f"/api/assessments/{aid}/approve"
     if without_length:
-        resp = client.open(
-            url,
-            method="POST",
-            input_stream=BytesIO(payload),
-            content_type="application/json",
-            environ_overrides={
-                "wsgi.input_terminated": True,
-            },
-        )
+        req = app.test_request_context(url, method="POST", content_type="application/json").request
+        req.environ.pop("CONTENT_LENGTH", None)
+        req.environ.update({"wsgi.input": BytesIO(payload), "wsgi.input_terminated": True})
+        resp = client.open(req)
+        assert resp.request.content_length is None
     else:
         resp = client.post(url, data=payload, content_type="application/json")
 
-    assert resp.status_code == 413
-    assert _stored(app, aid)["origin"] == "ai"
+    assert resp.status_code == (413 if extra_byte else 200)
+    assert _stored(app, aid)["origin"] == ("ai" if extra_byte else "custom")
 
 
 def test_approve_ignores_non_json_body(client, app):
