@@ -2193,7 +2193,8 @@ POST /api/agent/conversations/main/reset
 ```
 
 The server runs AI requests (assess and review actions, chat messages) from one process-wide queue shared by
-every local client, the web UI and the CLI. Actions and messages run on two lanes, one request at a time per lane;
+every local client, the web UI and the CLI. The action lane runs up to five reviews of distinct assessments
+or one other action. The chat lane runs one message independently;
 the requests of one conversation run in order. These routes have the same localhost/origin checks and
 `Cache-Control: no-store` as the other agent routes, but return `503` until the import finishes, except the stream.
 The queue is process-local: a restart forgets it.
