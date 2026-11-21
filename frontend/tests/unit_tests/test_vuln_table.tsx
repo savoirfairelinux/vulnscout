@@ -3290,9 +3290,10 @@ describe('Status helper, banner close, package filter, modal navigation, first s
     });
 
     test('packages filter select all / deselect all toggles every package', async () => {
+        const historicalVulnerability = { ...vulnerabilities[0], id: 'CVE-2020-9876', packages_current: [] };
         render(
             <TableVulnerabilities
-                vulnerabilities={vulnerabilities}
+                vulnerabilities={[...vulnerabilities, historicalVulnerability]}
                 appendAssessment={() => {}}
                 appendCVSS={() => null}
                 patchVuln={() => {}}
@@ -3315,6 +3316,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         await waitFor(() => {
             expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
             expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+            expect(screen.queryByRole('cell', {name: historicalVulnerability.id})).not.toBeInTheDocument();
         });
 
         // Clearing the selection removes the Packages filter entirely
@@ -3322,7 +3324,7 @@ describe('Status helper, banner close, package filter, modal navigation, first s
         packageCheckboxes().forEach(checkbox => expect(checkbox).not.toBeChecked());
         expect(screen.getByRole('button', { name: 'Select all' })).toBeInTheDocument();
         await waitFor(() => {
-            expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+            expect(screen.getByRole('cell', {name: historicalVulnerability.id})).toBeInTheDocument();
         });
     });
 
