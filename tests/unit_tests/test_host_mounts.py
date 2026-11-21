@@ -237,6 +237,22 @@ class TestSourceBrowsing:
         read = _source(client, variant, "mount:build", operation="read", path="log.txt").get_json()
         assert read["content"] == "needle in build\n" and read["original_name"] == "Host folder build"
 
+    def test_folder_scopes_host_folder_browsing(self, client, variant, host, helper_server):
+        _attach(client, variant, "src", host["app"])
+        listing = _source(client, variant, "mount:src", folder="src", pattern="*.c").get_json()
+        assert [f["path"] for f in listing["files"]] == ["src/main.c"]
+        search = _source(client, variant, "mount:src", operation="search", query="needle", folder="src").get_json()
+        assert [match["path"] for match in search["matches"]] == ["src/main.c"]
+        for folder in ("../outside", "/etc", ".git"):
+            assert _source(client, variant, "mount:src", folder=folder).status_code in (400, 404)
+        assert _source(client, variant, "mount:src", folder="x" * 1025).status_code == 400
+
+    def test_folder_is_rejected_for_non_host_sources(self, app):
+        from src.routes.context import _browse_reference
+        with app.test_request_context("/?folder=src"):
+            body, status = _browse_reference("/nonexistent", "ref.zip", "codebase reference")
+        assert status == 400 and "host folders" in body["error"]
+
     def test_merged_context_lists_mounts(self, client, variant, host, helper_server):
         _attach(client, variant, "src", host["app"])
         body = client.get("/api/context", query_string={

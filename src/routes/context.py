@@ -160,6 +160,8 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
         pattern = request.args.get("pattern", "*")
         if len(pattern) > 512:
             raise ValueError("File pattern must be at most 512 characters.")
+        if request.args.get("folder"):
+            raise ValueError("folder is only supported for attached host folders (file_id=mount:<alias>).")
         with ExitStack() as stack:
             reference: CodebaseReference
             if directory:
@@ -213,9 +215,12 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
             raise ValueError("File pattern must be at most 512 characters.")
         if operation in ("list", "search"):
             validate_mount_pattern(pattern)
+        folder = request.args.get("folder", "")
+        if len(folder) > 1024:
+            raise ValueError("folder must be at most 1024 characters.")
         params: dict
         if operation == "list":
-            params = {"pattern": pattern, "offset": _integer("offset", 0, 0, MAX_ENTRIES),
+            params = {"pattern": pattern, "folder": folder, "offset": _integer("offset", 0, 0, MAX_ENTRIES),
                       "limit": _integer("limit", 200, 1, 200)}
         elif operation == "read":
             params = {"path": request.args.get("path", ""),
@@ -225,7 +230,8 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
             query = request.args.get("query", "")
             if not query or len(query) > 200:
                 raise ValueError("Search query must contain 1-200 characters.")
-            params = {"query": query, "pattern": pattern, "max_results": _integer("max_results", 100, 1, 100)}
+            params = {"query": query, "pattern": pattern, "folder": folder,
+                      "max_results": _integer("max_results", 100, 1, 100)}
         else:
             raise ValueError("Operation must be list, read, or search.")
         result = host_mounts.browse(variant_uuid, alias, operation, params)
@@ -874,7 +880,8 @@ def init_app(app):
         path file_id string required Upload UUID, directory for the active server directory, or mount:<alias>.
         query operation string optional list (default), read, or search.
         query path string optional Exact member path for read.
-        query pattern string optional File-path glob for list or search (default *).
+        query pattern string optional File-path glob for list or search (default *), relative to folder.
+        query folder string optional Host folders only: sub-folder scoping list or search.
         query offset integer optional List offset (default 0).
         query limit integer optional List page size, 1-200 (default 200).
         query start_line integer optional First line for read (default 1).

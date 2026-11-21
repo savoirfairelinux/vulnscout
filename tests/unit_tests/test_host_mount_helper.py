@@ -16,6 +16,19 @@ from src.helpers import host_mount_helper as hh
 VARIANT = str(uuid.uuid4())
 
 
+@pytest.fixture(autouse=True)
+def python_engine(monkeypatch):
+    """Existing tests exercise the pure-Python walk; ripgrep has its own tests below."""
+    monkeypatch.setenv(hh.ENGINE_ENV, "python")
+
+
+@pytest.fixture()
+def rg_engine(monkeypatch):
+    monkeypatch.delenv(hh.ENGINE_ENV)
+    if hh._rg_binary() is None:
+        pytest.skip("ripgrep is not installed")
+
+
 @pytest.fixture()
 def tree(tmp_path):
     root = tmp_path / "approved"
@@ -534,3 +547,70 @@ def test_literal_prefix_prunes_unrelated_folders(helper, tree, monkeypatch):
     result = ok(helper, "list", variant_id=VARIANT, alias="src", pattern="src/*")
     assert result["total"] == 1 and "visited_entries" in result and "elapsed_seconds" in result
     assert "src" in opened and "docs" not in opened
+
+
+def test_folder_scopes_list_and_search_inside_the_attachment(helper, tree):
+    (tree["app"] / "docs").mkdir()
+    (tree["app"] / "docs" / "guide.c").write_text("needle docs\n")
+    attached(helper, tree)
+    listing = ok(helper, "list", variant_id=VARIANT, alias="src", folder="src", pattern="*.c")
+    assert [item["path"] for item in listing["files"]] == ["src/main.c"]
+    found = ok(helper, "search", variant_id=VARIANT, alias="src", folder="docs/", query="needle")
+    assert [(item["path"], item["line"]) for item in found["matches"]] == [("docs/guide.c", 1)]
+    # Returned paths stay relative to the attachment, so they can be read directly.
+    assert ok(helper, "read", variant_id=VARIANT, alias="src", path="src/main.c")["total_lines"] == 3
+
+
+def test_folder_rejects_traversal_links_hidden_and_missing_folders(helper, tree):
+    attached(helper, tree)
+    for folder in ("../outside", "/etc", "src/../..", ".git", "escape_dir", "api_token.txt", "src//x"):
+        assert err(helper, "list", variant_id=VARIANT, alias="src", folder=folder)[0] in ("invalid", "not_found")
+        assert err(helper, "search", variant_id=VARIANT, alias="src", folder=folder, query="needle")[0] in (
+            "invalid", "not_found")
+    assert err(helper, "list", variant_id=VARIANT, alias="src", folder="missing")[0] == "not_found"
+    assert err(helper, "list", variant_id=VARIANT, alias="src", folder="README")[0] == "invalid"
+
+
+def test_rg_engine_lists_like_the_python_walk(helper, tree, rg_engine, monkeypatch):
+    attached(helper, tree)
+    (tree["app"] / "docs").mkdir()
+    (tree["app"] / "docs" / "guide.txt").write_text("guide\n")
+    rg_result = ok(helper, "list", variant_id=VARIANT, alias="src")
+    monkeypatch.setenv(hh.ENGINE_ENV, "python")
+    python_result = ok(helper, "list", variant_id=VARIANT, alias="src")
+    assert rg_result["engine"] == "rg" and python_result["engine"] == "python"
+    assert rg_result["files"] == python_result["files"]
+    names = [item["path"] for item in rg_result["files"]]
+    assert "docs/guide.txt" in names and "src/main.c" in names
+    assert not {"api_token.txt", "escape.c", ".git/config"} & set(names)
+
+
+def test_rg_engine_does_not_follow_a_symlinked_literal_folder(helper, tree, rg_engine):
+    attached(helper, tree)
+    result = ok(helper, "list", variant_id=VARIANT, alias="src", pattern="escape_dir/*")
+    assert result["files"] == [] and result["total"] == 0
+    result = ok(helper, "search", variant_id=VARIANT, alias="src", pattern="escape_dir/*", query="needle")
+    assert result["matches"] == []
+
+
+def test_rg_engine_searches_only_eligible_text_files(helper, tree, rg_engine):
+    attached(helper, tree)
+    result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")
+    assert result["engine"] == "rg"
+    assert [(item["path"], item["line"]) for item in result["matches"]] == [("src/main.c", 2)]
+    scoped = ok(helper, "search", variant_id=VARIANT, alias="src", folder="src", pattern="*.c", query="needle")
+    assert [item["path"] for item in scoped["matches"]] == ["src/main.c"]
+
+
+def test_rg_engine_reports_the_time_limit(helper, tree, rg_engine, monkeypatch):
+    attached(helper, tree)
+    monkeypatch.setattr(hh, "LIST_TIME_LIMIT", -1.0)
+    result = ok(helper, "list", variant_id=VARIANT, alias="src")
+    assert result["truncated"] is True and "time limit" in result["message"]
+
+
+def test_missing_rg_falls_back_to_the_python_walk(helper, tree, monkeypatch):
+    monkeypatch.setenv(hh.ENGINE_ENV, "auto")
+    monkeypatch.setattr(hh.shutil, "which", lambda name: None)
+    attached(helper, tree)
+    assert ok(helper, "list", variant_id=VARIANT, alias="src")["engine"] == "python"

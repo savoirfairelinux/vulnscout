@@ -88,6 +88,14 @@ def test_registered_tools_forward_parameters():
     with patch.object(client, "get_codebase_source", return_value={"ok": True}) as source:
         assert json.loads(server.tools["list_codebase_files"]("v1", "f1", "*.c", 10, 20)) == {"ok": True}
         source.assert_called_with("v1", "f1", {"operation": "list", "pattern": "*.c", "offset": 10, "limit": 20})
+        server.tools["list_codebase_files"]("v1", "mount:src", "*.c", 0, 5, "build/tmp")
+        source.assert_called_with("v1", "mount:src", {
+            "operation": "list", "pattern": "*.c", "offset": 0, "limit": 5, "folder": "build/tmp",
+        })
+        server.tools["search_codebase"]("v1", "mount:src", "needle", "*", 3, "build/tmp")
+        source.assert_called_with("v1", "mount:src", {
+            "operation": "search", "query": "needle", "pattern": "*", "max_results": 3, "folder": "build/tmp",
+        })
         server.tools["read_codebase_file"]("v1", "f1", "a.c", 3, 5)
         source.assert_called_with("v1", "f1", {
             "operation": "read", "path": "a.c", "start_line": 3, "max_lines": 5,

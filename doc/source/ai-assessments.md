@@ -670,11 +670,27 @@ only local operator requests, and browser requests must be same-origin.
   10 MiB as `skipped_large_files`. File patterns are limited to 512 characters
   and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
   time limits. At most 8 requests run at once.
-- Large trees (for example a Yocto build directory): the pattern is applied while
-  walking, so folders that cannot match the pattern's literal prefix are never
-  opened and non-matching files are never stat'ed. Start patterns with a literal
-  folder path (`build/tmp/work/*/curl/*`) instead of `*curl*`. Results and
-  truncation messages report `visited_entries` and `elapsed_seconds`.
+- Large trees (for example a Yocto build directory):
+  - `list_codebase_files` and `search_codebase` accept `folder`, a sub-folder of the
+    attachment (for example `build/tmp/work/<arch>/curl`). The walk starts there;
+    `pattern` is relative to `folder`, while returned paths stay relative to the
+    attached folder, so they can be passed to `read_codebase_file` unchanged.
+    `folder` must be a plain relative path: `..`, absolute paths, hidden or
+    sensitive names and links are rejected, and every component is opened without
+    following links. It is only valid for host folders.
+  - Without `folder`, start `pattern` with a literal path
+    (`build/tmp/work/*/curl/*`) instead of `*curl*`: folders that cannot match the
+    literal prefix are never opened and non-matching files are never stat'ed.
+  - When `rg` (ripgrep) is on the helper host's `PATH`, the helper uses it as a
+    fast parallel enumerator (and as a pre-filter for content search). It runs
+    without a shell, with a fixed argument list, no config file, no link
+    following and no ignore files; every path it reports is re-validated by the
+    helper, so the exclusions and symlink rules are identical. Without `rg`, or
+    with `VULNSCOUT_HOST_HELPER_ENGINE=python`, the helper uses its pure-Python
+    walk. Responses report `engine`, `visited_entries` and `elapsed_seconds`;
+    with `rg`, `skipped_*` counters only cover the files it reported as candidates.
+  - A "time limit" or "entry limit" message means the result is incomplete: narrow
+    `folder` or `pattern` and repeat. It is not evidence that nothing matches.
 
 **Unavailability is explicit.** When the helper is not running, the AI Context
 page shows **Host folder helper unavailable** and each folder as

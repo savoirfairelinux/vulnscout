@@ -25,11 +25,13 @@ import io
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import socketserver
 import stat
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -59,6 +61,8 @@ MAX_PATTERN_CHARS = 512
 # Few wildcards keep glob matching linear enough: a regex match cannot be interrupted by the time limits.
 MAX_PATTERN_WILDCARDS = 16
 MIN_PYTHON = (3, 9)
+ENGINE_ENV = "VULNSCOUT_HOST_HELPER_ENGINE"
+RG_READ_CHUNK = 64 * 1024
 MAX_PATH_CHARS = 4096
 MAX_BROWSE_ENTRIES = 500
 MAX_ATTACHMENTS_PER_VARIANT = 32
@@ -134,6 +138,12 @@ def compile_pattern(pattern: str) -> Callable[[str], bool]:
 def _pattern(request: dict) -> tuple[Callable[[str], bool], str]:
     pattern = _string(request, "pattern", required=False, maximum=MAX_PATTERN_CHARS) or "*"
     return compile_pattern(pattern), _literal_prefix(pattern)
+
+
+def _folder_parts(request: dict) -> list[str]:
+    """Optional sub-folder of the attachment that scopes a list or search."""
+    folder = _string(request, "folder", required=False, maximum=1024).rstrip("/")
+    return _relative_path(folder) if folder else []
 
 
 def _integer(request: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -309,6 +319,7 @@ class _Walk:
         self.started = time.monotonic()
         self.deadline = self.started + time_limit
         self.visited = 0
+        self.engine = "python"
         self.matcher = matcher
         self.literal = literal
 
@@ -369,6 +380,193 @@ class _Walk:
             raise _Exhausted("entries")
         if self.visited % 256 == 0 and time.monotonic() > self.deadline:
             raise _Exhausted("time")
+
+
+def _rg_binary() -> str | None:
+    """The ripgrep executable, unless the operator forced the pure-Python engine."""
+    if os.environ.get(ENGINE_ENV, "auto").lower() == "python":
+        return None
+    return shutil.which("rg")
+
+
+class _RgWalk(_Walk):
+    """Walk that lets ripgrep enumerate (or pre-filter) files, then re-validates every result.
+
+    ripgrep is only a fast, parallel enumerator: it runs without a shell, with a fixed argument
+    list, from the already opened folder, and never follows links. Each reported path is checked
+    again here (excluded names, glob, links, regular file) by opening every parent without following
+    links, so the safety rules are exactly those of the Python walk, which is the fallback.
+    """
+
+    def __init__(self, root_fd: int, time_limit: float, matcher: Callable[[str], bool] | None,
+                 literal: str, rg: str, query: str | None = None):
+        super().__init__(root_fd, time_limit, matcher, literal)
+        self.rg = rg
+        self.query = query
+        self.engine = "rg"
+        self._parent_key: str | None = None
+        self._parent_fd = root_fd
+        self._parent_ok = False
+        self._parts: dict[str, bool] = {}
+
+    def _root_path(self) -> str | None:
+        try:
+            path = os.readlink(f"/proc/self/fd/{self.root_fd}")
+        except OSError:
+            return None
+        return path if path.startswith("/") and os.path.isdir(path) else None
+
+    def _command(self, start: str) -> list[str]:
+        command = [self.rg, "--no-config", "--no-ignore", "--no-messages", "--no-mmap", "--null"]
+        for name in _SENSITIVE_NAMES:
+            command += ["--iglob", f"!{name}"]
+        if self.query is None:
+            command.append("--files")
+        else:
+            command += ["--files-with-matches", "--fixed-strings", "--max-filesize", str(MAX_FILE_BYTES),
+                        "-e", self.query]
+        command.append("--")
+        if start:
+            command.append(start)
+        return command
+
+    def _start(self) -> str | None:
+        """Folder holding the literal pattern prefix; None when no path can match."""
+        directory = self.literal.rpartition("/")[0]
+        if not directory:
+            return ""
+        parts = directory.split("/")
+        if any(part in ("", ".", "..") or _excluded(part) or not _printable(part) for part in parts):
+            return None
+        return directory if self._open_parent(parts) else None
+
+    def _open_parent(self, parts: list[str]) -> bool:
+        """Open (and cache the last) parent folder, one component at a time, without following links."""
+        key = "/".join(parts)
+        if key == self._parent_key:
+            return self._parent_ok
+        self._close_parent()
+        self._parent_key = key
+        current = self.root_fd
+        try:
+            for part in parts:
+                child = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                if current != self.root_fd:
+                    os.close(current)
+                current = child
+        except OSError:
+            if current != self.root_fd:
+                os.close(current)
+            self._parent_ok = False
+            return False
+        self._parent_fd = current
+        self._parent_ok = True
+        return True
+
+    def _close_parent(self) -> None:
+        if self._parent_fd != self.root_fd:
+            os.close(self._parent_fd)
+        self._parent_fd = self.root_fd
+        self._parent_key = None
+        self._parent_ok = False
+
+    def _regular_size(self, parts: list[str]) -> int | None:
+        if not self._open_parent(parts[:-1]):
+            return None
+        try:
+            info = os.stat(parts[-1], dir_fd=self._parent_fd, follow_symlinks=False)
+        except OSError:
+            return None
+        return info.st_size if stat.S_ISREG(info.st_mode) else None
+
+    def _enumerate(self, root: str, start: str) -> tuple[list[str], bool]:
+        """Matching relative paths reported by ripgrep and whether the time limit stopped it."""
+        process = subprocess.Popen(
+            self._command(start), cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+        timed_out = threading.Event()
+
+        def stop() -> None:
+            timed_out.set()
+            process.kill()
+
+        timer = threading.Timer(max(0.0, self.deadline - time.monotonic()), stop)
+        timer.start()
+        found: list[str] = []
+        pending = b""
+        try:
+            assert process.stdout is not None
+            while True:
+                chunk = process.stdout.read1(RG_READ_CHUNK)  # type: ignore[attr-defined]
+                if not chunk:
+                    break
+                pending += chunk
+                *names, pending = pending.split(b"\0")
+                for raw in names:
+                    self._collect(raw, found)
+                if self.visited > MAX_WALK_ENTRIES:
+                    process.kill()
+                    break
+        finally:
+            timer.cancel()
+            process.kill()
+            process.wait()
+            if process.stdout:
+                process.stdout.close()
+        return found, timed_out.is_set()
+
+    def _eligible(self, part: str) -> bool:
+        known = self._parts.get(part)
+        if known is None:
+            known = self._parts[part] = part not in ("", ".", "..") and not _excluded(part) and _printable(part)
+        return known
+
+    def _collect(self, raw: bytes, found: list[str]) -> None:
+        self.visited += 1
+        try:
+            path = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return
+        if (self.matcher is None or self.matcher(path)) and all(self._eligible(part) for part in path.split("/")):
+            found.append(path)
+
+    def files(self) -> Iterator[tuple[str, int]]:
+        root = self._root_path()
+        start = self._start() if root else None
+        if root is None:
+            self.engine = "python"
+            yield from super().files()
+            return
+        if start is None:
+            return
+        try:
+            found, timed_out = self._enumerate(root, start)
+        except OSError:
+            self.engine = "python"
+            yield from super().files()
+            return
+        try:
+            found.sort()
+            for path in found:
+                if time.monotonic() > self.deadline:
+                    raise _Exhausted("time")
+                size = self._regular_size(path.split("/"))
+                if size is not None:
+                    yield path, size
+            if self.visited > MAX_WALK_ENTRIES:
+                raise _Exhausted("entries")
+            if timed_out:
+                raise _Exhausted("time")
+        finally:
+            self._close_parent()
+
+
+def _new_walk(fd: int, time_limit: float, matcher: Callable[[str], bool], literal: str,
+              query: str | None = None) -> _Walk:
+    rg = _rg_binary()
+    if rg:
+        return _RgWalk(fd, time_limit, matcher, literal, rg, query)
+    return _Walk(fd, time_limit, matcher, literal)
 
 
 def _exhausted_message(reason: str, operation: str, walk: "_Walk | None" = None) -> str:
@@ -455,6 +653,26 @@ class Helper:
             raise HelperError("not_found", f"No folder is attached as '{alias}' for this variant.")
         real, root = self._checked(path)
         return self._open_folder(real, root)
+
+    def _scoped_fd(self, request: dict) -> tuple[int, str]:
+        """Attachment (or its optional ``folder``) opened without following links, plus the path prefix."""
+        parts = _folder_parts(request)
+        fd = self._attachment_fd(request)
+        current = fd
+        try:
+            for part in parts:
+                child = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                os.close(current)
+                current = child
+        except FileNotFoundError:
+            os.close(current)
+            raise HelperError("not_found", "Folder not found inside the attached folder.") from None
+        except OSError as exc:
+            os.close(current)
+            if exc.errno in _LINK_ERRNOS:
+                raise HelperError("invalid", "Folder is not a directory or is a link.") from None
+            raise HelperError("unavailable", "Folder cannot be opened.") from None
+        return current, "".join(f"{part}/" for part in parts)
 
     def _checked(self, path: str) -> tuple[str, str]:
         real, root = self._approved(path)
@@ -565,22 +783,22 @@ class Helper:
         matches_pattern, literal = _pattern(request)
         offset = _integer(request, "offset", 0, 0, MAX_WALK_ENTRIES)
         limit = _integer(request, "limit", MAX_LIST_LIMIT, 1, MAX_LIST_LIMIT)
-        fd = self._attachment_fd(request)
-        walk = _Walk(fd, LIST_TIME_LIMIT, matches_pattern, literal)
+        fd, base = self._scoped_fd(request)
+        walk = _new_walk(fd, LIST_TIME_LIMIT, matches_pattern, literal)
         files: list[dict] = []
         total = 0
         message = None
         try:
             for path, size in walk.files():
                 if offset <= total < offset + limit:
-                    files.append({"path": path, "size": size})
+                    files.append({"path": base + path, "size": size})
                 total += 1
         except _Exhausted as exc:
             message = _exhausted_message(str(exc), "listing", walk)
         finally:
             os.close(fd)
         result: dict[str, Any] = {
-            "files": files, "total": total, "truncated": message is not None,
+            "files": files, "total": total, "truncated": message is not None, "engine": walk.engine,
             "visited_entries": walk.visited, "elapsed_seconds": round(walk.elapsed, 2),
             "next_offset": offset + limit if offset + limit < total else None,
         }
@@ -666,11 +884,11 @@ class Helper:
         matches_pattern, literal = _pattern(request)
         max_results = _integer(request, "max_results", MAX_SEARCH_RESULTS, 1, MAX_SEARCH_RESULTS)
         needle = query.encode("utf-8")
-        fd = self._attachment_fd(request)
+        fd, base = self._scoped_fd(request)
         matches: list[dict] = []
         searched = skipped_binary = skipped_large = 0
         budget = [SEARCH_BYTE_BUDGET]
-        walk = _Walk(fd, SEARCH_TIME_LIMIT, matches_pattern, literal)
+        walk = _new_walk(fd, SEARCH_TIME_LIMIT, matches_pattern, literal, query)
         truncated = False
         message = None
         try:
@@ -703,7 +921,8 @@ class Helper:
                         continue
                     if len(matches) == max_results:
                         raise _Exhausted("results")
-                    matches.append({"path": path, "line": number, "text": line.rstrip("\r\n")[:MAX_SNIPPET_CHARS]})
+                    snippet = line.rstrip("\r\n")[:MAX_SNIPPET_CHARS]
+                    matches.append({"path": base + path, "line": number, "text": snippet})
         except _Exhausted as exc:
             truncated = True
             if str(exc) != "results":
@@ -711,7 +930,7 @@ class Helper:
         finally:
             os.close(fd)
         result: dict[str, Any] = {
-            "matches": matches, "truncated": truncated, "searched_files": searched,
+            "matches": matches, "truncated": truncated, "searched_files": searched, "engine": walk.engine,
             "skipped_binary_files": skipped_binary, "skipped_large_files": skipped_large,
             "visited_entries": walk.visited, "elapsed_seconds": round(walk.elapsed, 2),
         }
