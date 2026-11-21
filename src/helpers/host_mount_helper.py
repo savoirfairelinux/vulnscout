@@ -247,6 +247,11 @@ def _directory_handle(fd: int, boot: bytes | None) -> str | None:
     return "h" + hashlib.sha256(identity).hexdigest()
 
 
+class _ExpiredPin(HelperError):
+    def __init__(self):
+        super().__init__("unavailable", "Session-only approval expired; reattach with the host CLI.")
+
+
 class _SessionPin:
     """Own an exact directory descriptor until activation is abandoned or the grant is detached."""
 
@@ -317,7 +322,7 @@ class Registry:
                     for alias, entry in list(self.data[variant_id].items()):
                         if (loaded.get("version") != PROTOCOL_VERSION or entry.get("host_approved") != "yes"
                                 or not entry.get("attachment_id") or not entry.get("identity")
-                                or self._retired(entry["attachment_id"])):
+                                or self.is_retired(entry["attachment_id"])):
                             del self.data[variant_id][alias]
                             rewrite = True
         except FileNotFoundError:
@@ -327,7 +332,7 @@ class Registry:
         if rewrite:
             self._save()
 
-    def _retired(self, attachment_id: str) -> bool:
+    def is_retired(self, attachment_id: str) -> bool:
         with closing(sqlite3.connect(self._fences)) as conn:
             return conn.execute("SELECT 1 FROM retired WHERE id=?", (attachment_id,)).fetchone() is not None
 
@@ -347,7 +352,7 @@ class Registry:
                 raise HelperError(
                     "limit", f"A variant can have at most {MAX_ATTACHMENTS_PER_VARIANT} attached folders.")
             previous = aliases.get(alias, {})
-            if self._retired(attachment_id) or (previous and (
+            if self.is_retired(attachment_id) or (previous and (
                     previous["attachment_id"] != attachment_id or previous["path"] != path)):
                 raise HelperError("unavailable", "Attachment has been detached or replaced.")
             if previous.get("identity") == identity:
@@ -646,7 +651,7 @@ class Helper:
                 with self._pin_lock:
                     pin = self._pins.get(identity)
                     if pin is None or pin.expires <= time.monotonic():
-                        raise HelperError("unavailable", "Session-only approval expired; reattach with the host CLI.")
+                        raise _ExpiredPin()
                     pinned_fd = os.dup(pin.fd)
                 try:
                     info = os.fstat(pinned_fd)
@@ -746,7 +751,15 @@ class Helper:
                 or not (match := re.fullmatch(r"(h[a-f0-9]{64}|s[a-f0-9]{32}):[a-f0-9]{64}", proof))
                 or not hmac.compare_digest(proof, self._proof(attachment_id, variant_id, alias, path, match[1]))):
             raise HelperError("forbidden", "No valid host approval; reattach this folder with the host CLI.")
-        identity = match[1]
+        try:
+            self._publish_approval(path, variant_id, alias, attachment_id, match[1])
+        except _ExpiredPin:
+            if self.registry.is_retired(attachment_id):
+                raise HelperError("unavailable", "Attachment has been detached or replaced.") from None
+            raise
+        return {"path": path}
+
+    def _publish_approval(self, path: str, variant_id: str, alias: str, attachment_id: str, identity: str) -> None:
         os.close(self._open_approved(path, identity))
         # Order registry publication and pin retirement, but never wait for the
         # attached filesystem while holding either shared lock.
@@ -754,7 +767,7 @@ class Helper:
             with self._pin_lock:
                 pin = self._pins.get(identity)
                 if identity.startswith("s") and (pin is None or pin.expires <= time.monotonic()):
-                    raise HelperError("unavailable", "Session-only approval expired; reattach with the host CLI.")
+                    raise _ExpiredPin()
                 if pin is not None:
                     previous_expiry = pin.expires
                     pin.expires = float("inf")
@@ -770,7 +783,6 @@ class Helper:
                            if key != identity and old.attachment_id == attachment_id and old.expires == float("inf")]
         for old in retired:
             old.close()
-        return {"path": path}
 
     def detach(self, request: dict) -> dict:
         variant_id = _variant_id(request)
