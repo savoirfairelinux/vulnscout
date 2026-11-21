@@ -17,9 +17,7 @@ type Props = {
     /** Format an option value for display; checkbox values stay raw */
     formatLabel?: (value: string) => string;
     /**
-     * Render a "Select all" / "Deselect all" button at the top of the option list.
-     * It acts on the options currently shown, so with an active search it only
-     * adds or removes the matching options and keeps the rest of the selection.
+     * Show separate controls to select or deselect the currently visible options.
      */
     showSelectAll?: boolean;
 };
@@ -33,7 +31,8 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
 
     const displayLabel = (value: string) => formatLabel ? formatLabel(value) : value;
 
-    const visibleOptions = searchable && optionSearch.trim() !== ''
+    const isSearchActive = searchable && optionSearch.trim() !== '';
+    const visibleOptions = isSearchActive
         ? options.filter(option => {
             const needle = optionSearch.trim().toLowerCase();
             return option.toLowerCase().includes(needle) || displayLabel(option).toLowerCase().includes(needle);
@@ -48,18 +47,14 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
         }
     };
 
-    const isSearchActive = searchable && optionSearch.trim() !== '';
-    const allVisibleSelected = visibleOptions.length > 0 && visibleOptions.every(option => selected.includes(option));
-    const selectAllLabel = `${allVisibleSelected ? 'Deselect' : 'Select'} all${isSearchActive ? ' matching' : ''}`;
+    const selectVisible = () => {
+        setSelected([...new Set([...selected, ...visibleOptions])]);
+        setShowCustomFilterComponent?.(false);
+    };
 
-    const toggleSelectAll = () => {
-        if (allVisibleSelected) {
-            const visibleSet = new Set(visibleOptions);
-            setSelected(selected.filter(item => !visibleSet.has(item)));
-        } else {
-            const selectedSet = new Set(selected);
-            setSelected([...selected, ...visibleOptions.filter(option => !selectedSet.has(option))]);
-        }
+    const deselectVisible = () => {
+        const visibleSet = new Set(visibleOptions);
+        setSelected(selected.filter(item => !visibleSet.has(item)));
         setShowCustomFilterComponent?.(false);
     };
 
@@ -124,13 +119,14 @@ function FilterOption({ label, options, selected, setSelected, parentRef, Custom
                             />
                         )}
                         {showSelectAll && visibleOptions.length > 0 && (
-                            <button
-                                type="button"
-                                onClick={toggleSelectAll}
-                                className="w-full mb-1 py-1 px-2 rounded text-left text-sm font-medium text-cyan-300 hover:bg-sky-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
-                            >
-                                {selectAllLabel}
-                            </button>
+                            <div className="flex flex-wrap gap-1">
+                                <button type="button" onClick={selectVisible} className="py-1 px-2 rounded text-sm font-medium text-cyan-300 hover:bg-sky-800">
+                                    Select all{isSearchActive && ' matching'}
+                                </button>
+                                <button type="button" onClick={deselectVisible} className="py-1 px-2 rounded text-sm font-medium text-cyan-300 hover:bg-sky-800">
+                                    Deselect all{isSearchActive && ' matching'}
+                                </button>
+                            </div>
                         )}
                         {visibleOptions.map(option => (
                             <label key={option} className="flex items-center space-x-2">
