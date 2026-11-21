@@ -285,10 +285,10 @@ MEDIUM and LOW, follow it with one sentence naming the uncertainty or data gap.
 - `rationale` is always required and always about the review — never a copy of
   `status_notes`.
 - With a non-null `assessment_format` in the target variant's context, present
-  `status_notes`, `impact_statement` and `workaround` as `cve-assessment`
-  Phase 4 **Presentation preferences** allows. It never changes the derived
+  only `status_notes` as `cve-assessment` Phase 5 **Presentation preferences** allows. It never changes the derived
   fields, the confidence gate or `rationale`, and never drops
-  `confidence level: <level>`.
+  `confidence level: <level>` or its uncertainty explanation. Do not restyle
+  `impact_statement` or `workaround`: agreement compares them verbatim.
 
 ---
 
