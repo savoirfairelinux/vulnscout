@@ -763,6 +763,28 @@ def test_approve_returns_conflict_if_row_was_already_approved(client, app, monke
     assert _stored(app, aid)["status_notes"] == "First reviewer"
 
 
+def test_edited_approval_conflicts_with_concurrent_content_change(client, app, monkeypatch):
+    from src.routes import assessments as routes
+
+    aid = json.loads(_post_ai(
+        client, status="not_affected", justification="component_not_present",
+    ).data)["assessment"]["id"]
+    validate = routes._validate_content_edit
+
+    def validate_then_change(row, *args, **kwargs):
+        result = validate(row, *args, **kwargs)
+        # Interleave the state written by a PATCH before the approval's UPDATE.
+        row.update(status="affected", justification="")
+        return result
+
+    monkeypatch.setattr(routes, "_validate_content_edit", validate_then_change)
+    resp = client.post(f"/api/assessments/{aid}/approve", json={"status": "not_affected"})
+
+    assert resp.status_code == 409
+    stored = _stored(app, aid)
+    assert (stored["origin"], stored["status"], stored["justification"]) == ("ai", "affected", "")
+
+
 def test_approve_rejects_non_object_or_malformed_body(client, app):
     aid = _get_first_ai_id(client)
 

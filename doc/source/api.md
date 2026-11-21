@@ -962,7 +962,9 @@ field, send an empty string explicitly. Targets cannot be changed here.
 `400` if the assessment is not a pending AI assessment, the JSON body is not
 an object, or the edits are invalid (`Invalid status`, `Justification required`,
 `Invalid justification`); the suggestion then stays pending and unchanged.
-`404` if it does not exist.
+`404` if it does not exist. `409` if another write changes the content
+being validated or the row is no longer pending at promotion time; reload
+the assessment and review it again.
 
 ### Reject an AI Assessment
 

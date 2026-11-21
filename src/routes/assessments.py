@@ -5,7 +5,7 @@ import gzip
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Literal, overload
+from typing import Any, Literal, cast, overload
 from uuid import UUID
 
 from ..models import Assessment as DBAssessment, Package, Finding
@@ -46,6 +46,7 @@ from ._assessment_write import (
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
 from sqlalchemy import func, select
+from sqlalchemy.engine import CursorResult
 from werkzeug.exceptions import RequestEntityTooLarge
 
 _SCANNER_AUTHORS = {
@@ -182,18 +183,25 @@ def _validate_content_edit(
 
 
 def _approve_row(
-    row: "DBAssessment", edits: dict[str, Any] | None = None,
+    row: "DBAssessment", payload: dict[str, Any],
 ) -> ResponseReturnValue:
     """Turn a pending AI row into a custom assessment.
 
-    When *edits* are given, only those validated fields are replaced in
-    the same transaction, so the row is never left edited but still pending.
+    Replace supplied content fields only if the validated snapshot still matches.
     """
     values: dict[str, Any] = {
         "origin": "custom",
         "timestamp": datetime.now(timezone.utc),
     }
-    if edits:
+    condition = (DBAssessment.id == row.id) & (DBAssessment.origin == "ai")
+    if any(key in payload for key in _CONTENT_EDIT_FIELDS):
+        # The omitted fields used during validation must still match at write time.
+        for field in _CONTENT_EDIT_FIELDS:
+            condition &= getattr(DBAssessment, field) == getattr(row, field)
+        content, error = _validate_content_edit(row, payload, preserve_omitted=True)
+        if content is None:
+            return {"error": error or "Invalid request data"}, 400
+        edits = {key: getattr(content, key) for key in _CONTENT_EDIT_FIELDS if key in payload}
         values.update(edits)
         if "status" in edits:
             values["simplified_status"] = STATUS_TO_SIMPLIFIED.get(edits["status"], "Pending Assessment")
@@ -201,12 +209,12 @@ def _approve_row(
         hold_write_lock()
         result = db.session.execute(
             db.update(DBAssessment)
-            .where(DBAssessment.id == row.id, DBAssessment.origin == "ai")
+            .where(condition)
             .values(**values)
             .execution_options(synchronize_session=False)
         )
-        if result.rowcount != 1:
-            return {"error": "Assessment is no longer pending AI approval"}, 409
+        if cast(CursorResult[Any], result).rowcount != 1:
+            return {"error": "Assessment changed before approval; reload and review it again"}, 409
         db.session.refresh(row)
     return {"status": "success", "assessments": [row.to_dict()]}, 200
 
@@ -1815,7 +1823,7 @@ def init_app(app: Flask) -> None:
         response 200 AssessmentWriteResult Approved assessment.
         response 400 Error Not a pending AI assessment, or invalid content edits.
         response 404 Error Assessment not found.
-        response 409 Error Assessment is no longer pending AI approval.
+        response 409 Error Assessment changed before approval.
         response 413 Error Request body exceeds the approval size limit.
         """
         # Only a JSON body carries edits; any other body is ignored as before.
@@ -1847,12 +1855,7 @@ def init_app(app: Flask) -> None:
             return err
         if row is None:
             return {"error": "Internal error"}, 500
-        if not any(field in payload for field in _CONTENT_EDIT_FIELDS):
-            return _approve_row(row)
-        content, content_error = _validate_content_edit(row, payload, preserve_omitted=True)
-        if content is None:
-            return {"error": content_error or "Invalid request data"}, 400
-        return _approve_row(row, {key: getattr(content, key) for key in _CONTENT_EDIT_FIELDS if key in payload})
+        return _approve_row(row, payload)
 
     @app.route("/api/assessments/<assessment_id>/reject", methods=["POST"])
     def reject_ai_assessment(assessment_id: str) -> ResponseReturnValue:
