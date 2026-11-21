@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Host folder helper: exact grants, traversal/symlink containment, bounds and socket permissions."""
 
+import ctypes
 import json
 import os
+import shutil
 import socket
 import stat
 import threading
@@ -115,14 +117,19 @@ def test_unapproved_legacy_registry_never_grants_access(helper, tree):
     assert err(restarted, "activate", **binding)[0] == "forbidden"
 
 
-def test_upgrade_requires_reapproval_for_path_only_grants(helper, tree):
+@pytest.mark.parametrize("version,identity,old_proof", [
+    (2, None, "a" * 64),
+    (3, "1:2", "1:2:" + "a" * 64),
+])
+def test_upgrade_requires_reapproval_for_older_grants(helper, tree, version, identity, old_proof):
     binding = grant(helper, tree["app"])
     path = tree["tmp"] / "state" / hh.REGISTRY_NAME
-    path.write_text(json.dumps({"version": 2, "attachments": {VARIANT: {"src": {
-        "path": binding["path"], "attachment_id": binding["attachment_id"], "host_approved": "yes"}}}}))
+    path.write_text(json.dumps({"version": version, "attachments": {VARIANT: {"src": {
+        "path": binding["path"], "attachment_id": binding["attachment_id"], "host_approved": "yes",
+        "identity": identity}}}}))
     restarted = hh.Helper(helper.state_dir)
     assert err(restarted, "list", variant_id=VARIANT, alias="src")[0] == "not_found"
-    assert err(restarted, "activate", **binding, approval_proof="a" * 64)[0] == "forbidden"
+    assert err(restarted, "activate", **binding, approval_proof=old_proof)[0] == "forbidden"
     staged = ok(restarted, "stage", **binding)
     ok(restarted, "activate", attachment_id=binding["attachment_id"], **staged)
 
@@ -139,9 +146,10 @@ def test_attachment_replaced_by_a_link_becomes_unavailable(helper, tree):
 def test_real_directory_replacement_requires_new_permit(helper, tree):
     binding = attached(helper, tree)
     scope = dict(variant_id=VARIANT, alias="src")
-    tree["app"].rename(tree["root"] / "previous")
+    shutil.rmtree(tree["app"])
     tree["app"].mkdir()
     (tree["app"] / "README").write_text("replacement")
+    assert err(helper, "read", **scope, path="README")[0] == "unavailable"
     restarted = hh.Helper(helper.state_dir)
     assert err(restarted, "activate", **binding)[0] == "unavailable"
     assert err(restarted, "read", **scope, path="README")[0] == "unavailable"
@@ -149,6 +157,89 @@ def test_real_directory_replacement_requires_new_permit(helper, tree):
     approved = ok(restarted, "stage", **binding, host_permit=permit)
     ok(restarted, "activate", **{**binding, **approved})
     assert ok(restarted, "read", **scope, path="README")["content"] == "replacement"
+
+
+@pytest.mark.parametrize("change", ["generation", "mount"])
+def test_handle_survives_restart_but_rejects_reused_inode(helper, tree, monkeypatch, change):
+    root = tree["app"]
+    previous = root.stat()
+    current = {"generation": 1, "mount": 7}
+    real_fstat = os.fstat
+
+    def reused_inode(fd):
+        if os.readlink(f"/proc/self/fd/{fd}") == str(root):
+            return previous
+        return real_fstat(fd)
+
+    def get_handle(fd, name, handle_ptr, mount_ptr, flags):
+        assert name == b"" and flags == 0x1001 and os.path.samestat(os.fstat(fd), previous)
+        handle = ctypes.cast(handle_ptr, ctypes.POINTER(hh._FileHandle)).contents
+        handle.size, handle.kind = 9, 1
+        handle.data[:9] = previous.st_ino.to_bytes(8, "big") + bytes([current["generation"]])
+        ctypes.cast(mount_ptr, ctypes.POINTER(ctypes.c_uint64))[0] = current["mount"]
+        return 0
+
+    monkeypatch.setattr(os, "fstat", reused_inode)
+    monkeypatch.setattr(hh, "_NAME_TO_HANDLE_AT", get_handle)
+    binding = grant(helper, root)
+    staged = ok(helper, "stage", **binding)
+    restarted = hh.Helper(helper.state_dir)
+    binding.update(staged)
+    ok(restarted, "activate", **binding)
+    (root / "new").write_text("edited")
+    assert ok(restarted, "read", variant_id=VARIANT, alias="src", path="new")["content"] == "edited"
+    shutil.rmtree(root)
+    root.mkdir()
+    current[change] += 1
+    (root / "new").write_text("replacement")
+    for server in (restarted, hh.Helper(helper.state_dir)):
+        assert err(server, "activate", **binding)[0] == "unavailable"
+        assert err(server, "read", variant_id=VARIANT, alias="src", path="new")[0] == "unavailable"
+
+
+def test_session_pin_survives_edits_not_replacement_or_restart(helper, tree, monkeypatch):
+    monkeypatch.setattr(hh, "_NAME_TO_HANDLE_AT", None)
+    binding = attached(helper, tree)
+    root = tree["app"]
+    scope = dict(variant_id=VARIANT, alias="src")
+    (root / "new").write_text("edited")
+    assert ok(helper, "read", **scope, path="new")["content"] == "edited"
+    permit = host_permit(helper, VARIANT, src=root)
+    assert ok(helper, "stage", **binding, host_permit=permit)["approval_proof"] == binding["approval_proof"]
+    restarted = hh.Helper(helper.state_dir)
+    assert "reattach" in err(restarted, "read", **scope, path="new")[1]
+    assert "reattach" in err(restarted, "activate", **binding)[1]
+    shutil.rmtree(root)
+    root.mkdir()
+    (root / "new").write_text("replacement")
+    assert err(helper, "read", **scope, path="new")[0] == "unavailable"
+    assert err(restarted, "activate", **binding)[0] == "unavailable"
+    ok(restarted, "activate", **{**binding, **ok(restarted, "stage", **binding,
+                                                 host_permit=host_permit(restarted, VARIANT, src=root))})
+    assert ok(restarted, "read", **scope, path="new")["content"] == "replacement"
+
+
+def test_session_pin_quota_released_on_expiry_and_detach(helper, tree, monkeypatch):
+    monkeypatch.setattr(hh, "_NAME_TO_HANDLE_AT", None)
+    monkeypatch.setattr(hh, "MAX_SESSION_PINS", 1)
+    pending = grant(helper, tree["app"])
+    staged = ok(helper, "stage", **pending)
+    fd = helper._pins[staged["identity"]].fd
+    assert err(helper, "stage", **grant(helper, tree["app"], "other"))[0] == "limit"
+    now = hh.time.monotonic() + hh.STAGED_PIN_SECONDS + 1
+    monkeypatch.setattr(hh.time, "monotonic", lambda: now)
+    helper.expire_pending_pins()
+    with pytest.raises(OSError):
+        os.fstat(fd)
+    assert "reattach" in err(helper, "activate", **{**pending, **staged})[1]
+    active = attached(helper, tree)
+    fd = helper._pins[active["identity"]].fd
+    now += hh.STAGED_PIN_SECONDS + 1
+    helper.expire_pending_pins()
+    ok(helper, "list", variant_id=VARIANT, alias="src")
+    ok(helper, "detach", **active)
+    with pytest.raises(OSError):
+        os.fstat(fd)
 
 
 def test_special_file_is_never_opened_for_io(helper, tree, monkeypatch):
