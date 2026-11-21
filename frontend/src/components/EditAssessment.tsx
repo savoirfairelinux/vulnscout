@@ -403,18 +403,26 @@ function EditAssessment({
                     Justification:
                     <select
                         value={justification}
+                        disabled={contentOnly && assessment.justification === "component_not_present"}
                         onChange={(event) => setJustification(event.target.value)}
                         className="p-1 px-2 bg-gray-700 text-white ml-2 rounded"
                         name="edit_assessment_justification"
                     >
                         <option value="none">No justification</option>
-                        <option value="component_not_present">Component not present</option>
+                        <option value="component_not_present" disabled={contentOnly && assessment.justification !== "component_not_present"}>
+                            Component not present
+                        </option>
                         <option value="vulnerable_code_not_present">vulnerable code not present</option>
                         <option value="code_not_reachable">The vulnerable code is not invoked at runtime</option>
                         <option value="requires_configuration">Exploitability requires a configurable option to be set/unset</option>
                         <option value="requires_environment">Exploitability requires a certain environment which is not present</option>
                         <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
                     </select>
+                    {contentOnly && (
+                        <span className="ml-2 text-sm text-gray-300">
+                            Switching to or from “Component not present” would change the CycloneDX verdict.
+                        </span>
+                    )}
                 </>}
             </h3>
 

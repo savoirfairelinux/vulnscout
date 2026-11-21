@@ -368,6 +368,8 @@ class Assessment(Base):
         return None
 
     def get_status_cdx_vex(self) -> Optional[str]:
+        if self.status == "not_affected" and self.justification == "component_not_present":
+            return "false_positive"
         if self.status in VALID_STATUS_CDX_VEX:
             return self.status
         if self.status in STATUS_OPENVEX_TO_CDX_VEX:
@@ -557,8 +559,7 @@ class Assessment(Base):
         if self.justification:
             cdx_justif = self.get_justification_cdx_vex()
 
-        if self.status == "not_affected" and self.justification == "component_not_present":
-            cdx_state = "false_positive"
+        if self.status == "not_affected" and cdx_state == "false_positive":
             cdx_justif = ""
 
         cdx_response = list(self.responses or [])

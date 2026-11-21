@@ -218,9 +218,12 @@ def _approve_row(
         for field in APPROVAL_CONTENT_FIELDS:
             condition &= getattr(DBAssessment, field) == getattr(row, field)
     if has_edits:
+        reviewed_state = row.get_status_cdx_vex()
         content, error = _validate_content_edit(row, payload, preserve_omitted=True)
         if content is None:
             return {"error": error or "Invalid request data"}, 400
+        if content.get_status_cdx_vex() != reviewed_state:
+            return {"error": "Changing this justification would change the CycloneDX verdict"}, 400
         values.update({key: getattr(content, key) for key in APPROVAL_EDIT_FIELDS if key in payload})
     with batch_session():
         if expected_targets is not None:

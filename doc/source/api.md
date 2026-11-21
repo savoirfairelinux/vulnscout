@@ -987,7 +987,9 @@ and `workaround` in the same transaction as approval. Omitted fields keep
 their suggested values. To clear an optional text field, send an empty
 string. For `not_affected`, the edited result must have a valid justification
 or a nonblank impact statement. The suggested verdict and targets are fixed:
-do not send `status`, even if it matches the stored verdict.
+do not send `status`, even if it matches the stored verdict. For `not_affected`,
+switching to or from `component_not_present` returns `400`: that justification
+exports as `false_positive` in CycloneDX.
 
 Editors send the pending suggestion's `approval_fingerprint` as
 `expected_fingerprint`, including when confirming without edits. If any content
@@ -998,7 +1000,7 @@ precondition is optional for existing clients.
 **Request body (optional):**
 ```json
 {
-  "justification": "component_not_present",
+  "justification": "code_not_reachable",
   "impact_statement": "The vulnerable module is not built.",
   "status_notes": "Reviewed and edited before approval."
 }
