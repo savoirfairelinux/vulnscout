@@ -65,7 +65,7 @@ describe('EditAiAssessment', () => {
         expect(onConfirm).toHaveBeenCalledWith({ expected_fingerprint: 'original', status_notes: 'Reviewed' });
     });
 
-    test('does not rewrite an imported impact statement displayed as notes', async () => {
+    test('updates imported impact displayed as notes only when the message changes', async () => {
         const onConfirm = jest.fn();
         render(<EditAiAssessment assessment={{ ...aiAssessment, status_notes: '' }}
             onConfirm={onConfirm} onCancel={jest.fn()} />);
@@ -74,11 +74,12 @@ describe('EditAiAssessment', () => {
         await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
         expect(onConfirm).toHaveBeenLastCalledWith({ expected_fingerprint: 'original' });
 
-        await user.type(notes(), ' reviewed');
+        await user.clear(notes());
+        await user.type(notes(), 'Corrected message');
         await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
         expect(onConfirm).toHaveBeenLastCalledWith({
             expected_fingerprint: 'original',
-            status_notes: 'Original impact reviewed',
+            impact_statement: 'Corrected message',
         });
     });
 

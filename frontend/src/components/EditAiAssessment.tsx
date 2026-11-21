@@ -21,9 +21,15 @@ function toAiAssessmentEdits(data: EditAssessmentData, original: Assessment): Ai
     const edits: AiAssessmentEdits = { expected_fingerprint: original.approval_fingerprint ?? "" };
     if (data.justification !== undefined && data.justification !== (original.justification || ""))
         edits.justification = data.justification;
-    if (['not_affected', 'false_positive'].includes(original.status) &&
+    const hasImpactField = ['not_affected', 'false_positive'].includes(original.status);
+    if (hasImpactField &&
         data.impact_statement !== (original.impact_statement || "")) edits.impact_statement = data.impact_statement;
-    if (data.status_notes !== initialStatusNotes(original)) edits.status_notes = data.status_notes;
+    if (data.status_notes !== initialStatusNotes(original)) {
+        if (!hasImpactField && !original.status_notes && original.impact_statement)
+            edits.impact_statement = data.status_notes;
+        else
+            edits.status_notes = data.status_notes;
+    }
     if (data.workaround !== (original.workaround || "")) edits.workaround = data.workaround;
     return edits;
 }
