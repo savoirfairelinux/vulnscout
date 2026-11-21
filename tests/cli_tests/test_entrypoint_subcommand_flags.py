@@ -339,3 +339,16 @@ def test_ai_review_rejects_an_unsafe_run_id(tmp_path, monkeypatch):
     assert result.returncode == 2
     assert "Invalid VULNSCOUT_RUN_ID." in result.stderr
     assert calls == []
+
+
+@pytest.mark.parametrize(("args", "expected"), [
+    (["--project", "demo", "--variant", "x86", "--ai-context-attach", "src=/work/app", "build=/work/build"],
+     "ai-context-attach --project demo --variant x86 src=/work/app build=/work/build"),
+    (["--ai-context-list", "--json"], "ai-context-list --json"),
+    (["--project", "demo", "--ai-context-detach", "src", "build"], "ai-context-detach --project demo src build"),
+])
+def test_ai_context_mount_commands_are_forwarded(tmp_path, args, expected):
+    result, calls = _run(tmp_path, *args)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == [f"{APP} {expected}"]

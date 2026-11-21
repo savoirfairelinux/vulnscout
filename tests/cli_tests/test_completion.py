@@ -84,7 +84,7 @@ def test_top_level_offers_all_verbs(completion_script):
     out = complete(completion_script, ["vulnscout", ""])
     for verb in ("add", "scan", "match-condition", "assess", "review", "report", "export", "import",
                  "refresh", "delete", "list", "config", "asset", "start", "stop",
-                 "restart", "update", "version", "serve"):
+                 "restart", "update", "version", "serve", "ai-context"):
         assert verb in out
     assert "--dev" in out
 
@@ -162,7 +162,7 @@ def test_completion_matches_help(tmp_path, completion_script):
         assert verb in offered, verb
         help_text = _run([verb, "--help"], tmp_path).stdout
         flags = set(re.findall(r"^    (--[a-z-]+)", help_text, re.M)) - {"--project", "--variant"}
-        prefix = ["vulnscout", verb] + (["custom-openvex"] if verb == "import" else [])
+        prefix = ["vulnscout", verb] + {"import": ["custom-openvex"], "ai-context": ["list"]}.get(verb, [])
         reply = complete(completion_script, [*prefix, "-"])
         for flag in flags:
             assert flag in reply, f"{verb} {flag}"
@@ -215,3 +215,11 @@ def test_review_flags(completion_script):
                  "-p", "--variant"):
         assert flag in out
     assert "--filter" not in out
+
+
+def test_ai_context_actions_and_scope(completion_script):
+    assert set(complete(completion_script, ["vulnscout", "ai-context", ""])) >= {"attach", "list", "detach", "helper"}
+    assert "-p" in complete(completion_script, ["vulnscout", "ai-context", "attach", "-"])
+    assert "--json" in complete(completion_script, ["vulnscout", "ai-context", "list", "-"])
+    helper = complete(completion_script, ["vulnscout", "ai-context", "helper", ""])
+    assert {"start", "stop", "status"} <= set(helper) and "-p" not in helper

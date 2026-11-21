@@ -67,8 +67,8 @@ _vulnscout_files() {
 }
 _vulnscout_complete() {
     local cur prev word verb="" i k
-    local data_verbs="add scan match-condition assess review report export import refresh"
-    local all_verbs="add scan match-condition assess review report export import refresh delete list config asset start stop restart update version serve"
+    local data_verbs="add scan match-condition assess review report export import refresh ai-context"
+    local all_verbs="add scan match-condition assess review report export import refresh ai-context delete list config asset start stop restart update version serve"
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -188,6 +188,21 @@ _vulnscout_complete() {
             words="--run-id" ;;
         match-condition)
             words="" ;;
+        ai-context)
+            local action="" k
+            for ((k = i + 1; k < COMP_CWORD; k++)); do
+                case "${COMP_WORDS[k]}" in
+                    -p|--project|-v|--variant) k=$((k + 1)) ;;
+                    -*) ;;
+                    *) action="${COMP_WORDS[k]}"; break ;;
+                esac
+            done
+            case "$action" in
+                "") words="attach list detach helper"; scope="" ;;
+                list) words="--json" ;;
+                helper) words="start stop restart status"; scope="" ;;
+                *) words="" ;;
+            esac ;;
     esac
     mapfile -t COMPREPLY < <(compgen -W "$words $scope $globals" -- "$cur")
 }
@@ -205,13 +220,62 @@ if [ "${1:-}" = "completion" ]; then
     exit 0
 fi
 
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+VULNSCOUT_BUILD_DIR="$(realpath -m -- "${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}")"
+HOST_CONFIG_FILE="$VULNSCOUT_BUILD_DIR/launcher.env"
+
+host_config_key() {
+    case "$1" in
+        VULNSCOUT_CONTAINER|VULNSCOUT_IMAGE|VULNSCOUT_CACHE_DIR|VULNSCOUT_OUTPUTS_DIR|\
+        VULNSCOUT_HOST_HELPER_STATE_DIR|VULNSCOUT_SBOM_CVE_CHECK_DB_DIR|VULNSCOUT_BIND_ADDRESS|VITE_API_URL)
+            return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Refuse custom mounts that would expose host policy or helper state.
+check_host_paths() {
+    local mount protected policy state
+    policy="$(realpath -m -- "$HOST_CONFIG_FILE")"
+    state="$(realpath -m -- "${VULNSCOUT_HOST_HELPER_STATE_DIR:-$VULNSCOUT_BUILD_DIR/host-helper}")"
+    for mount in "${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}" \
+        "${VULNSCOUT_OUTPUTS_DIR:-$VULNSCOUT_BUILD_DIR/outputs}" "${VULNSCOUT_SBOM_CVE_CHECK_DB_DIR:-}" \
+        "$SCRIPT_DIR/src" "$SCRIPT_DIR/vulnscout_mcp" "$SCRIPT_DIR/.github/skills"; do
+        [[ -n "$mount" ]] || continue
+        mount="$(realpath -m -- "$mount")"
+        for protected in "$policy" "$state"; do
+            if [[ "$protected/" == "${mount%/}/"* || "$mount/" == "${protected%/}/"* ]]; then
+                console_err error "Error: host configuration and helper state must be outside container mounts ($mount)."
+                exit 1
+            fi
+        done
+    done
+}
+
+# Only known launcher settings can affect the host. Values are literal, not shell syntax.
+cache_from_env="${VULNSCOUT_CACHE_DIR+x}"
+bind_from_env="${VULNSCOUT_BIND_ADDRESS+x}"
+if [[ -e "$HOST_CONFIG_FILE" || -L "$HOST_CONFIG_FILE" ]]; then
+    check_host_paths
+    if [[ ! -f "$HOST_CONFIG_FILE" || -L "$HOST_CONFIG_FILE" ]]; then
+        console_err error "Error: expected a regular host configuration file: $HOST_CONFIG_FILE"
+        exit 1
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        key="${line%%=*}"
+        [[ "$line" == *=* ]] || continue
+        host_config_key "$key" || continue
+        [[ -v "$key" ]] || printf -v "$key" '%s' "${line#*=}"
+    done < "$HOST_CONFIG_FILE"
+fi
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
 DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.25.1}"
-SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-VULNSCOUT_BUILD_DIR="${VULNSCOUT_BUILD_DIR:-$SCRIPT_DIR/.vulnscout}"
-VULNSCOUT_CACHE_DIR="${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}"
+# Resolve the operator-selected root, never a socket path inside the shared cache.
+VULNSCOUT_CACHE_DIR="$(realpath -m -- "${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}")"
+VULNSCOUT_HOST_HELPER_STATE_DIR="$(realpath -m -- "${VULNSCOUT_HOST_HELPER_STATE_DIR:-$VULNSCOUT_BUILD_DIR/host-helper}")"
 VULNSCOUT_OUTPUTS_DIR="${VULNSCOUT_OUTPUTS_DIR:-$VULNSCOUT_BUILD_DIR/outputs}"
 VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
+check_host_paths
 
 if command -v podman &> /dev/null; then
     CONTAINER_ENGINE="podman"
@@ -235,12 +299,12 @@ if [[ -d "$VULNSCOUT_CACHE_DIR" && ! -x "$VULNSCOUT_CACHE_DIR" ]]; then
     fi
 fi
 
-# Source config early so stored values (e.g. VULNSCOUT_BUILD_DIR) take effect
-if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
+# Never source the application config: the container can change its contents.
+if [[ ! -L "$VULNSCOUT_CONFIG_FILE" && -f "$VULNSCOUT_CONFIG_FILE" ]]; then
     # Older rootless Podman containers chowned the cache to a subordinate host UID.
     if [ ! -r "$VULNSCOUT_CONFIG_FILE" ]; then
         if [[ "$CONTAINER_ENGINE" != "podman" ]] ||
-            ! podman unshare chown 0:0 "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_CONFIG_FILE"; then
+            ! podman unshare chown -h 0:0 "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_CONFIG_FILE"; then
             console_err error "Error: cannot restore host ownership of $VULNSCOUT_CONFIG_FILE. Restore its ownership to $(id -u):$(id -g) before retrying."
             exit 1
         fi
@@ -249,12 +313,25 @@ if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
             exit 1
         fi
     fi
-    # shellcheck source=/dev/null
-    . "$VULNSCOUT_CONFIG_FILE"
 fi
-# Re-derive VULNSCOUT_CONFIG_FILE in case VULNSCOUT_CACHE_DIR was updated by config
-VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-$DOCKER_IMAGE}"
+
+# Pin a regular file before reading, chmodding or rewriting it. A rename or
+# symlink in the shared cache must not redirect a host operation to another file.
+open_app_config() {
+    local path="$VULNSCOUT_CACHE_DIR/config.env"
+    if [[ ! -e "$path" && ! -L "$path" ]]; then
+        [[ "${1:-}" == create ]] || return 1
+        mkdir -p -- "$VULNSCOUT_CACHE_DIR"
+        (umask 077; dd of="$path" conv=excl count=0 status=none) || return 1
+    fi
+    [[ -f "$path" && ! -L "$path" ]] && exec {app_fd}< "$path" &&
+        [[ -f "/proc/self/fd/$app_fd" &&
+           "$(stat -c '%d:%i' -- "$path")" == "$(stat -Lc '%d:%i' "/proc/self/fd/$app_fd")" ]] || {
+        console_err error "Error: refusing unsafe application config: $path"
+        exit 1
+    }
+    VULNSCOUT_CONFIG_FILE="/proc/self/fd/$app_fd"
+}
 
 # Run a container command using the detected container engine on the host (podman or docker)
 call_container_engine() {
@@ -295,6 +372,7 @@ Data commands (also accept --project and --variant; see '<command> --help'):
     export                  Export SBOMs, custom data, assessments or context
     import                  Import custom data, assessments or context
     refresh                 Refresh stored vulnerability data, including EPSS
+    ai-context              Attach host folders to a variant's AI context, read-only
 
 Maintenance commands:
     delete                  Delete scans and stale data
@@ -493,6 +571,28 @@ Examples:
     vulnscout refresh -p demo
 EOF
             ;;
+        ai-context) cat <<'EOF'
+Usage: vulnscout ai-context attach [-p <project>] [-v <variant>] <alias>=<host path>...
+       vulnscout ai-context list [-p <project>] [-v <variant>] [--json]
+       vulnscout ai-context detach [-p <project>] [-v <variant>] <alias>...
+       vulnscout ai-context helper start|stop|restart|status
+
+Attach host folders to a variant's AI context without copying them. Agents browse,
+read and search them read-only with file_id "mount:<alias>".
+Only this host command can approve a folder. A helper running as the current
+user serves it over a private socket; no container restart is needed.
+Aliases: 1-32 lowercase letters, digits, '_' or '-', unique per variant.
+Options:
+    -p, --project <name>    Project (default: "default")
+    -v, --variant <name>    Variant (default: "default")
+    --json                  list: print the attachments as JSON
+
+Examples:
+    vulnscout ai-context attach -p demo -v x86 src=/work/app build=/work/build/tmp/work
+    vulnscout ai-context list -p demo -v x86
+    vulnscout ai-context detach -p demo -v x86 build
+EOF
+            ;;
         delete) cat <<'EOF'
 Usage: vulnscout delete <target> [--dry-run] [--yes] [--clear-vulnerability-history]
 
@@ -529,7 +629,8 @@ Usage: vulnscout config get <key>
        vulnscout config unset <key>
        vulnscout config list
 
-Read or change the host config file (.vulnscout/cache/config.env).
+Read or change application settings (cache/config.env) and host settings
+(launcher.env in the host build directory).
 'list' masks sensitive values.
 
 Examples:
@@ -697,6 +798,7 @@ ensure_running() {
         console_out info "Container running without dev mode, restarting..."
         do_start
     fi
+    ensure_host_helper
 }
 
 die() {
@@ -761,6 +863,7 @@ do_update() {
         if [ -n "$target_id" ] && [ "$running_id" != "$target_id" ]; then
             console_out info "Restarting container on $DOCKER_IMAGE ($(image_version "$DOCKER_IMAGE"))..."
             do_start
+            ensure_host_helper
         else
             console_out info "Container already running on the target image."
         fi
@@ -858,40 +961,230 @@ reject_removed_syntax() {
     done
 }
 
-config_set() {
-    local key="$1"
-    local value="$2"
-    mkdir -p "$(dirname "$VULNSCOUT_CONFIG_FILE")"
-    touch "$VULNSCOUT_CONFIG_FILE"
-    local tmp
-    tmp=$(mktemp)
-    grep -v "^${key}=" "$VULNSCOUT_CONFIG_FILE" > "$tmp" || true
-    echo "${key}=${value}" >> "$tmp"
-    cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
-    rm -f "$tmp"
-    console_out success "Config set: $key=$value"
-    # Restart the container so volume mounts reflect the new cache dir
-    if [ "$key" = "VULNSCOUT_CACHE_DIR" ] && call_container_engine ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        console_out info "Restarting container to apply new VULNSCOUT_CACHE_DIR..."
-        VULNSCOUT_CACHE_DIR="$value"
-        do_start
+select_config_file() {
+    if host_config_key "$1"; then
+        VULNSCOUT_CONFIG_FILE="$HOST_CONFIG_FILE"
+        if [[ "${2:-}" == create ]]; then
+            mkdir -p -- "$VULNSCOUT_BUILD_DIR"
+            (umask 077; touch -- "$HOST_CONFIG_FILE")
+        fi
+    else
+        open_app_config "${2:-}"
     fi
+}
+
+check_helper_state_transition() {
+    local default="$VULNSCOUT_BUILD_DIR/host-helper" saved current proposed HOST_HELPER_PID_FILE
+    proposed="$(realpath -m -- "${1:-$default}")"
+    # An exported override can mask a still-running helper at the stored location.
+    saved="$(grep -m1 '^VULNSCOUT_HOST_HELPER_STATE_DIR=' "$HOST_CONFIG_FILE" 2>/dev/null || true)"
+    saved="${saved#*=}"
+    for current in "${saved:-$default}" "${VULNSCOUT_HOST_HELPER_STATE_DIR:-$default}"; do
+        HOST_HELPER_PID_FILE="$current/helper.pid"
+        if [[ "$(realpath -m -- "$current")" != "$proposed" ]] && host_helper_pid >/dev/null; then
+            die "run 'vulnscout ai-context helper stop' before changing the host helper state directory."
+        fi
+    done
+}
+
+write_config() {
+    local key="$1" line
+    local -a lines
+    if [[ "$key" == VULNSCOUT_HOST_HELPER_STATE_DIR ]]; then check_helper_state_transition "${2:-}"; fi
+    select_config_file "$key" create
+    mapfile -t lines < "$VULNSCOUT_CONFIG_FILE"
+    {
+        for line in "${lines[@]}"; do
+            [[ "$line" == "$key="* ]] || printf '%s\n' "$line"
+        done
+        if [[ $# == 2 ]]; then printf '%s=%s\n' "$key" "$2"; fi
+    } > "$VULNSCOUT_CONFIG_FILE"
+}
+
+check_proposed_host_setting() {
+    local "$1=$2"
+    check_host_paths
+}
+
+validate_bind_address() {
+    local address="$1" octet
+    local -a octets
+    [[ "$address" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "VULNSCOUT_BIND_ADDRESS must be a dotted-decimal IPv4 address."
+    IFS=. read -ra octets <<< "$address"
+    for octet in "${octets[@]}"; do
+        if [[ "$octet" == 0?* ]] || ((10#$octet > 255)); then
+            die "VULNSCOUT_BIND_ADDRESS must be a dotted-decimal IPv4 address."
+        fi
+    done
+}
+
+restart_for_launcher_setting() {
+    # An exported setting still takes precedence over the newly stored value.
+    case "$1" in
+        VULNSCOUT_CACHE_DIR)
+            [[ -z "$cache_from_env" ]] || return 0
+            VULNSCOUT_CACHE_DIR="$(realpath -m -- "${2:-$VULNSCOUT_BUILD_DIR/cache}")" ;;
+        VULNSCOUT_BIND_ADDRESS)
+            [[ -z "$bind_from_env" ]] || return 0
+            VULNSCOUT_BIND_ADDRESS="${2-127.0.0.1}" ;;
+        *) return 0 ;;
+    esac
+    if call_container_engine ps --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
+        console_out info "Restarting container to apply new $1..."
+        do_start
+        ensure_host_helper
+    fi
+}
+
+config_set() {
+    local key="$1" value="$2"
+    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "config values must be single-line."
+    case "$key" in
+        VULNSCOUT_BIND_ADDRESS) validate_bind_address "$value" ;;
+        VULNSCOUT_CACHE_DIR|VULNSCOUT_HOST_HELPER_STATE_DIR)
+            if [[ -n "$value" ]]; then
+                IFS= read -r -d '' value < <(realpath -mz -- "$value") || die "cannot resolve $key."
+                [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "resolved config paths must be single-line."
+            fi ;;
+    esac
+    [[ "$key" != VULNSCOUT_BUILD_DIR ]] || die "export VULNSCOUT_BUILD_DIR on the host."
+    # Validate proposed mounts before persisting them.
+    if host_config_key "$key"; then
+        check_proposed_host_setting "$key" "$value"
+    fi
+    write_config "$key" "$value"
+    console_out success "Config set: $key=$value"
+    restart_for_launcher_setting "$key" "$value"
 }
 
 config_clear() {
     local key="$1"
-    touch "$VULNSCOUT_CONFIG_FILE"
-    local tmp
-    tmp=$(mktemp)
-    grep -v "^${key}=" "$VULNSCOUT_CONFIG_FILE" > "$tmp" || true
-    cat "$tmp" > "$VULNSCOUT_CONFIG_FILE"
-    rm -f "$tmp"
+    if [[ "$key" == VULNSCOUT_CACHE_DIR ]]; then check_proposed_host_setting "$key" ""; fi
+    write_config "$key"
     console_out success "Config cleared: $key"
+    restart_for_launcher_setting "$key"
+}
+
+# Host folder helper: an unprivileged process on this host, run as the invoking user, that serves
+# attached folders read-only over a private socket inside the cache directory (already mounted).
+host_helper_paths() {
+    HOST_HELPER_STATE_DIR="$VULNSCOUT_HOST_HELPER_STATE_DIR"
+    HOST_HELPER_SOCKET="$VULNSCOUT_CACHE_DIR/host-helper/helper.sock"
+    HOST_HELPER_PID_FILE="$HOST_HELPER_STATE_DIR/helper.pid"
+}
+
+host_helper_pid() {
+    local pid
+    pid="$(cat "$HOST_HELPER_PID_FILE" 2>/dev/null || true)"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    # A recycled PID must not be signalled.
+    ps -o args= -p "$pid" 2>/dev/null | grep -q 'host_mount_helper' || return 1
+    echo "$pid"
+}
+
+host_helper_running() {
+    host_helper_pid >/dev/null && [ -S "$HOST_HELPER_SOCKET" ]
+}
+
+stop_host_helper() {
+    local pid i
+    host_helper_paths
+    if pid="$(host_helper_pid)"; then
+        kill "$pid" 2>/dev/null || true
+        for ((i = 0; i < 50; i++)); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        console_out info "Host folder helper stopped."
+    fi
+    rm -f "$HOST_HELPER_PID_FILE" "$HOST_HELPER_STATE_DIR/image.active"
+}
+
+# Never execute from the checkout: --dev exposes src/ to the container.
+host_helper_script() {
+    local cached image_id tmp
+    image_id="$(call_container_engine image inspect "$DOCKER_IMAGE" --format '{{.Id}}')" || return 1
+    [[ "$image_id" =~ ^(sha256:)?[[:xdigit:]]{64}$ ]] || {
+        console_err error "Error: cannot identify the configured helper image."
+        return 1
+    }
+    cached="$HOST_HELPER_STATE_DIR/host_mount_helper-${image_id#sha256:}.py"
+    if [[ -f "$cached" ]]; then
+        echo "$cached"
+        return 0
+    fi
+    tmp="$(mktemp -- "$HOST_HELPER_STATE_DIR/extract.XXXXXXXX")" || return 1
+    if ! call_container_engine run --rm --entrypoint cat "$image_id" \
+        /scan/src/helpers/host_mount_helper.py > "$tmp" 2>/dev/null || [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        console_err error "Error: cannot extract the host folder helper from $DOCKER_IMAGE."
+        console_err error "Build this checkout's Dockerfile, set VULNSCOUT_IMAGE to that image, and run './vulnscout start' before retrying. The v0.25.1 release lacks host folders; --dev is not sufficient."
+        return 1
+    fi
+    mv -- "$tmp" "$cached" || return 1
+    echo "$cached"
+}
+
+# Restart the helper if its image has changed.
+start_host_helper() {
+    local script i
+    host_helper_paths
+    if [ "$(id -u)" -eq 0 ]; then
+        console_err error "Error: the host folder helper runs as the invoking user, never as root; run vulnscout as a regular user."
+        return 1
+    fi
+    if ! command -v python3 &>/dev/null ||
+        ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
+        console_err error "Error: host folders need python3 (3.9 or newer) on this host."
+        return 1
+    fi
+    mkdir -p "$HOST_HELPER_STATE_DIR" || return 1
+    chmod 700 "$HOST_HELPER_STATE_DIR" || return 1
+    script="$(host_helper_script)" || { stop_host_helper >/dev/null; return 1; }
+    # The cached filename includes the immutable image ID used for extraction.
+    if host_helper_running &&
+        [ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null || true)" = "${script##*/}" ]; then
+        return 0
+    fi
+    stop_host_helper >/dev/null
+    if ! python3 -I "$script" serve --daemon --socket "$HOST_HELPER_SOCKET" \
+        --state-dir "$HOST_HELPER_STATE_DIR" --pid-file "$HOST_HELPER_PID_FILE" \
+        --log-file "$HOST_HELPER_STATE_DIR/helper.log" < /dev/null >&2; then
+        console_err error "Error: the host folder helper did not start; see the message above."
+        return 1
+    fi
+    for ((i = 0; i < 50; i++)); do
+        host_helper_running && break
+        sleep 0.1
+    done
+    if ! host_helper_running; then
+        console_err error "Error: the host folder helper did not start; see $HOST_HELPER_STATE_DIR/helper.log."
+        return 1
+    fi
+    printf '%s\n' "${script##*/}" > "$HOST_HELPER_STATE_DIR/image.active"
+    console_out success "Host folder helper running as $(id -un)."
+}
+
+# Restore the helper for existing or staged attachments; never fail the calling command.
+ensure_host_helper() {
+    host_helper_paths
+    if [[ ! -f "$HOST_HELPER_STATE_DIR/registry.json" &&
+          ! -f "$HOST_HELPER_STATE_DIR/.approval.key" && ! -f "$HOST_HELPER_PID_FILE" ]]; then
+        return 0
+    fi
+    start_host_helper || console_err warning "Warning: attached host folders are unavailable until the helper runs."
 }
 
 do_start() {
+    local bind_address="${VULNSCOUT_BIND_ADDRESS-127.0.0.1}"
+    validate_bind_address "$bind_address"
+    local -a publish_args=(-p "$bind_address:7275:7275")
+    if [[ "$bind_address" == 127.* ]]; then
+        publish_args+=(--tmpfs "/run/vulnscout-loopback-published:ro,size=4k")
+    fi
     call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
-    mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR" "$(dirname "$VULNSCOUT_CONFIG_FILE")"
+    mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR"
 
     if [[ $CONTAINER_ENGINE = "docker" ]]; then
         # Docker bind-mounts create root-owned directories on the host when a path
@@ -907,7 +1200,8 @@ do_start() {
             -c "[ -f /mnt/cache/config.env ] && [ \"\$(stat -c %u /mnt/cache/config.env)\" = '0' ] && rm -f /mnt/cache/config.env; chown -R ${uid}:${gid} /mnt/cache /mnt/outputs" \
             2>/dev/null || true
     fi
-    if [ ! -f "$VULNSCOUT_CONFIG_FILE" ]; then
+    if ! open_app_config; then
+        open_app_config create
         cat > "$VULNSCOUT_CONFIG_FILE" <<EOF
 FLASK_RUN_PORT=7275
 FLASK_RUN_HOST=0.0.0.0
@@ -915,7 +1209,6 @@ IGNORE_PARSING_ERRORS=false
 VERBOSE_MODE=false
 USER_UID=$(id -u)
 USER_GID=$(id -g)
-VITE_API_URL=
 REFRESH_REMOTE_DELAY=2w
 # GRYPE_MEMLIMIT — cap RAM used by the grype binary (Go soft memory limit).
 # Unset = auto (~80 % of the container/cgroup memory limit, recommended).
@@ -923,7 +1216,7 @@ REFRESH_REMOTE_DELAY=2w
 # Set to "off" to disable the limit entirely.
 #GRYPE_MEMLIMIT=
 EOF
-        console_out success "Created default config at $VULNSCOUT_CONFIG_FILE"
+        console_out success "Created default config at $VULNSCOUT_CACHE_DIR/config.env"
     fi
     chmod 600 "$VULNSCOUT_CONFIG_FILE"
     # The sbom-cve-check advisory databases (NVD-FKIE + CVEList) live inside the
@@ -936,13 +1229,16 @@ EOF
 
     local -a env_args=()
     while IFS='=' read -r key value; do
-        [ -z "$key" ] && continue
-        [ "${key#\#}" = "$key" ] || continue
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        host_config_key "$key" && continue
         case "$key" in
             AI_PROVIDER|AI_AUTH_CREDENTIALS|AI_MODEL|AI_BASE_URL|AI_CONTEXT_TIER|AI_REASONING_EFFORT) continue ;;
         esac
         env_args+=(-e "${key}=${value}")
     done < "$VULNSCOUT_CONFIG_FILE"
+    # Resolve the application file inside the container's cache mount, not as
+    # a separate host bind source that a cache symlink could redirect.
+    env_args+=(-e VULNSCOUT_CONFIG=/cache/vulnscout/config.env)
     # Pass SBOM_CVE_CHECK_AUTO_UPDATE from the host environment so the operator can
     # override the container default (1 = on) e.g. to run offline (SBOM_CVE_CHECK_AUTO_UPDATE=0).
     [[ -n "${SBOM_CVE_CHECK_AUTO_UPDATE:-}" ]] && env_args+=(-e "SBOM_CVE_CHECK_AUTO_UPDATE=$SBOM_CVE_CHECK_AUTO_UPDATE")
@@ -952,7 +1248,6 @@ EOF
     local -a vol_args=(
         -v "$VULNSCOUT_CACHE_DIR:/cache/vulnscout:Z"
         -v "$VULNSCOUT_OUTPUTS_DIR:/scan/outputs:Z"
-        -v "$VULNSCOUT_CONFIG_FILE:/etc/vulnscout/config.env:Z"
     )
     if [[ -n "$_sbom_cve_check_host_db" ]]; then
         mkdir -p "$_sbom_cve_check_host_db"
@@ -984,7 +1279,7 @@ EOF
 
     call_container_engine run -d --name "$CONTAINER_NAME" \
         "${userns_args[@]}" \
-        -p 7275:7275 \
+        "${publish_args[@]}" \
         "${env_args[@]}" \
         "${vol_args[@]}" \
         "$DOCKER_IMAGE" daemon
@@ -1112,6 +1407,7 @@ verb_start() {
     reject_scope start
     require_no_args start "$@"
     do_start
+    ensure_host_helper
     if [ "$DEV_MODE" = true ]; then
         start_frontend_dev
     fi
@@ -1121,13 +1417,14 @@ verb_stop() {
     reject_scope stop
     require_no_args stop "$@"
     call_container_engine rm -f "$CONTAINER_NAME"
+    stop_host_helper
 }
 
 verb_restart() {
     reject_scope restart
     require_no_args restart "$@"
-    call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
     do_start
+    ensure_host_helper
     if [ "$DEV_MODE" = true ]; then
         start_frontend_dev
     fi
@@ -1626,6 +1923,128 @@ verb_import() {
     exec_container "${SCOPE_ARGS[@]}" "${import_args[@]}"
 }
 
+validate_host_alias() {
+    if [[ ! "$1" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+        die "invalid alias '$1': use 1-32 lowercase letters, digits, '_' or '-', starting with a letter or digit."
+    fi
+}
+
+verb_ai_context() {
+    local action="${1:-}"
+    case "$action" in
+        attach|list|detach) shift; "ai_context_$action" "$@" ;;
+        helper) shift; ai_context_helper "$@" ;;
+        "") die "'ai-context' needs attach, list, detach, or helper." ;;
+        *) die "unknown ai-context action '$action'. Expected attach, list, detach, or helper." ;;
+    esac
+}
+
+ai_context_attach() (
+    local arg alias path scope permit seen=" "
+    local -a pairs=()
+    if [ $# -eq 0 ]; then
+        die "'ai-context attach' needs at least one <alias>=<host path> pair, e.g. src=/work/app."
+    fi
+    for arg in "$@"; do
+        case "$arg" in
+            -*) reject_option "ai-context attach" "$arg" ;;
+            *=*) ;;
+            *) die "expected <alias>=<host path>, got '$arg'." ;;
+        esac
+        alias="${arg%%=*}"
+        path="${arg#*=}"
+        validate_host_alias "$alias"
+        if [[ "$seen" == *" $alias "* ]]; then
+            die "alias '$alias' is given twice."
+        fi
+        seen+="$alias "
+        if [ -z "$path" ] || [ ! -d "$path" ]; then
+            die "host folder not found: ${path:-<empty>}"
+        fi
+        # The helper runs elsewhere: send the absolute canonical host path.
+        IFS= read -r -d '' path < <(realpath -ez -- "$path") || die "could not resolve host folder."
+        [[ "$path" != / ]] || die "cannot attach the host root directory."
+        pairs+=("$alias=$path")
+    done
+    ensure_running
+    start_host_helper || exit 1
+    set_explicit_scope_args
+    scope="$(exec_container "${SCOPE_ARGS[@]}" --ai-context-list --variant-id-only)" || exit 1
+    [[ "$scope" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]] || die "could not resolve the variant ID."
+    permit="$(mktemp -d -- "$HOST_HELPER_STATE_DIR/permit.XXXXXXXXXXXX")"
+    trap 'for arg in "${pairs[@]}"; do rm -f -- "$permit/${arg%%=*}"; done; rmdir -- "$permit"' EXIT
+    for arg in "${pairs[@]}"; do
+        printf '%s\0%s' "$scope" "${arg#*=}" > "$permit/${arg%%=*}"
+    done
+    exec_container "${SCOPE_ARGS[@]}" --ai-context-attach --host-permit "${permit##*/}" "${pairs[@]}"
+)
+
+ai_context_list() {
+    local json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=true ;;
+            *) reject_option "ai-context list" "$1" ;;
+        esac
+        shift
+    done
+    set_explicit_scope_args
+    if [ "$json" = true ]; then
+        # stdout carries only the JSON document.
+        ensure_running >&2
+        exec_container "${SCOPE_ARGS[@]}" --ai-context-list --json
+    else
+        ensure_running
+        exec_container "${SCOPE_ARGS[@]}" --ai-context-list
+    fi
+}
+
+ai_context_detach() {
+    local alias
+    if [ $# -eq 0 ]; then
+        die "'ai-context detach' needs at least one alias."
+    fi
+    for alias in "$@"; do
+        case "$alias" in
+            -*) reject_option "ai-context detach" "$alias" ;;
+        esac
+        validate_host_alias "$alias"
+    done
+    ensure_running
+    set_explicit_scope_args
+    exec_container "${SCOPE_ARGS[@]}" --ai-context-detach "$@"
+}
+
+ai_context_helper() {
+    local action="${1:-}" script
+    reject_scope "ai-context helper"
+    if [ $# -gt 1 ]; then
+        reject_option "ai-context helper $action" "$2"
+    fi
+    host_helper_paths
+    case "$action" in
+        start) start_host_helper || exit 1 ;;
+        stop) stop_host_helper ;;
+        restart)
+            stop_host_helper
+            start_host_helper || exit 1 ;;
+        status)
+            if ! host_helper_running; then
+                console_err warning "Host folder helper is not running."
+                return 1
+            fi
+            script="$(host_helper_script)" || exit 1
+            if [[ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null)" != "${script##*/}" ]]; then
+                die "helper image has changed; run 'vulnscout ai-context helper restart'."
+            fi
+            python3 -I "$script" ping --socket "$HOST_HELPER_SOCKET" >/dev/null || return 1
+            console_out success "Host folder helper is running (PID $(host_helper_pid)) on $HOST_HELPER_SOCKET."
+            ;;
+        "") die "'ai-context helper' needs start, stop, restart, or status." ;;
+        *) die "unknown ai-context helper action '$action'. Expected start, stop, restart, or status." ;;
+    esac
+}
+
 stdin_is_tty() {
     [ -t 0 ]
 }
@@ -1722,7 +2141,10 @@ verb_config() {
                 die "usage: vulnscout config get <key>"
             fi
             validate_config_key "$2"
-            line="$(grep "^$2=" "$VULNSCOUT_CONFIG_FILE" 2>/dev/null | tail -n 1 || true)"
+            line=""
+            if select_config_file "$2"; then
+                line="$(grep "^$2=" "$VULNSCOUT_CONFIG_FILE" 2>/dev/null | tail -n 1 || true)"
+            fi
             if [ -z "$line" ]; then
                 die "config key not set: $2"
             fi
@@ -1743,10 +2165,18 @@ verb_config() {
             if [ $# -gt 1 ]; then
                 reject_option "config list" "$2"
             fi
-            if [ -f "$VULNSCOUT_CONFIG_FILE" ]; then
-                sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET|AI_AUTH_CREDENTIALS)[A-Za-z0-9_]*)=.+/\1=****/' "$VULNSCOUT_CONFIG_FILE"
-            else
+            if open_app_config; then
+                while IFS= read -r line || [[ -n "$line" ]]; do
+                    host_config_key "${line%%=*}" || printf '%s\n' "$line"
+                done < "$VULNSCOUT_CONFIG_FILE" |
+                    sed -E 's/^([A-Za-z0-9_]*(API_KEY|PASSWORD|SECRET|AI_AUTH_CREDENTIALS)[A-Za-z0-9_]*)=.+/\1=****/'
+            elif [[ ! -f "$HOST_CONFIG_FILE" ]]; then
                 console_out info "No config file found."
+            fi
+            if [[ -f "$HOST_CONFIG_FILE" ]]; then
+                while IFS= read -r line || [[ -n "$line" ]]; do
+                    if host_config_key "${line%%=*}"; then printf '%s\n' "$line"; fi
+                done < "$HOST_CONFIG_FILE"
             fi ;;
         "")
             die "'config' needs get, set, unset, or list." ;;
@@ -1807,6 +2237,7 @@ parse_new() {
         assess) verb_assess "${rest[@]}" ;;
         review) verb_review "${rest[@]}" ;;
         refresh) verb_refresh "${rest[@]}" ;;
+        ai-context) verb_ai_context "${rest[@]}" ;;
         asset) verb_asset "${rest[@]}" ;;
         report) verb_report "${rest[@]}" ;;
         export) verb_export "${rest[@]}" ;;
