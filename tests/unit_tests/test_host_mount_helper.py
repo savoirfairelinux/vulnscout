@@ -550,7 +550,7 @@ def test_folder_scopes_list_and_search_inside_the_attachment(helper, tree):
 
 def test_folder_rejects_traversal_links_hidden_and_missing_folders(helper, tree):
     attached(helper, tree)
-    for folder in ("../outside", "/etc", "src/../..", ".git", "escape_dir", "api_token.txt", "src//x"):
+    for folder in ("/", "///", "../outside", "/etc", "src/../..", ".git", "escape_dir", "api_token.txt", "src//x"):
         assert err(helper, "list", variant_id=VARIANT, alias="src", folder=folder)[0] in ("invalid", "not_found")
         assert err(helper, "search", variant_id=VARIANT, alias="src", folder=folder, query="needle")[0] in (
             "invalid", "not_found")

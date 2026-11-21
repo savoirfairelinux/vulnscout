@@ -140,8 +140,8 @@ def _pattern(request: dict) -> tuple[Callable[[str], bool], str]:
 
 def _folder_parts(request: dict) -> list[str]:
     """Optional sub-folder of the attachment that scopes a list or search."""
-    folder = _string(request, "folder", required=False, maximum=1024).rstrip("/")
-    return _relative_path(folder) if folder else []
+    folder = _string(request, "folder", required=False, maximum=1024)
+    return _relative_path(folder.rstrip("/")) if folder else []
 
 
 def _integer(request: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -261,24 +261,35 @@ class Registry:
             entry = self.data.get(variant_id, {}).get(alias, {})
             return entry.get("host_approved") == "yes" and entry.get("path") == path
 
-    def set(self, variant_id: str, alias: str, path: str, *, host_approved: bool = False) -> None:
+    def set(self, variant_id: str, alias: str, path: str, *, host_approved: bool = False,
+            attachment_id: str = "", refresh: bool = False) -> None:
         with self.lock:
             aliases = self.data.setdefault(variant_id, {})
             if alias not in aliases and len(aliases) >= MAX_ATTACHMENTS_PER_VARIANT:
                 raise HelperError(
                     "limit", f"A variant can have at most {MAX_ATTACHMENTS_PER_VARIANT} attached folders.")
             previous = aliases.get(alias, {})
-            if previous.get("path") == path and (not host_approved or previous.get("host_approved") == "yes"):
+            if refresh and (previous.get("host_approved") or previous.get("attachment_id")):
                 return
-            aliases[alias] = {"path": path, "created_at": datetime.now(timezone.utc).isoformat()}
-            if host_approved:
+            if (previous.get("path") == path and previous.get("attachment_id", "") == attachment_id
+                    and (not host_approved or previous.get("host_approved") == "yes")):
+                return
+            aliases[alias] = {"path": path, "created_at": datetime.now(timezone.utc).isoformat(),
+                              "attachment_id": attachment_id}
+            if host_approved or (previous.get("path") == path and previous.get("host_approved")
+                                 and not previous.get("attachment_id")):
                 aliases[alias]["host_approved"] = "yes"
             self._save()
 
-    def remove(self, variant_id: str, alias: str) -> bool:
+    def remove(self, variant_id: str, alias: str, *, attachment_id: str = "", refresh: bool = False) -> bool:
         with self.lock:
             aliases = self.data.get(variant_id, {})
             if alias not in aliases:
+                return False
+            entry = aliases[alias]
+            if refresh and (entry.get("host_approved") or entry.get("attachment_id")):
+                return False
+            if entry.get("attachment_id") and entry["attachment_id"] != attachment_id:
                 return False
             del aliases[alias]
             if not aliases:
@@ -597,13 +608,15 @@ class Helper:
         if request.get("exact") is True and real != path:
             # Re-registration of a stored attachment must not silently follow a replaced folder.
             raise HelperError("unavailable", _MOVED)
-        self.registry.set(variant_id, alias, real, host_approved=permit is not None)
+        self.registry.set(variant_id, alias, real, host_approved=permit is not None,
+                          attachment_id=_string(request, "attachment_id", required=False, maximum=36))
         return {"variant_id": variant_id, "alias": alias, "path": real}
 
     def detach(self, request: dict) -> dict:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
-        return {"removed": self.registry.remove(variant_id, alias)}
+        return {"removed": self.registry.remove(variant_id, alias, attachment_id=_string(
+            request, "attachment_id", required=False, maximum=36))}
 
     def source(self, request: dict) -> dict:
         """Browse a database-authorized mount path without resolving its mutable alias again."""
@@ -629,7 +642,7 @@ class Helper:
                               f"{MAX_ATTACHMENTS_PER_VARIANT} aliases to host paths.")
         for alias in self.registry.aliases(variant_id):
             if alias not in wanted:
-                self.registry.remove(variant_id, alias)
+                self.registry.remove(variant_id, alias, refresh=True)
         report: dict[str, dict[str, Any]] = {}
         for alias, path in wanted.items():
             validate_alias(alias)
@@ -638,7 +651,7 @@ class Helper:
             try:
                 real, root = self._checked(variant_id, alias, path)
                 os.close(self._open_folder(real, root))
-                self.registry.set(variant_id, alias, real)
+                self.registry.set(variant_id, alias, real, refresh=True)
                 report[alias] = {"status": "available", "message": "Folder is available read-only."}
             except HelperError as exc:
                 report[alias] = {"status": "unavailable", "message": exc.message}

@@ -41,7 +41,7 @@ def app(tmp_path, monkeypatch):
     cache = tmp_path / "cache"
     monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(cache))
     monkeypatch.delenv("VULNSCOUT_HOST_HELPER_SOCKET", raising=False)
-    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+    os.environ["FLASK_SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{tmp_path / 'test.db'}"
     try:
         application = create_app()
         application.config.update({"TESTING": True, "SCAN_FILE": "/dev/null"})
@@ -358,7 +358,7 @@ class TestSourceBrowsing:
 
     def test_source_works_without_a_helper_registry_entry(self, client, variant, host, helper_server):
         _attach(client, variant, "src", host["app"])
-        helper_server.registry.remove(str(variant.id), "src")
+        helper_server.registry.remove(str(variant.id), "src", attachment_id=str(HostMount.get(variant.id, "src").id))
         assert _source(client, variant, "mount:src").status_code == 200
         assert helper_server.registry.get(str(variant.id), "src") is None
 
@@ -395,7 +395,7 @@ class TestCli:
     def _run(self, app, *args):
         return app.test_cli_runner().invoke(args=list(args))
 
-    def test_host_command_grants_only_one_scoped_folder(self, app, client, variant, host, helper_server):
+    def test_host_command_grants_only_one_scoped_folder(self, app, client, variant, host, helper_server, monkeypatch):
         scope = self._run(app, "ai-context-list", "-p", "Demo", "-v", "x86", "--variant-id-only")
         assert scope.exit_code == 0 and scope.output.strip() == str(variant.id)
         helper_server.roots.clear()
@@ -406,6 +406,18 @@ class TestCli:
         params = {"variant_id": str(variant.id), "alias": "src", "path": path, "host_permit": permit.name}
         for invalid in ({"variant_id": str(uuid.uuid4())}, {"alias": "other"}, {"path": str(host["outside"])}):
             assert not helper_server.dispatch({"op": "attach", **params, **invalid})["ok"]
+        # A second HTTP request sees the pre-commit DB snapshot after the helper granted access.
+        endpoint = f"/api/variants/{variant.id}/context/mounts"
+        original_call = host_mounts.helper.call
+
+        def refresh_before_commit(op, **kwargs):
+            reply = original_call(op, **kwargs)
+            if op == "attach" and kwargs.get("host_permit"):
+                with app.app_context():
+                    assert app.test_client().get(endpoint).get_json()["mounts"] == []
+            return reply
+
+        monkeypatch.setattr(host_mounts.helper, "call", refresh_before_commit)
         result = self._run(app, "ai-context-attach", "-p", "Demo", "-v", "x86",
                            "--host-permit", permit.name, f"src={path}")
         assert result.exit_code == 0, result.output
@@ -416,6 +428,8 @@ class TestCli:
         assert restarted.dispatch({"op": "sync", "variant_id": str(variant.id),
                                    "attachments": {"src": path}})["result"]["attachments"]["src"]["status"] == "available"
         assert _source(client, variant, "mount:src").status_code == 200
+        assert helper_server.dispatch({"op": "detach", "variant_id": str(variant.id), "alias": "src",
+                                       "attachment_id": str(uuid.uuid4())})["result"]["removed"] is False
         assert self._run(app, "ai-context-detach", "-p", "Demo", "-v", "x86", "src").exit_code == 0
         assert not helper_server.registry.host_approved(str(variant.id), "src", path)
         assert _attach(client, variant, "src", path).status_code == 403

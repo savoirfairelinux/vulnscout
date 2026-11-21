@@ -55,36 +55,41 @@ def attach(variant_id: uuid.UUID, alias: str, host_path: str, *, host_permit: st
         if host_path == existing.host_path:
             # Revalidate the stored path without following a moved folder to a new target.
             helper.call("attach", variant_id=str(variant_id), alias=alias,
-                        path=existing.host_path, exact=True, host_permit=host_permit)
+                        path=existing.host_path, exact=True, host_permit=host_permit, attachment_id=str(existing.id))
         elif helper.call("browse", path=host_path)["path"] != existing.host_path:
             raise HostMountConflict(
                 f"Alias '{alias}' is already attached to {existing.host_path}; detach it first."
             )
         return existing, False
-    result = helper.call("attach", variant_id=str(variant_id), alias=alias, path=host_path, host_permit=host_permit)
-    mount = HostMount(variant_id=variant_id, alias=alias, host_path=result["path"],
+    attachment_id = uuid.uuid4()
+    mount = HostMount(id=attachment_id, variant_id=variant_id, alias=alias, host_path=host_path,
                       created_at=datetime.now(timezone.utc))
     try:
         db.session.add(mount)
+        # Reserve this alias before changing helper state; another transaction may be attaching it.
+        db.session.flush()
+        result = helper.call("attach", variant_id=str(variant_id), alias=alias, path=host_path,
+                             host_permit=host_permit, attachment_id=str(attachment_id))
+        mount.host_path = result["path"]
         VariantContext.touch(variant_id, commit=False)
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
         raced = HostMount.get(variant_id, alias)
-        if raced is not None and raced.host_path == result["path"]:
-            return raced, False
-        _forget(variant_id, alias)
+        if raced is not None:
+            return attach(variant_id, alias, host_path, host_permit=host_permit)
+        _forget(variant_id, alias, attachment_id)
         raise HostMountConflict(f"Alias '{alias}' is already attached for this variant.") from None
     except Exception:
         db.session.rollback()
-        _forget(variant_id, alias)
+        _forget(variant_id, alias, attachment_id)
         raise
     return mount, True
 
 
-def _forget(variant_id: uuid.UUID, alias: str) -> None:
+def _forget(variant_id: uuid.UUID, alias: str, attachment_id: uuid.UUID) -> None:
     try:
-        helper.call("detach", variant_id=str(variant_id), alias=alias)
+        helper.call("detach", variant_id=str(variant_id), alias=alias, attachment_id=str(attachment_id))
     except (HostHelperError, HostHelperUnavailable):
         logger.warning("Could not remove host folder alias %s from the helper registry", alias)
 
@@ -100,11 +105,12 @@ def detach(variant_id: uuid.UUID, alias: str) -> tuple[bool, str | None]:
     mount = HostMount.get(variant_id, alias)
     if mount is None:
         return False, None
+    attachment_id = mount.id
     db.session.delete(mount)
     VariantContext.touch(variant_id, commit=False)
     db.session.commit()
     try:
-        helper.call("detach", variant_id=str(variant_id), alias=alias)
+        helper.call("detach", variant_id=str(variant_id), alias=alias, attachment_id=str(attachment_id))
     except HostHelperUnavailable as exc:
         return True, exc.message
     except HostHelperError as exc:
