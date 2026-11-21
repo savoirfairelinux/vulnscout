@@ -744,6 +744,18 @@ def test_approve_with_partial_edit_keeps_other_fields(client, app):
     assert stored["workaround"] == "AI workaround"
 
 
+def test_approve_replaced_imported_message_exports_only_corrected_detail(client, app):
+    pending = _post_ai(client, impact_statement="Original impact", status_notes="").json["assessment"]
+    resp = client.post(f"/api/assessments/{pending['id']}/approve", json={
+        "expected_fingerprint": pending["approval_fingerprint"],
+        "impact_statement": "Corrected message",
+    })
+    assert resp.status_code == 200
+    with app.app_context():
+        approved = DBAssessment.get_by_id(pending["id"])
+        assert approved.to_cdx_vex_dict()["analysis"]["detail"] == "Corrected message"
+
+
 def test_approve_partial_edit_keeps_existing_required_justification(client, app):
     aid = json.loads(_post_ai(
         client,
