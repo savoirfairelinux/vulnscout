@@ -13,10 +13,6 @@ Importing an SBOM loads its package inventory and any vulnerability findings or
 assessments supplied by the input documents. It does not run additional
 vulnerability scanners.
 
-Neither web uploads in **Settings** nor CLI imports with `./vulnscout add`
-refresh provider metadata. After importing, start a refresh from the
-[Refresh](web-refresh.md) tab; see [SBOM Imports](web-settings.md#sbom-imports).
-
 Use [Scan History](web-scans.md) to discover additional findings and
 [refresh vulnerability data](web-vulnerabilities.md#refreshing-vulnerability-data)
 to enrich findings already recorded.

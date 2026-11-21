@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faFolderOpen,
@@ -1458,11 +1458,6 @@ function Settings({ onDataChanged, onLoadingMessage, projectId, onAgentContextCh
                 containing SPDX 2 JSON or SPDX 3 JSON-LD companion documents.
               </p>
             </div>
-
-            <p className="text-xs text-zinc-400">
-              Importing does not refresh vulnerability data. Open the{" "}
-              <Link className="underline" to={ROUTES.refresh}>Refresh tab</Link> to update it.
-            </p>
 
             {/* ---- Submit ---- */}
             <div className="space-y-2 pt-1">
