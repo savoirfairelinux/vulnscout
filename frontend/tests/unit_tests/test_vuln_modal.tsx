@@ -3266,6 +3266,28 @@ describe('Vulnerability Modal', () => {
         expect(within(aiPanel()).queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
     });
 
+    test('cannot exit and start another draft before an edited approval completes', async () => {
+        let finish!: (rows: Assessment[]) => void;
+        const approval = jest.spyOn(Assessments, 'approveAi').mockImplementation(
+            () => new Promise(resolve => { finish = resolve; })
+        );
+        try {
+            renderWithPendingAiAssessment({ isEditing: true });
+            const user = userEvent.setup();
+            await screen.findByText(/AI-generated/i);
+            await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+            await user.click(within(aiPanel()).getByRole('button', { name: 'Confirm and approve' }));
+            const exit = screen.getByRole('button', { name: 'Exit editing' });
+            expect(exit).toBeDisabled();
+            await user.click(exit);
+            expect(within(aiPanel()).getByRole('button', { name: 'Approving…' })).toBeVisible();
+            await act(async () => finish([{ ...pendingAiAssessment, origin: 'custom' }]));
+            expect(exit).toBeEnabled();
+        } finally {
+            approval.mockRestore();
+        }
+    });
+
     test('a failed edited approval keeps the edit and shows the error', async () => {
         let rejectApproval: (error: Error) => void = () => {};
         const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockImplementation(
