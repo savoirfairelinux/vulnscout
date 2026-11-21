@@ -117,7 +117,8 @@ def attach(variant_id: uuid.UUID, alias: str, host_path: str, *, host_permit: st
     return response, existing is None, None
 
 
-def detach(variant_id: uuid.UUID, alias: str, *, expected_id: uuid.UUID | None = None) -> tuple[bool, str | None]:
+def detach(variant_id: uuid.UUID, alias: str, *, expected_id: uuid.UUID | None = None,
+           expected_revision: uuid.UUID | None = None) -> tuple[bool, str | None]:
     """Delete the matching attachment; returns (deleted, helper warning).
 
     Access is revoked as soon as the row is deleted, because every request is checked
@@ -130,6 +131,13 @@ def detach(variant_id: uuid.UUID, alias: str, *, expected_id: uuid.UUID | None =
     delete = db.delete(HostMount).where(HostMount.variant_id == variant_id, HostMount.alias == alias)
     if expected_id is not None:
         delete = delete.where(HostMount.id == expected_id)
+    if expected_revision is not None:
+        mount = HostMount.get(variant_id, alias)
+        if mount is None or mount.approval_revision != expected_revision:
+            db.session.rollback()
+            return False, None
+        # A concurrent reapproval can change the proof between this read and the DELETE.
+        delete = delete.where(HostMount.id == mount.id, HostMount.approval_proof == mount.approval_proof)
     attachment_id = db.session.execute(delete.returning(HostMount.id)).scalar_one_or_none()
     if attachment_id is None:
         db.session.rollback()

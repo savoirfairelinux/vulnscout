@@ -43,9 +43,14 @@ class HostMount(Base):
     def file_id(self) -> str:
         return f"{MOUNT_FILE_ID_PREFIX}{self.alias}"
 
+    @property
+    def approval_revision(self) -> uuid.UUID:
+        return uuid.uuid5(self.id, self.approval_proof or "")
+
     def to_dict(self) -> dict:
         return {
             "attachment_id": str(self.id),
+            "approval_revision": str(self.approval_revision),
             "alias": self.alias,
             "file_id": self.file_id,
             "host_path": self.host_path,

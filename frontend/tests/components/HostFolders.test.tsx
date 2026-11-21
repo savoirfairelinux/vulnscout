@@ -11,6 +11,7 @@ describe("HostFolders", () => {
             helper: { available: true, message: null },
             mounts: [{
                 attachment_id: "7fa695e4-8872-45fd-a244-1d4e956a6021",
+                approval_revision: "05000000-0000-5000-8000-000000000001",
                 alias: "src",
                 file_id: "mount:src",
                 host_path: "/work/app",
