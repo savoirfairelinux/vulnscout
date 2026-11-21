@@ -711,6 +711,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                                     <p className="text-sm text-zinc-400">{variantDraft.loading ? 'Loading variant context…' : ''}</p>
                                 ) : (
                                     <VariantEditor
+                                        projectName={projectName}
                                         variantId={selected.id}
                                         variantName={openVariant?.name ?? ''}
                                         draft={variantDraft.draft}

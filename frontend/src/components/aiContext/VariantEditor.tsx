@@ -12,6 +12,7 @@ import { BADGE_VARIANT, BUTTON_PRIMARY, BUTTON_SECONDARY, PANEL } from "./styles
 export type VariantTab = 'context' | 'system' | 'threat_model' | 'risks';
 
 type Props = {
+    projectName: string;
     variantId: string;
     variantName: string;
     draft: VariantDraft;
@@ -54,7 +55,7 @@ function keyTarget(key: string, index: number): number | null {
 }
 
 function VariantEditor({
-    variantId, variantName, draft, onDraftChange, onSave, saving, dirty,
+    projectName, variantId, variantName, draft, onDraftChange, onSave, saving, dirty,
     onCopyFrom, fieldErrors, draftGeneration, tab, onTabChange, locked = false, extraActions,
 }: Readonly<Props>) {
     const tabRefs = useRef<Partial<Record<VariantTab, HTMLButtonElement | null>>>({});
@@ -109,6 +110,8 @@ function VariantEditor({
                 <div key={key} role="tabpanel" id={panelId(key)} aria-labelledby={tabId(key)} hidden={key !== tab}>
                     {key === 'context' && (
                         <ContextTab
+                            projectName={projectName}
+                            variantName={variantName}
                             draft={draft}
                             onDraftChange={onDraftChange}
                             variantId={variantId}

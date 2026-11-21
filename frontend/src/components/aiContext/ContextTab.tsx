@@ -1,6 +1,7 @@
 import type { VariantDraft } from "../../handlers/context";
 import CodebaseDirectory from "./CodebaseDirectory";
 import FieldErrorText from "./FieldErrorText";
+import HostFolders from "./HostFolders";
 import { describeField } from "./fieldErrors";
 import { LABEL, TEXTAREA } from "./styles";
 
@@ -8,6 +9,8 @@ type Props = {
     draft: VariantDraft;
     onDraftChange: (draft: VariantDraft) => void;
     variantId: string;
+    projectName: string;
+    variantName: string;
     fieldErrors: Record<string, string>;
     disabled?: boolean;
     /** Makes context fields read-only while the AI drafts the variant. */
@@ -18,7 +21,7 @@ type TextKey = 'variant_description' | 'environment' | 'other_info';
 
 const fieldId = (key: string) => `ai-variant-${key.replace(/_/g, '-')}`;
 
-function ContextTab({ draft, onDraftChange, variantId, fieldErrors, disabled = false, locked = false }: Readonly<Props>) {
+function ContextTab({ draft, onDraftChange, variantId, projectName, variantName, fieldErrors, disabled = false, locked = false }: Readonly<Props>) {
     const setText = (key: TextKey, value: string) => onDraftChange({ ...draft, [key]: value });
     const textArea = (key: TextKey, label: string) => (
         <>
@@ -41,6 +44,13 @@ function ContextTab({ draft, onDraftChange, variantId, fieldErrors, disabled = f
             <CodebaseDirectory
                 key={variantId}
                 variantId={variantId}
+                disabled={disabled || locked}
+            />
+            <HostFolders
+                key={`host-folders-${variantId}`}
+                variantId={variantId}
+                projectName={projectName}
+                variantName={variantName}
                 disabled={disabled || locked}
             />
             <div>{textArea('environment', 'Environment')}</div>
