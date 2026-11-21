@@ -530,7 +530,9 @@ and returns `201` with `{"alias", "file_id": "mount:src", "host_path", "created_
 `{"helper": {"available", "message"}, "mounts": [...]}` with each folder's `status`
 (`available` or `unavailable`) and `message`. `DELETE` returns
 `{"alias", "detached": true, "warning": str|null}`; access ends immediately even if the helper
-could not be updated. `GET /api/context` lists only `alias` and `file_id` for each mount;
+could not be updated. The backend records pending cleanup in the same transaction
+and retries it when the helper is reachable. Cleanup is scoped to the deleted
+attachment ID, not just its alias. `GET /api/context` lists only `alias` and `file_id` for each mount;
 absolute host paths are available only through the operator endpoints.
 
 Host-folder management, browsing and source reads are restricted to local operator requests.

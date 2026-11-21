@@ -640,10 +640,12 @@ only local operator requests, and browser requests must be same-origin.
   against it before reaching the helper, so a detached alias is refused at once.
   The **helper is the enforcement point**: it keeps its own alias registry in the
   host-only `VULNSCOUT_HOST_HELPER_STATE_DIR` (default `.vulnscout/host-helper`,
-  outside the cache mount). A host CLI approval is redeemed once for the exact
-  variant ID, alias and path and persists there until detached. If the registry
-  is lost, repeat the host command: the database alone cannot recreate that
-  approval. Picker attachments can be recovered within configured roots. Host-source reads use
+  outside the cache mount). Before a database write, the helper checks the folder
+  and signs a CLI approval for its attachment ID, variant, alias and path. The
+  database saves that proof so activation can retry after a restart without a
+  second host command. Keep the private helper state: if its signing key is
+  lost, repeat the host command. An offline detach is recorded for retry and
+  cannot revoke a later attachment using the same alias. Host-source reads use
   the exact path returned by the database lookup and validate/open it in the same
   helper request, rather than resolving the alias a second time.
 - Requests are scoped by **variant ID and alias**. Paths are relative to the
@@ -653,9 +655,9 @@ only local operator requests, and browser requests must be same-origin.
   verified directory descriptor without following symbolic links, so links
   (including a directory swapped for a link) cannot escape. Hard-linked regular
   files inside the folder are readable.
-- The helper is **read-only**: it only implements `status`, `browse` (approved
-  roots and subfolders, at most 500), `attach`/`detach`/`sync` of its own
-  registry, `list`, `read` and `search`. No operation creates, writes or deletes
+- The helper is **read-only**: it can check status, browse picker roots, stage
+  and activate approvals, update its private registry, and list, read or search
+  source files. No operation creates, writes or deletes
   anything under an attached folder.
 - Bounds: listings visit at most **500,000 entries** or **10 s**, return pages of
   200 files and report `truncated=true` (with `total` as a lower bound) when a

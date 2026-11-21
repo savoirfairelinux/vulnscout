@@ -3,6 +3,7 @@
 """Attached host folders: API, source browsing through the helper, CLI and persistence."""
 
 import os
+import sqlite3
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +17,7 @@ from src.bin.webapp import create_app
 from src.controllers import host_mounts
 from src.extensions import db as _db
 from src.helpers import host_mount_helper as hh
-from src.models.host_mount import HostMount
+from src.models.host_mount import HostMount, HostMountDetach
 from src.models.project import Project
 from src.models.variant import Variant
 from src.models.variant_context import VariantContext
@@ -147,6 +148,71 @@ class TestHelperUnavailable:
 
 class TestAttachDetach:
 
+    def test_detach_while_offline_releases_quota_after_restart(self, client, variant, host, helper_server, monkeypatch):
+        monkeypatch.setattr(hh, "MAX_ATTACHMENTS_PER_VARIANT", 1)
+        assert _attach(client, variant, "old", host["app"]).status_code == 201
+        with monkeypatch.context() as offline:
+            offline.setenv("VULNSCOUT_HOST_HELPER_SOCKET", str(host["tmp"] / "offline"))
+            result = client.delete(f"/api/variants/{variant.id}/context/mounts/old")
+            assert result.status_code == 200 and result.get_json()["warning"]
+            assert _source(client, variant, "mount:old").status_code == 404
+        # No operator intervention or manual status refresh before the next attach.
+        assert _attach(client, variant, "new", host["build"]).status_code == 201
+        assert _source(client, variant, "mount:new").status_code == 200
+        assert helper_server.registry.get(str(variant.id), "old") is None
+
+    def test_helper_io_leaves_sqlite_writable(self, client, variant, host, helper_server, monkeypatch):
+        db_file = _db.engine.url.database
+        original = host_mounts.helper.call
+        calls = []
+
+        def verify_unrelated_write(op, **kwargs):
+            with sqlite3.connect(db_file, timeout=0.1) as independent:
+                independent.execute("BEGIN IMMEDIATE")
+            calls.append(op)
+            return original(op, **kwargs)
+
+        monkeypatch.setattr(host_mounts.helper, "call", verify_unrelated_write)
+        assert _attach(client, variant, "src", host["app"]).status_code == 201
+        assert calls
+
+    @pytest.mark.parametrize("repeat_with_permit", [False, True])
+    def test_delayed_repeat_cannot_replace_new_cli_approval(
+            self, app, client, variant, host, helper_server, monkeypatch, repeat_with_permit):
+        variant_id = variant.id
+        assert _attach(client, variant, "src", host["app"]).status_code == 201
+        original = host_mounts.helper.call
+        raced = False
+
+        def make_permit(path, name):
+            permit = Path(helper_server.state_dir) / name
+            permit.mkdir()
+            (permit / "src").write_bytes(str(variant_id).encode() + b"\0" + os.fsencode(path))
+            return name
+
+        def replace_before_revalidation(op, **kwargs):
+            nonlocal raced
+            if not raced and kwargs.get("alias") == "src":
+                raced = True
+                with app.app_context():
+                    assert host_mounts.detach(variant_id, "src")[0]
+                    replacement = str(host["outside"])
+                    host_mounts.attach(variant_id, "src", replacement,
+                                       host_permit=make_permit(replacement, "permit.Abc123Def456"))
+            return original(op, **kwargs)
+
+        monkeypatch.setattr(host_mounts.helper, "call", replace_before_revalidation)
+        path = str(host["app"])
+        permit = make_permit(path, "permit.Abc123Def457") if repeat_with_permit else None
+        try:
+            host_mounts.attach(variant_id, "src", path, host_permit=permit)
+        except (host_mounts.HostMountConflict, host_mounts.HostHelperError):
+            pass  # A stale request may fail; the replacement must remain usable.
+        assert raced
+        _db.session.expire_all()
+        assert HostMount.get(variant_id, "src").host_path == str(host["outside"])
+        assert _source(client, variant, "mount:src").status_code == 200
+
     def test_roots_and_browse(self, client, host, helper_server):
         body = client.get("/api/context/host-roots").get_json()
         assert body == {"available": True, "message": None, "roots": [str(host["root"])]}
@@ -266,7 +332,7 @@ def test_first_concurrent_attaches_preserve_both_aliases(postgres_uri, monkeypat
     with engine.begin() as conn:
         conn.execute(sa.schema.CreateSchema(schema))
     try:
-        models = (Project, Variant, HostMount, VariantContext)
+        models = (Project, Variant, HostMount, HostMountDetach, VariantContext)
         _db.metadata.create_all(engine, tables=[model.__table__ for model in models])
         variant_id = Variant.create("x86", Project.create("Demo").id).id
         sessions.remove()
@@ -406,21 +472,25 @@ class TestCli:
         params = {"variant_id": str(variant.id), "alias": "src", "path": path, "host_permit": permit.name}
         for invalid in ({"variant_id": str(uuid.uuid4())}, {"alias": "other"}, {"path": str(host["outside"])}):
             assert not helper_server.dispatch({"op": "attach", **params, **invalid})["ok"]
-        # A second HTTP request sees the pre-commit DB snapshot after the helper granted access.
+        # Another HTTP request sees the earlier snapshot while the host has staged its approval.
         endpoint = f"/api/variants/{variant.id}/context/mounts"
         original_call = host_mounts.helper.call
+        refreshed = False
 
         def refresh_before_commit(op, **kwargs):
+            nonlocal refreshed
             reply = original_call(op, **kwargs)
-            if op == "attach" and kwargs.get("host_permit"):
+            if op == "stage" and kwargs.get("host_permit"):
                 with app.app_context():
                     assert app.test_client().get(endpoint).get_json()["mounts"] == []
+                refreshed = True
             return reply
 
         monkeypatch.setattr(host_mounts.helper, "call", refresh_before_commit)
         result = self._run(app, "ai-context-attach", "-p", "Demo", "-v", "x86",
                            "--host-permit", permit.name, f"src={path}")
         assert result.exit_code == 0, result.output
+        assert refreshed
         assert not (permit / "src").exists()
         assert client.get("/api/context/host-roots").get_json()["roots"] == []
         assert _attach(client, variant, "other", path).status_code == 403
@@ -433,6 +503,36 @@ class TestCli:
         assert self._run(app, "ai-context-detach", "-p", "Demo", "-v", "x86", "src").exit_code == 0
         assert not helper_server.registry.host_approved(str(variant.id), "src", path)
         assert _attach(client, variant, "src", path).status_code == 403
+
+    def test_committed_cli_approval_recovers_after_interrupted_activation(
+            self, client, variant, host, helper_server, monkeypatch):
+        path = str(host["outside"])
+        permit = Path(helper_server.state_dir) / "permit.Abc123Def458"
+        permit.mkdir()
+        (permit / "src").write_bytes(str(variant.id).encode() + b"\0" + os.fsencode(path))
+        original_call = host_mounts.helper.call
+
+        def interrupt(op, **kwargs):
+            if op == "activate":
+                raise host_mounts.HostHelperUnavailable()
+            return original_call(op, **kwargs)
+
+        with monkeypatch.context() as offline:
+            offline.setattr(host_mounts.helper, "call", interrupt)
+            with pytest.raises(host_mounts.HostHelperUnavailable):
+                host_mounts.attach(variant.id, "src", path, host_permit=permit.name)
+        assert not (permit / "src").exists()
+        owner_id = variant.id
+        _db.session.remove()
+        variant = _db.session.get(Variant, owner_id)
+        assert _source(client, variant, "mount:src").status_code == 200
+        stored = HostMount.get(variant.id, "src")
+        activation = {"op": "activate", "variant_id": str(variant.id), "path": path,
+                      "alias": "src", "attachment_id": str(stored.id), "approval_proof": stored.approval_proof}
+        for field, value in (("alias", "bad"), ("attachment_id", str(uuid.uuid4())), ("path", str(host["app"]))):
+            assert helper_server.dispatch({**activation, field: value})["ok"] is False
+        assert client.delete(f"/api/variants/{variant.id}/context/mounts/src").status_code == 200
+        assert hh.Helper([], helper_server.state_dir).dispatch(activation)["ok"] is False
 
     def test_attach_list_detach(self, app, variant, host, helper_server):
         result = self._run(app, "ai-context-attach", "-p", "Demo", "-v", "x86",

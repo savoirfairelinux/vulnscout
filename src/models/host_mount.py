@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from ..extensions import db, Base
 from ..helpers.datetime_utils import ensure_utc_iso
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, event, insert
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
@@ -32,6 +32,7 @@ class HostMount(Base):
     )
     alias: Mapped[str] = mapped_column(String(32), nullable=False)
     host_path: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_proof: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
@@ -61,3 +62,20 @@ class HostMount(Base):
         return db.session.execute(
             db.select(HostMount).where(HostMount.variant_id == variant_id, HostMount.alias == alias)
         ).scalar_one_or_none()
+
+
+class HostMountDetach(Base):
+    """Helper cleanup survives both backend restarts and deletion of the parent variant."""
+
+    __tablename__ = "host_mount_detach_outbox"
+
+    attachment_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    variant_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    alias: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+@event.listens_for(HostMount, "after_delete")
+def _queue_detach(mapper, connection, mount: HostMount) -> None:
+    connection.execute(insert(HostMountDetach).values(
+        attachment_id=mount.id, variant_id=mount.variant_id, alias=mount.alias,
+    ))

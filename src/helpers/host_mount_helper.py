@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hmac
 import io
 import json
 import os
@@ -222,6 +223,38 @@ def _open_under(root: str, path: str) -> int:
     return fd
 
 
+def _sync_directory(path: str) -> None:
+    fd = os.open(path, _DIRECTORY_FLAGS)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _proof_key(directory: str) -> bytes:
+    """Publish a complete private key exactly once, including across competing starts."""
+    path = os.path.join(directory, ".approval.key")
+    if not os.path.exists(path):
+        temporary = f"{path}.{uuid.uuid4()}"
+        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
+            try:
+                handle.write(os.urandom(32))
+                handle.flush()
+                os.fsync(handle.fileno())
+                try:
+                    os.link(temporary, path)
+                except FileExistsError:
+                    pass
+            finally:
+                os.unlink(temporary)
+    _sync_directory(directory)
+    with open(path, "rb") as handle:
+        key = handle.read(33)
+    if len(key) != 32:
+        raise ValueError("Invalid host folder approval key.")
+    return key
+
+
 class Registry:
     """Alias -> host path, per variant, stored in a private host-only JSON file."""
 
@@ -229,11 +262,14 @@ class Registry:
         self.path = os.path.join(state_dir, REGISTRY_NAME)
         self.lock = threading.Lock()
         self.data: dict[str, dict[str, dict[str, str]]] = {}
+        # A detach can arrive before a delayed activation, even for a never-activated ID.
+        self.retired: set[str] = set()
         try:
             with open(self.path, encoding="utf-8") as handle:
                 loaded = json.load(handle)
             attachments = loaded.get("attachments") if isinstance(loaded, dict) else None
             if isinstance(attachments, dict):
+                self.retired.update(loaded.get("retired", []))
                 for variant_id, aliases in attachments.items():
                     if not isinstance(aliases, dict):
                         continue
@@ -262,50 +298,75 @@ class Registry:
             return entry.get("host_approved") == "yes" and entry.get("path") == path
 
     def set(self, variant_id: str, alias: str, path: str, *, host_approved: bool = False,
-            attachment_id: str = "", refresh: bool = False) -> None:
+            attachment_id: str = "", refresh: bool = False, guarded: bool = False, check_only: bool = False) -> None:
         with self.lock:
-            aliases = self.data.setdefault(variant_id, {})
+            aliases = self.data.get(variant_id, {})
             if alias not in aliases and len(aliases) >= MAX_ATTACHMENTS_PER_VARIANT:
                 raise HelperError(
                     "limit", f"A variant can have at most {MAX_ATTACHMENTS_PER_VARIANT} attached folders.")
             previous = aliases.get(alias, {})
             if refresh and (previous.get("host_approved") or previous.get("attachment_id")):
                 return
-            if (previous.get("path") == path and previous.get("attachment_id", "") == attachment_id
-                    and (not host_approved or previous.get("host_approved") == "yes")):
+            if guarded and (attachment_id in self.retired or (
+                    previous.get("attachment_id")
+                    and (previous["attachment_id"] != attachment_id or previous["path"] != path))):
+                raise HelperError("unavailable", "Attachment has been detached or replaced.")
+            if check_only or (previous.get("path") == path and previous.get("attachment_id", "") == attachment_id
+                              and (not host_approved or previous.get("host_approved") == "yes")):
                 return
+            self.data[variant_id] = aliases
             aliases[alias] = {"path": path, "created_at": datetime.now(timezone.utc).isoformat(),
                               "attachment_id": attachment_id}
             if host_approved or (previous.get("path") == path and previous.get("host_approved")
                                  and not previous.get("attachment_id")):
                 aliases[alias]["host_approved"] = "yes"
-            self._save()
+            try:
+                self._save()
+            except OSError:
+                if previous:
+                    aliases[alias] = previous
+                else:
+                    del aliases[alias]
+                raise
 
-    def remove(self, variant_id: str, alias: str, *, attachment_id: str = "", refresh: bool = False) -> bool:
+    def remove(self, variant_id: str, alias: str, *, attachment_id: str = "", refresh: bool = False,
+               retire: bool = False) -> bool:
         with self.lock:
             aliases = self.data.get(variant_id, {})
-            if alias not in aliases:
-                return False
-            entry = aliases[alias]
+            entry = aliases.get(alias, {})
             if refresh and (entry.get("host_approved") or entry.get("attachment_id")):
                 return False
-            if entry.get("attachment_id") and entry["attachment_id"] != attachment_id:
+            removed = bool(entry and (not entry.get("attachment_id") or entry["attachment_id"] == attachment_id))
+            fence = retire and attachment_id and attachment_id not in self.retired
+            if not removed and not fence:
                 return False
-            del aliases[alias]
-            if not aliases:
-                self.data.pop(variant_id, None)
-            self._save()
-            return True
+            if removed:
+                del aliases[alias]
+                if not aliases:
+                    self.data.pop(variant_id, None)
+            if fence:
+                self.retired.add(attachment_id)
+            try:
+                self._save()
+            except OSError:
+                if removed:
+                    self.data.setdefault(variant_id, {})[alias] = entry
+                if fence:
+                    self.retired.remove(attachment_id)
+                raise
+            return removed
 
     def _save(self) -> None:
         temporary = f"{self.path}.{os.getpid()}.{threading.get_ident()}.tmp"
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _CLOEXEC, 0o600)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump({"version": PROTOCOL_VERSION, "attachments": self.data}, handle, indent=2, sort_keys=True)
+                json.dump({"version": PROTOCOL_VERSION, "attachments": self.data, "retired": sorted(self.retired)},
+                          handle, indent=2, sort_keys=True)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
+            _sync_directory(os.path.dirname(self.path))
         except BaseException:
             try:
                 os.unlink(temporary)
@@ -435,9 +496,10 @@ class Helper:
         self.roots = list(roots)
         self.state_dir = state_dir
         self.registry = Registry(state_dir)
+        self._key = _proof_key(state_dir)
         self.operations: dict[str, Callable[[dict], dict]] = {
             "status": self.status, "browse": self.browse, "attach": self.attach, "detach": self.detach,
-            "sync": self.sync, "source": self.source,
+            "sync": self.sync, "source": self.source, "stage": self.stage, "activate": self.activate,
             "list": self.list_files, "read": self.read, "search": self.search,
         }
 
@@ -574,7 +636,7 @@ class Helper:
         os.close(self._open_folder(real, root))
         return real
 
-    def attach(self, request: dict) -> dict:
+    def _validate_attach(self, request: dict) -> dict:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
         path = _string(request, "path")
@@ -594,11 +656,11 @@ class Helper:
                 raise HelperError("forbidden", "Host attachment permit does not authorize this folder.")
             if any(_excluded(part) for part in path.split("/") if part):
                 raise HelperError("forbidden", "Hidden or sensitive folders cannot be attached.")
+            os.close(self._open_folder(path, path))
             try:
                 os.unlink(permit_file)
             except FileNotFoundError:
                 raise HelperError("forbidden", "Host attachment permit has expired.") from None
-            os.close(self._open_folder(path, path))
             real = path
         elif request.get("exact") is True:
             real, root = self._checked(variant_id, alias, path)
@@ -608,15 +670,50 @@ class Helper:
         if request.get("exact") is True and real != path:
             # Re-registration of a stored attachment must not silently follow a replaced folder.
             raise HelperError("unavailable", _MOVED)
-        self.registry.set(variant_id, alias, real, host_approved=permit is not None,
-                          attachment_id=_string(request, "attachment_id", required=False, maximum=36))
         return {"variant_id": variant_id, "alias": alias, "path": real}
+
+    def attach(self, request: dict) -> dict:
+        result = self._validate_attach(request)
+        if request.get("exact") is not True or request.get("host_permit") is not None:
+            self.registry.set(**result, guarded=True, host_approved=request.get("host_permit") is not None,
+                              attachment_id=_string(request, "attachment_id", required=False, maximum=36))
+        return result
+
+    def _proof(self, attachment_id: str, variant_id: str, alias: str, path: str) -> str:
+        binding = json.dumps(["approval-v1", attachment_id, variant_id, alias, path], separators=(",", ":"))
+        return hmac.digest(self._key, binding.encode("ascii"), "sha256").hex()
+
+    def stage(self, request: dict) -> dict:
+        """Validate before the backend transaction; never make the folder accessible here."""
+        attachment_id = _string(request, "attachment_id", maximum=36)
+        result = self._validate_attach(request)
+        result["approval_proof"] = self._proof(attachment_id, **result) if request.get("host_permit") else None
+        return result
+
+    def activate(self, request: dict) -> dict:
+        variant_id = _variant_id(request)
+        alias = validate_alias(request.get("alias"))
+        path = _string(request, "path")
+        attachment_id = _string(request, "attachment_id", maximum=36)
+        proof = request.get("approval_proof")
+        if proof is not None:
+            if (not isinstance(proof, str) or not re.fullmatch("[a-f0-9]{64}", proof)
+                    or not hmac.compare_digest(proof, self._proof(attachment_id, variant_id, alias, path))):
+                raise HelperError("forbidden", "Invalid host attachment approval.")
+            root = path
+        else:
+            # Revalidate current roots, or an existing migrated per-folder approval.
+            _, root = self._checked(variant_id, alias, path)
+        os.close(self._open_folder(path, root))
+        self.registry.set(variant_id, alias, path, guarded=True, attachment_id=attachment_id,
+                          host_approved=proof is not None, check_only=request.get("check_only") is True)
+        return {"path": path}
 
     def detach(self, request: dict) -> dict:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
         return {"removed": self.registry.remove(variant_id, alias, attachment_id=_string(
-            request, "attachment_id", required=False, maximum=36))}
+            request, "attachment_id", required=False, maximum=36), retire=True)}
 
     def source(self, request: dict) -> dict:
         """Browse a database-authorized mount path without resolving its mutable alias again."""
