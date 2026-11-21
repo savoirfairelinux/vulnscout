@@ -88,11 +88,14 @@ PY
         ;;
     inspect)
         log_call "$@"
+        if [[ "${*: -1}" == '{{.Image}}' && -n "${VULNSCOUT_TEST_RUNNING_IMAGE:-}" ]]; then
+            echo "$VULNSCOUT_TEST_RUNNING_IMAGE"; exit 0
+        fi
         echo "${VULNSCOUT_TEST_IMAGE_VERSION:-v0.24}"
         ;;
     image)
         [[ "$2" = inspect ]] || exit 99
-        printf 'sha256:%064d\n' 1
+        printf 'sha256:%064d\n' "${VULNSCOUT_TEST_IMAGE_GENERATION:-1}"
         ;;
     *)
         echo "Unexpected podman command: $*" >&2
@@ -810,6 +813,13 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
         echo "The helper must not restart when its roots are unchanged." >&2
         exit 1
     fi
+
+    # A rebuilt image with unchanged roots also needs a matching daemon.
+    export VULNSCOUT_TEST_IMAGE_GENERATION=2 VULNSCOUT_TEST_RUNNING_IMAGE=previous
+    run_ok update
+    assert_log "/scan/src/helpers/host_mount_helper.py"
+    [[ "$(cat "$VULNSCOUT_BUILD_DIR/host-helper/helper.pid")" != "$pid" ]]
+    run_ok ai-context helper status
 
     # Changing the approved roots restarts it.
     export VULNSCOUT_HOST_ROOTS="$roots/app"

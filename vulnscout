@@ -860,6 +860,7 @@ do_update() {
         if [ -n "$target_id" ] && [ "$running_id" != "$target_id" ]; then
             console_out info "Restarting container on $DOCKER_IMAGE ($(image_version "$DOCKER_IMAGE"))..."
             do_start
+            ensure_host_helper
         else
             console_out info "Container already running on the target image."
         fi
@@ -1089,7 +1090,7 @@ start_host_helper() {
     local script root i
     local -a roots=() root_args=()
     host_helper_paths
-    local policy="image-helper-v1:${VULNSCOUT_HOST_ROOTS:-}"
+    local policy
     if [ "$(id -u)" -eq 0 ]; then
         console_err error "Error: the host folder helper runs as the invoking user, never as root; run vulnscout as a regular user."
         return 1
@@ -1099,14 +1100,16 @@ start_host_helper() {
         console_err error "Error: host folders need python3 (3.9 or newer) on this host."
         return 1
     fi
+    mkdir -p "$HOST_HELPER_STATE_DIR" || return 1
+    chmod 700 "$HOST_HELPER_STATE_DIR" || return 1
+    script="$(host_helper_script)" || { stop_host_helper >/dev/null; return 1; }
+    # The cached filename includes the immutable image ID used for extraction.
+    policy="${script##*/}:${VULNSCOUT_HOST_ROOTS:-}"
     if host_helper_running &&
         [ "$(cat "$HOST_HELPER_STATE_DIR/roots.active" 2>/dev/null || true)" = "$policy" ]; then
         return 0
     fi
     stop_host_helper >/dev/null
-    mkdir -p "$HOST_HELPER_STATE_DIR"
-    chmod 700 "$HOST_HELPER_STATE_DIR"
-    script="$(host_helper_script)" || return 1
     IFS=':' read -r -a roots <<< "${VULNSCOUT_HOST_ROOTS:-}"
     for root in "${roots[@]}"; do
         [ -n "$root" ] && root_args+=(--root "$root")
@@ -1992,6 +1995,9 @@ ai_context_helper() {
                 return 1
             fi
             script="$(host_helper_script)" || exit 1
+            if [[ "$(cat "$HOST_HELPER_STATE_DIR/roots.active" 2>/dev/null)" != "${script##*/}:${VULNSCOUT_HOST_ROOTS:-}" ]]; then
+                die "helper image or roots have changed; run 'vulnscout ai-context helper restart'."
+            fi
             console_out success "Host folder helper is running (PID $(host_helper_pid)) on $HOST_HELPER_SOCKET."
             console_out info "Approved roots:"
             python3 -I "$script" ping --socket "$HOST_HELPER_SOCKET" | sed 's/^/    /' ;;
