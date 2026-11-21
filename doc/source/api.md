@@ -520,7 +520,11 @@ GET /api/variants/<variant_id>/context/files/mount:<alias>/source
 Only `./vulnscout ai-context attach` on the host can authorize a folder.
 The REST API cannot enumerate unattached host paths or grant access to them. `GET .../mounts` returns
 `{"helper": {"available", "message"}, "mounts": [...]}` with each folder's `status`
-(`available` or `unavailable`) and `message`. `DELETE` returns
+(`available` or `unavailable`), `message`, and `attachment_id` (UUID). To detach the
+folder shown in a listing, pass its ID as `?attachment_id=<uuid>` on `DELETE`.
+If the alias was removed or reused, the server returns `409` without deleting anything;
+refresh the list before retrying. Omitting this parameter detaches the current alias
+unconditionally (`404` if absent). A successful `DELETE` returns
 `{"alias", "detached": true, "warning": str|null}`; access ends immediately even if the helper
 could not be updated. The backend records pending cleanup in the same transaction
 and retries it when the helper is reachable. Cleanup is scoped to the deleted

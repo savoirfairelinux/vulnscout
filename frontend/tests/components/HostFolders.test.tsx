@@ -10,6 +10,7 @@ describe("HostFolders", () => {
         const listMounts = jest.spyOn(Context, "listMounts").mockResolvedValue({
             helper: { available: true, message: null },
             mounts: [{
+                attachment_id: "7fa695e4-8872-45fd-a244-1d4e956a6021",
                 alias: "src",
                 file_id: "mount:src",
                 host_path: "/work/app",
