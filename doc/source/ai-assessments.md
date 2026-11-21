@@ -206,8 +206,8 @@ Assess and review actions follow the repository's `cve-assessment` and
 same methodology. The Agent can read VulnScout data, uploaded source references
 and the skill files, and fetch public advisory pages such as NVD and GHSA
 (disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no shell or host
-filesystem access**; provision a **Codebase directory** as described below
-to expose source through the bounded MCP tools. Missing evidence remains an uncertainty, never proof that the
+filesystem access**; provision a **Codebase directory** or attach host folders
+as described below to expose source through the bounded MCP tools. Missing evidence remains an uncertainty, never proof that the
 product is safe.
 
 Submitted AI assessments remain pending until a human approves them.
@@ -323,8 +323,8 @@ A variant page has four tabs, **Context**, **System**, **Threat model** and
 whole draft with another variant's context (any project); nothing is saved until
 you save. Uploaded references are never copied.
 
-**Context** holds the variant description, the server codebase directory,
-environment and other information. Directory access is the only codebase method
+**Context** holds the variant description, the server codebase directory, the
+attached host folders, environment and other information. Directory access is the only codebase method
 shown on this page; legacy uploaded references and external paths remain stored
 for API compatibility. The other tabs edit a STRIDE model:
 system text fields with Components and Interactions tables (System), a Threats
@@ -535,8 +535,9 @@ services:
 The equivalent Docker/Podman volume argument is
 `--volume /srv/reviewed-source:/cache/vulnscout/<directory-name>:ro`.
 Provision first, then recreate the container with the added mount. The wrapper
-does not add arbitrary mounts from the Context form: customize your deployment
-configuration for this option. On SELinux systems provide an appropriate
+does not add container mounts from the Context form: customize your deployment
+configuration for this option, or use [Attached host folders](#attached-host-folders),
+which need no container change. On SELinux systems provide an appropriate
 container-readable label (for example `:ro,Z` only when private relabeling is
 appropriate), and account for rootless UID mapping. Keep the parent cache
 writable for VulnScout's database and metadata; only the source mount is read-only.
@@ -576,6 +577,164 @@ Directory contents are live, not immutable evidence. Administrator edits and
 mount changes outside VulnScout do **not** automatically mark pending assessments
 outdated. Prefer versioned, read-only snapshots, identify their revision in the
 context, and re-review assessments after source changes.
+
+### Attached host folders
+
+Attach several named folders from the **container host** to a variant, for
+example the application source as `src` and a Yocto build tree as `build`,
+without copying files, uploading archives or restarting the container. Agents
+browse, read and search each one read-only with `file_id="mount:<alias>"`, so a
+search of `src` never scans `build`. `get_merged_context` lists them under
+`mounts` (`alias`, `file_id`); the provisioned codebase directory
+keeps working unchanged alongside them.
+
+**Image prerequisite:** The default `v0.25.1` release does not contain the
+helper or the container-side attach command. Until a release includes them,
+build this checkout with the same engine the launcher uses (Podman when
+installed, otherwise Docker). Select it before starting the container:
+
+```bash
+podman build -t localhost/vulnscout:host-folders .  # or docker build
+./vulnscout config set VULNSCOUT_IMAGE localhost/vulnscout:host-folders
+./vulnscout start
+```
+
+`--dev` alone does not supply the host helper. Once the image is selected,
+no per-folder setup is required.
+
+**From the CLI** (use an existing project and variant; both default to `default`):
+
+```bash
+./vulnscout ai-context attach -p demo -v x86 src=/work/app build=/work/build/tmp/work
+./vulnscout ai-context list -p demo -v x86          # alias, availability, host path
+./vulnscout ai-context detach -p demo -v x86 build
+./vulnscout ai-context helper status                # check helper reachability
+```
+
+`attach` approves exactly the named folder for that variant and alias. No
+per-folder `config set` is required. The parent directory is not approved.
+Relative paths are resolved on the host. Aliases are 1-32 lowercase letters,
+digits, `_` or `-`, starting with a letter or digit, unique per variant;
+re-attaching the same folder under the same alias is a no-op, and a different
+folder needs `detach` first. A variant can have at most 32 attached folders.
+
+Host-folder reads return whole lines within a 64 KiB JSON response. If even
+one line cannot fit, `partial_line: true` marks its content as a prefix only;
+`next_line`, when present, continues with the following line.
+
+**From the web UI.** The variant's **Context** tab shows the host command to run,
+each attached folder's availability, and actions to refresh status or detach.
+Neither the browser nor the REST API can authorize a new host path. Folders
+attached by a previous version without a host CLI approval must be approved
+with the host command before they can be read. Attaching or detaching marks
+older pending AI assessments outdated, like other source changes.
+
+Open the UI on localhost and use its same-origin API. Host-folder endpoints
+require a loopback peer (or the local container forwarder on a wrapper-created,
+loopback-only publication), a localhost Host header and, when present, a matching
+Origin. Do not expose the local service through an external reverse proxy.
+On upgrade, use an updated backend image and run `./vulnscout restart` with the
+updated wrapper to recreate the container: `serve` alone does not replace an
+existing public port mapping or mark it as loopback-only.
+If you set the wrapper's `VULNSCOUT_BIND_ADDRESS` to a LAN address or `0.0.0.0`,
+ordinary UI/API access remains available, but the Agent and host-folder endpoints do not
+trust container-forwarded requests. Use `./vulnscout ai-context` on the host
+to manage attachments.
+
+**How it works and security model.**
+
+- The wrapper starts or reuses an **unprivileged helper process on the host, as
+  the invoking user** (never root; it refuses to run as root). It needs `python3`
+  3.9 or newer on the host and uses only its standard library. Even in dev mode
+  the wrapper extracts the helper from the trusted configured image into host-only
+  state, once per image ID; rebuild the image to test helper changes. `vulnscout stop`
+  and `ai-context helper stop` stop it.
+- It listens on a **private Unix socket** `host-helper/helper.sock` inside
+  `VULNSCOUT_CACHE_DIR`, which the container already mounts at
+  `/cache/vulnscout`: the directory is `0700`, the socket `0600`, both owned by
+  the invoking user, and the helper also checks the peer's credentials (the same
+  user, or root for rootful engines). Attaching folders later therefore needs no
+  container restart, and no container ID, mount or engine option changes. Docker
+  (rootful or rootless) and rootless Podman (with the wrapper's keep-id mapping)
+  can open an owner-only socket under Unix permissions because the container's
+  root maps to the invoking user or to host root. Host security policy still
+  applies: on SELinux-enforcing hosts the container may be denied access to
+  the host helper socket even when `ai-context helper status` succeeds. If
+  attach reports `PermissionError`, check the host audit log; restarting the
+  helper or making the socket world-writable is not a fix.
+- The **backend database is the source of truth** (variant, alias, host path,
+  creation time) for the UI, API, CLI and agents; every request is checked
+  against it before reaching the helper, so a detached alias is refused at once.
+  The **helper is the enforcement point**: it keeps its own alias registry in the
+  host-only `VULNSCOUT_HOST_HELPER_STATE_DIR` (default `.vulnscout/host-helper`,
+  outside the cache mount). Before a database write, the helper checks the folder
+  and signs a CLI approval for its attachment ID, variant, alias and path. The
+  database saves that proof so activation can retry after a restart without a
+  second host command. If the CLI reports `activation pending`, the attachment
+  was saved. Run `ai-context list` to retry and check availability. Keep the
+  private helper state: if its signing key is
+  lost, repeat the host command. An offline detach is recorded for retry and
+  cannot revoke a later attachment using the same alias. Host-source reads use
+  the exact path returned by the database lookup and validate/open it in the same
+  helper request, rather than resolving the alias a second time.
+- Requests are scoped by **variant ID and alias**. Paths are relative to the
+  attached folder; absolute paths, `..`, empty components and hidden or sensitive
+  names (the same list as codebase directories) are rejected, and every path
+  component, including each ancestor of the attached folder, is opened relative to a
+  verified directory descriptor without following symbolic links, so links
+  (including a directory swapped for a link) cannot escape. Hard-linked regular
+  files inside the folder are readable.
+- The helper is **read-only**: it can check status, stage
+  and activate approvals, update its private registry, and list, read or search
+  source files. No operation creates, writes or deletes
+  anything under an attached folder.
+- Bounds: listings visit at most **500,000 entries** or **10 s**, return pages of
+  200 files and report `truncated=true` (with `total` as a lower bound) when a
+  budget stops them; reads are limited to **10 MiB/file**, 200 lines and
+  **64 KiB**; searches are limited to **500,000 entries**, **100 matches**, **100 MiB** read or **20 s**
+  (`truncated=true` with a message), skip binary files and count files over
+  10 MiB as `skipped_large_files`. File patterns are limited to 512 characters
+  and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
+  time limits. At most 8 requests run at once.
+- Large trees (for example a Yocto build directory):
+  - `list_codebase_files` and `search_codebase` accept `folder`, a sub-folder of the
+    attachment (for example `build/tmp/work/<arch>/curl`). The walk starts there;
+    `pattern` is relative to `folder`, while returned paths stay relative to the
+    attached folder, so they can be passed to `read_codebase_file` unchanged.
+    `folder` must be a plain relative path: `..`, absolute paths, hidden or
+    sensitive names and links are rejected, and every component is opened without
+    following links. It is only valid for host folders.
+  - Without `folder`, start `pattern` with a literal path
+    (`build/tmp/work/*/curl/*`) instead of `*curl*`: folders that cannot match the
+    literal prefix are never opened and non-matching files are never stat'ed.
+  - Listing and search use the same bounded Python walk (`engine="python"`).
+    `visited_entries` includes nonmatching and excluded entries encountered during
+    traversal. Search `bytes_read` includes nonmatching and binary content; the
+    helper does not read a file known to exceed the remaining budget.
+  - A budget limit, I/O error or skipped path sets `truncated=true` with a message.
+    `skipped_paths` counts files whose paths cannot be used in a read request. Search
+    reports `io_errors` separately from binary and oversized skips and keeps
+    matches it could verify. Narrow `folder` or `pattern` for a budget limit;
+    check access and retry for an I/O error. An incomplete search cannot establish absence.
+
+**Unavailability is explicit.** When the helper is not running, the AI Context
+page shows **Host folder helper unavailable** and each folder as
+**Unavailable**. CLI attach fails if the helper cannot start. HTTP source reads
+return 503 if the helper cannot be reached; agents must report that as missing evidence. Restart it
+with `./vulnscout ai-context helper start` (or any `vulnscout` command). Its log
+is `helper.log` in the state directory.
+
+Limitations: the helper runs on the host that runs the container, so folders on
+a remote workstation are not accessible. The socket is shared through a bind
+mount, which requires a Linux container host (not Docker Desktop's VM), and an
+engine that maps container root to the invoking user or to host root: setups
+that remap it to another unprivileged UID (for example Docker `userns-remap`)
+cannot connect. Approve only roots whose content you may
+share with the selected AI provider; the filename exclusions are a safeguard,
+not secret detection. On SELinux-enforcing hosts, policy may deny the container
+from connecting to a socket created by a host process; check the audit log if
+folders stay unavailable while the helper runs. Context exports, imports and
+**Copy from...** do not carry attached folders.
 
 ## Review AI Assessments
 
