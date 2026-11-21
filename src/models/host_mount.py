@@ -45,6 +45,7 @@ class HostMount(Base):
 
     def to_dict(self) -> dict:
         return {
+            "attachment_id": str(self.id),
             "alias": self.alias,
             "file_id": self.file_id,
             "host_path": self.host_path,

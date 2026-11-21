@@ -3,7 +3,7 @@
 
 """Host folders attached read-only to a variant through the host folder helper."""
 
-from flask import jsonify
+from flask import jsonify, request
 
 from ..controllers import host_mounts
 from ..routes._scan_helpers import parse_uuid_or_400
@@ -47,10 +47,12 @@ def init_app(app):
 
         OpenAPI:
         path alias string required Alias of the attached folder.
+        query attachment_id uuid optional Only detach the attachment with this ID.
         response 200 HostMountDetached Folder detached; warning reports a helper cleanup problem.
-        response 400 Error Invalid variant identifier or alias.
+        response 400 Error Invalid variant identifier, alias or attachment identifier.
         response 403 Error Local operator access required.
-        response 404 Error Variant or alias not found.
+        response 404 Error Variant not found, or alias not found on an unconditional detach.
+        response 409 Error The specified attachment is no longer present under the alias.
         """
         if error := _access_error():
             return error
@@ -58,10 +60,18 @@ def init_app(app):
         if err:
             return err
         assert variant_uuid is not None
+        expected_id = None
+        if (value := request.args.get("attachment_id")) is not None:
+            expected_id, err = parse_uuid_or_400(value, "attachment_id")
+            if err:
+                return err
         try:
-            existed, warning = host_mounts.detach(variant_uuid, alias)
+            existed, warning = host_mounts.detach(variant_uuid, alias, expected_id=expected_id)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         if not existed:
+            if expected_id is not None:
+                message = f"Attachment '{alias}' was removed or replaced. Refresh the folder list."
+                return jsonify({"error": message}), 409
             return jsonify({"error": f"No folder is attached as '{alias}' for this variant."}), 404
         return jsonify({"alias": alias, "detached": True, "warning": warning})

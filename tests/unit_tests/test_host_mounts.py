@@ -296,6 +296,28 @@ class TestAttachDetach:
         assert client.delete(f"/api/variants/{variant.id}/context/mounts/build").status_code == 404
         assert _source(client, variant, "mount:build").status_code == 404
 
+    def test_conditional_detach_rejects_reused_alias(self, client, variant, host, helper_server):
+        url = f"/api/variants/{variant.id}/context/mounts"
+        _attach(helper_server, variant, "src", host["app"])
+        target = {"attachment_id": client.get(url).json["mounts"][0]["attachment_id"]}
+        assert client.delete(f"{url}/src", query_string=target).status_code == 200
+        assert client.delete(f"{url}/src", query_string=target).status_code == 409
+
+        _attach(helper_server, variant, "src", host["build"])
+        revision = VariantContext.get_by_variant(variant.id).updated_at
+        assert client.delete(f"{url}/src", query_string=target).status_code == 409
+        replacement = client.get(url).json["mounts"][0]
+        assert replacement["attachment_id"] != target["attachment_id"]
+        assert replacement["status"] == "available" and replacement["host_path"] == str(host["build"])
+        assert VariantContext.get_by_variant(variant.id).updated_at == revision
+
+    def test_invalid_detach_precondition_is_not_unconditional(self, client, variant, host, helper_server):
+        _attach(helper_server, variant, "src", host["app"])
+        url = f"/api/variants/{variant.id}/context/mounts/src"
+        for value in ("", "invalid"):
+            assert client.delete(url, query_string={"attachment_id": value}).status_code == 400
+        assert HostMount.get(variant.id, "src") is not None
+
     def test_reattach_is_idempotent_but_aliases_are_unique(self, client, variant, host, helper_server):
         assert _attach(helper_server, variant, "src", host["app"])[1:] == (True, None)
         context = VariantContext.get_by_variant(variant.id)

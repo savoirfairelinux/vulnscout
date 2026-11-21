@@ -39,12 +39,12 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
         return () => { latestRequest.current = null; };
     }, [load]);
 
-    const detach = async (alias: string) => {
+    const detach = async (alias: string, attachmentId: string) => {
         setBusy(true);
         setError('');
         setNotice('');
         try {
-            const warning = await Context.detachMount(variantId, alias);
+            const warning = await Context.detachMount(variantId, alias, attachmentId);
             setNotice(warning ? `Detached ${alias}. ${warning}` : `Detached ${alias}.`);
             await load();
         } catch (failure) {
@@ -75,7 +75,7 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
             {mounts.length > 0 && (
                 <ul aria-label="Attached folders" className="space-y-1">
                     {mounts.map(mount => (
-                        <li key={mount.alias} className="flex flex-wrap items-center gap-2 text-sm text-zinc-200">
+                        <li key={mount.attachment_id} className="flex flex-wrap items-center gap-2 text-sm text-zinc-200">
                             <code>{mount.alias}</code>
                             <span className="break-all">{mount.host_path}</span>
                             <span className={mount.status === 'available' ? 'text-xs text-green-400' : 'text-xs text-amber-300'}>
@@ -83,7 +83,7 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
                             </span>
                             {mount.status !== 'available' && mount.message && <span className={WARNING}>{mount.message}</span>}
                             <button type="button" className={BUTTON_SECONDARY} disabled={disabled || busy}
-                                aria-label={`Detach ${mount.alias}`} onClick={() => void detach(mount.alias)}>
+                                aria-label={`Detach ${mount.alias}`} onClick={() => void detach(mount.alias, mount.attachment_id)}>
                                 Detach
                             </button>
                         </li>

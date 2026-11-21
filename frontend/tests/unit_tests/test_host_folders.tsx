@@ -9,8 +9,10 @@ beforeEach(() => fetchMock.resetMocks());
 
 const props = { variantId: "v1", projectName: "demo", variantName: "x86", disabled: false };
 const helper = { available: true, message: null };
-const available = { alias: "src", host_path: "/work/app", status: "available" };
-const unavailable = { alias: "build", host_path: "/work/build", status: "unavailable", message: "Host folder not found." };
+const available = { attachment_id: "3488d574-c2db-44e9-9ed1-34f413541295",
+    alias: "src", host_path: "/work/app", status: "available" };
+const unavailable = { attachment_id: "bf19a62f-ac62-4534-a65d-c74251a1de0a",
+    alias: "build", host_path: "/work/build", status: "unavailable", message: "Host folder not found." };
 
 test("lists attached folders and refreshes after detaching one", async () => {
     fetchMock.mockResponses(
@@ -27,7 +29,8 @@ test("lists attached folders and refreshes after detaching one", async () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Detach build" }));
     expect(await screen.findByText("Detached build. Cleanup pending.")).toBeVisible();
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://localhost/api/variants/v1/context/mounts/build",
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+        `http://localhost/api/variants/v1/context/mounts/build?attachment_id=${unavailable.attachment_id}`,
         expect.objectContaining({ method: "DELETE" }));
     expect(screen.queryByRole("button", { name: "Detach build" })).not.toBeInTheDocument();
 });
