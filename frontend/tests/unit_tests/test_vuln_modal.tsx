@@ -269,6 +269,35 @@ describe('Vulnerability Modal', () => {
         await waitFor(() => expect(assessmentFetches()).toBe(6));
     });
 
+    test('waits for a slow snapshot before replaying writes and aborts it on scope change', async () => {
+        fetchMock.resetMocks();
+        const signals: AbortSignal[] = [];
+        let release!: () => void;
+        fetchMock.mockResponse(async req => {
+            if (req.url.includes('/variant-snapshots')) {
+                signals.push(req.signal);
+                if (signals.length > 1) await new Promise<void>(resolve => { release = resolve; });
+            } else if (req.url.includes('/variants')) {
+                return JSON.stringify([{ id: 'v1', name: 'Alpha', project_id: 'proj1' }]);
+            }
+            return '[]';
+        });
+        const props = { vuln: { ...vulnerability }, onClose: () => {}, appendAssessment: () => {},
+            appendCVSS: () => null, patchVuln: () => {}, projectId: 'proj1' };
+        const { rerender } = render(<VulnModal {...props} />);
+        await waitFor(() => expect(signals).toHaveLength(1));
+        const announce = () => window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT));
+        await act(async () => { announce(); });
+        await act(async () => { announce(); });
+        expect(signals).toHaveLength(2);
+        expect(signals[1].aborted).toBe(false);
+        await act(async () => { release(); });
+        expect(signals).toHaveLength(3);
+        rerender(<VulnModal {...props} variantId="v1" />);
+        expect(signals[2].aborted).toBe(true);
+        await act(async () => { release(); });
+    });
+
     test('titles the add form above the assessment history and draws no bar for a single assessment', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponse(JSON.stringify([]));
