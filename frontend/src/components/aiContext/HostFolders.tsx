@@ -39,12 +39,12 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
         return () => { latestRequest.current = null; };
     }, [load]);
 
-    const detach = async (alias: string, attachmentId: string) => {
+    const detach = async (alias: string, revision: string) => {
         setBusy(true);
         setError('');
         setNotice('');
         try {
-            const warning = await Context.detachMount(variantId, alias, attachmentId);
+            const warning = await Context.detachMount(variantId, alias, revision);
             setNotice(warning ? `Detached ${alias}. ${warning}` : `Detached ${alias}.`);
             await load();
         } catch (failure) {
@@ -83,7 +83,7 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
                             </span>
                             {mount.status !== 'available' && mount.message && <span className={WARNING}>{mount.message}</span>}
                             <button type="button" className={BUTTON_SECONDARY} disabled={disabled || busy}
-                                aria-label={`Detach ${mount.alias}`} onClick={() => void detach(mount.alias, mount.attachment_id)}>
+                                aria-label={`Detach ${mount.alias}`} onClick={() => void detach(mount.alias, mount.approval_revision)}>
                                 Detach
                             </button>
                         </li>

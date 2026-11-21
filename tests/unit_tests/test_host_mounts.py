@@ -316,7 +316,22 @@ class TestAttachDetach:
         url = f"/api/variants/{variant.id}/context/mounts/src"
         for value in ("", "invalid"):
             assert client.delete(url, query_string={"attachment_id": value}).status_code == 400
+            assert client.delete(url, query_string={"approval_revision": value}).status_code == 400
         assert HostMount.get(variant.id, "src") is not None
+
+    def test_conditional_detach_rejects_same_path_reapproval(self, client, variant, host, helper_server):
+        url = f"/api/variants/{variant.id}/context/mounts"
+        _attach(helper_server, variant, "src", host["app"])
+        original = client.get(url).json["mounts"][0]
+        host["app"].rename(host["root"] / "previous")
+        host["app"].mkdir()
+        _attach(helper_server, variant, "src", host["app"])
+        current = client.get(url).json["mounts"][0]
+        assert current["attachment_id"] == original["attachment_id"]
+        assert current["approval_revision"] != original["approval_revision"]
+        for row, status in ((original, 409), (current, 200)):
+            response = client.delete(f"{url}/src", query_string={"approval_revision": row["approval_revision"]})
+            assert response.status_code == status
 
     def test_reattach_is_idempotent_but_aliases_are_unique(self, client, variant, host, helper_server):
         assert _attach(helper_server, variant, "src", host["app"])[1:] == (True, None)

@@ -433,12 +433,13 @@ SCHEMAS: dict[str, Any] = {
     }, ("file_id", "path", "status", "message", "file_count", "directory_count")),
     "HostMount": _object({
         "attachment_id": _UUID,
+        "approval_revision": _UUID,
         "alias": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
         "file_id": {"type": "string", "example": "mount:src"},
         "host_path": _STRING, "created_at": _DATE,
         "status": {"type": "string", "enum": ["available", "unavailable"]},
         "message": _STRING,
-    }, ("attachment_id", "alias", "file_id", "host_path", "created_at", "status", "message")),
+    }, ("attachment_id", "approval_revision", "alias", "file_id", "host_path", "created_at", "status", "message")),
     "HostMountList": _object({
         "helper": _object({"available": _BOOL, "message": _TEXT}, ("available", "message")),
         "mounts": _array(_ref("HostMount")),

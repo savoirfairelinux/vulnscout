@@ -31,6 +31,7 @@ type Rating = 'low' | 'medium' | 'high' | null;
 /** A host folder attached read-only to a variant; agents browse it with `file_id`. */
 type HostMount = {
     attachment_id: string;
+    approval_revision: string;
     alias: string;
     file_id: string;
     host_path: string;
@@ -309,10 +310,10 @@ class Context {
     }
 
     /** Detaches a folder; resolves to the helper cleanup warning, if any. */
-    static async detachMount(variantId: string, alias: string, attachmentId: string): Promise<string | null> {
+    static async detachMount(variantId: string, alias: string, revision: string): Promise<string | null> {
         const res = await fetch(
             `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/mounts/${encodeURIComponent(alias)}`
-                + `?attachment_id=${encodeURIComponent(attachmentId)}`,
+                + `?approval_revision=${encodeURIComponent(revision)}`,
             { mode: 'cors', method: 'DELETE' }
         );
         const body = await jsonOrThrow<{ warning?: string | null }>(res, 'Failed to detach folder');
