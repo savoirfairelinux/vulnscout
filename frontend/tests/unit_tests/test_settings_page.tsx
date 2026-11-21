@@ -545,8 +545,7 @@ describe("Settings scoped project and variant views", () => {
     expect(screen.queryByRole("heading", { name: "Rename Variant" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete Variant" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("SBOM Files")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Complete refresh/ })).toBeChecked();
-    expect(screen.getByRole("radio", { name: /Custom refresh/ })).not.toBeChecked();
+    expect(screen.queryByRole("radio", { name: /refresh/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "NVD" })).not.toBeInTheDocument();
   });
 
@@ -758,7 +757,6 @@ describe("Settings scoped project and variant views", () => {
       project.id,
       variant.id,
       [file],
-      ["nvd", "epss", "ghsa", "euvd"],
     );
   });
 
@@ -777,7 +775,7 @@ describe("Settings scoped project and variant views", () => {
     }
     await user.click(screen.getByRole("button", { name: "Import" }));
     await waitFor(() => expect(variantsUploadSBOM).toHaveBeenCalledWith(
-      project.id, variant.id, files, ["nvd", "epss", "ghsa", "euvd"],
+      project.id, variant.id, files,
     ));
     expect(await screen.findByText("Upload rejected")).toBeInTheDocument();
   });
@@ -796,61 +794,11 @@ describe("Settings scoped project and variant views", () => {
       await user.click(screen.getByRole("button", { name: "Import" }));
 
       await waitFor(() => expect(variantsUploadSBOM).toHaveBeenCalledWith(
-        project.id, variant.id, [file], ["nvd", "epss", "ghsa", "euvd"],
+        project.id, variant.id, [file],
       ));
       expect(await screen.findByText("Upload rejected")).toBeInTheDocument();
     },
   );
-
-  test("custom import refresh submits only selected sources", async () => {
-    renderSettings();
-
-    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
-    fireEvent.click(screen.getByRole("button", { name: "Release" }));
-    fireEvent.click(await screen.findByRole("radio", { name: /Custom refresh/ }));
-    expect(screen.getByRole("checkbox", { name: "NVD" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "EPSS" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "GHSA" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "ENISA EUVD" })).toBeChecked();
-
-    fireEvent.click(screen.getByRole("checkbox", { name: "NVD" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "GHSA" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "ENISA EUVD" }));
-    const file = new File(["{}"], "sbom.json", { type: "application/json" });
-    fireEvent.change(screen.getByLabelText("SBOM Files"), { target: { files: [file] } });
-    fireEvent.click(screen.getByRole("button", { name: "Import" }));
-
-    await waitFor(() => expect(variantsUploadSBOM).toHaveBeenCalledWith(
-      project.id,
-      variant.id,
-      [file],
-      ["epss"],
-    ));
-  });
-
-  test("custom import refresh can be disabled without disabling import", async () => {
-    renderSettings();
-
-    fireEvent.click(await screen.findByRole("button", { name: "Expand Apollo" }));
-    fireEvent.click(screen.getByRole("button", { name: "Release" }));
-    fireEvent.click(await screen.findByRole("radio", { name: /Custom refresh/ }));
-    for (const source of ["NVD", "EPSS", "GHSA", "ENISA EUVD"]) {
-      fireEvent.click(screen.getByRole("checkbox", { name: source }));
-    }
-    expect(screen.getByText("The SBOM will be imported without refreshing vulnerability data.")).toBeInTheDocument();
-
-    const file = new File(["{}"], "sbom.json", { type: "application/json" });
-    fireEvent.change(screen.getByLabelText("SBOM Files"), { target: { files: [file] } });
-    expect(screen.getByRole("button", { name: "Import" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Import" }));
-
-    await waitFor(() => expect(variantsUploadSBOM).toHaveBeenCalledWith(
-      project.id,
-      variant.id,
-      [file],
-      [],
-    ));
-  });
 
   test("removes selected import files and navigates settings sections", async () => {
     renderSettings();
