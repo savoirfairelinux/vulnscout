@@ -790,6 +790,8 @@ Until it is approved, a pending AI assessment has no effect on the
 vulnerability's status, on scan history/diffs, or on any exported VEX.
 You can also inspect pending suggestions in **Review → AI Assessments**, where
 each row offers the same **Approve**, **Edit** and **Reject** actions.
+In that editor, pressing **Escape** or the close button asks before discarding
+unsaved changes. **Cancel changes** discards the draft immediately.
 
 ## AI Review of Custom Assessments
 

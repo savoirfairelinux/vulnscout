@@ -1433,6 +1433,25 @@ describe('Review — AI Assessments tab', () => {
         expect(postCalls().some(c => String(c[0]).includes('/approve'))).toBe(false);
     });
 
+    test('Escape and Close protect a dirty AI draft until discard is confirmed', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const notes = await screen.findByPlaceholderText(/Free text notes/);
+        await user.type(notes, ' changed');
+
+        await user.keyboard('{Escape}');
+        await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+        expect(notes).toHaveValue('shared note changed');
+
+        await user.click(screen.getByRole('button', { name: 'Close AI assessment editor' }));
+        await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+        expect(notes).not.toBeInTheDocument();
+        expect(postCalls().some(c => String(c[0]).includes('/approve'))).toBe(false);
+    });
+
     test('a failed edited approval keeps the AI row editor open with the error', async () => {
         mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')], mutationOk: false });
         render(<Review projectId="proj1" />);
