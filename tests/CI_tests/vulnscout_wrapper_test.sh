@@ -59,10 +59,11 @@ case "$1" in
             *" --ai-context-attach --host-permit "*)
                 while [[ "$1" != --host-permit ]]; do shift; done
                 python3 - "$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock" "${@:2}" <<'PY'
-import json, socket, sys, uuid
+import json, os, socket, sys, uuid
+os.chdir(os.path.dirname(sys.argv[1]))
 def call(op, **params):
     with socket.socket(socket.AF_UNIX) as client:
-        client.connect(sys.argv[1])
+        client.connect(os.path.basename(sys.argv[1]))
         client.sendall(json.dumps(dict(op=op, **params)).encode() + b"\n")
         reply = json.loads(client.makefile("rb").readline())
         assert reply["ok"], reply
@@ -879,17 +880,37 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
         exit 1
     fi
 
-    if [[ -e /sys/fs/selinux/enforce ]]; then
-        # Simulate a recreated container using a label this test user can create.
-        export VULNSCOUT_TEST_PROCESS_LABEL
-        VULNSCOUT_TEST_PROCESS_LABEL="$(id -Z)"
-        run_ok ai-context list
-        [[ "$(cat "$state/helper.pid")" != "$pid" ]]
+    (
+        source "$ROOT_DIR/vulnscout" --help >/dev/null
+        host_helper_socket_label() { echo test-label; }
+        python3() {
+            local -a args=()
+            while (( $# )); do
+                if [[ "$1" == --socket-label ]]; then
+                    [[ "$2" == test-label ]] || return 1
+                    echo launch >> "$state/launches"
+                    sleep 0.3   # Let the competing refresh reach the startup path.
+                    shift 2
+                else
+                    args+=("$1"); shift
+                fi
+            done
+            command python3 "${args[@]}"
+        }
+        start_host_helper > "$state/refresh1" & first=$!
+        start_host_helper > "$state/refresh2" & second=$!
+        wait "$first"
+        wait "$second"
+        [[ "$(cat "$state/launches")" == launch && "$(cat "$state/helper.pid")" != "$pid" ]]
         pid="$(cat "$state/helper.pid")"
-        run_ok ai-context helper status
-        run_ok ai-context list
-        [[ "$(cat "$state/helper.pid")" == "$pid" ]]
-    fi
+        ai_context_helper status
+        start_host_helper
+        [[ "$(cat "$state/helper.pid")" == "$pid" && "$(cat "$state/launches")" == launch ]]
+        ai_context_helper restart
+        [[ "$(cat "$state/helper.pid")" != "$pid" ]]
+        ai_context_helper status
+    )
+    pid="$(cat "$state/helper.pid")"
 
     # A rebuilt image needs a matching daemon.
     export VULNSCOUT_TEST_IMAGE_GENERATION=2 VULNSCOUT_TEST_RUNNING_IMAGE=previous
