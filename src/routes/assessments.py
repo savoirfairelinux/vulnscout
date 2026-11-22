@@ -1892,6 +1892,9 @@ def init_app(app: Flask) -> None:
             return {"error": "Approval accepts only rationale fields and expected_fingerprint"}, 400
         if any(not isinstance(value, str) for value in payload.values()):
             return {"error": "Assessment edit fields must be strings"}, 400
+        for field in APPROVAL_EDIT_FIELDS:
+            if field in payload and "\x00" in payload[field]:
+                return {"error": f"{field} must not contain NUL characters"}, 400
         row, err = _resolve_pending_ai_row(assessment_id)
         if err is not None:
             return err

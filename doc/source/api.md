@@ -985,9 +985,11 @@ The body is optional. Without one (or with `{}`), the suggestion is approved
 unchanged. You may amend `status_notes`, `justification`, `impact_statement`
 and `workaround` in the same transaction as approval. Omitted fields keep
 their suggested values. To clear an optional text field, send an empty
-string. For `not_affected`, the edited result must have a valid justification
-or a nonblank impact statement. The suggested verdict and targets are fixed:
-do not send `status`, even if it matches the stored verdict. For `not_affected`,
+string. A rationale field containing a NUL character returns `400` and leaves the
+suggestion pending and unchanged. For `not_affected`, the edited result must
+have a valid justification or a nonblank impact statement. The suggested
+verdict and targets are fixed: do not send `status`, even if it matches the
+stored verdict. For `not_affected`,
 switching to or from `component_not_present` returns `400`: that justification
 exports as `false_positive` in CycloneDX.
 
