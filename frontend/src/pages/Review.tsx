@@ -270,9 +270,10 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [editCompatibilityError, setEditCompatibilityError] = useState<string | undefined>();
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [editHasUnsavedChanges, setEditHasUnsavedChanges] = useState(false);
-    const [showDiscardEditConfirmation, setShowDiscardEditConfirmation] = useState(false);
+    const [discardEditor, setDiscardEditor] = useState<'assessment' | 'ai' | null>(null);
     const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
     const [aiEditingRow, setAiEditingRow] = useState<ReviewRow | null>(null);
+    const [aiEditHasChanges, setAiEditHasChanges] = useState(false);
     const [aiEditSaving, setAiEditSaving] = useState(false);
     const [aiEditError, setAiEditError] = useState<string | null>(null);
     const listScope = useMemo(() => ({ projectId, variantId }), [projectId, variantId]);
@@ -285,6 +286,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         setAssessments([]);
         setAiAssessments([]);
         setAiEditingRow(null);
+        setDiscardEditor(editor => editor === 'ai' ? null : editor);
         setAiEditSaving(false);
         setAiEditError(null);
         return () => { activeListScope.current = null; };
@@ -527,14 +529,18 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const closeAssessmentEditor = () => {
         if (editSubmitting) return;
         if (editHasUnsavedChanges) {
-            setShowDiscardEditConfirmation(true);
+            setDiscardEditor('assessment');
             return;
         }
         setEditingRow(null);
     };
 
     const discardAssessmentEdit = () => {
-        setShowDiscardEditConfirmation(false);
+        setDiscardEditor(null);
+        if (discardEditor === 'ai') {
+            closeAiAssessmentEditor();
+            return;
+        }
         setEditHasUnsavedChanges(false);
         setEditingRow(null);
     };
@@ -944,6 +950,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     }, [refreshAssessmentLists, showMessage]);
 
     const openAiAssessmentEditor = useCallback((row: ReviewRow) => {
+        setAiEditHasChanges(false);
         setAiEditError(null);
         setShowBanner(false);
         setAiEditingRow(row);
@@ -2167,7 +2174,10 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 <ModalShell
                     isOpen={true}
                     title={aiEditingRow.vuln_id}
-                    onClose={closeAiAssessmentEditor}
+                    onClose={() => {
+                        if (aiEditHasChanges) setDiscardEditor('ai');
+                        else closeAiAssessmentEditor();
+                    }}
                     closeLabel="Close AI assessment editor"
                     closeDisabled={aiEditSaving}
                     closeOnEscape={!aiEditSaving}
@@ -2179,6 +2189,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         assessment={aiEditingRow}
                         onConfirm={edits => { void handleConfirmAiEdit(edits); }}
                         onCancel={closeAiAssessmentEditor}
+                        onFieldsChange={setAiEditHasChanges}
                         triggerBanner={showMessage}
                         saving={aiEditSaving}
                         errorMessage={aiEditError}
@@ -2198,13 +2209,13 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             />
 
             <ConfirmationModal
-                isOpen={showDiscardEditConfirmation}
+                isOpen={discardEditor !== null}
                 title="Discard assessment changes?"
                 message="Your unsaved assessment changes will be lost."
                 confirmText="Discard changes"
                 cancelText="Keep editing"
                 onConfirm={discardAssessmentEdit}
-                onCancel={() => setShowDiscardEditConfirmation(false)}
+                onCancel={() => setDiscardEditor(null)}
             />
         </div>
     );
