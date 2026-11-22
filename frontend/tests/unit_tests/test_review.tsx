@@ -1301,6 +1301,29 @@ describe('Review — AI Assessments tab', () => {
         expect(screen.queryByRole('button', { name: 'Confirm and approve' })).not.toBeInTheDocument();
     });
 
+    test('shows missing rationale inside the AI editor until the reviewer corrects it', async () => {
+        mockNetwork([], { aiReviewList: [{
+            ...makeAssessment('ai1', 'v1'), status: 'not_affected',
+            justification: 'code_not_reachable', impact_statement: 'Original reason',
+        }] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const editor = within(screen.getByRole('dialog'));
+        const justification = editor.getByRole('combobox');
+        await user.selectOptions(justification, 'none');
+        const impact = editor.getByPlaceholderText(/Why this vulnerability is not exploitable/i);
+        await user.clear(impact);
+        await user.type(impact, '   ');
+        await user.click(editor.getByRole('button', { name: 'Confirm and approve' }));
+
+        expect(editor.getByRole('alert')).toHaveTextContent(/provide a justification or an impact statement/i);
+        expect(postCalls().some(c => String(c[0]).includes('/approve'))).toBe(false);
+        await user.selectOptions(justification, 'code_not_reachable');
+        expect(editor.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     test('a failed refresh and an older response cannot restore approved row actions', async () => {
         const pending = { ...makeAssessment('ai1', 'v1'), simplified_status: 'Exploitable' };
         mockNetwork([], { aiReviewList: [pending] });

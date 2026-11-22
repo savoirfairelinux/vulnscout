@@ -264,7 +264,7 @@ function EditAssessment({
 
     useEffect(() => {
         setMessageError(null);
-    }, [status, statusNotes, impact]);
+    }, [status, statusNotes, impact, justification]);
 
     // Check if fields have changes compared to original assessment
     useEffect(() => {
@@ -301,13 +301,12 @@ function EditAssessment({
         if (status == '' || justification == '')
             return;
         if (status == "not_affected" && justification == 'none' && !(allowImpactInsteadOfJustification && impact.trim())) {
-            const message = allowImpactInsteadOfJustification
-                ? "Provide a justification or an impact statement for this status"
-                : "You must provide a justification for this status";
-            if (triggerBanner) {
-                triggerBanner(message, "error");
+            if (allowImpactInsteadOfJustification) {
+                setMessageError("Provide a justification or an impact statement for this status");
+            } else if (triggerBanner) {
+                triggerBanner("You must provide a justification for this status", "error");
             } else {
-                internalTriggerBanner(message, "error");
+                internalTriggerBanner("You must provide a justification for this status", "error");
             }
             return;
         }
