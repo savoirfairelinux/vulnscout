@@ -996,8 +996,8 @@ SCHEMAS.update({
         **_CONTEXT_TEXT_FIELDS,
         "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
     }, description=(
-        "With stride, an editor save storing every field (the STRIDE "
-        "model must describe a threat model). Without stride, a full replacement of the text fields; "
+        "With stride, an editor save storing every field (the STRIDE tables may be empty). "
+        "Without stride, a full replacement of the text fields; "
         "threat_model and risks are read-only. Source code is accessed through the variant's directory."
     )),
     "SbomUploadAccepted": _object({

@@ -319,7 +319,8 @@ opens its page; there is one **Save changes** button per page and no auto-save.
 Leaving a page with unsaved changes asks to Save, Discard or Cancel.
 
 A variant page has four tabs, **Context**, **System**, **Threat model** and
-**Risks**. Edits are kept when you switch tabs. **Copy from...** replaces the
+**Risks**. You can save **Context** or **System** on its own and add threats and
+risks later. Edits are kept when you switch tabs. **Copy from...** replaces the
 whole draft with another variant's context (any project); nothing is saved until
 you save. Uploaded references are never copied.
 

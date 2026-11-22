@@ -5,7 +5,7 @@ import Context, { ContextSaveError } from '../../src/handlers/context';
 import type { MergedContext, StrideModel } from '../../src/handlers/context';
 import {
     STRIDE_CATEGORIES, RATING_OPTIONS, emptyStrideModel, emptyDraft, draftFromContext,
-    draftsEqual, nextId, isReferenced, hasThreatModel, requiredFieldErrors,
+    draftsEqual, nextId, isReferenced, requiredFieldErrors,
 } from '../../src/helpers/strideModel';
 
 beforeEach(() => fetchMock.resetMocks());
@@ -107,19 +107,6 @@ describe('ids and references', () => {
         expect(isReferenced(populated, 'T1')).toBe(true);
         expect(isReferenced(populated, 'C9')).toBe(false);
         expect(isReferenced({ ...populated, risks: [] }, 'T1')).toBe(false);
-    });
-});
-
-describe('hasThreatModel', () => {
-    test('counts system fields and rows but not risks', () => {
-        const base = emptyDraft();
-        expect(hasThreatModel(base)).toBe(false);
-        expect(hasThreatModel({ ...base, system: { ...base.system, scope: 'x' } })).toBe(true);
-        expect(hasThreatModel({ ...base, system: { ...base.system, scope: '  ' } })).toBe(false);
-        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), components: populated.components } })).toBe(true);
-        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), interactions: populated.interactions } })).toBe(true);
-        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), threats: populated.threats } })).toBe(true);
-        expect(hasThreatModel({ ...base, stride: { ...emptyStrideModel(), risks: populated.risks } })).toBe(false);
     });
 });
 

@@ -673,8 +673,16 @@ describe('AIContext page', () => {
             expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
         });
 
-        test('variant save sends the editor shape through saveVariantEditor', async () => {
-            const backend = mockBackend();
+        test('editing Context sends the saved STRIDE rows unchanged', async () => {
+            const original = variantContext('v1', 'TM');
+            const stride = {
+                ...emptyStrideModel(),
+                components: [{ id: 'C1', name: 'Gateway', description: '', trust_zone: '' }],
+                threats: [{ id: 'T1', category: 'tampering', description: 'Modified firmware', target_ids: ['C1'] }],
+                risks: [{ id: 'R1', threat_ids: ['T1'], description: '', impact: 'high', likelihood: null,
+                    mitigation: '', residual: '' }],
+            };
+            const backend = mockBackend({ contexts: { v1: { ...original, editor: { ...original.editor, stride } } } });
             renderPage({ projectId: 'p1' });
             await openVariant1();
             fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Gateway' } });
@@ -688,21 +696,31 @@ describe('AIContext page', () => {
             expect(JSON.parse(puts[0].body ?? '{}')).toEqual({
                 variant_description: 'Gateway', environment: 'Lab', other_info: null,
                 system: { scope: 'TM', actors: null, entry_points: null, trust_boundaries: null },
-                stride: emptyStrideModel(),
+                stride,
             });
         });
 
-        test('a missing threat model blocks the save and opens the Threat model tab', async () => {
-            const backend = mockBackend({ threat: '' });
-            renderPage({ projectId: 'p1' });
+        test.each([
+            ['Context', 'Environment', 'Lab'],
+            ['System', 'System scope and assets', 'Gateway'],
+        ])('%s can be saved and reopened before adding any threats', async (tab, field, value) => {
+            const backend = mockBackend({ threat: '', echoPut: true });
+            const scope = { projectId: 'p1' };
+            const page = renderPage(scope);
             await openVariant1();
-            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Lab' } });
-
+            fireEvent.click(variantTab(tab));
+            fireEvent.change(screen.getByLabelText(field), { target: { value } });
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
-            expect(await screen.findByText('A threat model is required.')).toBeInTheDocument();
-            expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
-            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+            expect(await screen.findByText('Saved.')).toBeInTheDocument();
+            const [put] = requestsTo(backend, '/api/variants/v1/context', 'PUT');
+            expect(JSON.parse(put.body ?? '{}').stride).toEqual(emptyStrideModel());
+            page.unmount();
+            renderPage(scope);
+            await openVariant1();
+            fireEvent.click(variantTab(tab));
+            expect(screen.getByLabelText(field)).toHaveValue(value);
+            expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
         });
 
         test('save 400 marks the offending field and shows the error banner', async () => {
@@ -1208,11 +1226,13 @@ describe('AIContext page', () => {
             expect(screen.queryByLabelText('Risk R2 description')).not.toBeInTheDocument();
         });
 
-        test('a risk without a threat blocks the save and says so next to the cell', async () => {
-            const { backend } = await openStride();
+        test('saving Context still reports a risk entered without a threat', async () => {
+            const { backend } = await openStride({ threat: '' });
             addTargetedThreat();
             fireEvent.click(variantTab('Risks'));
             addRisk();
+            fireEvent.click(variantTab('Context'));
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Lab' } });
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
             expect(await screen.findByText('Select at least one threat.')).toBeInTheDocument();
@@ -1320,10 +1340,10 @@ describe('AIContext page', () => {
         });
 
         test('a threat_model 400 error opens the Threat model tab and shows the message', async () => {
-            await failWith({ threat_model: 'A threat model is required.' }, addTargetedThreat);
+            await failWith({ threat_model: 'Invalid threat model' }, addTargetedThreat);
 
             expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
-            expect(within(screen.getByRole('tabpanel', { name: 'Threat model' })).getByText('A threat model is required.')).toBeVisible();
+            expect(within(screen.getByRole('tabpanel', { name: 'Threat model' })).getByText('Invalid threat model')).toBeVisible();
         });
 
         test('a top-level risks 400 error opens the Risks tab and shows the message', async () => {
@@ -1456,8 +1476,12 @@ describe('AIContext page', () => {
             ['Variant description', 'Environment', 'Other information']
                 .forEach(name => expect(screen.getByRole('textbox', { name })).toHaveValue(''));
             await user.click(screen.getByRole('button', { name: 'Save changes' }));
-            expect(await screen.findByText('A threat model is required.')).toBeInTheDocument();
-            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+            expect(await screen.findByText('Saved.')).toBeInTheDocument();
+            const [put] = requestsTo(backend, '/api/variants/v1/context', 'PUT');
+            expect(JSON.parse(put.body ?? '{}')).toEqual({
+                variant_description: null, environment: null, other_info: null,
+                system: NO_SYSTEM, stride: emptyStrideModel(),
+            });
         });
 
         test('a failed source load shows an error and keeps the draft', async () => {

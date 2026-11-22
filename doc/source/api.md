@@ -364,8 +364,8 @@ Two body shapes are accepted.
 `variant_description`, `environment`, `other_info`,
 `system` (`scope`, `actors`, `entry_points`, `trust_boundaries`) and
 `stride` (`components`, `interactions`, `threats`, `risks`).
-Validation failures return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`
-(for example `"threat_model": "A threat model is required."`).
+The STRIDE tables may all be empty. Validation failures return `400` with
+`{"error": ..., "fields": {"<path>": "<message>"}}`.
 A blank required STRIDE field reports `is required` (for example
 `"interactions[0].destination_id": "is required"`); a threat needs a category and at least one target
 (`"threats[0].target_ids": "is required"`). A non-empty id that matches no row reports
@@ -403,7 +403,7 @@ Export format `3.0` carries `system` and `stride_model` per variant, alongside t
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
 contents are not exported, and import ignores `files`. Directory names,
 mounts and contents are not transferred; provision each destination variant's own directory.
-Every entry is imported through the editor path, so it needs a non-empty threat model;
+Every entry is imported through the editor path and needs a `stride_model` object, which may be empty;
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
 Files exported as `2.x` still import, but their removed source selector and external paths are discarded.
 For `2.0`, each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
@@ -452,7 +452,6 @@ Rules checked on import, with the same messages as the editor save:
   `denial_of_service` or `elevation_of_privilege`) with at least one non-repeated `target_ids` entry, and a risk with at
   least one non-repeated `threat_ids` entry (its `description` is optional). `likelihood` and `impact` are `low`, `medium`,
   `high` or `null`.
-- The system fields and STRIDE tables together must render a non-empty threat model.
 - At most 500 rows per table and 20,000 characters per text field.
 
 `version` and `exported_at` are ignored on import, and a bare list of projects is accepted. The response lists
