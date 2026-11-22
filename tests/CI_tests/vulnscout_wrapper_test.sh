@@ -5,6 +5,29 @@ ROOT_DIR=$(readlink -f "$(dirname "$0")/../..")
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
+# A failed confined test must retain a possibly live helper's recovery files.
+cleanup_state="$TEST_DIR/confined-test"
+mkdir -p -- "$cleanup_state/host-helper"
+echo 123 > "$cleanup_state/host-helper/helper.pid"
+set +e
+(
+    # shellcheck source=/dev/null
+    source "$ROOT_DIR/tests/CI_tests/helper_selinux_podman_test.sh"
+    # shellcheck disable=SC2034
+    name=test-helper state="$cleanup_state" containers=(first second)
+    # shellcheck disable=SC2329
+    helper() { return 1; }
+    # shellcheck disable=SC2329
+    podman() { echo "$*" >> "$TEST_DIR/removals"; [[ "${*: -1}" != first ]]; }
+    trap cleanup EXIT
+    exit 42
+) 2>"$TEST_DIR/cleanup.log"
+cleanup_status=$?
+set -e
+[[ "$cleanup_status" == 42 && "$(< "$cleanup_state/host-helper/helper.pid")" == 123 ]]
+grep -Fq -- "$cleanup_state" "$TEST_DIR/cleanup.log"
+[[ "$(< "$TEST_DIR/removals")" == $'rm -ft 0 first\nrm -ft 0 second' ]]
+
 mkdir -p "$TEST_DIR/bin"
 cat > "$TEST_DIR/bin/podman" <<'EOF'
 #!/bin/bash
