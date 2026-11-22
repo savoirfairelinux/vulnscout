@@ -572,13 +572,13 @@ def register_tools(server, client: VulnScoutClient) -> None:
         and is limited to 500,000 visited entries. It never reads the MCP host filesystem.
         pattern is a case-sensitive file-path glob. Follow next_offset until null
         before claiming the list is complete. limit must be 1-200.
-        For an unfamiliar mount omit folder and inspect a small page of file paths.
-        The alias does not identify the layout; limit bounds the page, not traversal.
-        Narrow a large tree with an observed literal prefix or set folder to a
-        sub-folder relative to the mount (host folders only; no '..', links or
-        hidden names). The pattern is then relative to folder, while returned
-        paths stay relative to the mount for read_codebase_file. If a guessed
-        folder is not found, inspect the mount root and retry with an observed prefix.
+        Prefer a mount-relative folder or literal prefix from the caller or build
+        metadata. If the layout is unknown or a guessed folder is missing, inspect
+        one small root page of file paths. limit bounds the page, not traversal.
+        If no relevant prefix appears, ask for the relative folder or a narrower
+        attachment instead of paging the unfiltered root. With folder (host folders
+        only; no '..', links or hidden names), pattern is relative to folder but
+        returned paths stay relative to the mount for read_codebase_file.
         If the message says the listing stopped at its time or entry limit, the
         list is incomplete: narrow folder or pattern and repeat; this is not evidence
         that files are missing. Responses report engine, visited_entries and elapsed_seconds.
@@ -636,8 +636,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
         100 MiB read or 20 seconds and then report truncated=true with a message.
         I/O errors also mark searches incomplete. Check bytes_read and io_errors
         before interpreting a partial result.
-        On a large host folder use list_codebase_files to identify a mount-relative
-        sub-folder to search. Set folder to that sub-folder (host folders only) or start
+        On a large host folder use a mount-relative sub-folder from build metadata
+        or listed paths. Set folder to that sub-folder (host folders only) or start
         the pattern with a literal prefix; the pattern is relative to folder and returned paths stay
         relative to the attached folder. A time-limit or entry-limit message means
         "narrow folder or pattern and search again", never "no match".

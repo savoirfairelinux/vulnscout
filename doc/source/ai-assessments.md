@@ -710,10 +710,12 @@ to manage attachments.
   and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
   time limits. At most 8 requests run at once.
 - Large trees (for example a Yocto build directory):
-  - An alias identifies an attachment, not its layout. To orient yourself, omit
-    `folder` and inspect a small page of **file paths** from `list_codebase_files`.
-    `limit` bounds the returned page, not the underlying walk. If a guessed
-    sub-folder is missing, inspect the root rather than declaring the mount unavailable.
+  - An alias identifies an attachment, not its layout. Prefer a mount-relative
+    folder or literal prefix supplied by the caller or build metadata. If the
+    layout is unknown or a guessed folder is missing, inspect one small root page
+    of **file paths**. `limit` bounds the page, not the walk. If no path gives a
+    relevant prefix, ask for the mount-relative workdir or a narrower attachment
+    rather than paging the unfiltered root or declaring the mount unavailable.
   - `list_codebase_files` and `search_codebase` accept `folder`, a sub-folder of the
     attachment. For the CLI example above, `build` is already rooted at the Yocto
     work directory: use `<tuple>/<recipe>` from discovered paths, not
@@ -725,7 +727,7 @@ to manage attachments.
     sensitive names and links are rejected, and every component is opened without
     following links. It is only valid for host folders.
   - Without `folder`, start `pattern` with a literal path
-    from the listing instead of `*curl*`: folders that cannot match the
+    from metadata or the listing instead of `*curl*`: folders that cannot match the
     literal prefix are never opened and non-matching files are never stat'ed.
   - Listing and search use the same bounded Python walk (`engine="python"`).
     `visited_entries` includes nonmatching and excluded entries encountered during

@@ -13,9 +13,10 @@ ACTION_TIMEOUT = 600
 SKILLS_MISSING_ERROR = "Bundled agent skills not found. Check the installation or VULNSCOUT_SKILLS_PATH override."
 _WEB_OFF = {"0", "false", "no", "off"}
 MOUNT_DISCOVERY_MESSAGE = (
-    "For mount:<alias>, inspect a small page of file paths with list_codebase_files before assuming a layout. "
-    "Scope further list/search calls with a mount-relative folder or literal prefix from those paths. "
-    "Retry a missing subfolder from the mount root; narrow a truncated walk rather than inferring absence. "
+    "For mount:<alias>, prefer a mount-relative folder or literal prefix from the caller or build metadata. "
+    "If the layout is unknown or a guessed subfolder is missing, inspect one small root page of file paths. "
+    "If it shows no relevant prefix, ask for the relative folder or a narrower attachment instead of paging "
+    "the root or inferring absence. "
 )
 PROFILE_SYSTEM_MESSAGE = (
     "You are the VulnScout agent running a skill-driven action. The selected skill is the methodology: "
