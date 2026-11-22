@@ -1957,6 +1957,59 @@ Unavailable, expired or out-of-scope exact runs return `404`, never another run.
 The default retention window is 90 days; see
 [CLI archival and cleanup](cli-refresh-runs.md).
 
+Changes are recorded only when a value differs. Tracked lists (links, CPEs,
+weaknesses, patch links, KEV sources) are compared as unordered collections, so
+a provider returning the same entries in another order records no change, and
+refresh timestamps alone are never tracked.
+
+### Refresh Indicators of a Vulnerability
+
+```
+GET /api/vulnerabilities/<vuln_id>/refresh-indicators?project_id=…&variant_id=…
+```
+
+Returns, per source, the deltas of the latest retained refresh whose target for
+this vulnerability completed, using the same scope visibility as the routes
+above. This drives the **New**/**Updated** indicators of the vulnerability
+details modal. A newer failed, skipped, cancelled or pending target never
+replaces them and is reported as `later_attempt`. Reading the endpoint does not
+acknowledge anything. Returns `404` for an unknown vulnerability.
+
+```json
+{
+  "vuln_id": "CVE-2020-35492",
+  "scope": {"project_id": "…"},
+  "sources": [
+    {"source": "nvd", "state": "changed",
+     "run": {"run_id": "q-1234", "refresh_type": "full", "status": "complete",
+             "source_status": {"nvd": "complete"},
+             "started_at": "2026-10-30T12:00:00+00:00", "finished_at": "2026-10-30T12:00:05+00:00"},
+     "later_attempt": null,
+     "changes": [
+       {"field": "cvss:3.1:nvd@nist.gov:<metric_uuid>", "indicator": "updated", "kind": "changed",
+        "before": {"score": 7.5, "vector": "CVSS:3.1/…"}, "after": {"score": 9.8, "vector": "CVSS:3.1/…"},
+        "changed_at": "2026-10-30T12:00:01+00:00", "current": true,
+        "cvss": {"version": "3.1", "author": "nvd@nist.gov", "metric_id": "<metric_uuid>"}},
+       {"field": "links", "indicator": "new", "kind": "changed", "before": ["…"], "after": ["…", "https://…"],
+        "added": ["https://…"], "removed": [], "changed_at": "2026-10-30T12:00:01+00:00",
+        "current": true, "cvss": null}
+     ]},
+    {"source": "epss", "state": "no_change", "run": {"run_id": "q-1234", "…": "…"},
+     "later_attempt": {"status": "failed", "error": "HTTP 503", "run": {"run_id": "q-1300", "…": "…"}},
+     "changes": []}
+  ]
+}
+```
+
+`state` is `changed`, `no_change` (checked, nothing differed) or `no_baseline`
+(no completed check in scope). Several changes of one field within a run are
+collapsed into their net effect. `indicator` is `new` for previously absent
+values and lists that only gained entries, `updated` for modified values or
+lists that lost entries, and `removed` for cleared values. List fields carry
+`added` and `removed` entries. `current` is `false` once another write replaced
+the refreshed value. `run.status` is `running` or `incomplete` for partial or
+cancelled runs.
+
 ## Vulnerability History
 
 Every change to a vulnerability's data is recorded, whichever path wrote it: SBOM import, scans, bulk refreshes or single-CVE refreshes. Tracked fields are the description, severity (`status`), published date, attack vector, EPSS score, links, weaknesses, affected CPEs, patch links, the ENISA EUVD fields, and scanner-level CVSS scores, keyed `cvss:<version>:<author>`. User-entered, variant-scoped CVSS scores are not tracked.

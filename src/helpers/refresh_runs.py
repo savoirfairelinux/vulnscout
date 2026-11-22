@@ -390,7 +390,7 @@ def capture_changes(session, rows: list[dict]) -> None:
         return
     from ..models.metrics import Metrics
     from ..models.vulnerability import Vulnerability
-    from ..models.vulnerability_history import CVSS_FIELD_PREFIX, cvss_field, normalize_value
+    from ..models.vulnerability_history import CVSS_FIELD_PREFIX, cvss_field, equivalent_values, normalize_value
     import uuid
 
     connection = session.connection()
@@ -419,7 +419,7 @@ def capture_changes(session, rows: list[dict]) -> None:
                 select(getattr(Vulnerability, field)).where(Vulnerability.id == row["vuln_id"])
             ).scalar_one_or_none())
         before = session.info.get("refresh_before", {}).get((row["vuln_id"], field), row["old_value"])
-        if before == after:
+        if equivalent_values(before, after):
             continue
         kind = "first_enrichment" if before is None else "changed"
         snapshots.append({
