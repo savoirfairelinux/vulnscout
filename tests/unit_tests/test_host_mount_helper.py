@@ -846,6 +846,28 @@ def test_discover_recipe_task_log_relative_to_attachment(helper, tree, mount_wor
     assert read["content"].splitlines() == [f"recipe: {recipe}", f"{cve}: not vulnerable"]
 
 
+def test_root_sample_can_miss_a_mounted_recipe_workdir(helper, tree, monkeypatch):
+    workspace = tree["root"] / "workspace"
+    unrelated = workspace / "archives"
+    unrelated.mkdir(parents=True)
+    for n in range(8):
+        (unrelated / str(n)).touch()
+    workdir = "build/tmp/work/arm-poky-linux/sample/2.4/temp"
+    temp = workspace / workdir
+    temp.mkdir(parents=True)
+    (temp / "log.do_cve_check.17").touch()
+    attached(helper, tree, path=workspace)
+    scope = dict(variant_id=VARIANT, alias="src")
+    monkeypatch.setattr(hh, "MAX_WALK_ENTRIES", 5)
+
+    sample = ok(helper, "list", **scope, limit=1)
+    assert sample["truncated"] and sample["visited_entries"] == 5
+    assert len(sample["files"]) == 1 and sample["files"][0]["path"].startswith("archives/")
+    scoped = ok(helper, "list", **scope, folder=workdir)
+    assert not scoped["truncated"]
+    assert [f["path"] for f in scoped["files"]] == [f"{workdir}/log.do_cve_check.17"]
+
+
 def test_folder_rejects_traversal_links_hidden_and_missing_folders(helper, tree):
     attached(helper, tree)
     for folder in ("/", "///", "../outside", "/etc", "src/../..", ".git", "escape_dir", "api_token.txt", "src//x"):
