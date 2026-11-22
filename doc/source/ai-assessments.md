@@ -776,7 +776,9 @@ Pending AI assessments must be reviewed by a human before they become official.
        *Not applicable* / *False positive*) cannot be empty. For *Not applicable*,
        the editor shows an inline error if both justification and impact
        statement are missing. If the save fails,
-       the editor stays open with your changes and shows the error.
+       the editor stays open with your changes and shows the error. While
+       approval is in progress, the vulnerability modal cannot be closed
+       or used to navigate to another vulnerability.
        When Notes displays an imported impact statement, editing it moves the
        corrected message to notes and clears the old impact statement so both
        OpenVEX and CycloneDX include the correction exactly once.

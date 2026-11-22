@@ -4,7 +4,6 @@ fetchMock.enableMocks();
 import { act, fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
-// @ts-expect-error TS6133
 import React from 'react';
 
 import type { Vulnerability } from "../../src/handlers/vulnerabilities";
@@ -2888,6 +2887,7 @@ describe('Vulnerability Modal', () => {
         readOnly?: boolean;
         isEditing?: boolean;
         patchVuln?: jest.Mock;
+        navigation?: Pick<React.ComponentProps<typeof VulnModal>, 'currentIndex' | 'vulnerabilities' | 'onNavigate' | 'onClose'>;
         explorerState?: Partial<Vulnerability>;
         pendingAssessments?: typeof pendingAiAssessment[];
         fullHistory?: () => Promise<string>;
@@ -2926,6 +2926,7 @@ describe('Vulnerability Modal', () => {
                 appendAssessment={() => {}}
                 appendCVSS={() => null}
                 patchVuln={options?.patchVuln ?? (() => {})}
+                {...options?.navigation}
             />
         );
     };
@@ -3294,6 +3295,51 @@ describe('Vulnerability Modal', () => {
             expect(within(aiPanel()).getByRole('button', { name: 'Approving…' })).toBeVisible();
             await act(async () => finish([{ ...pendingAiAssessment, origin: 'custom' }]));
             expect(exit).toBeEnabled();
+        } finally {
+            approval.mockRestore();
+        }
+    });
+
+    test.each(['success', 'failure'])('holds the modal open until approval settles: %s', async outcome => {
+        let finish!: () => void;
+        const approval = jest.spyOn(Assessments, 'approveAi').mockImplementation(() => new Promise((resolve, reject) => {
+            finish = () => outcome === 'success' ? resolve([{ ...pendingAiAssessment, origin: 'custom' }])
+                : reject(new Error('Save failed'));
+        }));
+        const onClose = jest.fn(), onNavigate = jest.fn(), patchVuln = jest.fn();
+        try {
+            renderWithPendingAiAssessment({ isEditing: true, patchVuln, navigation: {
+                currentIndex: 1, vulnerabilities: [vulnerability, vulnerability, vulnerability], onClose, onNavigate,
+            } });
+            const user = userEvent.setup();
+            await screen.findByText(/AI-generated/i);
+            await user.click(within(aiPanel()).getByRole('button', { name: 'Edit' }));
+            await user.type(within(aiPanel()).getByPlaceholderText(/Free text notes/), ' revised');
+            await user.click(within(aiPanel()).getByRole('button', { name: 'Confirm and approve' }));
+            const controls = ['Close', 'Close modal', 'Previous vulnerability', 'Next vulnerability']
+                .map(name => screen.getByRole('button', { name }));
+            for (const control of controls) {
+                expect(control).toBeDisabled();
+                await user.click(control);
+            }
+            await user.keyboard('{Escape}{ArrowLeft}{ArrowRight}');
+            fireEvent.mouseDown(screen.getByTestId('vuln-modal-backdrop'));
+            fireEvent.mouseDown(screen.getByRole('dialog'));
+            expect(screen.queryByRole('button', { name: 'No, stay' })).not.toBeInTheDocument();
+            expect(onClose).not.toHaveBeenCalled();
+            expect(onNavigate).not.toHaveBeenCalled();
+
+            await act(async () => finish());
+            for (const control of controls) expect(control).toBeEnabled();
+            if (outcome === 'success') {
+                expect(patchVuln).toHaveBeenCalled();
+                await user.click(controls[3]);
+                expect(onNavigate).toHaveBeenCalledWith(2);
+            } else {
+                expect(within(aiPanel()).getByPlaceholderText(/Free text notes/)).toHaveValue('ai notes revised');
+                await user.keyboard('{Escape}');
+                expect(screen.getByRole('button', { name: 'No, stay' })).toBeVisible();
+            }
         } finally {
             approval.mockRestore();
         }

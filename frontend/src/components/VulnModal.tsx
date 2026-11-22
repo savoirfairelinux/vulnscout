@@ -619,16 +619,18 @@ type PendingAiEditTransition =
         setShowBanner(false);
     };
 
-    const handleClose = () => {
+    const handleClose = useCallback(() => {
+        if (aiEditSaving) return;
         if (hasUnsavedChanges) {
             setPendingNavigation(null);
             setShowConfirmClose(true);
         } else {
             onClose();
         }
-    };
+    }, [aiEditSaving, hasUnsavedChanges, onClose]);
 
     const handleConfirmClose = () => {
+        if (aiEditSaving) return;
         setShowConfirmClose(false);
         if (pendingAiEditTransition) {
             const transition = pendingAiEditTransition;
@@ -658,6 +660,7 @@ type PendingAiEditTransition =
     };
 
     const navigateTo = useCallback((targetIndex: number) => {
+        if (aiEditSaving) return;
         hideBanner();
         if (!vulnerabilities || currentIndex === undefined || !onNavigate) return;
         if (hasUnsavedChanges) {
@@ -666,10 +669,10 @@ type PendingAiEditTransition =
         } else {
             onNavigate(targetIndex);
         }
-    }, [vulnerabilities, currentIndex, onNavigate, hasUnsavedChanges]);
+    }, [vulnerabilities, currentIndex, onNavigate, hasUnsavedChanges, aiEditSaving]);
 
-    const canNavigatePrevious = vulnerabilities && currentIndex !== undefined && currentIndex > 0;
-    const canNavigateNext = vulnerabilities && currentIndex !== undefined && currentIndex < vulnerabilities.length - 1;
+    const canNavigatePrevious = !aiEditSaving && vulnerabilities && currentIndex !== undefined && currentIndex > 0;
+    const canNavigateNext = !aiEditSaving && vulnerabilities && currentIndex !== undefined && currentIndex < vulnerabilities.length - 1;
 
     // Navigation info
     const navigationInfo = vulnerabilities && currentIndex !== undefined
@@ -1245,12 +1248,7 @@ type PendingAiEditTransition =
 
             if (event.key === 'Escape') {
                 event.preventDefault();
-                if (hasUnsavedChanges) {
-                    setPendingNavigation(null);
-                    setShowConfirmClose(true);
-                } else {
-                    onClose();
-                }
+                handleClose();
             } else if (event.key === 'ArrowLeft' && canNavigatePrevious && !isInTextField) {
                 event.preventDefault();
                 navigateTo(currentIndex! - 1);
@@ -1264,7 +1262,7 @@ type PendingAiEditTransition =
         return () => {
             document.removeEventListener('keydown', handleKeyDown);
         };
-    }, [hasUnsavedChanges, onClose, canNavigatePrevious, canNavigateNext, navigateTo, currentIndex]);
+    }, [handleClose, canNavigatePrevious, canNavigateNext, navigateTo, currentIndex]);
 
     // Decorate raw assessments with per-target ``outdated``, mirroring what
     // the server's annotated listing returns (src/controllers/assessment_targets.py).
@@ -1811,6 +1809,7 @@ type PendingAiEditTransition =
             ) : <div />}
             <ModalButton
                 onClick={handleClose}
+                disabled={aiEditSaving}
                 className="!border-gray-600 !bg-gray-800 !text-gray-400 hover:!bg-gray-700 hover:!text-white"
             >
                 Close
@@ -1828,6 +1827,7 @@ type PendingAiEditTransition =
             titleId="vulnerability_modal_title"
             onClose={handleClose}
             closeLabel="Close modal"
+            closeDisabled={aiEditSaving}
             closeOnEscape={false}
             closeOnPanel={true}
             testId="vuln-modal-backdrop"
