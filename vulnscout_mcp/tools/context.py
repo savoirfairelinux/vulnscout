@@ -572,12 +572,13 @@ def register_tools(server, client: VulnScoutClient) -> None:
         and is limited to 500,000 visited entries. It never reads the MCP host filesystem.
         pattern is a case-sensitive file-path glob. Follow next_offset until null
         before claiming the list is complete. limit must be 1-200.
-        For a large host folder (for example a Yocto build tree) never list or search
-        from its root: set folder to a sub-folder such as "build/tmp/work/<arch>/curl"
-        (host folders only; no '..', links or hidden names). The pattern is then
-        relative to folder, while returned paths stay relative to the attached
-        folder and can be passed to read_codebase_file unchanged. Without folder,
-        start the pattern with a literal path ("build/tmp/work/*/curl/*"), not "*curl*".
+        For an unfamiliar mount omit folder and inspect a small page of file paths.
+        The alias does not identify the layout; limit bounds the page, not traversal.
+        Narrow a large tree with an observed literal prefix or set folder to a
+        sub-folder relative to the mount (host folders only; no '..', links or
+        hidden names). The pattern is then relative to folder, while returned
+        paths stay relative to the mount for read_codebase_file. If a guessed
+        folder is not found, inspect the mount root and retry with an observed prefix.
         If the message says the listing stopped at its time or entry limit, the
         list is incomplete: narrow folder or pattern and repeat; this is not evidence
         that files are missing. Responses report engine, visited_entries and elapsed_seconds.
@@ -635,9 +636,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
         100 MiB read or 20 seconds and then report truncated=true with a message.
         I/O errors also mark searches incomplete. Check bytes_read and io_errors
         before interpreting a partial result.
-        On a large host folder set folder to the sub-folder to search (for example
-        "build/tmp/work/<arch>/curl"; host folders only) or start the pattern with a
-        literal path; the pattern is then relative to folder and returned paths stay
+        On a large host folder use list_codebase_files to identify a mount-relative
+        sub-folder to search. Set folder to that sub-folder (host folders only) or start
+        the pattern with a literal prefix; the pattern is relative to folder and returned paths stay
         relative to the attached folder. A time-limit or entry-limit message means
         "narrow folder or pattern and search again", never "no match".
 
