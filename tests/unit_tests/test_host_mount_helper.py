@@ -657,6 +657,30 @@ def test_peer_credentials_allow_only_the_owner_or_root(monkeypatch):
         assert hh.peer_allowed(left) is (uid == 0)
 
 
+def test_selinux_label_applies_to_socket_creation_only(helper, tree, monkeypatch):
+    from unittest.mock import Mock
+
+    lib = Mock()
+    lib.getsockcreatecon_raw.return_value = lib.setsockcreatecon_raw.return_value = 0
+    monkeypatch.setattr(hh.ctypes, "CDLL", lambda *args, **kwargs: lib)
+    label = "system_u:system_r:container_t:s0:c12,c34"
+    create = hh.socket.socket
+    bind = hh.HelperServer.server_bind
+
+    def labelled_socket(*args, **kwargs):
+        lib.setsockcreatecon_raw.assert_called_once_with(label.encode())
+        return create(*args, **kwargs)
+
+    def ordinary_bind(server):
+        assert lib.setsockcreatecon_raw.call_count == 2
+        assert lib.setsockcreatecon_raw.call_args.args[0].value is None
+        bind(server)
+
+    monkeypatch.setattr(hh.socket, "socket", labelled_socket)
+    monkeypatch.setattr(hh.HelperServer, "server_bind", ordinary_bind)
+    hh.HelperServer(str(tree["tmp"] / "private" / "helper.sock"), helper, label).server_close()
+
+
 def test_helper_refuses_to_run_as_root(monkeypatch, tree, capsys):
     monkeypatch.setattr(hh.os, "geteuid", lambda: 0)
     assert hh.main(["serve", "--socket", str(tree["tmp"] / "s.sock"), "--state-dir", str(tree["tmp"] / "st")]) == 1

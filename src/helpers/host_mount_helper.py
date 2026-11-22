@@ -38,7 +38,7 @@ import threading
 import time
 import uuid
 import weakref
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from fnmatch import fnmatchcase, translate
 from typing import Any, Callable, Iterator
@@ -1072,6 +1072,28 @@ def _short_path(path: str) -> tuple[str, int | None]:
     return f"/proc/self/fd/{fd}/{name}", fd
 
 
+@contextmanager
+def _socket_create_label(label: str | None) -> Iterator[None]:
+    """Label the socket endpoint, not its filesystem entry or the helper process."""
+    if not label:
+        yield
+        return
+    lib = ctypes.CDLL("libselinux.so.1", use_errno=True)
+    previous = ctypes.c_char_p()
+    if lib.getsockcreatecon_raw(ctypes.byref(previous)) < 0:
+        raise OSError(ctypes.get_errno(), "Cannot read the SELinux socket creation context")
+    try:
+        if lib.setsockcreatecon_raw(label.encode("ascii")) < 0:
+            raise OSError(ctypes.get_errno(), f"Cannot create helper socket with SELinux label {label}")
+        try:
+            yield
+        finally:
+            if lib.setsockcreatecon_raw(previous) < 0:
+                raise OSError(ctypes.get_errno(), "Cannot restore the SELinux socket creation context")
+    finally:
+        lib.freecon(previous)
+
+
 class HelperServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     request_queue_size = 32
@@ -1090,14 +1112,15 @@ class HelperServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         finally:
             stopped.set()
 
-    def __init__(self, socket_path: str, helper: Helper):
+    def __init__(self, socket_path: str, helper: Helper, socket_label: str | None = None):
         self.helper = helper
         self.socket_path = socket_path
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         self.socket_name = os.path.basename(socket_path)
         self.directory_fd: int | None = None
         self.bound_socket: os.stat_result | None = None
-        super().__init__(socket_path, _Handler, bind_and_activate=False)
+        with _socket_create_label(socket_label):
+            super().__init__(socket_path, _Handler, bind_and_activate=False)
         try:
             self.server_bind()
             self.server_activate()
@@ -1285,7 +1308,7 @@ def _serve(args: argparse.Namespace) -> int:
         os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
         os.chmod(args.state_dir, 0o700)
         helper = Helper(args.state_dir)
-        server = HelperServer(os.path.abspath(args.socket), helper)
+        server = HelperServer(os.path.abspath(args.socket), helper, args.socket_label)
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -1338,6 +1361,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve", help="Serve attached folders on a private Unix socket.")
     serve.add_argument("--socket", required=True)
+    serve.add_argument("--socket-label", help="Container process SELinux label for the listening socket only.")
     serve.add_argument("--state-dir", required=True, help="Host-only directory holding the alias registry.")
     serve.add_argument("--daemon", action="store_true")
     serve.add_argument("--pid-file")

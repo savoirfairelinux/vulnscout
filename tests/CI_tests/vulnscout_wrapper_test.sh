@@ -93,6 +93,9 @@ PY
         ;;
     inspect)
         log_call "$@"
+        if [[ "${*: -1}" == '{{.ProcessLabel}}' ]]; then
+            echo "${VULNSCOUT_TEST_PROCESS_LABEL:-}"; exit 0
+        fi
         if [[ "${*: -1}" == '{{.Image}}' && -n "${VULNSCOUT_TEST_RUNNING_IMAGE:-}" ]]; then
             echo "$VULNSCOUT_TEST_RUNNING_IMAGE"; exit 0
         fi
@@ -874,6 +877,18 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     if [ "$(cat "$state/helper.pid")" != "$pid" ]; then
         echo "The helper must not restart when its image is unchanged." >&2
         exit 1
+    fi
+
+    if [[ -e /sys/fs/selinux/enforce ]]; then
+        # Simulate a recreated container using a label this test user can create.
+        export VULNSCOUT_TEST_PROCESS_LABEL
+        VULNSCOUT_TEST_PROCESS_LABEL="$(id -Z)"
+        run_ok ai-context list
+        [[ "$(cat "$state/helper.pid")" != "$pid" ]]
+        pid="$(cat "$state/helper.pid")"
+        run_ok ai-context helper status
+        run_ok ai-context list
+        [[ "$(cat "$state/helper.pid")" == "$pid" ]]
     fi
 
     # A rebuilt image needs a matching daemon.
