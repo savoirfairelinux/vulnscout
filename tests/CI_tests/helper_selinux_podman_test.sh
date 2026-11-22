@@ -13,7 +13,6 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 name="vulnscout-helper-$(cat /proc/sys/kernel/random/uuid)"
 state="$PWD/.$name"
 mkdir -m 700 -- "$state"
-mkdir -- "$state/cache"
 containers=()
 helper() {
     env -i HOME="$HOME" PATH="$PATH" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?}" \
@@ -21,11 +20,16 @@ helper() {
         "$root/vulnscout" ai-context helper "$@"
 }
 cleanup() {
-    helper stop
-    for cid in "${containers[@]}"; do podman rm -ft 0 "$cid" >/dev/null; done
-    rm -r -- "$state"
+    local status=$? cid
+    helper stop || echo "Cleanup: could not stop helper for $name." >&2
+    for cid in "${containers[@]}"; do
+        podman rm -ft 0 "$cid" >/dev/null || echo "Cleanup: could not remove container $cid." >&2
+    done
+    rm -r -- "$state" || echo "Cleanup: could not remove $state." >&2
+    exit "$status"
 }
 trap cleanup EXIT
+mkdir -- "$state/cache"
 
 for generation in 1 2; do
     cid="$(podman run -d --pull=never --network=none --name "$name" \
