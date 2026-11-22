@@ -2,6 +2,22 @@
 # Usage: bash tests/CI_tests/helper_selinux_podman_test.sh <local VulnScout image>
 set -euo pipefail
 
+cleanup() {
+    local status=$? cid stopped=true
+    if ! helper stop; then
+        stopped=false
+        echo "Cleanup: could not stop helper for $name; retaining $state for recovery." >&2
+    fi
+    for cid in "${containers[@]}"; do
+        podman rm -ft 0 "$cid" >/dev/null || echo "Cleanup: could not remove container $cid." >&2
+    done
+    if [[ "$stopped" == true ]]; then
+        rm -r -- "$state" || echo "Cleanup: could not remove $state." >&2
+    fi
+    exit "$status"
+}
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
+
 image="${1:?Pass a local image built with the current host folder helper}"
 if [[ ! -r /sys/fs/selinux/enforce || "$(< /sys/fs/selinux/enforce)" != 1 ||
       "$(podman info --format '{{.Host.Security.Rootless}} {{.Host.Security.SELinuxEnabled}}')" != "true true" ]]; then
@@ -18,15 +34,6 @@ helper() {
     env -i HOME="$HOME" PATH="$PATH" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?}" \
         VULNSCOUT_IMAGE="$image" VULNSCOUT_CONTAINER="$name" VULNSCOUT_BUILD_DIR="$state" \
         "$root/vulnscout" ai-context helper "$@"
-}
-cleanup() {
-    local status=$? cid
-    helper stop || echo "Cleanup: could not stop helper for $name." >&2
-    for cid in "${containers[@]}"; do
-        podman rm -ft 0 "$cid" >/dev/null || echo "Cleanup: could not remove container $cid." >&2
-    done
-    rm -r -- "$state" || echo "Cleanup: could not remove $state." >&2
-    exit "$status"
 }
 trap cleanup EXIT
 mkdir -- "$state/cache"
