@@ -6,6 +6,16 @@ import MessageBanner from './MessageBanner';
 import { formatPkgId } from '../helpers/pkgId';
 import TargetPairSelector from './TargetPairSelector';
 
+const justificationOptions: Record<string, string> = {
+    none: "No justification",
+    component_not_present: "Component not present",
+    vulnerable_code_not_present: "vulnerable code not present",
+    code_not_reachable: "The vulnerable code is not invoked at runtime",
+    requires_configuration: "Exploitability requires a configurable option to be set/unset",
+    requires_environment: "Exploitability requires a certain environment which is not present",
+    inline_mitigations_already_exist: "Inline Mitigation already exist",
+};
+
 type EditAssessmentData = {
     id: string;
     status: string;
@@ -408,15 +418,15 @@ function EditAssessment({
                         className="p-1 px-2 bg-gray-700 text-white ml-2 rounded"
                         name="edit_assessment_justification"
                     >
-                        <option value="none">No justification</option>
-                        <option value="component_not_present" disabled={contentOnly && assessment.justification !== "component_not_present"}>
-                            Component not present
-                        </option>
-                        <option value="vulnerable_code_not_present">vulnerable code not present</option>
-                        <option value="code_not_reachable">The vulnerable code is not invoked at runtime</option>
-                        <option value="requires_configuration">Exploitability requires a configurable option to be set/unset</option>
-                        <option value="requires_environment">Exploitability requires a certain environment which is not present</option>
-                        <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
+                        {Object.entries(justificationOptions).map(([value, label]) => (
+                            <option key={value} value={value}
+                                disabled={contentOnly && value === "component_not_present" && assessment.justification !== value}>
+                                {label}
+                            </option>
+                        ))}
+                        {contentOnly && assessment.justification && !Object.keys(justificationOptions).includes(assessment.justification) && (
+                            <option value={assessment.justification}>{assessment.justification}</option>
+                        )}
                     </select>
                     {contentOnly && (
                         <span className="ml-2 text-sm text-gray-300">

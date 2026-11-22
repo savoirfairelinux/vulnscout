@@ -65,6 +65,16 @@ describe('EditAiAssessment', () => {
         expect(onConfirm).toHaveBeenCalledWith({ expected_fingerprint: 'original', status_notes: 'Reviewed' });
     });
 
+    test('displays the stored OpenVEX justification without rewriting it on approval', async () => {
+        const onConfirm = jest.fn();
+        const justification = 'vulnerable_code_not_in_execute_path';
+        render(<EditAiAssessment assessment={{ ...aiAssessment, status: 'not_affected', justification }}
+            onConfirm={onConfirm} onCancel={jest.fn()} />);
+        expect(screen.getByRole('combobox')).toHaveDisplayValue(justification);
+        await userEvent.setup().click(screen.getByRole('button', { name: 'Confirm and approve' }));
+        expect(onConfirm).toHaveBeenCalledWith({ expected_fingerprint: 'original' });
+    });
+
     test('updates imported impact displayed as notes only when the message changes', async () => {
         const onConfirm = jest.fn();
         render(<EditAiAssessment assessment={{ ...aiAssessment, status_notes: '' }}
