@@ -661,9 +661,9 @@ to manage attachments.
   reads the container's process label (including its MCS categories). The host
   helper uses `libselinux` to apply that label to its listening socket only.
   A recreated container with a different label gets a freshly bound socket.
-  The launcher uses `flock` on a persistent file in the private host state
-  directory so concurrent commands cannot stop or overwrite each other's
-  replacement helper.
+  The launcher uses the host Python's `fcntl.flock` on a persistent file in
+  the private host state directory so concurrent commands cannot stop or
+  overwrite each other's replacement helper. No `flock` executable is needed.
   This requires matching launcher and image versions, not a host policy
   change, `--privileged`, or disabling SELinux.
 - The **backend database is the source of truth** (variant, alias, host path,

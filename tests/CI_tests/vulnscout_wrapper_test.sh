@@ -884,11 +884,36 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
         # The sourced launcher calls the test overrides below.
         # shellcheck source=/dev/null
         source "$ROOT_DIR/vulnscout" --help >/dev/null
+        (
+            mkdir "$TEST_DIR/python-only"
+            ln -s "$(command -v python3)" "$TEST_DIR/python-only/python3"
+            # Probe with an independent open after the lock-taking child exits.
+            probe_lock() {
+                python3 -I -c 'import fcntl, sys
+with open(sys.argv[1], "r+") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        assert sys.argv[2] == "held"
+    else:
+        assert sys.argv[2] == "released"' "$state/lifecycle.lock" "$1"
+            }
+            # shellcheck disable=SC2329
+            stop_host_helper_locked() { probe_lock held; }
+            PATH="$TEST_DIR/python-only" stop_host_helper
+            probe_lock released
+        )
         # shellcheck disable=SC2329
         host_helper_socket_label() { echo test-label; }
         # shellcheck disable=SC2329
         python3() {
             local -a args=()
+            # Model the NFS descriptor requirement on a local filesystem.
+            if [[ -e /proc/self/fd/9 ]]; then
+                command python3 -c 'import fcntl, os, stat
+assert stat.S_ISREG(os.fstat(9).st_mode)
+assert fcntl.fcntl(9, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDWR' || return 1
+            fi
             while (( $# )); do
                 if [[ "$1" == --socket-label ]]; then
                     [[ "$2" == test-label ]] || return 1
@@ -900,15 +925,6 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
                 fi
             done
             command python3 "${args[@]}"
-        }
-        # Model the NFS requirement, even when CI runs on a local filesystem.
-        # shellcheck disable=SC2329
-        flock() {
-            command python3 -c 'import fcntl, os, stat, sys
-fd = int(sys.argv[1])
-assert stat.S_ISREG(os.fstat(fd).st_mode)
-assert fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDWR' "$2" || return 1
-            command flock "$@"
         }
         lock_inode="$(stat -c %i "$state/lifecycle.lock")"
         start_host_helper > "$state/refresh1" & first=$!

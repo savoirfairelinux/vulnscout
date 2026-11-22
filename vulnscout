@@ -1141,11 +1141,6 @@ host_helper_socket_label() {
 start_host_helper_locked() {
     local script i label identity
     local -a label_args=()
-    if ! command -v python3 &>/dev/null ||
-        ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
-        console_err error "Error: host folders need python3 (3.9 or newer) on this host."
-        return 1
-    fi
     script="$(host_helper_script)" || { stop_host_helper_locked >/dev/null; return 1; }
     label="$(host_helper_socket_label)" || return 1
     [[ -z "$label" ]] || label_args=(--socket-label "$label")
@@ -1186,10 +1181,16 @@ host_helper_lifecycle() {
         (umask 077; mkdir -p -- "$HOST_HELPER_STATE_DIR") || return 1
         chmod 700 -- "$HOST_HELPER_STATE_DIR" || return 1
     fi
+    if ! command -v python3 &>/dev/null ||
+        ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
+        console_err error "Error: host folders need python3 (3.9 or newer) on this host."
+        return 1
+    fi
     # NFS needs a writable file for exclusive flock. Never unlink it:
     # launchers waiting on the old inode must share the next caller's lock.
     (
-        flock -x 9 || return 1
+        # The shell keeps the same open file description after Python exits.
+        python3 -I -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX)' || return 1
         if [[ "$action" == stop ]]; then
             stop_host_helper_locked 9<&-
         else
