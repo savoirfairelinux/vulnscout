@@ -884,6 +884,8 @@ def test_approve_rejects_empty_merged_required_justification(client, app, impact
 @pytest.mark.parametrize("payload, error", [
     ({"simplified_status": "Fixed"}, "Approval accepts only rationale fields and expected_fingerprint"),
     ({"justification": "bogus"}, "Invalid justification"),
+    *[({field: "reviewed\x00text"}, f"{field} must not contain NUL characters")
+      for field in ("status_notes", "impact_statement", "workaround", "justification")],
 ])
 def test_approve_with_invalid_edits_leaves_suggestion_pending(client, app, payload, error):
     aid = json.loads(_post_ai(client, status_notes="AI rationale").data)["assessment"]["id"]
