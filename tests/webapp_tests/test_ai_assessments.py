@@ -500,6 +500,47 @@ def test_postgresql_rejection_locks_parent_before_deleting_targets(postgres_app,
         assert approval.result(timeout=10).status_code == 409
 
 
+def test_patch_reloads_parent_after_concurrent_approval(postgres_app, monkeypatch):
+    from src.routes import assessments as routes
+
+    routes.init_app(postgres_app)
+    setup_demo_db(postgres_app)
+    client = postgres_app.test_client()
+    reason = "vulnerable_code_not_in_execute_path"
+    pending = _post_ai(client, status="not_affected", justification=reason,
+                       impact_statement="The code is isolated").json["assessment"]
+    url = f"/api/assessments/{pending['id']}"
+
+    with postgres_app.app_context(), ThreadPoolExecutor(max_workers=1) as pool:
+        # Retain the ordinary edit's original ORM snapshot while a second
+        # request commits approval using only the impact statement as reason.
+        snapshot = DBAssessment.get_by_id(pending["id"])
+        assert snapshot.justification == reason
+        approval = pool.submit(postgres_app.test_client().post, url + "/approve", json={
+            "expected_fingerprint": pending["approval_fingerprint"], "justification": "",
+        }).result(timeout=10)
+        assert approval.status_code == 200
+        assert snapshot.origin == "ai"
+        validate = routes._validate_content_edit
+
+        def validate_locked(row, payload):
+            # Reloading without a lock would just move the race to validation.
+            with db.engine.connect() as observer:
+                query = db.select(DBAssessment.id).where(DBAssessment.id == row.id)
+                assert observer.scalar(query.with_for_update(skip_locked=True)) is None
+            return validate(row, payload)
+
+        monkeypatch.setattr(routes, "_validate_content_edit", validate_locked)
+        response = client.patch(url, json={"justification": reason, "impact_statement": ""})
+        assert response.status_code == 200
+
+    with postgres_app.app_context():
+        row = DBAssessment.get_by_id(pending["id"])
+        assert row.origin == "custom"
+        assert row.impact_statement == ""
+        assert row.to_openvex_dict()["justification"] == reason
+
+
 def test_approve_promotes_group_to_custom(client):
     aid = _get_first_ai_id(client)
     resp = _approve(client, aid)
