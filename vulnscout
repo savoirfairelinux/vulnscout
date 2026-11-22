@@ -1183,10 +1183,11 @@ host_helper_lifecycle() {
             console_err error "Error: the host folder helper runs as the invoking user, never as root; run vulnscout as a regular user."
             return 1
         fi
-        mkdir -p -m 700 -- "$HOST_HELPER_STATE_DIR" || return 1
+        (umask 077; mkdir -p -- "$HOST_HELPER_STATE_DIR") || return 1
         chmod 700 -- "$HOST_HELPER_STATE_DIR" || return 1
     fi
-    # Lock the private directory inode; don't pass the lock to the daemon.
+    # NFS needs a writable file for exclusive flock. Never unlink it:
+    # launchers waiting on the old inode must share the next caller's lock.
     (
         flock -x 9 || return 1
         if [[ "$action" == stop ]]; then
@@ -1194,7 +1195,7 @@ host_helper_lifecycle() {
         else
             start_host_helper_locked "$action" 9<&-
         fi
-    ) 9< "$HOST_HELPER_STATE_DIR"
+    ) 9<> "$HOST_HELPER_STATE_DIR/lifecycle.lock"
 }
 
 start_host_helper() { host_helper_lifecycle start; }
