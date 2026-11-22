@@ -82,9 +82,11 @@ HTTPS (TLS 1.2+) [confirm: certificate pinning]
 ```
 ````
 
-## Project description (sidebar item)
+## Project
 
-**Project description** (required to save): what the product is, who uses it,
+### Project description
+
+**Project description** (cannot be blank when edited): what the product is, who uses it,
 where it is deployed and what matters most if it is compromised. It applies to
 every variant. Example:
 
@@ -93,6 +95,22 @@ Industrial IoT gateway that bridges PLCs on a plant network to a cloud dashboard
 Operated by plant technicians; updated over the air. Safety-relevant: it can send
 write commands to PLCs.
 ```
+
+### Skills customization
+
+Set **Assessment verbosity** independently of **Review verbosity** (Standard, Brief or Detailed).
+**Review emphasis** chooses which facts the review rationale leads with: Balanced, Supporting
+evidence, Field differences or Uncertainty and gaps. These choices never change the verdict,
+evidence requirements or tool permissions. Neither format can be written by MCP.
+
+Optional, project-level: how AI assessment notes are presented. **Sections**
+(Confidence, Verdict, Evidence, Reachability, Remediation) can be reordered with
+the move buttons, included or not (Confidence is always included) and given a
+label of at most 40 characters. **Layout** is "Inline (one paragraph)" or "One
+section per line". **Style notes** (at most 500 characters) give tone hints
+only. **Reset to default** returns to the skill's presentation. It never changes
+verdicts and saving it does not outdate assessments. No tool saves it: give the
+values to set and let the user save.
 
 ## Variant page
 

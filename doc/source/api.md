@@ -334,7 +334,8 @@ DELETE /api/variants/<variant_id>
 GET /api/context?project_id=<project_id>&variant_id=<variant_id>
 ```
 
-Returns the merged project and variant context, including uploaded codebase reference metadata
+Returns the merged project and variant context, including the project's `assessment_format` and `review_format` (see below)
+and uploaded codebase reference metadata
 (`files`: `id`, `original_name`, `description`; no server filesystem paths). Both UUID parameters are required,
 and the variant must belong to the selected project.
 
@@ -350,7 +351,35 @@ GET /api/projects/<project_id>/context
 PUT /api/projects/<project_id>/context
 ```
 
-The `PUT` request accepts a JSON object with a `description` field.
+Both return `project_id`, `description`, `assessment_format` and `review_format`. The `PUT` request accepts
+any subset of the last three fields; omitted fields keep their stored value and `null` clears one.
+Presentation changes do not mark AI assessments as outdated. Both formats travel in project-level
+context exports; an omitted key on import keeps that preference.
+
+`review_format` controls the reviewer's `rationale`, independently of the proposed assessment notes.
+For example: `{"focus":"differences","verbosity":"detailed"}`. `focus` accepts `balanced` (default),
+`evidence`, `differences` or `uncertainty`. Both formats accept `verbosity`: `standard` (default),
+`brief` or `detailed`. These preferences do not change assessment or review decisions.
+
+`assessment_format` sets how AI `status_notes` are presented, or `null` for the skill's default:
+
+```json
+{
+  "sections": [
+    {"id": "confidence", "enabled": true},
+    {"id": "verdict", "enabled": true, "label": "Verdict"},
+    {"id": "evidence", "enabled": false}
+  ],
+  "layout": "lines",
+  "style_notes": "Neutral tone."
+}
+```
+
+`sections` is an ordered list using each of `confidence`, `verdict`, `evidence`, `reachability` and `remediation` at
+most once (`enabled` defaults to `true`; `label` is at most 40 characters). `layout` is `inline` (default) or `lines`.
+`style_notes` is at most 500 characters. Labels and style notes must be UTF-8 encodable. Control characters are removed and blank labels and notes are dropped.
+Invalid values return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`, for example
+`"assessment_format.sections[1].id": "is duplicated"`.
 
 ### Update Variant Context
 
@@ -399,7 +428,8 @@ POST /api/context/import
 Export accepts either a `project_id` and `variant_id` pair, a comma-separated `variant_ids` filter, or no filter to
 export all context. Import accepts an exported context JSON document and applies all valid entries atomically.
 
-Export format `3.0` carries `system` and `stride_model` per variant, alongside the text fields,
+Export format `3.2` carries each project's `assessment_format` and `review_format` and, per variant, `system` and `stride_model` alongside
+the text fields,
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
 contents are not exported, and import ignores `files`. Directory names,
 mounts and contents are not transferred; provision each destination variant's own directory.
@@ -407,14 +437,18 @@ Every entry is imported through the editor path, so it needs a non-empty threat 
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
 Files exported as `2.x` still import, but their removed source selector and external paths are discarded.
 For `2.0`, each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
+An omitted format key keeps the destination project's value (both keys were absent before `3.1`,
+and `review_format` was absent in `3.1`). An invalid format fails the project's entries.
 
 ```json
 {
-  "version": "3.0",
+  "version": "3.2",
   "exported_at": "2026-01-01T12:00:00+00:00",
   "projects": [{
     "project_name": "demo",
     "project_description": "Required. Describes the project.",
+    "assessment_format": null,
+    "review_format": null,
     "variants": [{
       "variant_name": "x86",
       "variant_description": "text or null",

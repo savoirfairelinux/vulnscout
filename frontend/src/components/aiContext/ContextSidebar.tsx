@@ -27,7 +27,7 @@ function ContextSidebar({ projectName, variants, inScopeIds, selected, onSelect 
                 onClick={() => onSelect({ kind: 'project' })}
                 className={`${ITEM} ${projectSelected ? 'bg-sky-900 text-white' : 'text-zinc-200 hover:bg-slate-700'}`}
             >
-                Project description
+                Project
             </button>
             <div className="mt-4 mb-1 flex items-baseline justify-between px-3">
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Variants</h2>

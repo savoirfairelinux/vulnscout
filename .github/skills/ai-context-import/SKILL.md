@@ -124,9 +124,10 @@ Use the exact labels below; they are the labels on the page.
 
 The **Codebase directory** is administrator-managed and is never configured from
 a document. Uploaded attachments must also remain unchanged.
-The project description (sidebar item **Project description**) is
+The project description (sidebar item **Project**) is
 outside this skill; if the document states the product's purpose, you may
-suggest one at the end, clearly labelled as optional.
+suggest one at the end, clearly labelled as optional. Never derive or change
+the project's Skills customization preferences from a document.
 
 **STRIDE category** options are **Spoofing**, **Tampering**, **Repudiation**,
 **Information disclosure**, **Denial of service** and **Elevation of privilege**.

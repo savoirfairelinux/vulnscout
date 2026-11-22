@@ -209,8 +209,9 @@ function ContextTransferControls({ projects, beforeImport, onImported, notify }:
                 project/variant. Variants whose project or variant does not exist
                 are ignored; variants missing mandatory fields (description, threat
                 model) fail. Accepts an exported file, whose projects each nest
-                their variants. Uploaded codebase references are not included
-                in context JSON transfers.
+                their variants. Project writing preferences are replaced only
+                when the file includes the corresponding setting. Uploaded codebase references are not
+                included in context JSON transfers.
             </HelpPopover>
         </div>
     );

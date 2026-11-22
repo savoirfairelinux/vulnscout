@@ -973,6 +973,9 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
     })
     assert other_upload.status_code == 201
     other_file_id = other_upload.get_json()["id"]
+    writing = {"review_format": {"focus": "differences", "verbosity": "brief"},
+               "assessment_format": {"sections": [], "layout": "inline", "verbosity": "detailed"}}
+    assert client.put(f"/api/projects/{project_id}/context", json=writing).status_code == 200
 
     server = make_server("127.0.0.1", 0, client.application, threaded=True)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -982,6 +985,7 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
         assert [project["id"] for project in agent_client.list_projects()] == [project_id]
         assert [variant["id"] for variant in agent_client.list_variants()] == [chosen_id]
         context = agent_client.get_merged_context(project_id, chosen_id)
+        assert {key: context[key] for key in writing} == writing
         assert context["files"][0]["id"] == file_id
         listing = json.loads(_codebase_source_impl(
             agent_client, chosen_id, file_id, {"operation": "list"},
