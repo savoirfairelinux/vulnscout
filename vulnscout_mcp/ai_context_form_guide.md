@@ -99,8 +99,8 @@ write commands to PLCs.
 Variants are selected in the sidebar. **Copy from…** replaces the whole unsaved
 draft with another variant's context (uploads are not copied); it is a good
 start when variants differ only slightly. Edits survive tab switches; text and table edits are not
-stored until **Save changes**. Directory creation is immediate. Saving needs a threat model: at least one System
-text field or one Components, Interactions or Threats row.
+stored until **Save changes**. Directory creation is immediate. You can save
+Context or System on its own; threats and risks can be added later.
 
 ### Context tab
 

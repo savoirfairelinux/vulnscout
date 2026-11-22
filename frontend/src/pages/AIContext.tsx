@@ -12,7 +12,7 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
 import { useLoadedDraft } from "../hooks/useLoadedDraft";
-import { draftFromContext, draftsEqual, emptyDraft, hasThreatModel, requiredFieldErrors } from "../helpers/strideModel";
+import { draftFromContext, draftsEqual, emptyDraft, requiredFieldErrors } from "../helpers/strideModel";
 import ContextSidebar from "../components/aiContext/ContextSidebar";
 import type { SidebarSelection } from "../components/aiContext/ContextSidebar";
 import ProjectDescriptionPanel from "../components/aiContext/ProjectDescriptionPanel";
@@ -365,11 +365,6 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             return { kind: 'project', projectId, description: projectDraft.draft.trim(), sent: projectDraft.draft };
         }
         if (variantDraft.baseline === null) return null;
-        if (!hasThreatModel(variantDraft.draft)) {
-            setFieldError("A threat model is required.");
-            setVariantTab('threat_model');
-            return null;
-        }
         const missing = requiredFieldErrors(variantDraft.draft.stride);
         const first = Object.keys(missing)[0];
         if (first !== undefined) {

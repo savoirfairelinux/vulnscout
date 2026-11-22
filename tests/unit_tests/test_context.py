@@ -1305,13 +1305,32 @@ class TestVariantEditorSave:
         assert vc.environment is None
         assert vc.system_actors is None
 
-    def test_editor_save_requires_threat_model(self, app, variant):
-        from src.helpers.stride_model import StrideValidationError, empty_stride_model
-        from src.models.variant_context import VariantContext
-        with pytest.raises(StrideValidationError) as exc:
-            VariantContext.save_editor(variant.id, _editor_payload(system={}, stride=empty_stride_model()))
-        assert exc.value.fields["threat_model"] == "A threat model is required."
-        assert VariantContext.get_by_variant(variant.id) is None
+    @pytest.mark.parametrize("description,scope", [("Gateway", None), (None, "Firmware")])
+    def test_add_model_after_basic_editor_save(self, client, project, variant, description, scope):
+        from src.helpers.stride_model import empty_stride_model
+        save_url = f"/api/variants/{variant.id}/context"
+        load_url = f"/api/context?project_id={project.id}&variant_id={variant.id}"
+        payload = _editor_payload(variant_description=description, environment=None,
+                                  system={"scope": scope}, stride=empty_stride_model())
+        assert client.put(save_url, json=payload).status_code == 200
+        saved = client.get(load_url).get_json()
+        assert saved["variant_description"] == description
+        assert saved["editor"]["system"]["scope"] == scope
+        assert saved["editor"]["stride"] == empty_stride_model()
+        if scope:
+            assert scope in saved["threat_model"]
+        else:
+            assert saved["threat_model"] is None
+        assert saved["risks"] is None
+
+        payload["stride"] = _stride_model()
+        assert client.put(save_url, json=payload).status_code == 200
+        saved = client.get(load_url).get_json()
+        assert saved["variant_description"] == description
+        assert saved["editor"]["system"]["scope"] == scope
+        assert saved["editor"]["stride"] == payload["stride"]
+        assert "Tampering" in saved["threat_model"]
+        assert "Likelihood: High" in saved["risks"]
 
     def test_editor_save_rejects_bad_model(self, app, variant):
         from src.helpers.stride_model import StrideValidationError
@@ -1320,6 +1339,16 @@ class TestVariantEditorSave:
         with pytest.raises(StrideValidationError) as exc:
             VariantContext.save_editor(variant.id, _editor_payload(stride=bad))
         assert "threats[0].target_ids" in exc.value.fields
+
+    def test_null_stride_does_not_erase_saved_model(self, client, project, variant):
+        save_url = f"/api/variants/{variant.id}/context"
+        load_url = f"/api/context?project_id={project.id}&variant_id={variant.id}"
+        assert client.put(save_url, json=_editor_payload()).status_code == 200
+        before = client.get(load_url).get_json()
+        resp = client.put(save_url, json=_editor_payload(environment="Lab", stride=None))
+        assert resp.status_code == 400
+        assert resp.get_json()["fields"] == {"model": "must be an object"}
+        assert client.get(load_url).get_json() == before
 
     def test_identical_editor_save_keeps_updated_at(self, app, variant):
         from src.models.variant_context import VariantContext

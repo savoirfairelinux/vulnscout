@@ -386,7 +386,7 @@ class TestImportContext:
             {"project_name": "ProjectA", "variant_name": "NoSuchVariant",
              "description": "d", **_tm("t")},
             {"project_name": "ProjectB", "variant_name": "VariantB1",
-             "description": "d", **_tm("")},  # empty threat model
+             "description": "d", "stride_model": {"risks": [{"id": "R1", "threat_ids": []}]}},
         ]).data)
         assert len(body["imported"]) == 1
         assert len(body["ignored"]) == 1
@@ -507,7 +507,7 @@ class TestExportImportStructuredContext:
                           "threat_model": "legacy tm", "risks": "r"}],
         }]}).data)
         assert result["imported"] == []
-        assert result["failed"][0]["reason"].endswith("A threat model is required.")
+        assert result["failed"][0]["reason"] == "model: must be an object"
         entry = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
         assert entry["stride_model"]["components"][0]["name"] == "A1 threat model"
         assert entry["description"] == "ProjectA description"
@@ -529,14 +529,16 @@ class TestExportImportStructuredContext:
         # The session stays usable: the follow-up export still works.
         assert client.get("/api/context/export").status_code == 200
 
-    def test_import_v2_empty_threat_model_fails_entry(self, client_and_data):
+    def test_import_context_without_threats(self, client_and_data):
         client, _ = client_and_data
         result = json.loads(_post_json(client, [{
             "project_name": "ProjectA", "project_description": "d",
-            "variants": [{"variant_name": "VariantA1", **_tm("")}],
+            "variants": [{"variant_name": "VariantA1", "environment": "Lab", **_tm("")}],
         }]).data)
-        assert result["failed"][0]["reason"] .endswith("A threat model is required.")
-        assert result["imported"] == []
+        assert result["failed"] == []
+        entry = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
+        assert entry["environment"] == "Lab"
+        assert entry["stride_model"] == {"components": [], "interactions": [], "threats": [], "risks": []}
 
     def test_import_v2_0_legacy_risks_are_upgraded(self, client_and_data):
         client, _ = client_and_data

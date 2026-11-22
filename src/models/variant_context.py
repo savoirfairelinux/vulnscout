@@ -30,8 +30,6 @@ if typing.TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-THREAT_MODEL_REQUIRED = "A threat model is required."
-
 # Editor payload key -> column for the four system-description fields.
 _SYSTEM_COLUMNS: dict[str, str] = {key: f"system_{key}" for key in SYSTEM_KEYS}
 # Top-level editor payload keys stored as nullable text in the same-named column.
@@ -79,11 +77,7 @@ def _editor_values(payload: object) -> dict[str, typing.Any]:
     system = _validated(normalize_system, payload.get("system"), errors) or {}
     for key, column in _SYSTEM_COLUMNS.items():
         values[column] = _blank_to_none(system.get(key))
-    stride_raw = payload.get("stride")
-    stride = _validated(normalize_stride_model, empty_stride_model() if stride_raw is None else stride_raw, errors)
-    values["stride_model"] = stride
-    if not errors and not render_threat_model({k: values[c] for k, c in _SYSTEM_COLUMNS.items()}, stride):
-        errors["threat_model"] = THREAT_MODEL_REQUIRED
+    values["stride_model"] = _validated(normalize_stride_model, payload.get("stride"), errors)
     if errors:
         raise StrideValidationError(errors)
     return values

@@ -161,8 +161,7 @@ no rating.
   example `(Source: report.pdf p.14)` or `(Source: threagile.yaml, risk_tracking)`.
   Cite System text paragraphs the same way when they come from different places.
 - **Limits:** at most 20,000 characters per text field and 500 rows per table.
-  Saving also needs a threat model: at least one System text field or one
-  Components, Interactions or Threats row.
+  Context and System can be saved without adding threats or risks.
 - **Volume.** Each row is pasted by hand. When the document yields more than
   about 30 threats or risks, group them: one threat per (category, kind of
   problem) with all affected targets ticked, and one risk per distinct rating and
