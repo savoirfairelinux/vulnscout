@@ -657,11 +657,12 @@ to manage attachments.
   container restart, and no container ID, mount or engine option changes. Docker
   (rootful or rootless) and rootless Podman (with the wrapper's keep-id mapping)
   can open an owner-only socket under Unix permissions because the container's
-  root maps to the invoking user or to host root. Host security policy still
-  applies: on SELinux-enforcing hosts the container may be denied access to
-  the host helper socket even when `ai-context helper status` succeeds. If
-  attach reports `PermissionError`, check the host audit log; restarting the
-  helper or making the socket world-writable is not a fix.
+  root maps to the invoking user or to host root. On SELinux hosts the wrapper
+  reads the container's process label (including its MCS categories). The host
+  helper uses `libselinux` to apply that label to its listening socket only.
+  A recreated container with a different label gets a freshly bound socket.
+  This requires matching launcher and image versions, not a host policy
+  change, `--privileged`, or disabling SELinux.
 - The **backend database is the source of truth** (variant, alias, host path,
   creation time) for the UI, API, CLI and agents; every request is checked
   against it before reaching the helper, so a detached alias is refused at once.

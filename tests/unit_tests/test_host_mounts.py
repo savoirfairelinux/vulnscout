@@ -136,6 +136,16 @@ class TestAccessControl:
 
 class TestHelperUnavailable:
 
+    def test_denied_helper_socket_reports_permissions(self, helper_server, monkeypatch):
+        from src.helpers import host_mounts as transport
+
+        def denied(*args, **kwargs):
+            raise PermissionError("connect")
+
+        monkeypatch.setattr(hh, "request", denied)
+        with pytest.raises(transport.HostHelperUnavailable, match="Permission denied connecting"):
+            transport.call("status")
+
     def test_incompatible_helper_is_unavailable(self, client, variant, helper_server, monkeypatch):
         legacy_reply = {"ok": True, "result": {"protocol": 1, "roots": ["/old"]}}
         monkeypatch.setattr(hh, "request", lambda *args, **kwargs: legacy_reply)

@@ -1126,9 +1126,18 @@ host_helper_script() {
     echo "$cached"
 }
 
-# Restart the helper if its image has changed.
+# A standalone helper may start before the container; rebind when the container's MCS label changes.
+host_helper_socket_label() {
+    [[ -e /sys/fs/selinux/enforce ]] || return 0
+    local names
+    names="$(call_container_engine ps --format '{{.Names}}')" || return 1
+    grep -Fxq -- "$CONTAINER_NAME" <<< "$names" || return 0
+    call_container_engine inspect "$CONTAINER_NAME" --format '{{.ProcessLabel}}'
+}
+
 start_host_helper() {
-    local script i
+    local script i label identity
+    local -a label_args=()
     host_helper_paths
     if [ "$(id -u)" -eq 0 ]; then
         console_err error "Error: the host folder helper runs as the invoking user, never as root; run vulnscout as a regular user."
@@ -1142,13 +1151,15 @@ start_host_helper() {
     mkdir -p "$HOST_HELPER_STATE_DIR" || return 1
     chmod 700 "$HOST_HELPER_STATE_DIR" || return 1
     script="$(host_helper_script)" || { stop_host_helper >/dev/null; return 1; }
-    # The cached filename includes the immutable image ID used for extraction.
+    label="$(host_helper_socket_label)" || return 1
+    [[ -z "$label" ]] || label_args=(--socket-label "$label")
+    identity="${script##*/}${label:+|$label}"
     if host_helper_running &&
-        [ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null || true)" = "${script##*/}" ]; then
+        [ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null || true)" = "$identity" ]; then
         return 0
     fi
     stop_host_helper >/dev/null
-    if ! python3 -I "$script" serve --daemon --socket "$HOST_HELPER_SOCKET" \
+    if ! python3 -I "$script" serve --daemon --socket "$HOST_HELPER_SOCKET" "${label_args[@]}" \
         --state-dir "$HOST_HELPER_STATE_DIR" --pid-file "$HOST_HELPER_PID_FILE" \
         --log-file "$HOST_HELPER_STATE_DIR/helper.log" < /dev/null >&2; then
         console_err error "Error: the host folder helper did not start; see the message above."
@@ -1162,7 +1173,7 @@ start_host_helper() {
         console_err error "Error: the host folder helper did not start; see $HOST_HELPER_STATE_DIR/helper.log."
         return 1
     fi
-    printf '%s\n' "${script##*/}" > "$HOST_HELPER_STATE_DIR/image.active"
+    printf '%s\n' "$identity" > "$HOST_HELPER_STATE_DIR/image.active"
     console_out success "Host folder helper running as $(id -un)."
 }
 
@@ -2034,8 +2045,10 @@ ai_context_helper() {
                 return 1
             fi
             script="$(host_helper_script)" || exit 1
-            if [[ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null)" != "${script##*/}" ]]; then
-                die "helper image has changed; run 'vulnscout ai-context helper restart'."
+            local label
+            label="$(host_helper_socket_label)" || return 1
+            if [[ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null)" != "${script##*/}${label:+|$label}" ]]; then
+                die "helper image or container label has changed; run 'vulnscout ai-context helper restart'."
             fi
             python3 -I "$script" ping --socket "$HOST_HELPER_SOCKET" >/dev/null || return 1
             console_out success "Host folder helper is running (PID $(host_helper_pid)) on $HOST_HELPER_SOCKET."

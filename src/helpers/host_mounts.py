@@ -71,6 +71,11 @@ def call(operation: str, timeout: float = CALL_TIMEOUT, **params: object) -> dic
         raise HostHelperUnavailable()
     try:
         reply = protocol.request(path, {"op": operation, **params}, timeout=timeout)
+    except PermissionError as exc:
+        raise HostHelperUnavailable(
+            "Permission denied connecting to the host folder helper socket. Check the container's UID mapping "
+            "and SELinux socket label; use matching VulnScout launcher and image versions."
+        ) from exc
     except (OSError, ValueError) as exc:
         raise HostHelperUnavailable(f"{UNAVAILABLE_MESSAGE} ({exc.__class__.__name__})") from exc
     if reply.get("protocol") != protocol.PROTOCOL_VERSION:
