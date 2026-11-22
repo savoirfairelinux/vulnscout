@@ -2888,6 +2888,7 @@ describe('Vulnerability Modal', () => {
         readOnly?: boolean;
         isEditing?: boolean;
         patchVuln?: jest.Mock;
+        explorerState?: Partial<Vulnerability>;
         pendingAssessments?: typeof pendingAiAssessment[];
         fullHistory?: () => Promise<string>;
     }) => {
@@ -2918,7 +2919,7 @@ describe('Vulnerability Modal', () => {
 
         return render(
             <VulnModal
-                vuln={{ ...vulnerability, assessments: [] }}
+                vuln={{ ...vulnerability, assessments: [], ...options?.explorerState }}
                 readOnly={options?.readOnly}
                 isEditing={options?.isEditing}
                 onClose={() => {}}
@@ -3105,16 +3106,23 @@ describe('Vulnerability Modal', () => {
 
     test('editing a pending AI review approves it with the edited content', async () => {
         const patchVuln = jest.fn();
-        const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([
-            { ...pendingAiAssessment, status_notes: 'edited notes', origin: 'custom' }
-        ]);
+        const affected = { ...pendingAiAssessment, id: 'old', origin: 'custom', simplified_status: 'Exploitable' };
+        const pending = { ...pendingAiAssessment, status: 'fixed', simplified_status: 'Fixed' };
+        const approved = { ...pending, status_notes: 'edited notes', origin: 'custom', timestamp: '2025-01-01T00:00:00Z' };
+        const approveAiSpy = jest.spyOn(Assessments, 'approveAi').mockResolvedValue([approved]);
         const listByVulnSpy = jest.spyOn(Assessments, 'listByVuln')
-            .mockResolvedValueOnce([pendingAiAssessment])
+            .mockResolvedValueOnce([pending])
             .mockResolvedValue([]);
 
-        const fullHistory = jest.fn().mockResolvedValueOnce(JSON.stringify([pendingAiAssessment]))
-            .mockResolvedValue(JSON.stringify([{ ...pendingAiAssessment, status_notes: 'edited notes', origin: 'custom' }]));
-        renderWithPendingAiAssessment({ patchVuln, isEditing: true, fullHistory });
+        const fullHistory = jest.fn().mockResolvedValueOnce(JSON.stringify([affected, pending]))
+            .mockResolvedValue(JSON.stringify([affected, approved]));
+        renderWithPendingAiAssessment({ patchVuln, isEditing: true, fullHistory, explorerState: {
+            assessments: [affected], packages_current_by_variant: { 'variant-1': affected.packages },
+            simplified_status: 'Exploitable', status_summary: {
+                dominant_status: 'Exploitable', has_active_status: true, total_assessments: 1,
+                counts: { Exploitable: 1 }, ordered: [{ status: 'Exploitable', count: 1 }],
+            },
+        } });
         const user = userEvent.setup();
 
         await screen.findByText(/AI-generated/i);
@@ -3123,7 +3131,7 @@ describe('Vulnerability Modal', () => {
         const panel = aiPanel();
         expect(within(panel).queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
         expect(within(panel).queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
-        expect(within(panel).getByText('affected')).toBeVisible();
+        expect(within(panel).getByText('fixed')).toBeVisible();
         expect(within(panel).queryByRole('combobox')).not.toBeInTheDocument();
         const notes = within(panel).getByPlaceholderText(/Free text notes/);
         expect(notes).toHaveValue('ai notes');
@@ -3140,7 +3148,10 @@ describe('Vulnerability Modal', () => {
         await waitFor(() => {
             expect(screen.queryByText(/AI-generated/i)).not.toBeInTheDocument();
         });
-        expect(patchVuln).toHaveBeenCalled();
+        expect(patchVuln).toHaveBeenCalledWith(vulnerability.id, expect.objectContaining({
+            simplified_status: 'Fixed',
+            status_summary: expect.objectContaining({ dominant_status: 'Fixed', counts: { Fixed: 1 }, has_active_status: false }),
+        }));
         expect(screen.getByText('AI assessment approved!')).toBeInTheDocument();
 
         approveAiSpy.mockRestore();

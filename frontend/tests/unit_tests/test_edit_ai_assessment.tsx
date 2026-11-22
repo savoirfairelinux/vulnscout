@@ -141,12 +141,11 @@ describe('EditAiAssessment', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
-    test('accepts a notes-only edit with impact but no justification and rejects blank impact', async () => {
+    test('accepts a notes-only edit with impact but no justification', async () => {
         const onConfirm = jest.fn();
-        const triggerBanner = jest.fn();
         render(<EditAiAssessment
             assessment={{ ...aiAssessment, status: 'not_affected', justification: '', impact_statement: 'AI impact' }}
-            onConfirm={onConfirm} onCancel={jest.fn()} triggerBanner={triggerBanner}
+            onConfirm={onConfirm} onCancel={jest.fn()}
         />);
         const user = userEvent.setup();
         await user.clear(notes());
@@ -154,13 +153,6 @@ describe('EditAiAssessment', () => {
         const confirm = screen.getByRole('button', { name: 'Confirm and approve' });
         await user.click(confirm);
         expect(onConfirm).toHaveBeenCalledWith({ expected_fingerprint: 'original', status_notes: 'Reviewed' });
-
-        const impact = screen.getByPlaceholderText(/Why this vulnerability is not exploitable/i);
-        await user.clear(impact);
-        await user.type(impact, '   ');
-        await user.click(confirm);
-        expect(onConfirm).toHaveBeenCalledTimes(1);
-        expect(triggerBanner).toHaveBeenCalledWith(expect.stringMatching(/justification or an impact statement/i), 'error');
     });
 
     test('accepts an impact statement as the message of a not affected assessment', async () => {

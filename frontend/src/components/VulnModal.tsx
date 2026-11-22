@@ -854,20 +854,15 @@ type PendingAiEditTransition =
             return approvedById.get(a.id) ?? { ...a, ...edits, origin: "custom" };
         }));
 
-        approved.forEach(a => {
-            if (!vuln.assessments.some(x => x.id === a.id)) {
-                vuln.assessments.push(a);
-            } else {
-                vuln.assessments = vuln.assessments.map(x => x.id === a.id ? a : x);
-            }
-        });
-
-        const latest = vuln.assessments.slice().sort(
-            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-        );
-        if (latest.length > 0) vuln.simplified_status = latest[0].simplified_status;
-
-        patchVuln(vuln.id, vuln);
+        const assessments = [
+            ...vuln.assessments.filter(a => !approvedById.has(a.id)),
+            ...approved,
+        ].filter(a => a.origin !== "ai" && (!variantId || appliesToVariant(a, variantId)));
+        const summary = buildStatusSummary(assessments, vuln.packages_current, vuln.packages_current_by_variant);
+        vuln.assessments = assessments;
+        vuln.simplified_status = summary.dominant_status;
+        vuln.status_summary = summary;
+        patchVuln(vuln.id, { ...vuln });
         refreshAssessmentRows();
         refreshReviews();
         showMessage("AI assessment approved!", "success");

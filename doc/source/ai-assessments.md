@@ -773,7 +773,9 @@ Pending AI assessments must be reviewed by a human before they become official.
      - **Confirm and approve** — saves your changes and approves the
        assessment in a single step, exactly like **Approve** but with the
        edited content. The message (notes, or the impact statement for
-       *Not applicable* / *False positive*) cannot be empty. If the save fails,
+       *Not applicable* / *False positive*) cannot be empty. For *Not applicable*,
+       the editor shows an inline error if both justification and impact
+       statement are missing. If the save fails,
        the editor stays open with your changes and shows the error.
        When Notes displays an imported impact statement, editing it moves the
        corrected message to notes and clears the old impact statement so both
