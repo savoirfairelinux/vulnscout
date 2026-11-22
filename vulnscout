@@ -1087,15 +1087,18 @@ host_helper_running() {
     host_helper_pid >/dev/null && [ -S "$HOST_HELPER_SOCKET" ]
 }
 
-stop_host_helper() {
+stop_host_helper_locked() {
     local pid i
-    host_helper_paths
     if pid="$(host_helper_pid)"; then
         kill "$pid" 2>/dev/null || true
         for ((i = 0; i < 50; i++)); do
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.1
         done
+        if [[ "$(host_helper_pid)" == "$pid" ]]; then
+            console_err error "Error: the host folder helper has not stopped."
+            return 1
+        fi
         console_out info "Host folder helper stopped."
     fi
     rm -f "$HOST_HELPER_PID_FILE" "$HOST_HELPER_STATE_DIR/image.active"
@@ -1135,30 +1138,23 @@ host_helper_socket_label() {
     call_container_engine inspect "$CONTAINER_NAME" --format '{{.ProcessLabel}}'
 }
 
-start_host_helper() {
+start_host_helper_locked() {
     local script i label identity
     local -a label_args=()
-    host_helper_paths
-    if [ "$(id -u)" -eq 0 ]; then
-        console_err error "Error: the host folder helper runs as the invoking user, never as root; run vulnscout as a regular user."
-        return 1
-    fi
     if ! command -v python3 &>/dev/null ||
         ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
         console_err error "Error: host folders need python3 (3.9 or newer) on this host."
         return 1
     fi
-    mkdir -p "$HOST_HELPER_STATE_DIR" || return 1
-    chmod 700 "$HOST_HELPER_STATE_DIR" || return 1
-    script="$(host_helper_script)" || { stop_host_helper >/dev/null; return 1; }
+    script="$(host_helper_script)" || { stop_host_helper_locked >/dev/null; return 1; }
     label="$(host_helper_socket_label)" || return 1
     [[ -z "$label" ]] || label_args=(--socket-label "$label")
     identity="${script##*/}${label:+|$label}"
-    if host_helper_running &&
+    if [[ "$1" == start ]] && host_helper_running &&
         [ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null || true)" = "$identity" ]; then
         return 0
     fi
-    stop_host_helper >/dev/null
+    stop_host_helper_locked >/dev/null || return 1
     if ! python3 -I "$script" serve --daemon --socket "$HOST_HELPER_SOCKET" "${label_args[@]}" \
         --state-dir "$HOST_HELPER_STATE_DIR" --pid-file "$HOST_HELPER_PID_FILE" \
         --log-file "$HOST_HELPER_STATE_DIR/helper.log" < /dev/null >&2; then
@@ -1173,9 +1169,36 @@ start_host_helper() {
         console_err error "Error: the host folder helper did not start; see $HOST_HELPER_STATE_DIR/helper.log."
         return 1
     fi
-    printf '%s\n' "$identity" > "$HOST_HELPER_STATE_DIR/image.active"
+    printf '%s\n' "$identity" > "$HOST_HELPER_STATE_DIR/image.active" || return 1
     console_out success "Host folder helper running as $(id -un)."
 }
+
+host_helper_lifecycle() {
+    local action="$1"
+    host_helper_paths
+    if [[ "$action" == stop ]]; then
+        [[ -d "$HOST_HELPER_STATE_DIR" ]] || return 0
+    else
+        if [[ "$(id -u)" == 0 ]]; then
+            console_err error "Error: the host folder helper runs as the invoking user, never as root; run vulnscout as a regular user."
+            return 1
+        fi
+        mkdir -p -m 700 -- "$HOST_HELPER_STATE_DIR" || return 1
+        chmod 700 -- "$HOST_HELPER_STATE_DIR" || return 1
+    fi
+    # Lock the private directory inode; don't pass the lock to the daemon.
+    (
+        flock -x 9 || return 1
+        if [[ "$action" == stop ]]; then
+            stop_host_helper_locked 9<&-
+        else
+            start_host_helper_locked "$action" 9<&-
+        fi
+    ) 9< "$HOST_HELPER_STATE_DIR"
+}
+
+start_host_helper() { host_helper_lifecycle start; }
+stop_host_helper() { host_helper_lifecycle stop; }
 
 # Restore the helper for existing or staged attachments; never fail the calling command.
 ensure_host_helper() {
@@ -2036,9 +2059,7 @@ ai_context_helper() {
     case "$action" in
         start) start_host_helper || exit 1 ;;
         stop) stop_host_helper ;;
-        restart)
-            stop_host_helper
-            start_host_helper || exit 1 ;;
+        restart) host_helper_lifecycle restart || exit 1 ;;
         status)
             if ! host_helper_running; then
                 console_err warning "Host folder helper is not running."
