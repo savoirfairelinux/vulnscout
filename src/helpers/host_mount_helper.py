@@ -548,7 +548,7 @@ class _Walk:
 
 def _exhausted_message(reason: str, operation: str, walk: "_Walk | None" = None) -> str:
     detail = f" (visited {walk.visited} entries in {walk.elapsed:.1f}s)" if walk else ""
-    advice = ("narrow the pattern with a literal folder prefix such as 'build/tmp/work/*/curl/*' "
+    advice = ("narrow folder or pattern using a literal prefix from the attachment's returned paths "
               "or attach a smaller folder.")
     if reason == "entries":
         return f"The {operation} stopped after visiting {MAX_WALK_ENTRIES} entries{detail}; {advice}"

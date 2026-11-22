@@ -11,6 +11,7 @@ import stat
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import PurePosixPath
 
 import pytest
 
@@ -812,6 +813,37 @@ def test_folder_scopes_list_and_search_inside_the_attachment(helper, tree):
     assert [(item["path"], item["line"]) for item in found["matches"]] == [("docs/guide.c", 1)]
     # Returned paths stay relative to the attachment, so they can be read directly.
     assert ok(helper, "read", variant_id=VARIANT, alias="src", path="src/main.c")["total_lines"] == 3
+
+
+@pytest.mark.parametrize("mount_work_root", [True, False], ids=["work-root", "enclosing-root"])
+def test_discover_recipe_task_log_relative_to_attachment(helper, tree, mount_work_root):
+    workspace = tree["root"] / "workspace"
+    work = workspace / "build/tmp/work"
+    arch = work / "arm-poky-linux"
+    recipe = "sample-provider"
+    cve = "CVE-2099-12345"
+    for name in ("another-provider", recipe):
+        temp = arch / name / "2.4+git" / "temp"
+        temp.mkdir(parents=True)
+        log = temp / "log.do_cve_check.17"
+        log.write_text(f"recipe: {name}\n{cve}: not vulnerable\n")
+        (temp / "log.do_cve_check").symlink_to(log.name)
+    attached(helper, tree, alias="artifacts", path=work if mount_work_root else workspace)
+    scope = dict(variant_id=VARIANT, alias="artifacts")
+    if mount_work_root:
+        assert err(helper, "list", **scope, folder="build/tmp/work")[0] == "not_found"
+
+    # Orient using a file from a different recipe, then scope to the requested provider.
+    sample = ok(helper, "list", **scope, limit=1)["files"][0]["path"]
+    tuple_path = PurePosixPath(sample).parents[3]
+    listing = ok(helper, "list", **scope, folder=str(tuple_path), pattern=f"{recipe}/*/temp/log.do_cve_check*")
+    path, = (PurePosixPath(item["path"]) for item in listing["files"])
+    assert path.relative_to(tuple_path) == PurePosixPath(recipe, "2.4+git/temp/log.do_cve_check.17")
+    result = ok(helper, "search", **scope, folder=str(path.parent), pattern="log.do_cve_check*", query=cve)
+    match, = result["matches"]
+    assert not result["truncated"] and match["path"] == str(path)
+    read = ok(helper, "read", **scope, path=match["path"], start_line=match["line"] - 1, max_lines=2)
+    assert read["content"].splitlines() == [f"recipe: {recipe}", f"{cve}: not vulnerable"]
 
 
 def test_folder_rejects_traversal_links_hidden_and_missing_folders(helper, tree):
