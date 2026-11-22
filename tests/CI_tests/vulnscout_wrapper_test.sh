@@ -881,8 +881,12 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     fi
 
     (
+        # The sourced launcher calls the test overrides below.
+        # shellcheck source=/dev/null
         source "$ROOT_DIR/vulnscout" --help >/dev/null
+        # shellcheck disable=SC2329
         host_helper_socket_label() { echo test-label; }
+        # shellcheck disable=SC2329
         python3() {
             local -a args=()
             while (( $# )); do
@@ -897,6 +901,16 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
             done
             command python3 "${args[@]}"
         }
+        # Model the NFS requirement, even when CI runs on a local filesystem.
+        # shellcheck disable=SC2329
+        flock() {
+            command python3 -c 'import fcntl, os, stat, sys
+fd = int(sys.argv[1])
+assert stat.S_ISREG(os.fstat(fd).st_mode)
+assert fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDWR' "$2" || return 1
+            command flock "$@"
+        }
+        lock_inode="$(stat -c %i "$state/lifecycle.lock")"
         start_host_helper > "$state/refresh1" & first=$!
         start_host_helper > "$state/refresh2" & second=$!
         wait "$first"
@@ -908,6 +922,7 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
         [[ "$(cat "$state/helper.pid")" == "$pid" && "$(cat "$state/launches")" == launch ]]
         ai_context_helper restart
         [[ "$(cat "$state/helper.pid")" != "$pid" ]]
+        [[ "$(stat -c %i "$state/lifecycle.lock")" == "$lock_inode" ]]
         ai_context_helper status
     )
     pid="$(cat "$state/helper.pid")"
