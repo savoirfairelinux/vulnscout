@@ -12,7 +12,7 @@ from ..models import Assessment as DBAssessment, Package, Finding
 from ..models.assessment import APPROVAL_CONTENT_FIELDS, APPROVAL_EDIT_FIELDS
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
-from ..extensions import db, batch_session, hold_write_lock
+from ..extensions import db, batch_session, hold_write_lock, write_lock
 from ..models.variant import Variant as DBVariant
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
@@ -1748,14 +1748,30 @@ def init_app(app: Flask) -> None:
                 return {"error": "Invalid allowed_variant_ids"}, 400
             try:
                 allowed_ids = {UUID(value) for value in raw_ids}
-                assessment_uuid = UUID(assessment_id)
             except ValueError:
                 return {"error": "Invalid allowed_variant_ids or assessment ID"}, 400
-            existing = db.session.execute(
-                db.select(DBAssessment).where(DBAssessment.id == assessment_uuid).with_for_update()
-            ).scalar_one_or_none()
-        else:
-            existing = DBAssessment.get_by_id(assessment_id)
+        try:
+            assessment_uuid = UUID(assessment_id)
+        except ValueError:
+            if allowed_ids is not None:
+                return {"error": "Invalid allowed_variant_ids or assessment ID"}, 400
+            return {"error": "Assessment not found"}, 404
+
+        with write_lock():
+            # Serialize the read used for validation with edited approvals.
+            _lock_target_writes()
+            result, status = _update_locked_assessment(assessment_uuid, allowed_ids, payload_data)
+            if status != 200:
+                db.session.rollback()
+            return result, status
+
+    def _update_locked_assessment(
+        assessment_uuid: UUID, allowed_ids: set[UUID] | None, payload_data: dict[str, Any],
+    ) -> tuple[dict[str, Any], int]:
+        existing = db.session.scalar(
+            db.select(DBAssessment).where(DBAssessment.id == assessment_uuid).with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if existing is None:
             return {"error": "Assessment not found"}, 404
         if allowed_ids is not None:
@@ -1764,7 +1780,6 @@ def init_app(app: Flask) -> None:
                 .where(AssessmentTarget.assessment_id == existing.id).with_for_update()
             ).scalars().all()
             if not current_ids or not set(current_ids) <= allowed_ids:
-                db.session.rollback()
                 return {"error": "Assessment targets changed or are outside the current agent scope."}, 409
             db.session.expire(existing, ["target_rows"])
         if not existing.target_rows or any(
