@@ -208,10 +208,12 @@ def _approve_row(
     condition = (DBAssessment.id == row.id) & (DBAssessment.origin == "ai")
     conflict = "Assessment changed before approval; reload and review it again"
     expected_targets = None
+    expected_responses = None
     if "expected_fingerprint" in payload:
         if payload["expected_fingerprint"] != row.approval_fingerprint():
             return {"error": conflict}, 409
         expected_targets = {(t.variant_id, t.finding_id) for t in row.target_rows}
+        expected_responses = list(row.responses or [])
     has_edits = any(key in payload for key in APPROVAL_EDIT_FIELDS)
     if has_edits or "expected_fingerprint" in payload:
         # The omitted fields used during validation must still match at write time.
@@ -229,7 +231,10 @@ def _approve_row(
         if expected_targets is not None:
             # Target writers take the same parent lock before changing membership.
             _lock_target_writes()
-            if db.session.scalar(db.select(DBAssessment.id).where(condition).with_for_update()) is None:
+            locked = db.session.execute(
+                db.select(DBAssessment.responses).where(condition).with_for_update()
+            ).one_or_none()
+            if locked is None or (locked.responses or []) != expected_responses:
                 return {"error": conflict}, 409
             pairs = db.session.execute(
                 db.select(AssessmentTarget.variant_id, AssessmentTarget.finding_id)

@@ -995,9 +995,9 @@ exports as `false_positive` in CycloneDX.
 
 Editors send the pending suggestion's `approval_fingerprint` as
 `expected_fingerprint`, including when confirming without edits. If any content
-field or variant/finding target pair changed since the user opened the editor,
-approval returns `409` and leaves the newer suggestion pending. The
-precondition is optional for existing clients.
+field (including CycloneDX `responses`) or variant/finding target pair changed
+since the user opened the editor, approval returns `409` and leaves the newer
+suggestion pending. The precondition is optional for existing clients.
 
 **Request body (optional):**
 ```json

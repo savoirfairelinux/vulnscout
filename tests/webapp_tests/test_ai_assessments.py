@@ -957,6 +957,48 @@ def test_confirm_requires_the_content_seen_by_the_editor(client, app, edits):
     }).status_code == 200
 
 
+def test_approval_conflicts_after_response_only_reconcile(client):
+    pending = _post_ai(client, responses=["update"]).json["assessment"]
+    url = f"/api/assessments/{pending['id']}"
+    reconciled = client.post(url + "/reconcile", json={
+        "vuln_id": VULN_ID, "packages": [PKG], "variant_ids": [str(VARIANT_UUID)],
+        "status": pending["status"], "responses": ["will_not_fix"],
+    })
+    assert reconciled.status_code == 200
+    stale = client.post(url + "/approve", json={"expected_fingerprint": pending["approval_fingerprint"]})
+    assert stale.status_code == 409
+    current = client.get(url).json
+    assert (current["origin"], current["responses"]) == ("ai", ["will_not_fix"])
+    refreshed = client.post(url + "/approve", json={"expected_fingerprint": current["approval_fingerprint"]})
+    assert refreshed.status_code == 200
+
+
+def test_approval_rechecks_responses_at_promotion(client, monkeypatch):
+    from src.routes import assessments as routes
+
+    pending = _post_ai(client, responses=["update"]).json["assessment"]
+    validate = routes._validate_content_edit
+
+    def validate_then_change(row, *args, **kwargs):
+        result = validate(row, *args, **kwargs)
+        with db.engine.begin() as connection:
+            connection.execute(db.update(DBAssessment).where(DBAssessment.id == row.id)
+                               .values(responses=["will_not_fix"]))
+        assert row.responses == ["update"]
+        return result
+
+    monkeypatch.setattr(routes, "_validate_content_edit", validate_then_change)
+    url = f"/api/assessments/{pending['id']}"
+    response = client.post(url + "/approve", json={
+        "expected_fingerprint": pending["approval_fingerprint"], "status_notes": "Edited",
+    })
+    assert response.status_code == 409
+    current = client.get(url).json
+    assert (current["origin"], current["responses"], current["status_notes"]) == (
+        "ai", ["will_not_fix"], pending["status_notes"],
+    )
+
+
 def test_edited_approval_rechecks_targets_at_promotion(client, app, monkeypatch):
     from src.routes import assessments as routes
 

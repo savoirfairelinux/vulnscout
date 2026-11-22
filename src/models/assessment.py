@@ -458,7 +458,8 @@ class Assessment(Base):
     def approval_fingerprint(self) -> str:
         values = [getattr(self, field) or "" for field in APPROVAL_CONTENT_FIELDS]
         pairs = sorted((str(t.variant_id), str(t.finding_id)) for t in self.target_rows)
-        return hashlib.sha256(json.dumps([values, pairs], separators=(",", ":")).encode()).hexdigest()
+        content = json.dumps([values, self.responses or [], pairs], separators=(",", ":"))
+        return hashlib.sha256(content.encode()).hexdigest()
 
     def to_dict(self) -> dict:
         ts = ensure_utc_iso(self.timestamp)
