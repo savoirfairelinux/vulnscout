@@ -868,6 +868,36 @@ def test_root_sample_can_miss_a_mounted_recipe_workdir(helper, tree, monkeypatch
     assert [f["path"] for f in scoped["files"]] == [f"{workdir}/log.do_cve_check.17"]
 
 
+def test_task_log_candidates_need_run_and_exact_cve_evidence(helper, tree):
+    workdir = "arm-poky-linux/sample/2.4/temp"
+    temp = tree["app"] / workdir
+    temp.mkdir(parents=True)
+    cve = "CVE-2099-1234"
+    target_log = f"{workdir}/log.do_cve_check.17"
+    other_log = f"{workdir}/log.do_cve_check.23"
+    (tree["app"] / target_log).write_text(f"{cve}5: vulnerable\n{cve}: not vulnerable\n")
+    (tree["app"] / other_log).write_text(f"{cve}: vulnerable\n")
+    (tree["app"] / "target-task-record").write_text(target_log + "\n")
+    attached(helper, tree)
+    scope = dict(variant_id=VARIANT, alias="src")
+
+    found = ok(helper, "search", **scope, folder=workdir, pattern="log.do_cve_check*", query=cve)
+    candidates = {}
+    for hit in found["matches"]:
+        line = ok(helper, "read", **scope, path=hit["path"], start_line=hit["line"], max_lines=1)["content"]
+        candidates[hit["path"], hit["line"]] = line.strip()
+    assert not found["truncated"]
+    assert candidates == {
+        (target_log, 1): f"{cve}5: vulnerable",
+        (target_log, 2): f"{cve}: not vulnerable",
+        (other_log, 1): f"{cve}: vulnerable",
+    }
+    record = ok(helper, "read", **scope, path="target-task-record")["content"].strip()
+    verified = [(number, line) for (path, number), line in candidates.items()
+                if path == record and line.partition(":")[0] == cve]
+    assert verified == [(2, f"{cve}: not vulnerable")]
+
+
 def test_folder_rejects_traversal_links_hidden_and_missing_folders(helper, tree):
     attached(helper, tree)
     for folder in ("/", "///", "../outside", "/etc", "src/../..", ".git", "escape_dir", "api_token.txt", "src//x"):
