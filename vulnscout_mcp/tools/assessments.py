@@ -1,5 +1,17 @@
 from typing import Optional
+from typing_extensions import NotRequired, TypedDict
 from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+
+
+class RiskReference(TypedDict):
+    risk_id: str
+    threat_id: NotRequired[str]
+
+
+class WriteTarget(TypedDict):
+    package: str
+    variant_id: str
+    risk_links: NotRequired[list[RiskReference]]
 
 
 def _write_assessment_impl(
@@ -9,7 +21,7 @@ def _write_assessment_impl(
     packages: Optional[list] = None,
     variant_id: Optional[str] = None,
     variant_ids: Optional[list] = None,
-    targets: Optional[list] = None,
+    targets: Optional[list[WriteTarget]] = None,
     justification: Optional[str] = None,
     status_notes: Optional[str] = None,
     impact_statement: Optional[str] = None,
@@ -167,7 +179,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         packages: Optional[list] = None,
         variant_id: Optional[str] = None,
         variant_ids: Optional[list] = None,
-        targets: Optional[list] = None,
+        targets: Optional[list[WriteTarget]] = None,
         justification: Optional[str] = None,
         status_notes: Optional[str] = None,
         impact_statement: Optional[str] = None,
@@ -210,8 +222,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
 
         Returns a success summary when the API response includes an `assessment`
         object, followed by "; replaced: <id> (<deleted|trimmed>, <variant ids>)"
-        for each pending AI assessment the write replaced. If the response does not include `assessment`, the call is treated
-        as failed and the raw response payload is returned instead. Client errors
+        for each pending AI assessment the write replaced. If the response does not include `assessment`,
+        the call is treated as failed and the raw response payload is returned instead. Client errors
         are returned as an `Error: ...` string.
 
         Args:
@@ -230,7 +242,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     pairs. Use this instead of `packages`/`variant_id`/`variant_ids`
                     for a multi-variant group whose members do not all share the
                     same affected package set. Takes precedence over
-                    `packages`/`variant_id`/`variant_ids` when given.
+                    `packages`/`variant_id`/`variant_ids` when given. Each target may include
+                    risk_links: [{"risk_id": "R1", "threat_id": "T2"}]. Use only IDs from that
+                    variant's saved STRIDE records; the optional threat must belong to the risk.
+                    Omitted or [] means no modeled risk linked, not absence of risk.
             justification: Required when status is 'not_affected'. OpenVEX values:
                     component_not_present, vulnerable_code_not_present,
                     vulnerable_code_not_in_execute_path,
