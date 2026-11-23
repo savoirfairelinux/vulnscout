@@ -676,14 +676,32 @@ to manage attachments.
   opened directory's identity. On Linux kernels and filesystems supporting
   exportable file handles and unique mount IDs (Linux 6.12+), that identity
   includes the directory generation. Approval survives a helper restart on
-  the same mount within the same boot. Elsewhere the helper holds the approved
+  the same mount within the same boot.
+- A **host reboot** changes the boot ID; mount IDs from the previous boot
+  no longer identify the current mounts. New approvals
+  can survive it when the folder and the private approval key are on the host's
+  **same ext4 root mount** and the kernel supplies its filesystem UUID and a
+  generation-bearing directory handle. The helper verifies the filesystem UUID,
+  key-file handle, directory handle, and membership in the *current* root mount;
+  even a bind mount of the original directory is not interchangeable. Separate
+  data mounts, bind mounts, and other filesystems do not get this guarantee.
+  The trusted host and its private key must be preserved; these checks do not
+  authenticate a host restored wholesale from a disk image.
+- If only boot-scoped handles are available, run the host attach command again
+  after a host reboot. Without suitable handles the helper holds the approved
   directory open: run the attach command again after a helper restart. At most
   128 session-only directory descriptors are kept; unactivated approvals
   expire after five minutes and detaching releases an active descriptor.
   Replacing the root directory requires fresh approval even if its inode is
   reused; editing files inside it does not. Older path-only or device/inode
-  approvals require a fresh attach after upgrade. The database saves the proof
-  so activation can retry. If the CLI reports `activation pending`, the attachment
+  approvals require a fresh attach after upgrade. Older signed boot-scoped
+  approvals still work where their exact identity matches, but cannot be upgraded
+  from a path or refreshed automatically after reboot. Verify the host directories,
+  then repeat the original host `ai-context attach` with the same project, variant,
+  aliases and paths; there is no need to detach first. Use a matching wrapper
+  and image: unconsumed permits from old helpers are not valid.
+- The database saves the proof so activation can retry. If the CLI reports
+  `activation pending`, the attachment
   was saved. Run `ai-context list` to retry and check availability. Keep the
   private helper state: if its signing key is
   lost, repeat the host command. An offline detach is recorded for retry and

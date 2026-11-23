@@ -662,9 +662,7 @@ class TestCli:
         scope = self._run(app, "ai-context-list", "-p", "Demo", "-v", "x86", "--variant-id-only")
         assert scope.exit_code == 0 and scope.output.strip() == str(variant.id)
         path = str(host["app"])
-        permit = Path(helper_server.state_dir) / "permit.Abc123Def456"
-        permit.mkdir()
-        (permit / "src").write_bytes(str(variant.id).encode() + b"\0" + os.fsencode(path))
+        permit = Path(helper_server.state_dir) / host_permit(helper_server, variant.id, src=path)
         params = {"variant_id": str(variant.id), "alias": "src", "path": path, "host_permit": permit.name}
         for invalid in ({"variant_id": str(uuid.uuid4())}, {"alias": "other"}, {"path": str(host["outside"])}):
             stage = {"op": "stage", "attachment_id": str(uuid.uuid4()), **params, **invalid}
@@ -705,9 +703,7 @@ class TestCli:
     def test_committed_cli_approval_recovers_after_interrupted_activation(
             self, client, variant, host, helper_server, monkeypatch):
         path = str(host["outside"])
-        permit = Path(helper_server.state_dir) / "permit.Abc123Def458"
-        permit.mkdir()
-        (permit / "src").write_bytes(str(variant.id).encode() + b"\0" + os.fsencode(path))
+        permit = Path(helper_server.state_dir) / host_permit(helper_server, variant.id, src=path)
         original_call = host_mounts.helper.call
 
         def interrupt(op, **kwargs):

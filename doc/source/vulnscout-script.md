@@ -180,6 +180,12 @@ helper on this host, as the current user. See
 [Attached host folders](ai-assessments.md#attached-host-folders) for the security
 model and the list, refresh, and detach actions on the AI Context page.
 
+If folders show as unavailable after a host reboot, an existing path alone
+does not prove it is the approved directory. Check the host folders and mounts,
+then rerun the original `ai-context attach` command with the same aliases.
+Refreshing the list does not approve replacements. Older approvals need this
+step even on a filesystem that supports new reboot-persistent approvals.
+
 ## Source evidence and CVE refinement
 
 For imported SPDX 3 Build-profile evidence, the local engine also receives
