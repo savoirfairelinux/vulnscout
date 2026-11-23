@@ -9,6 +9,7 @@ ordered, so the front-ends stop reimplementing it and drifting apart.
 
 from uuid import UUID
 
+from ..helpers.assessment_risk_links import RiskModelIndex
 from ..helpers.assessment_staleness import annotate_assessments_outdated
 from ..models.assessment import Assessment
 
@@ -22,7 +23,8 @@ def annotate_targets(assessments: list[Assessment], link_scope: set[UUID] | None
     if not assessments:
         return []
 
-    dicts = [a.to_dict(link_scope=link_scope) for a in assessments]
+    indexes: dict[UUID, RiskModelIndex] = {}
+    dicts = [a.to_dict(link_scope=link_scope, link_indexes=indexes) for a in assessments]
     annotate_assessments_outdated(dicts)
     # Keyed on the (variant, package name) pair, not on the package alone:
     # ``stale_packages`` unions every variant the assessment targets, so it

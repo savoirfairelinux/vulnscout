@@ -16,7 +16,8 @@ from ..extensions import db, batch_session, hold_write_lock, write_lock
 from ..models.variant import Variant as DBVariant
 from ..models.variant_context import VariantContext
 from ..helpers.assessment_risk_links import (
-    MAX_SNAPSHOT_BYTES, RiskLinkError, RiskSnapshot, charge_snapshots, describe_links, preview_link, resolve_links,
+    MAX_SNAPSHOT_BYTES, RiskLinkError, RiskModelIndex, RiskSnapshot, charge_snapshots, describe_links,
+    preview_link, resolve_links,
 )
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
@@ -178,20 +179,23 @@ def _reviewed_links(
     ).tuples().all())
     replacements = {}
     remaining = MAX_SNAPSHOT_BYTES
+    indexes = {vid: RiskModelIndex(models.get(vid)) for vid in variants}
     for target in members.values():
-        model = models.get(target.variant_id)
+        if target.variant_id not in indexes:
+            continue
+        index = indexes[target.variant_id]
         retained = target.risk_links or []
         confirmed: set[tuple[str, str | None]] = set()
         if target in requested:
             try:
-                replacements[target] = resolve_links(requested[target], model,
+                replacements[target] = resolve_links(requested[target], index,
                                                      confirmed=confirmed if approval else None)
             except RiskLinkError as exc:
                 raise RiskLinkError(f"{target.finding.package.string_id} ({target.variant_id}): {exc}") from exc
             kept = {(r["risk_id"], r.get("threat_id")) for r in replacements[target]}
             retained = [r for r in retained if (r["risk_id"], r.get("threat_id")) in kept - confirmed]
         remaining = charge_snapshots(remaining, replacements.get(target, retained))
-        if retained and any(link["stale"] for link in describe_links(retained, model)):
+        if retained and any(link["stale"] for link in describe_links(retained, index)):
             raise RiskLinkError(f"Stale modeled risk link for {target.finding.package.string_id} "
                                 f"({target.variant_id}): correct or remove it before approval")
     return replacements
@@ -507,8 +511,9 @@ def init_app(app: Flask) -> None:
                 .where(VariantContext.variant_id.in_(linked_pairs))
             ).tuples().all())
             for vid, linked in linked_pairs.items():
+                index = RiskModelIndex(models.get(vid))
                 for pair in linked:
-                    pair["risk_links"] = describe_links(pair["risk_links"], models.get(vid))
+                    pair["risk_links"] = describe_links(pair["risk_links"], index)
 
         for entry in full_by_id.values():
             entry["variant_ids"].sort()
@@ -679,8 +684,9 @@ def init_app(app: Flask) -> None:
 
         assessments_serialized = []
         link_scope = set(variant_ids) if variant_ids is not None else None
+        indexes: dict[UUID, RiskModelIndex] = {}
         for a in assessments:
-            a_ser = a.to_dict(link_scope=link_scope)
+            a_ser = a.to_dict(link_scope=link_scope, link_indexes=indexes)
             a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
             if origin == "ai":
                 a_ser["context_outdated"] = _is_context_outdated(a, context_updates)

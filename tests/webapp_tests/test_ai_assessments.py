@@ -6,6 +6,7 @@
 import json
 import os
 import uuid
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -490,6 +491,37 @@ def test_retargeted_threat_requires_confirmation_even_when_descriptions_match(cl
     assert approved["status"] == row["status"]
     assert approved["targets"][0]["risk_links"] == [{k: v for k, v in current.items() if k != "revision"}
                                                     | {"stale": False}]
+
+
+def test_listings_index_each_referenced_section_once_per_variant(client, app, monkeypatch):
+    from src.helpers import assessment_risk_links
+
+    first, second = str(VARIANT_UUID), str(uuid.uuid4())
+    _add_variant(app, second)
+    for variant in (first, second):
+        _risk_model(app, variant, variant, target_ids=["I1"])
+    for package in (PKG, PKG2):
+        row = _post_ai(client, targets=[
+            {"package": package, "variant_id": first, "risk_links": [{"risk_id": "R1", "threat_id": "T1"}]},
+            {"package": package, "variant_id": second, "risk_links": [{"risk_id": "R1"}]},
+        ]).json["assessment"]
+        assert client.post(f"/api/assessments/{row['id']}/approve").status_code == 200
+
+    scans = Counter()
+    records = assessment_risk_links._records
+
+    def count(model, section):
+        scans[model["risks"][0]["description"], section] += 1
+        return records(model, section)
+
+    monkeypatch.setattr(assessment_risk_links, "_records", count)
+    for path in ("/api/assessments?format=list", "/api/reviews/assessments?origin=custom", "/api/assessments/review"):
+        scans.clear()
+        rows = client.get(path).json
+        links = [(t["variant_id"], t["risk_links"][0]) for row in rows for t in row["targets"] if t.get("risk_links")]
+        assert len(links) == 4
+        assert all(not link["stale"] and link["risk_description"] == variant for variant, link in links)
+        assert scans == {(first, "risks"): 1, (first, "threats"): 1, (first, "interactions"): 1, (second, "risks"): 1}
 
 
 def test_compare_preserves_exact_saved_endpoint_ids(client, app):
