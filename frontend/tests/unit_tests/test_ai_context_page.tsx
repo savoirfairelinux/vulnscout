@@ -1608,7 +1608,9 @@ describe('AIContext page', () => {
 
             expect(screen.queryByRole('tooltip')).toBeNull();
             fireEvent.click(screen.getByRole('button', { name: /import help/i }));
-            expect(await screen.findByRole('tooltip')).toHaveTextContent(/overwrites the existing context/i);
+            const tooltip = await screen.findByRole('tooltip');
+            expect(tooltip).toHaveTextContent(/replaces the project description shared by all its variants/i);
+            expect(tooltip).toHaveTextContent(/unmarked entries with only Context text.*preserve System and STRIDE/i);
         });
     });
 });
