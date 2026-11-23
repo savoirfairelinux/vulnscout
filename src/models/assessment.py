@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
 
 from ..extensions import db, Base
 from ..helpers.assessment_io import parse_imported_timestamp
-from ..helpers.assessment_risk_links import describe_links
+from ..helpers.assessment_risk_links import RiskSnapshot, describe_links
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
@@ -658,7 +658,7 @@ class Assessment(Base):
         responses: Optional[list] = None,
         timestamp: Optional[datetime] = None,
         commit: bool = True,
-        risk_snapshots: dict[tuple[uuid.UUID, uuid.UUID], list[dict[str, str]]] | None = None,
+        risk_snapshots: dict[tuple[uuid.UUID, uuid.UUID], list[RiskSnapshot]] | None = None,
     ) -> "Assessment":
         """Create a new assessment, persist it and return it.
 

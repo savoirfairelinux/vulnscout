@@ -16,7 +16,7 @@ from ..extensions import db, batch_session, hold_write_lock, write_lock
 from ..models.variant import Variant as DBVariant
 from ..models.variant_context import VariantContext
 from ..helpers.assessment_risk_links import (
-    MAX_SNAPSHOT_BYTES, RiskLinkError, charge_snapshots, describe_links, preview_link, resolve_links,
+    MAX_SNAPSHOT_BYTES, RiskLinkError, RiskSnapshot, charge_snapshots, describe_links, preview_link, resolve_links,
 )
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
@@ -156,7 +156,7 @@ _APPROVAL_REQUEST_MAX_BYTES = 64 * 1024
 
 def _reviewed_links(
     row: DBAssessment, edits: object, *, approval: bool = False,
-) -> dict[AssessmentTarget, list[dict[str, str]]]:
+) -> dict[AssessmentTarget, list[RiskSnapshot]]:
     """Validate all proposed replacements and retained references before applying any."""
     if not isinstance(edits, list):
         raise RiskLinkError("target_risk_links must be a list")

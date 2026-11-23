@@ -355,14 +355,14 @@ def test_edited_approval_conflicts_after_partial_replacement(client, app):
     }).status_code == 200
 
 
-def _risk_model(app, variant, description, extra_risks=()):
+def _risk_model(app, variant, description, extra_risks=(), target_ids=("C1",)):
     from src.models.variant_context import VariantContext
 
     with app.app_context():
         context = VariantContext.get_or_create(uuid.UUID(variant))
         context.stride_model = {
             "risks": [{"id": "R1", "description": description, "threat_ids": ["T1"]}, *extra_risks],
-            "threats": [{"id": "T1", "description": f"{description} threat"},
+            "threats": [{"id": "T1", "description": f"{description} threat", "target_ids": list(target_ids)},
                         {"id": "T2", "description": "Unrelated threat"}],
         }
         db.session.commit()
@@ -382,7 +382,7 @@ def test_risk_links_are_scoped_to_exact_targets_and_reviewed_atomically(client, 
     reviewed = client.get("/api/reviews/assessments?origin=ai").json[0]
     links = {t["variant_id"]: t["risk_links"][0] for t in reviewed["targets"]}
     assert links[first] == {**ref, "risk_description": "First model", "threat_description": "First model threat",
-                            "stale": False}
+                            "threat_target_ids": ["C1"], "stale": False}
     assert links[second]["risk_description"] == "Second model"
     for path in (f"/api/reviews/assessments?origin=ai&variant_id={first}",
                  f"/api/reviews/assessments?origin=ai&variant_id={first}&project_id={PROJECT_UUID}",
@@ -446,8 +446,40 @@ def test_reconfirm_requires_the_description_current_at_approval(client, app):
     result = client.post(url + "/approve", json=confirmation("Another revision")).json["assessments"][0]
     assert (result["origin"], result["status"]) == ("custom", row["status"])
     assert result["targets"][0]["risk_links"] == [{
-        **ref, "risk_description": "Another revision", "threat_description": "Another revision threat", "stale": False,
+        **ref, "risk_description": "Another revision", "threat_description": "Another revision threat",
+        "threat_target_ids": ["C1"], "stale": False,
     }]
+
+
+def test_retargeted_threat_requires_confirmation_even_when_descriptions_match(client, app):
+    variant = str(VARIANT_UUID)
+    _risk_model(app, variant, "Unchanged", target_ids=["I1", "C1"])
+    ref = {"risk_id": "R1", "threat_id": "T1"}
+    target = {"variant_id": variant, "package": PKG}
+    row = _post_ai(client, targets=[{**target, "risk_links": [ref]}]).json["assessment"]
+    url = f"/api/assessments/{row['id']}"
+
+    def preview():
+        return client.get(url + "/risk-link-preview", query_string={**target, **ref}).json
+
+    def approve(revision):
+        return client.post(url + "/approve", json={"target_risk_links": [
+            {**target, "risk_links": [{**ref, "confirmed_revision": revision}]},
+        ]})
+
+    first = preview()
+    _risk_model(app, variant, "Unchanged", target_ids=["C1", "I1"])
+    assert preview() == first
+    _risk_model(app, variant, "Unchanged", target_ids=["C2"])
+    stored = client.get(url).json["targets"][0]["risk_links"][0]
+    assert stored["stale"] and stored["threat_target_ids"] == ["C1", "I1"]
+    assert client.post(url + "/approve").status_code == 400
+    assert approve(first["revision"]).status_code == 400
+    current = preview()
+    assert current["threat_target_ids"] == ["C2"]
+    approved = approve(current["revision"]).json["assessments"][0]
+    assert approved["status"] == row["status"]
+    assert approved["targets"][0]["risk_links"] == [{**stored, "stale": False, "threat_target_ids": ["C2"]}]
 
 
 def test_link_limits_reject_expanded_edits_and_replacements_atomically(app, client):

@@ -43,7 +43,9 @@ _COUNT = {"type": "integer", "minimum": 0}
 _NUMBER = {"type": "number", "nullable": True}
 _STRINGS = _array(_STRING)
 _RISK_IDS = {"risk_id": _STRING, "threat_id": _STRING}
-_RISK_SNAPSHOT = {**_RISK_IDS, "risk_description": _STRING, "threat_description": _STRING}
+_RISK_SNAPSHOT = {**_RISK_IDS, "risk_description": _STRING, "threat_description": _STRING,
+                  "threat_target_ids": _array({"type": "string", "pattern": r"^[CI][1-9]\d*$"},
+                                              uniqueItems=True, maxItems=2 * MAX_ROWS)}
 _UUIDS = _array(_UUID)
 _PACKAGE_ID = {
     "type": "string",
