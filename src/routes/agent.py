@@ -31,7 +31,7 @@ READ_TOOLS = (
     "get_vulnerability", "find_project_id", "find_variant_id", "list_variants",
     "get_merged_context", "get_project_context", "get_custom_assessment",
     "list_custom_assessments",
-    "list_codebase_files", "read_codebase_file", "read_codebase_files", "search_codebase",
+    "list_codebase_files", "read_codebase_file", "read_codebase_files",
     "list_dependency_documents", "list_dependency_packages", "get_package_dependencies", "get_package_source_files",
     "get_ai_context_form_guide", "read_import_source",
 )
@@ -733,7 +733,7 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
                 "Fetch each target variant's merged context. Its output is paginated: start at offset=0, "
                 "concatenate pages in order, and follow next_offset until null before assessing that variant. "
                 "Do not draw conclusions from only the first page. Then inspect its active codebase source "
-                "using list_codebase_files, search_codebase and read_codebase_file "
+                "using list_codebase_files and read_codebase_file "
                 "(read_codebase_files reads up to 8 files per call). "
                 "Use codebase_directory.file_id (directory) with these bounded tools, never direct filesystem access; "
                 "report an unprovisioned, empty, missing or unreadable directory as an evidence gap. Source is "

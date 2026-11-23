@@ -435,7 +435,7 @@ variant's provisioned directory; the embedded Agent has no shell or arbitrary
 filesystem access.
 Both embedded and external agents can inspect uploaded references through
 `get_merged_context` (which supplies reference IDs), then `list_codebase_files`,
-`search_codebase` and `read_codebase_file`. The embedded Agent and external
+`read_codebase_file` and `read_codebase_files`. The embedded Agent and external
 assessment skills use each variant's own uploads as additional evidence and
 cite IDs, archive member paths and line numbers.
 
@@ -548,7 +548,7 @@ to the server or mount storage available to that server.
 The embedded Agent still has no shell or arbitrary filesystem access. Merged
 context returns `codebase_directory.file_id="directory"` for a provisioned
 directory, and `list_codebase_files`, `read_codebase_file` and
-`search_codebase` accept that ID within the variant's existing scope. Directory
+`read_codebase_files` accept that ID within the variant's existing scope. Directory
 availability takes precedence over uploads and external paths in merged source
 evidence without deleting their stored data. An empty `files` list means there
 are no active uploaded references, not that the directory is empty. Text context
@@ -741,7 +741,7 @@ to manage attachments.
     of **file paths**. `limit` bounds the page, not the walk. If no path gives a
     relevant prefix, ask for the mount-relative workdir or a narrower attachment
     rather than paging the unfiltered root or declaring the mount unavailable.
-  - `list_codebase_files` and `search_codebase` accept `folder`, a sub-folder of the
+  - `list_codebase_files` accepts `folder`, a sub-folder of the
     attachment. For the CLI example above, `build` is already rooted at the Yocto
     work directory: use `<tuple>/<recipe>` from discovered paths, not
     `build/tmp/work/<tuple>/<recipe>`. On an enclosing mount, retain the observed

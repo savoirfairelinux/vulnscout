@@ -120,6 +120,7 @@ def test_registered_tools_forward_parameters():
     server = Server()
     client = VulnScoutClient(BASE_URL)
     register_tools(server, client)
+    assert "search_codebase" not in server.tools
     with patch.object(client, "get_codebase_source", return_value={"ok": True}) as source:
         assert json.loads(server.tools["list_codebase_files"]("v1", "f1", "*.c", 10, 20)) == {"ok": True}
         source.assert_called_with("v1", "f1", {"operation": "list", "pattern": "*.c", "offset": 10, "limit": 20})
@@ -127,17 +128,9 @@ def test_registered_tools_forward_parameters():
         source.assert_called_with("v1", "mount:src", {
             "operation": "list", "pattern": "*.c", "offset": 0, "limit": 5, "folder": "build/tmp",
         })
-        server.tools["search_codebase"]("v1", "mount:src", "needle", "*", 3, "build/tmp")
-        source.assert_called_with("v1", "mount:src", {
-            "operation": "search", "query": "needle", "pattern": "*", "max_results": 3, "folder": "build/tmp",
-        })
         server.tools["read_codebase_file"]("v1", "f1", "a.c", 3, 5)
         source.assert_called_with("v1", "f1", {
             "operation": "read", "path": "a.c", "start_line": 3, "max_lines": 5,
-        })
-        server.tools["search_codebase"]("v1", "f1", "needle", "*.c", 3)
-        source.assert_called_with("v1", "f1", {
-            "operation": "search", "query": "needle", "pattern": "*.c", "max_results": 3,
         })
 
 
