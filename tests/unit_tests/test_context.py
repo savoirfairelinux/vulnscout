@@ -1340,15 +1340,36 @@ class TestVariantEditorSave:
             VariantContext.save_editor(variant.id, _editor_payload(stride=bad))
         assert "threats[0].target_ids" in exc.value.fields
 
-    def test_null_stride_does_not_erase_saved_model(self, client, project, variant):
+    @pytest.mark.parametrize("stride,system,errors", [
+        (None, {"scope": "Gateway"}, {"model": "must be an object"}),
+        *[({table: None}, {}, {table: "must be a list"})
+          for table in ("components", "interactions", "threats", "risks")],
+    ])
+    def test_null_stride_or_table_preserves_saved_context(self, client, project, variant, stride, system, errors):
         save_url = f"/api/variants/{variant.id}/context"
         load_url = f"/api/context?project_id={project.id}&variant_id={variant.id}"
         assert client.put(save_url, json=_editor_payload()).status_code == 200
         before = client.get(load_url).get_json()
-        resp = client.put(save_url, json=_editor_payload(environment="Lab", stride=None))
+        resp = client.put(save_url, json=_editor_payload(environment="Lab", stride=stride, system=system))
         assert resp.status_code == 400
-        assert resp.get_json()["fields"] == {"model": "must be an object"}
+        assert resp.get_json()["fields"] == errors
         assert client.get(load_url).get_json() == before
+
+    def test_system_only_save_must_explicitly_replace_model(self, client, variant):
+        from src.helpers.stride_model import empty_stride_model
+        url = f"/api/variants/{variant.id}/context"
+        payload = _editor_payload()
+        assert client.put(url, json=payload).status_code == 200
+        system = {"scope": "Gateway"}
+        resp = client.put(url, json={"system": system})
+        assert resp.status_code == 200
+        assert resp.get_json()["editor"]["system"]["scope"] == payload["system"]["scope"]
+        assert resp.get_json()["editor"]["stride"] == payload["stride"]
+
+        resp = client.put(url, json={"system": system, "stride": {}})
+        assert resp.status_code == 200
+        assert resp.get_json()["editor"]["system"]["scope"] == "Gateway"
+        assert resp.get_json()["editor"]["stride"] == empty_stride_model()
 
     def test_identical_editor_save_keeps_updated_at(self, app, variant):
         from src.models.variant_context import VariantContext

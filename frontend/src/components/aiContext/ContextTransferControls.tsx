@@ -206,9 +206,10 @@ function ContextTransferControls({ projects, beforeImport, onImported, notify }:
             </div>
             <HelpPopover ariaLabel="Import help" role="tooltip" buttonClassName="text-sky-300 hover:text-sky-100" surfaceClassName="w-[320px] p-3">
                 Importing overwrites the existing context for each matching
-                project/variant. Variants whose project or variant does not exist
-                are ignored; variants missing mandatory fields (description, threat
-                model) fail. Accepts an exported file, whose projects each nest
+                project/variant. A project description and a stride_model object are
+                required. An empty object clears all STRIDE rows; omitted or empty
+                tables clear their rows. A null model or table fails the entry.
+                Unknown projects or variants are ignored. Accepts an exported file, whose projects each nest
                 their variants. Uploaded codebase references are not included
                 in context JSON transfers.
             </HelpPopover>

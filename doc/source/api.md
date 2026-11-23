@@ -364,7 +364,11 @@ Two body shapes are accepted.
 `variant_description`, `environment`, `other_info`,
 `system` (`scope`, `actors`, `entry_points`, `trust_boundaries`) and
 `stride` (`components`, `interactions`, `threats`, `risks`).
-The STRIDE tables may all be empty. Validation failures return `400` with
+An editor save replaces all editable fields; it does not merge rows. Within `stride`,
+an omitted table or `[]` clears that table. Neither `stride` nor a table may be `null`.
+Clients that previously sent `stride: null` with System text must send `stride: {}` to
+save System with no rows, or include the existing rows to keep them.
+Validation failures leave the saved context unchanged and return `400` with
 `{"error": ..., "fields": {"<path>": "<message>"}}`.
 A blank required STRIDE field reports `is required` (for example
 `"interactions[0].destination_id": "is required"`); a threat needs a category and at least one target
@@ -403,7 +407,9 @@ Export format `3.0` carries `system` and `stride_model` per variant, alongside t
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
 contents are not exported, and import ignores `files`. Directory names,
 mounts and contents are not transferred; provision each destination variant's own directory.
-Every entry is imported through the editor path and needs a `stride_model` object, which may be empty;
+Every entry is imported through the editor path and needs a `stride_model` object.
+It replaces the matching variant's model: `{}` clears all tables, an omitted table or `[]` clears that
+table, and an explicitly `null` model or table fails the entry without changing its context.
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
 Files exported as `2.x` still import, but their removed source selector and external paths are discarded.
 For `2.0`, each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
