@@ -209,7 +209,8 @@ function ContextTransferControls({ projects, beforeImport, onImported, notify }:
                 project/variant. A project description and a stride_model object are
                 required. An empty object clears all STRIDE rows; omitted or empty
                 tables clear their rows. A null model or table fails the entry.
-                Unknown projects or variants are ignored. Accepts an exported file, whose projects each nest
+                Unknown projects or variants and entries marked as never configured are ignored.
+                Accepts an exported file, whose projects each nest
                 their variants. Uploaded codebase references are not included
                 in context JSON transfers.
             </HelpPopover>

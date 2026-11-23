@@ -409,7 +409,11 @@ Export format `3.0` carries `system` and `stride_model` per variant, alongside t
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
 contents are not exported, and import ignores `files`. Directory names,
 mounts and contents are not transferred; provision each destination variant's own directory.
-Every entry is imported through the editor path and needs a `stride_model` object.
+Variants with no saved editable context are still listed with `context_configured: false`;
+import ignores those entries without changing the destination. An explicitly saved empty editor
+context is a replacement, not a placeholder. Older exports lack the marker: remove any
+unintended blank entries before importing them.
+Every unmarked or configured entry is imported through the editor path and needs a `stride_model` object.
 It replaces the matching variant's model: `{}` clears all tables, an omitted table or `[]` clears that
 table. An explicitly `null` model or table, or an unknown table name without any recognized
 rows, fails the entry without changing its context.
@@ -464,7 +468,8 @@ Rules checked on import, with the same messages as the editor save:
 - At most 500 rows per table and 20,000 characters per text field.
 
 `version` and `exported_at` are ignored on import, and a bare list of projects is accepted. The response lists
-`imported`, `ignored` (project or variant not found) and `failed` (with the validation reason) entries. Failed entries are skipped; the imported ones are committed together.
+`imported`, `ignored` (unknown project/variant or unconfigured source context) and `failed`
+(with the validation reason) entries. Failed entries are skipped; the imported ones are committed together.
 
 ### Manage Codebase References
 

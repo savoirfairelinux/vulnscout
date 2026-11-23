@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, TypedDict
+from typing import NotRequired, Optional, TypedDict
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..models.project import Project
@@ -34,6 +34,7 @@ class ExportedFile(TypedDict):
 class VariantEntry(TypedDict):
     """One exported variant's context (nested under its project)."""
     variant_name: str
+    context_configured: NotRequired[bool]
     variant_description: Optional[str]
     environment: Optional[str]
     other_info: Optional[str]
@@ -69,7 +70,7 @@ def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntr
             "system": {key: getattr(vc, f"system_{key}") for key in SYSTEM_KEYS},
             "stride_model": vc.stride_model if vc.stride_model is not None else empty_stride_model(),
         }
-    return {
+    entry: VariantEntry = {
         "variant_name": variant.name,
         "variant_description": vc.variant_description if vc else None,
         "environment": vc.environment if vc else None,
@@ -80,6 +81,12 @@ def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntr
             for f in sorted(vc.files, key=lambda f: f.original_name)
         ] if vc else [],
     }
+    if vc is None or (vc.stride_model is None and not any((
+        vc.variant_description, vc.environment, vc.other_info, *editor["system"].values(),
+    ))):
+        # A directory, upload or draft can create a row without a saved editor context.
+        entry["context_configured"] = False
+    return entry
 
 
 def project_entry(project: Project, pc: Optional[ProjectContext],
@@ -283,6 +290,10 @@ def import_entries(entries: list) -> dict:
         variant = Variant.get_by_name_and_project(variant_name, project.id)
         if variant is None:
             ignored.append({**ident, "reason": "Variant not found"})
+            continue
+
+        if entry.get("context_configured") is False:
+            ignored.append({**ident, "reason": "Source variant has no saved context"})
             continue
 
         failure = _apply_entry(project, variant, entry)

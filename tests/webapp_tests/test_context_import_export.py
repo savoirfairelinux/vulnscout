@@ -434,6 +434,42 @@ def _post_json(client, payload):
 
 class TestExportImportStructuredContext:
 
+    @pytest.mark.parametrize("source", ["untouched", "metadata_only", "explicit_clear"])
+    def test_bulk_round_trip_distinguishes_unsaved_and_cleared_context(self, app_with_data, source):
+        import uuid
+        from src.helpers.stride_model import empty_stride_model
+        from src.models.variant import Variant
+        from src.models.variant_context import VariantContext
+
+        app, data = app_with_data
+        with app.app_context():
+            variant_id = Variant.create("Gateway", uuid.UUID(data["project_a_id"])).id
+            if source != "untouched":
+                VariantContext.get_or_create(variant_id)
+            if source == "explicit_clear":
+                VariantContext.save_editor(variant_id, {"stride": {}})
+        client = app.test_client()
+        exported = client.get("/api/context/export").get_json()
+        url = f"/api/variants/{variant_id}/context"
+        saved = client.put(url, json={
+            "variant_description": "Destination", "system": {"scope": "Firmware"}, "stride": _STRIDE_MODEL,
+        })
+        assert saved.status_code == 200
+        load_url = f"/api/context?project_id={data['project_a_id']}&variant_id={variant_id}"
+        before = client.get(load_url).get_json()
+        result = _post_json(client, exported).get_json()
+        assert result["failed"] == []
+        after = client.get(load_url).get_json()
+        if source == "explicit_clear":
+            assert {"project_name": "ProjectA", "variant_name": "Gateway"} in result["imported"]
+            assert after["variant_description"] is None
+            assert not any(after["editor"]["system"].values())
+            assert after["editor"]["stride"] == empty_stride_model()
+        else:
+            assert result["ignored"] == [{"project_name": "ProjectA", "variant_name": "Gateway",
+                                          "reason": "Source variant has no saved context"}]
+            assert after == before
+
     def test_export_v3_contains_editor_fields_without_legacy_codebase_settings(self, app_with_data):
         app, data = app_with_data
         _make_stride(app, data["variant_a2_id"])
