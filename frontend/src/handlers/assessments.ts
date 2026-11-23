@@ -24,7 +24,14 @@ type AssessmentTargetPair = {
     variant_id: string | null;
     package: string;
     outdated?: boolean;
+    risk_links?: ModeledRiskLink[];
 };
+
+export type RiskReference = { risk_id: string; threat_id?: string };
+export type ModeledRiskLink = RiskReference & {
+    risk_description?: string; threat_description?: string; stale?: boolean;
+};
+export type TargetRiskEdit = { variant_id: string; package: string; risk_links: RiskReference[] };
 
 type Assessment = {
     id: string;
@@ -179,6 +186,7 @@ export function initialStatusNotes(assessment: Assessment) {
 
 /** Content edits applied to a pending AI assessment as it is approved. */
 type AiAssessmentEdits = {
+    target_risk_links?: TargetRiskEdit[];
     expected_fingerprint?: string;
     justification?: string;
     impact_statement?: string;
@@ -228,6 +236,15 @@ const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
         .map((item: any) => ({
             variant_id: item.variant_id,
             package: item.package,
+            ...(Array.isArray(item.risk_links) ? { risk_links: item.risk_links
+                .filter((link: any) => typeof link?.risk_id === 'string')
+                .map((link: any) => ({
+                    risk_id: link.risk_id,
+                    ...(typeof link.threat_id === 'string' && { threat_id: link.threat_id }),
+                    ...(typeof link.risk_description === 'string' && { risk_description: link.risk_description }),
+                    ...(typeof link.threat_description === 'string' && { threat_description: link.threat_description }),
+                    stale: link.stale === true,
+                })) } : {}),
             ...(typeof item.outdated === "boolean" ? { outdated: item.outdated } : {}),
         }));
 
@@ -479,8 +496,10 @@ class Assessments {
         const init: RequestInit = { method: 'POST', mode: 'cors' };
         if (edits) {
             init.headers = { 'Content-Type': 'application/json' };
-            const { expected_fingerprint, justification, impact_statement, status_notes, workaround } = edits;
-            init.body = JSON.stringify({ expected_fingerprint, justification, impact_statement, status_notes, workaround });
+            const { expected_fingerprint, justification, impact_statement, status_notes, workaround, target_risk_links } = edits;
+            init.body = JSON.stringify({
+                expected_fingerprint, justification, impact_statement, status_notes, workaround, target_risk_links,
+            });
         }
         const response = await fetch(url.toString(), init);
         if (!response.ok) {
