@@ -741,6 +741,11 @@ to manage attachments.
     of **file paths**. `limit` bounds the page, not the walk. If no path gives a
     relevant prefix, ask for the mount-relative workdir or a narrower attachment
     rather than paging the unfiltered root or declaring the mount unavailable.
+  - Attach the narrowest useful folder (for example `tmp/work/<tuple>/<recipe>`, or
+    `tmp/` for CVE reports) rather than the whole build directory. A listing
+    counts the entries it visits, stops at 500,000 entries or 10 seconds and then
+    reports an incomplete result, and `limit` does not shorten that walk. Only a
+    literal prefix or `folder` avoids walking unrelated subtrees.
   - `list_codebase_files` and `search_codebase` accept `folder`, a sub-folder of the
     attachment. For the CLI example above, `build` is already rooted at the Yocto
     work directory: use `<tuple>/<recipe>` from discovered paths, not
