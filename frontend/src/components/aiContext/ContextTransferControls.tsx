@@ -205,12 +205,13 @@ function ContextTransferControls({ projects, beforeImport, onImported, notify }:
                 )}
             </div>
             <HelpPopover ariaLabel="Import help" role="tooltip" buttonClassName="text-sky-300 hover:text-sky-100" surfaceClassName="w-[320px] p-3">
-                Importing overwrites the existing context for each matching
-                project/variant. A project description and a stride_model object are
-                required. An empty object clears all STRIDE rows; omitted or empty
-                tables clear their rows. A null model or table fails the entry.
+                Importing replaces the context for each matching project/variant,
+                except that unmarked entries with only Context text replace just
+                the Context text fields, preserving System and STRIDE.
+                A project description and a stride_model object are required.
+                In a full replacement, omitted or empty tables clear their rows.
+                A null model or table fails the entry.
                 Unknown projects or variants and entries marked as never configured are ignored.
-                Older files without a context_configured marker still import nonblank variants.
                 A completely blank variant requires context_configured: true to clear its destination.
                 Accepts an exported file, whose projects each nest
                 their variants. Uploaded codebase references are not included

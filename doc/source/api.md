@@ -411,15 +411,18 @@ and lists the variant's uploaded codebase references by `original_name` and `des
 contents are not exported, and import ignores `files`. Directory names,
 mounts and contents are not transferred; provision each destination variant's own directory.
 Exports mark variants with no saved editable context as `context_configured: false`;
-import ignores those entries without changing the destination. Saved contexts, including
-deliberate clears, are exported with `context_configured: true`. When present, this marker
+import ignores those entries without changing the destination. Editor saves, including
+deliberate clears, are exported with `context_configured: true`. Variants with only
+Context text from a text-only save are exported without the marker. When present, the marker
 must be a JSON boolean; strings, numbers and `null` fail the entry.
-Older exports without the marker still import if the variant contains Context text, System
-text or STRIDE rows. An unmarked, completely blank variant fails without changing the
+For an unmarked entry (including older exports), Context text alone replaces the three
+Context text fields without changing the destination's System or STRIDE. Nonblank System
+text or populated STRIDE rows instead request a full replacement.
+An unmarked, completely blank variant fails without changing the
 destination, even if the project has a description or files are listed. To deliberately
 clear the destination with such an entry, set `context_configured: true` on that variant.
-Every unmarked or configured entry is imported through the editor path and needs a `stride_model` object.
-It replaces the matching variant's model: `{}` clears all tables, an omitted table or `[]` clears that
+Every unmarked or configured entry needs a valid `stride_model` object, even for text-only imports.
+In a full replacement, `{}` clears all tables, and an omitted table or `[]` clears that
 table. An explicitly `null` model or table, or an unknown table name without any recognized
 rows, fails the entry without changing its context.
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
