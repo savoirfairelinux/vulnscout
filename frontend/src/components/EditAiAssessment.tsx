@@ -50,8 +50,7 @@ function EditAiAssessment({
     triggerBanner,
 }: Readonly<Props>) {
     const [drafts, setDrafts] = useState<Record<string, string>>({});
-    const [confirmations, setConfirmations] = useState<Record<string, string>>({});
-    const [previews, setPreviews] = useState<Record<string, RiskLinkPreview | string>>({});
+    const [previews, setPreviews] = useState<Record<string, { current: RiskLinkPreview; confirmed: boolean } | string | null>>({});
     const [contentChanged, setContentChanged] = useState(false);
     const edits: TargetRiskEdit[] = [];
     let invalid = false;
@@ -59,14 +58,18 @@ function EditAiAssessment({
         if (!t.variant_id || t.risk_links_out_of_scope) return null;
         const key = JSON.stringify([t.variant_id, t.package]);
         const confirmationKey = (id: string) => JSON.stringify([key, id]);
+        const confirmedRevision = (id: string) => {
+            const state = previews[confirmationKey(id)];
+            return state && typeof state === 'object' && state.confirmed ? state.current.revision : undefined;
+        };
         const initial = (t.risk_links ?? []).map(l => [l.risk_id, l.threat_id].filter(Boolean).join('/')).join(', ');
         const text = drafts[key] ?? initial;
         const ids = text.trim() ? text.split(',').map(item => item.trim()) : [];
-        if (text !== initial || ids.some(id => confirmations[confirmationKey(id)])) {
+        if (text !== initial || ids.some(confirmedRevision)) {
             if (ids.some(id => !/^R[1-9]\d*(\/T[1-9]\d*)?$/.test(id))) invalid = true;
             edits.push({ package: t.package, variant_id: t.variant_id, risk_links: ids.map(id => {
                 const [risk_id, threat_id] = id.split('/');
-                const confirmed_revision = confirmations[confirmationKey(id)];
+                const confirmed_revision = confirmedRevision(id);
                 return { risk_id, ...(threat_id && { threat_id }), ...(confirmed_revision && { confirmed_revision }) };
             }) });
         }
@@ -84,23 +87,26 @@ function EditAiAssessment({
                 const k = confirmationKey(id);
                 const preview = previews[k];
                 if (!preview || typeof preview === 'string') return <div key={id}>
-                    <button type="button" onClick={async () => {
+                    <button type="button" disabled={preview === null} onClick={async () => {
+                        setPreviews(old => ({ ...old, [k]: null }));
                         try {
                             const current = await Assessments.previewRiskLink(assessment.id, t.variant_id!, t.package, link);
-                            setPreviews(old => ({ ...old, [k]: current }));
+                            setPreviews(old => ({ ...old, [k]: { current, confirmed: false } }));
                         } catch (error) {
                             setPreviews(old => ({ ...old, [k]: String(error) }));
                         }
                     }}>Compare current {id}</button>
                     {preview && <span role="alert">{preview}</span>}
                 </div>;
-                const { risk_description, threat_description, revision } = preview;
+                const { risk_description, threat_description, threat_target_ids } = preview.current;
                 return <label key={id} className="block">
-                    <input type="checkbox" checked={confirmations[k] === revision}
-                        onChange={e => setConfirmations({ ...confirmations, [k]: e.target.checked ? revision : '' })} />
+                    <input type="checkbox" checked={preview.confirmed} onChange={e => {
+                        const confirmed = e.target.checked;
+                        setPreviews(old => ({ ...old, [k]: { ...preview, confirmed } }));
+                    }} />
                     Reconfirm {id} using the current description: {risk_description}
                     {threat_description && `; ${threat_description}`}
-                    {preview.threat_target_ids && `; current targets: ${preview.threat_target_ids.join(', ') || 'none'}`}
+                    {threat_target_ids && `; current targets: ${threat_target_ids.join(', ') || 'none'}`}
                 </label>;
             })}
         </div>;

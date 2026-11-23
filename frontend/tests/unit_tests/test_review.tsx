@@ -1336,11 +1336,17 @@ describe('Review — AI Assessments tab', () => {
         await user.click(await screen.findByText('AI Assessments'));
         await user.click(await screen.findByTitle('Edit AI suggestion'));
         expect(within(screen.getByRole('dialog')).getByText(/saved targets: not recorded/)).toBeVisible();
-        fetchMock.mockResponseOnce(JSON.stringify({
-            risk_description: 'New description', threat_target_ids: ['I2'], revision: 'reviewed-revision',
-        }));
-        await user.click(screen.getByRole('button', { name: 'Compare current R1/T1' }));
+        let finishPreview!: (body: string) => void;
+        fetchMock.mockResponseOnce(() => new Promise(resolve => { finishPreview = resolve; }));
+        const compare = screen.getByRole('button', { name: 'Compare current R1/T1' });
+        await user.click(compare);
+        expect(compare).toBeDisabled();
+        await user.click(compare);
+        expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('risk-link-preview'))).toHaveLength(1);
         expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('risk-link-preview?variant_id=v1&package=pkgA%401.0.0&risk_id=R1&threat_id=T1');
+        await act(async () => finishPreview(JSON.stringify({
+            risk_description: 'New description', threat_target_ids: ['I2'], revision: 'reviewed-revision',
+        })));
         const confirm = await screen.findByRole('checkbox', { name: /Reconfirm R1.*New description.*current targets: I2/ });
         expect(confirm).not.toBeChecked();
         await user.click(confirm);
