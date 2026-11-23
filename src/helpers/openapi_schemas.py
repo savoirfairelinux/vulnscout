@@ -45,7 +45,10 @@ _STRINGS = _array(_STRING)
 _RISK_IDS = {"risk_id": _STRING, "threat_id": _STRING}
 _RISK_SNAPSHOT = {**_RISK_IDS, "risk_description": _STRING, "threat_description": _STRING,
                   "threat_target_ids": _array({"type": "string", "pattern": r"^[CI][1-9]\d*$"},
-                                              uniqueItems=True, maxItems=2 * MAX_ROWS)}
+                                              uniqueItems=True, maxItems=2 * MAX_ROWS),
+                  "interaction_endpoints": _map(_object(
+                      {k: {"type": "string", "pattern": r"^C[1-9]\d*$"} for k in ("source_id", "destination_id")},
+                      ("source_id", "destination_id"), additionalProperties=False), maxProperties=MAX_ROWS)}
 _UUIDS = _array(_UUID)
 _PACKAGE_ID = {
     "type": "string",

@@ -1329,13 +1329,14 @@ describe('Review — AI Assessments tab', () => {
     test('reconfirms a stale pair only against the displayed revision', async () => {
         const targets = [{ package: 'pkgA@1.0.0', variant_id: 'v1', risk_links: [{
             risk_id: 'R1', threat_id: 'T1', risk_description: 'Previously reviewed', stale: true,
+            threat_target_ids: ['I2'], interaction_endpoints: { I2: { source_id: 'C1', destination_id: 'C2' } },
         }] }];
         mockNetwork([], { aiReviewList: [{ ...makeAssessment('ai1', 'v1'), targets, approval_fingerprint: 'original' }] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
         await user.click(await screen.findByText('AI Assessments'));
         await user.click(await screen.findByTitle('Edit AI suggestion'));
-        expect(within(screen.getByRole('dialog')).getByText(/saved targets: not recorded/)).toBeVisible();
+        expect(within(screen.getByRole('dialog')).getByText(/saved targets: I2 \(C1 → C2\)/)).toBeVisible();
         let finishPreview!: (body: string) => void;
         fetchMock.mockResponseOnce(() => new Promise(resolve => { finishPreview = resolve; }));
         const compare = screen.getByRole('button', { name: 'Compare current R1/T1' });
@@ -1346,8 +1347,9 @@ describe('Review — AI Assessments tab', () => {
         expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('risk-link-preview?variant_id=v1&package=pkgA%401.0.0&risk_id=R1&threat_id=T1');
         await act(async () => finishPreview(JSON.stringify({
             risk_description: 'New description', threat_target_ids: ['I2'], revision: 'reviewed-revision',
+            interaction_endpoints: { I2: { source_id: 'C2', destination_id: 'C1' } },
         })));
-        const confirm = await screen.findByRole('checkbox', { name: /Reconfirm R1.*New description.*current targets: I2/ });
+        const confirm = await screen.findByRole('checkbox', { name: /Reconfirm R1.*New description.*I2 \(C2 → C1\)/ });
         expect(confirm).not.toBeChecked();
         await user.click(confirm);
         await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));

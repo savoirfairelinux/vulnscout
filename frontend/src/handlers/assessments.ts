@@ -29,10 +29,21 @@ type AssessmentTargetPair = {
 };
 
 export type RiskReference = { risk_id: string; threat_id?: string };
-export type ModeledRiskLink = RiskReference & {
-    risk_description?: string; threat_description?: string; threat_target_ids?: string[]; stale?: boolean;
+type ThreatTargets = {
+    threat_target_ids?: string[];
+    interaction_endpoints?: Record<string, { source_id: string; destination_id: string }>;
 };
-export type RiskLinkPreview = {risk_description: string; threat_description?: string; threat_target_ids?: string[]; revision: string};
+export function describeThreatTargets({ threat_target_ids, interaction_endpoints }: ThreatTargets): string {
+    return threat_target_ids?.map(id => {
+        if (!id.startsWith('I')) return id;
+        const ends = interaction_endpoints?.[id];
+        return `${id} (${ends ? `${ends.source_id} → ${ends.destination_id}` : 'endpoints not recorded'})`;
+    }).join(', ') ?? 'not recorded';
+}
+export type ModeledRiskLink = RiskReference & ThreatTargets & {
+    risk_description?: string; threat_description?: string; stale?: boolean;
+};
+export type RiskLinkPreview = ThreatTargets & {risk_description: string; threat_description?: string; revision: string};
 export type TargetRiskEdit = {
     variant_id: string; package: string; risk_links: (RiskReference & {confirmed_revision?: string})[];
 };
@@ -249,6 +260,7 @@ const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
                     ...(typeof link.risk_description === 'string' && { risk_description: link.risk_description }),
                     ...(typeof link.threat_description === 'string' && { threat_description: link.threat_description }),
                     ...(Array.isArray(link.threat_target_ids) && { threat_target_ids: link.threat_target_ids }),
+                    ...(link.interaction_endpoints && { interaction_endpoints: link.interaction_endpoints }),
                     stale: link.stale === true,
                 })) } : {}),
             ...(typeof item.outdated === "boolean" ? { outdated: item.outdated } : {}),
