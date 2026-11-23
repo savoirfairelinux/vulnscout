@@ -53,6 +53,10 @@ def test_valid_model_round_trips():
     assert normalize_stride_model(_model()) == _model()
 
 
+def test_populated_model_still_ignores_extension_keys():
+    assert normalize_stride_model({**_model(), "extension": []}) == _model()
+
+
 def test_missing_keys_are_filled():
     assert normalize_stride_model({}) == empty_stride_model()
 

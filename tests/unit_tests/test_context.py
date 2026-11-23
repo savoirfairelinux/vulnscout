@@ -1344,6 +1344,8 @@ class TestVariantEditorSave:
         (None, {"scope": "Gateway"}, {"model": "must be an object"}),
         ({"threat": [{"id": "T1"}]}, {},
          {"model": "expected at least one of: components, interactions, threats, risks"}),
+        ({"components": [], "threat": [{"id": "T1"}]}, {},
+         {"model": "cannot clear tables with unknown table names"}),
         *[({table: None}, {}, {table: "must be a list"})
           for table in ("components", "interactions", "threats", "risks")],
     ])

@@ -236,6 +236,8 @@ def normalize_stride_model(raw: object) -> dict[str, Any]:
     }
     _check_budgets(model, errs)
     errs.raise_if_any()
+    if not any(model.values()) and any(key not in _STRIDE_TABLES for key in raw):
+        raise StrideValidationError({"model": "cannot clear tables with unknown table names"})
     return model
 
 

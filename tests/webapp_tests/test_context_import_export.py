@@ -517,6 +517,7 @@ class TestExportImportStructuredContext:
         ({"components": "nope"}, "components: must be a list"),
         ({"threats": None}, "threats: must be a list"),
         ({"threat": [{"id": "T1"}]}, "model: expected at least one of: components, interactions, threats, risks"),
+        ({"components": [], "threat": [{"id": "T1"}]}, "model: cannot clear tables with unknown table names"),
     ])
     def test_import_v2_invalid_model_fails_entry(self, client_and_data, stride, reason):
         client, _ = client_and_data
@@ -534,7 +535,8 @@ class TestExportImportStructuredContext:
         assert "VariantA2" not in failed
         assert result["imported"] == [{"project_name": "ProjectA", "variant_name": "VariantA2"}]
         after = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
-        assert after["stride_model"] == before["stride_model"]
+        # A sibling entry updates the shared project description, not this variant.
+        assert {**after, "description": before["description"]} == before
 
     def test_import_context_without_threats(self, client_and_data):
         client, _ = client_and_data
