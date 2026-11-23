@@ -4,6 +4,7 @@
 
 import ctypes
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -11,10 +12,12 @@ import shutil
 import socket
 import stat
 import struct
+import subprocess
+import sys
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -242,6 +245,84 @@ def kernel(tree, monkeypatch):
 
 def reboot(kernel):
     kernel.update(boot=b"b" * 16, root=67, key=67, folder=67)
+
+
+@pytest.fixture
+def previous_helper(tmp_path):
+    # Test the previous reader, not a copy of its proof grammar in this test.
+    blob = "78c22f11458e59a94dd464328c9f6946146c8670"
+    if not shutil.which("git"):
+        pytest.skip("downgrade test requires Git and the previous helper blob")
+    result = subprocess.run(["git", "cat-file", "blob", blob], cwd=Path(__file__).resolve().parent,
+                            capture_output=True)
+    if result.returncode:
+        pytest.skip("downgrade test requires repository history containing the previous helper blob")
+    path = tmp_path / "previous_helper.py"
+    path.write_bytes(result.stdout)
+    spec = importlib.util.spec_from_file_location("previous_helper", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("prefix", ["b", "d"])
+def test_downgrade_requires_fresh_host_permit(tree, kernel, previous_helper, prefix):
+    if prefix == "b":
+        kernel["key"] += 1
+    state = tree["tmp"] / "state"
+    state.mkdir()
+    binding = attached(hh.Helper(str(state)), tree)
+    assert binding["approval_proof"].startswith(prefix)
+    old = previous_helper.Helper(str(state))
+    scope = dict(variant_id=VARIANT, alias="src", path="README")
+    assert err(old, "activate", **binding)[0] == "forbidden"
+    assert err(old, "read", **scope)[0] == "unavailable"
+    assert err(old, "stage", **binding)[0] == "forbidden"
+    permit = state / "permit.Abc123Def456"
+    permit.mkdir(mode=0o700)
+    (permit / "src").write_bytes(VARIANT.encode() + b"\0" + os.fsencode(tree["app"]))
+    approved = ok(old, "stage", **binding, host_permit=permit.name)
+    ok(old, "activate", **{**binding, **approved})
+    assert ok(old, "read", **scope)["content"].startswith("line 1")
+
+
+@pytest.fixture
+def ext4_root_tree(tree):
+    if sys.platform != "linux" or os.geteuid() == 0:
+        pytest.skip("requires Linux running as the non-root launcher user")
+    mounts = Path("/proc/self/mountinfo")
+    if not mounts.is_file() or not Path("/proc/self/fdinfo").is_dir():
+        pytest.skip("requires procfs mountinfo and fdinfo")
+    roots = [fields for fields in map(bytes.split, mounts.read_bytes().splitlines()) if fields[4] == b"/"]
+    if len(roots) != 1 or roots[0][3] != b"/" or roots[0][roots[0].index(b"-") + 1] != b"ext4":
+        pytest.skip("requires a native ext4 root mount")
+    for path in (tree["tmp"], tree["app"]):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            info = Path(f"/proc/self/fdinfo/{fd}").read_bytes().splitlines()
+            if not any(line.split() == [b"mnt_id:", roots[0][0]] for line in info):
+                pytest.skip("requires the pytest fixture directory on the same ext4 root mount")
+        finally:
+            os.close(fd)
+    if tuple(map(int, os.uname().release.split("-", 1)[0].split(".")[:2])) < (6, 12):
+        pytest.skip("requires Linux 6.12+ for unique mount IDs")
+    return tree
+
+
+def test_reboot_on_real_ext4_root(ext4_root_tree, monkeypatch):
+    tree = ext4_root_tree
+    state = tree["tmp"] / "state"
+    state.mkdir()
+    server = hh.Helper(str(state))
+    params = grant(server, tree["app"])
+    staged = ok(server, "stage", **params)
+    assert staged["approval_proof"].startswith("d"), "supported ext4 launcher must issue a durable proof"
+    binding = {**staged, "attachment_id": params["attachment_id"]}
+    ok(server, "activate", **binding)
+    monkeypatch.setattr(hh, "_boot_id", lambda: uuid.UUID(int=0).bytes)
+    restarted = hh.Helper(str(state))
+    ok(restarted, "activate", **binding)
+    assert ok(restarted, "read", variant_id=VARIANT, alias="src", path="README")["content"].startswith("line 1")
 
 
 def test_reboot_verifies_signed_binding_and_each_read(tree, kernel):
