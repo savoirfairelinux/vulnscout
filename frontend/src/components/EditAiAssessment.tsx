@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import EditAssessment from "./EditAssessment";
 import ModeledRiskLinks from "./ModeledRiskLinks";
-import Assessments, { describeThreatTargets, initialStatusNotes } from "../handlers/assessments";
+import Assessments, { describeThreatTargets, displayModelId, initialStatusNotes } from "../handlers/assessments";
 import type { EditAssessmentData } from "./EditAssessment";
-import type { AiAssessmentEdits, Assessment, RiskLinkPreview, TargetRiskEdit } from "../handlers/assessments";
+import type { AiAssessmentEdits, Assessment, RiskReference, RiskLinkPreview, TargetRiskEdit } from "../handlers/assessments";
 
 type Props = {
     assessment: Assessment;
@@ -36,6 +36,13 @@ function toAiAssessmentEdits(data: EditAssessmentData, original: Assessment): Ai
     return edits;
 }
 
+function parseAdditionalLink(item: string): RiskReference | null {
+    const match = /^(R[1-9]\p{Nd}*(?:\\n)?)(?:\/(T[1-9]\p{Nd}*(?:\\n)?))?$/u.exec(item.trim());
+    if (!match) return null;
+    return { risk_id: match[1].replace(/\\n$/, '\n'),
+        ...(match[2] && { threat_id: match[2].replace(/\\n$/, '\n') }) };
+}
+
 /** Edit the content of a pending AI assessment before approving it.
  *  Targets are not editable here: the suggestion keeps its packages/variants. */
 function EditAiAssessment({
@@ -49,7 +56,8 @@ function EditAiAssessment({
     onFieldsChange,
     triggerBanner,
 }: Readonly<Props>) {
-    const [drafts, setDrafts] = useState<Record<string, string>>({});
+    const [additions, setAdditions] = useState<Record<string, string>>({});
+    const [removed, setRemoved] = useState<Record<string, boolean>>({});
     const [previews, setPreviews] = useState<Record<string, { current: RiskLinkPreview; confirmed: boolean } | string | null>>({});
     const [contentChanged, setContentChanged] = useState(false);
     const edits: TargetRiskEdit[] = [];
@@ -57,36 +65,46 @@ function EditAiAssessment({
     const controls = (assessment.targets ?? []).map(t => {
         if (!t.variant_id || t.risk_links_out_of_scope) return null;
         const key = JSON.stringify([t.variant_id, t.package]);
-        const confirmationKey = (id: string) => JSON.stringify([key, id]);
-        const confirmedRevision = (id: string) => {
-            const state = previews[confirmationKey(id)];
+        const linkKey = (link: RiskReference) => JSON.stringify([key, link.risk_id, link.threat_id]);
+        const confirmedRevision = (link: RiskReference) => {
+            const state = previews[linkKey(link)];
             return state && typeof state === 'object' && state.confirmed ? state.current.revision : undefined;
         };
-        const initial = (t.risk_links ?? []).map(l => [l.risk_id, l.threat_id].filter(Boolean).join('/')).join(', ');
-        const text = drafts[key] ?? initial;
-        const ids = text.trim() ? text.split(',').map(item => item.trim()) : [];
-        if (text !== initial || ids.some(confirmedRevision)) {
-            if (ids.some(id => !/^R[1-9]\d*(\/T[1-9]\d*)?$/.test(id))) invalid = true;
-            edits.push({ package: t.package, variant_id: t.variant_id, risk_links: ids.map(id => {
-                const [risk_id, threat_id] = id.split('/');
-                const confirmed_revision = confirmedRevision(id);
+        const saved = t.risk_links ?? [];
+        const retained = saved.filter(link => !removed[linkKey(link)]);
+        const text = additions[key] ?? '';
+        const added: RiskReference[] = [];
+        for (const item of text.trim() ? text.split(',') : []) {
+            const link = parseAdditionalLink(item);
+            if (link) added.push(link);
+            else invalid = true;
+        }
+        if (text.trim() || retained.length !== saved.length || retained.some(confirmedRevision)) {
+            const kept = retained.map(link => {
+                const { risk_id, threat_id } = link;
+                const confirmed_revision = confirmedRevision(link);
                 return { risk_id, ...(threat_id && { threat_id }), ...(confirmed_revision && { confirmed_revision }) };
-            }) });
+            });
+            edits.push({ package: t.package, variant_id: t.variant_id, risk_links: [...kept, ...added] });
         }
         const label = `${variantNames?.[t.variant_id] ?? t.variant_id} · ${t.package}`;
         return <div key={key} className="my-2">
             <label className="block">{label}
-                <input aria-label={`Modeled risk IDs for ${label}`} value={text}
+                <input aria-label={`Additional modeled risk IDs for ${label}`} value={text}
                     placeholder="R1/T2, R3" className="mx-2 px-2 bg-gray-700"
-                    onChange={event => setDrafts({ ...drafts, [key]: event.target.value })} />
+                    onChange={event => setAdditions({ ...additions, [key]: event.target.value })} />
             </label>
             <ModeledRiskLinks links={t.risk_links} />
-            {t.risk_links?.map(link => {
-                const id = [link.risk_id, link.threat_id].filter(Boolean).join('/');
-                if (!link.stale || !ids.includes(id)) return null;
-                const k = confirmationKey(id);
+            {saved.map(link => {
+                const k = linkKey(link);
+                const id = displayModelId(link.risk_id) + (link.threat_id ? `/${displayModelId(link.threat_id)}` : '');
+                const keep = <label className="block">
+                    <input type="checkbox" checked={!removed[k]} onChange={event =>
+                        setRemoved({ ...removed, [k]: !event.target.checked })} /> Keep {id}
+                </label>;
+                if (!link.stale || removed[k]) return <div key={k}>{keep}</div>;
                 const preview = previews[k];
-                if (!preview || typeof preview === 'string') return <div key={id}>
+                if (!preview || typeof preview === 'string') return <div key={k}>{keep}
                     <button type="button" disabled={preview === null} onClick={async () => {
                         setPreviews(old => ({ ...old, [k]: null }));
                         try {
@@ -99,7 +117,7 @@ function EditAiAssessment({
                     {preview && <span role="alert">{preview}</span>}
                 </div>;
                 const { risk_description, threat_description, threat_target_ids } = preview.current;
-                return <label key={id} className="block">
+                return <div key={k}>{keep}<label className="block">
                     <input type="checkbox" checked={preview.confirmed} onChange={e => {
                         const confirmed = e.target.checked;
                         setPreviews(old => ({ ...old, [k]: { ...preview, confirmed } }));
@@ -107,7 +125,7 @@ function EditAiAssessment({
                     Reconfirm {id} using the current description: {risk_description}
                     {threat_description && `; ${threat_description}`}
                     {threat_target_ids && `; current targets: ${describeThreatTargets(preview.current) || 'none'}`}
-                </label>;
+                </label></div>;
             })}
         </div>;
     });
@@ -116,8 +134,8 @@ function EditAiAssessment({
     return (<>
         <fieldset disabled={saving || replaced} className="p-4 text-sm">
             <legend>Modeled risk links by target</legend>
-            <p>Enter IDs from this variant’s model, separated by commas. Use R1 or R1/T2.
-                Clear the field to remove its links. The original links are shown below each field.</p>
+            <p>Uncheck saved links to remove them. To add links, enter IDs from this variant’s model,
+                separated by commas. Use R1 or R1/T2. A trailing \n denotes a newline in an ID.</p>
             {controls}
             {invalid && <p role="alert">Use a risk ID, optionally followed by / and a threat ID.</p>}
         </fieldset>

@@ -33,11 +33,15 @@ type ThreatTargets = {
     threat_target_ids?: string[];
     interaction_endpoints?: Record<string, { source_id: string; destination_id: string }>;
 };
+export function displayModelId(id: string): string {
+    return JSON.stringify(id).slice(1, -1);
+}
 export function describeThreatTargets({ threat_target_ids, interaction_endpoints }: ThreatTargets): string {
     return threat_target_ids?.map(id => {
-        if (!id.startsWith('I')) return id;
+        if (!id.startsWith('I')) return displayModelId(id);
         const ends = interaction_endpoints?.[id];
-        return `${id} (${ends ? `${ends.source_id} → ${ends.destination_id}` : 'endpoints not recorded'})`;
+        const path = ends ? `${displayModelId(ends.source_id)} → ${displayModelId(ends.destination_id)}` : 'endpoints not recorded';
+        return `${displayModelId(id)} (${path})`;
     }).join(', ') ?? 'not recorded';
 }
 export type ModeledRiskLink = RiskReference & ThreatTargets & {
