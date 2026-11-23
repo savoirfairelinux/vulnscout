@@ -90,8 +90,6 @@ def _text(value: object, path: str, errs: _Errors, required: bool = False) -> st
 
 def _rows(raw: object, key: str, errs: _Errors) -> list[dict[str, Any]]:
     """Return the rows of a list field, flagging non-list/oversized/non-object input."""
-    if raw is None:
-        return []
     if not isinstance(raw, list):
         errs.add(key, "must be a list")
         return []
@@ -229,14 +227,14 @@ def normalize_stride_model(raw: object) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise StrideValidationError({"model": "must be an object"})
     errs = _Errors()
-    components, component_ids = _components(raw.get("components"), errs)
-    interactions, interaction_ids = _interactions(raw.get("interactions"), component_ids, errs)
-    threats, threat_ids = _threats(raw.get("threats"), component_ids | interaction_ids, errs)
+    components, component_ids = _components(raw.get("components", []), errs)
+    interactions, interaction_ids = _interactions(raw.get("interactions", []), component_ids, errs)
+    threats, threat_ids = _threats(raw.get("threats", []), component_ids | interaction_ids, errs)
     model = {
         "components": components,
         "interactions": interactions,
         "threats": threats,
-        "risks": _risks(raw.get("risks"), threat_ids, errs),
+        "risks": _risks(raw.get("risks", []), threat_ids, errs),
     }
     _check_budgets(model, errs)
     errs.raise_if_any()

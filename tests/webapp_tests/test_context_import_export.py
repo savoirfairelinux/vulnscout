@@ -512,22 +512,28 @@ class TestExportImportStructuredContext:
         assert entry["stride_model"]["components"][0]["name"] == "A1 threat model"
         assert entry["description"] == "ProjectA description"
 
-    def test_import_v2_invalid_model_fails_entry(self, client_and_data):
+    @pytest.mark.parametrize("stride,reason", [
+        (None, "model: must be an object"),
+        ({"components": "nope"}, "components: must be a list"),
+        ({"threats": None}, "threats: must be a list"),
+    ])
+    def test_import_v2_invalid_model_fails_entry(self, client_and_data, stride, reason):
         client, _ = client_and_data
+        before = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
         result = json.loads(_post_json(client, [{
             "project_name": "ProjectA", "project_description": "d",
             "variants": [
                 {"variant_name": "VariantA1",
-                 "stride_model": {"components": "nope"}},
+                 "stride_model": stride},
                 {"variant_name": "VariantA2", **_tm("ok")},
             ],
         }]).data)
         failed = {f["variant_name"]: f["reason"] for f in result["failed"]}
-        assert "VariantA1" in failed and failed["VariantA1"]
+        assert failed["VariantA1"] == reason
         assert "VariantA2" not in failed
         assert result["imported"] == [{"project_name": "ProjectA", "variant_name": "VariantA2"}]
-        # The session stays usable: the follow-up export still works.
-        assert client.get("/api/context/export").status_code == 200
+        after = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
+        assert after["stride_model"] == before["stride_model"]
 
     def test_import_context_without_threats(self, client_and_data):
         client, _ = client_and_data

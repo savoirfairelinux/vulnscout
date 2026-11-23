@@ -996,7 +996,8 @@ SCHEMAS.update({
         **_CONTEXT_TEXT_FIELDS,
         "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
     }, description=(
-        "With stride, an editor save storing every field (the STRIDE tables may be empty). "
+        "With stride, replace all editable fields. An empty object clears all STRIDE rows; "
+        "omitted or empty tables clear their rows. Neither stride nor a table may be null. "
         "Without stride, a full replacement of the text fields; "
         "threat_model and risks are read-only. Source code is accessed through the variant's directory."
     )),
