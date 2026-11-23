@@ -334,10 +334,10 @@ def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[st
         return "Missing mandatory field(s): description"
 
     try:
-        VariantContextController.save_editor(variant.id, _editor_payload(entry), commit=False,
-                                             replace_empty_model=entry.get("context_configured") is True)
         assessment_format = (normalize_assessment_format(entry['assessment_format'])
                              if 'assessment_format' in entry else KEEP)
+        VariantContextController.save_editor(variant.id, _editor_payload(entry), commit=False,
+                                             replace_empty_model=entry.get("context_configured") is True)
     except StrideValidationError as exc:
         return str(exc)
     ProjectContextController.upsert(

@@ -434,6 +434,8 @@ describe('AIContext page', () => {
         await act(async () => { gate.resolve(); await gate.promise; });
         await waitFor(() => expect(requestsTo(backend, 'variant_id=v1').length).toBeGreaterThan(3));
         expect(requestsTo(backend, draftPath).length).toBeGreaterThan(draftLoads);
+    });
+
     describe('assessment format', () => {
         const SAVED_FORMAT = {
             sections: [{ id: 'verdict', enabled: true, label: 'Result' }, { id: 'confidence', enabled: true }],
