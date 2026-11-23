@@ -83,9 +83,12 @@ def _editor_values(payload: object) -> dict[str, typing.Any]:
     for key, column in _SYSTEM_COLUMNS.items():
         values[column] = _blank_to_none(system.get(key))
     values["stride_model"] = _validated(normalize_stride_model, payload.get("stride"), errors)
-    if not errors and isinstance(raw_system, dict) and not _has_structured_context(values):
-        for key in raw_system.keys() - _SYSTEM_COLUMNS.keys():
-            errors[f"system.{key}"] = "unknown field in empty replacement"
+    if not errors and not _has_structured_context(values):
+        for key in payload.keys() - {*_EDITOR_TEXT_KEYS, "system", "stride"}:
+            errors[key] = "unknown field in empty replacement"
+        if isinstance(raw_system, dict):
+            for key in raw_system.keys() - _SYSTEM_COLUMNS.keys():
+                errors[f"system.{key}"] = "unknown field in empty replacement"
     if errors:
         raise StrideValidationError(errors)
     return values

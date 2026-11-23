@@ -1360,6 +1360,24 @@ class TestVariantEditorSave:
         assert resp.get_json()["fields"] == errors
         assert client.get(load_url).get_json() == before
 
+    def test_unknown_root_field_cannot_turn_editor_save_into_a_clear(self, client, project, variant):
+        from src.helpers.stride_model import empty_stride_model
+        url = f"/api/variants/{variant.id}/context"
+        load_url = f"/api/context?project_id={project.id}&variant_id={variant.id}"
+        assert client.put(url, json=_editor_payload()).status_code == 200
+        before = client.get(load_url).get_json()
+
+        rejected = client.put(url, json={"scope": "Gateway", "stride": {}})
+        assert rejected.status_code == 400
+        assert rejected.get_json()["fields"] == {"scope": "unknown field in empty replacement"}
+        assert client.get(load_url).get_json() == before
+
+        assert client.put(url, json={"stride": {}}).status_code == 200
+        cleared = client.get(load_url).get_json()
+        assert all(cleared[key] is None for key in ("variant_description", "environment", "other_info"))
+        assert not any(cleared["editor"]["system"].values())
+        assert cleared["editor"]["stride"] == empty_stride_model()
+
     def test_system_only_save_must_explicitly_replace_model(self, client, variant):
         from src.helpers.stride_model import empty_stride_model
         url = f"/api/variants/{variant.id}/context"
