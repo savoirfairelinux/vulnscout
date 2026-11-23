@@ -103,11 +103,12 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
         agent.Conversation(), "Inspect uploaded source", agent._mcp_path(), "model", scope,
     ))
     assert response == "Source inspected"
-    source_tools = {"list_codebase_files", "read_codebase_file", "read_codebase_files"}
+    source_tools = {"list_codebase_files", "read_codebase_file", "read_codebase_files", "run_codebase_shell"}
     assert source_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
     assert {f"mcp:vulnscout-{name}" for name in source_tools} <= set(captured["available_tools"])
     assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])
     assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SCOPE"] == scope
+    assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SHELL"] == "1"
     assert captured["enable_skills"] is False
     assert captured["on_permission_request"].__name__ == "approve_all" and "custom_agents" not in captured
     assert "untrusted evidence" in captured["system_message"]["content"]
@@ -1434,7 +1435,7 @@ def test_ephemeral_action_profile_turn_limits_tools_and_deletes_its_session(monk
     assert server["env"]["VULNSCOUT_BASE_URL"] == "http://127.0.0.1:4321"
     assert captured["available_tools"] == ([f"mcp:vulnscout-{tool}" for tool in tools]
                                            + ["builtin:skill", "builtin:view", "builtin:web_fetch"])
-    assert {"get_merged_context", "list_codebase_files", "read_codebase_file"} <= set(tools)
+    assert {"get_merged_context", "list_codebase_files", "read_codebase_file", "run_codebase_shell"} <= set(tools)
     assert not (set(agent.WRITE_TOOLS) - set(profile.write_tools)) & set(tools)
     assert captured["enable_skills"] is True and captured["agent"] == f"vulnscout-{action}"
     assert captured["custom_agents"][0]["skills"] == list(profile.skills)

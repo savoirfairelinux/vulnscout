@@ -91,6 +91,49 @@ def _source(client, variant, file_id, **params):
     return client.get(f"/api/variants/{variant.id}/context/files/{file_id}/source", query_string=params)
 
 
+def test_shell_rejects_remote_and_invalid_sources(client, variant):
+    url = f"/api/variants/{variant.id}/context/shell"
+    body = {"file_id": "directory", "command": "ls"}
+    assert client.post(url, json=body, environ_overrides={"REMOTE_ADDR": "192.0.2.10"}).status_code == 403
+    assert client.post(url, json={"file_id": "upload", "command": "ls"}).status_code == 400
+    assert client.post(url, json={"file_id": "directory", "command": ""}).status_code == 400
+
+
+def test_shell_action_guard_is_variant_scoped(app, variant):
+    from types import SimpleNamespace
+
+    from src.controllers.ai_actions import AssessGuard, ReviewTurn
+
+    target = SimpleNamespace(variant_id=str(variant.id), package="pkg")
+    assess = AssessGuard("CVE-1", [target])
+    review = ReviewTurn()
+    review.armed = (None, [target])
+    for candidate, allowed in ((str(variant.id), True), (str(uuid.uuid4()), False)):
+        with app.test_request_context(f"/api/variants/{candidate}/context/shell", method="POST"):
+            assert (assess.allow() is None) is allowed
+            assert (review.guard() is None) is allowed
+
+
+@pytest.mark.skipif(not os.getenv("VULNSCOUT_TEST_SHELL_IMAGE"), reason="requires a local Docker image")
+def test_attached_folder_shell_end_to_end(client, variant, host, helper_server):
+    import shutil
+
+    helper_server.engine = shutil.which("docker")
+    helper_server.image = os.environ["VULNSCOUT_TEST_SHELL_IMAGE"]
+    _attach(helper_server, variant, "src", host["app"])
+    url = f"/api/variants/{variant.id}/context/shell"
+    response = client.post(url, json={
+        "file_id": "mount:src", "folder": "src",
+        "command": "grep -n needle main.c; touch main.c",
+    })
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["exit_code"] != 0
+    assert "1:int main" in body["output"]
+    assert "Permission denied" in body["output"] or "Read-only file system" in body["output"]
+    assert "needle" in (host["app"] / "src" / "main.c").read_text()
+
+
 class TestAccessControl:
 
     @pytest.mark.parametrize("peer", ["192.0.2.1", "192.0.2.2"])

@@ -1139,12 +1139,15 @@ host_helper_socket_label() {
 }
 
 start_host_helper_locked() {
-    local script i label identity
+    local script i label identity image_id engine
     local -a label_args=()
     script="$(host_helper_script)" || { stop_host_helper_locked >/dev/null; return 1; }
+    image_id="$(call_container_engine image inspect "$DOCKER_IMAGE" --format '{{.Id}}')" || return 1
+    [[ "$image_id" =~ ^sha256:[[:xdigit:]]{64}$ ]] || return 1
+    engine="$(command -v "$CONTAINER_ENGINE")" || return 1
     label="$(host_helper_socket_label)" || return 1
     [[ -z "$label" ]] || label_args=(--socket-label "$label")
-    identity="${script##*/}${label:+|$label}"
+    identity="${script##*/}${label:+|$label}|$engine|$VULNSCOUT_CACHE_DIR"
     if [[ "$1" == start ]] && host_helper_running &&
         [ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null || true)" = "$identity" ]; then
         return 0
@@ -1152,6 +1155,7 @@ start_host_helper_locked() {
     stop_host_helper_locked >/dev/null || return 1
     if ! python3 -I "$script" serve --daemon --socket "$HOST_HELPER_SOCKET" "${label_args[@]}" \
         --state-dir "$HOST_HELPER_STATE_DIR" --pid-file "$HOST_HELPER_PID_FILE" \
+        --cache-dir "$VULNSCOUT_CACHE_DIR" --engine "$engine" --image "$image_id" \
         --log-file "$HOST_HELPER_STATE_DIR/helper.log" < /dev/null >&2; then
         console_err error "Error: the host folder helper did not start; see the message above."
         return 1
@@ -2070,9 +2074,10 @@ ai_context_helper() {
                 return 1
             fi
             script="$(host_helper_script)" || exit 1
-            local label
+            local label engine
             label="$(host_helper_socket_label)" || return 1
-            if [[ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null)" != "${script##*/}${label:+|$label}" ]]; then
+            engine="$(command -v "$CONTAINER_ENGINE")" || return 1
+            if [[ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null)" != "${script##*/}${label:+|$label}|$engine|$VULNSCOUT_CACHE_DIR" ]]; then
                 die "helper image or container label has changed; run 'vulnscout ai-context helper restart'."
             fi
             python3 -I "$script" ping --socket "$HOST_HELPER_SOCKET" >/dev/null || return 1

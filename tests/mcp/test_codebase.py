@@ -134,6 +134,34 @@ def test_registered_tools_forward_parameters():
         })
 
 
+def test_shell_tool_is_embedded_only_and_scope_checked(monkeypatch):
+    class Server:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self):
+            def register(function):
+                self.tools[function.__name__] = function
+                return function
+            return register
+
+    client = ScopedVulnScoutClient(BASE_URL, {"project_ids": ["p1"], "variant_ids": ["v1"]})
+    monkeypatch.delenv("VULNSCOUT_AGENT_SHELL", raising=False)
+    external = Server()
+    register_tools(external, client)
+    assert "run_codebase_shell" not in external.tools
+    monkeypatch.setenv("VULNSCOUT_AGENT_SHELL", "1")
+    embedded = Server()
+    register_tools(embedded, client)
+    with patch.object(VulnScoutClient, "run_codebase_shell", return_value={"output": "found", "exit_code": 0}) as run:
+        assert json.loads(embedded.tools["run_codebase_shell"]("v1", "directory", "grep x a", "src"))["output"] == (
+            "found"
+        )
+        run.assert_called_once_with("v1", "directory", "grep x a", "src")
+        assert "outside" in embedded.tools["run_codebase_shell"]("v2", "directory", "ls")
+        assert run.call_count == 1
+
+
 def test_merged_context_lists_mount_file_ids():
     result = _fmt_merged_context({"mounts": [
         {"alias": "src", "file_id": "mount:src", "host_path": "/work/app", "created_at": "2026-01-01T00:00:00Z"},

@@ -14,7 +14,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
-from ..helpers import context_draft
+from ..helpers import context_draft, host_mounts as host_helper
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.codebase_reference import (
     ARCHIVE_SUFFIXES, MAX_ENTRIES, MAX_FILE_BYTES, MAX_RESPONSE_BYTES, CodebaseReference, validate_reference,
@@ -921,6 +921,52 @@ def init_app(app):
             return jsonify({"error": "Failed to store file on server"}), 500
 
         return jsonify(cf.to_dict()), 201
+
+    @app.route('/api/variants/<variant_id>/context/shell', methods=['POST'])
+    def run_codebase_shell(variant_id):
+        """Run an isolated shell against a filtered snapshot of one variant source."""
+        if error := _access_error():
+            return error
+        variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
+        if err:
+            return err
+        assert variant_uuid is not None
+        if Variant.get_by_id(variant_uuid) is None:
+            return jsonify(error="Variant not found"), 404
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) - {"file_id", "folder", "command"}:
+            return jsonify(error="Invalid shell request."), 400
+        file_id, folder, command = body.get("file_id"), body.get("folder", ""), body.get("command")
+        if (not isinstance(file_id, str) or not isinstance(folder, str) or not isinstance(command, str)
+                or not command or len(command) > 4096 or "\x00" in command or len(folder) > 1024):
+            return jsonify(error="Invalid shell source, folder or command."), 400
+        try:
+            if file_id == "directory":
+                vc, err = _directory_context(variant_uuid)
+                if err:
+                    return err
+                if vc is None or vc.codebase_directory is None:
+                    return jsonify(error="No codebase directory found."), 404
+                result = host_helper.call("shell", timeout=60, source="directory",
+                                          directory=vc.codebase_directory, folder=folder, command=command)
+            elif file_id.startswith(MOUNT_FILE_ID_PREFIX):
+                alias = host_mounts.mount_alias(file_id)
+                assert alias is not None
+                mount = HostMount.get(variant_uuid, alias)
+                if mount is None:
+                    return jsonify(error="Attached host folder not found."), 404
+                host_mounts._activate(host_mounts._binding(mount))
+                result = host_helper.call("shell", timeout=60, source="mount", variant_id=str(variant_uuid),
+                                          alias=alias, mount_path=mount.host_path, folder=folder, command=command)
+            else:
+                return jsonify(error="Shell supports only the variant directory or an attached host folder."), 400
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except HostHelperUnavailable as exc:
+            return jsonify(error=exc.message), 503
+        except HostHelperError as exc:
+            return jsonify(error=exc.message, code=exc.code), exc.http_status
+        return jsonify({"file_id": file_id, "folder": folder, **result})
 
     @app.route('/api/variants/<variant_id>/context/files/<file_id>/source', methods=['GET'])
     def get_codebase_source(variant_id, file_id):

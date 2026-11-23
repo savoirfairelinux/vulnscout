@@ -28,14 +28,20 @@ WORKDIR /scan
 RUN apk add --no-cache \
     asciidoctor \
     bash \
+    binutils \
+    coreutils \
     curl \
+    file \
+    findutils \
     git \
+    grep \
     gcompat \
     icu \
     poppler-utils \
     python3 \
     py3-pip \
     ruby \
+    sed \
     shadow \
     sudo \
     unzip \

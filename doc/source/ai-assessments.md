@@ -205,9 +205,10 @@ Assess and review actions follow the repository's `cve-assessment` and
 `assessment-review` skills, so the built-in Agent and external clients use the
 same methodology. The Agent can read VulnScout data, uploaded source references
 and the skill files, and fetch public advisory pages such as NVD and GHSA
-(disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no shell or host
-filesystem access**; provision a **Codebase directory** or attach host folders
-as described below to expose source through the bounded MCP tools. Missing evidence remains an uncertainty, never proof that the
+(disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no direct host
+filesystem access**. Provision a **Codebase directory** or attach host folders
+as described below to expose source through the bounded MCP tools or the isolated
+read-only shell described in [AI Agent Development](agent-chat.md). Missing evidence remains an uncertainty, never proof that the
 product is safe.
 
 Submitted AI assessments remain pending until a human approves them.
@@ -431,7 +432,7 @@ may be stored/listed but cannot provide text evidence. Other archive formats
 are not unpacked.
 
 There is no external source-path setting. Administrators populate or mount the
-variant's provisioned directory; the embedded Agent has no shell or arbitrary
+variant's provisioned directory; the embedded Agent has no direct host
 filesystem access.
 Both embedded and external agents can inspect uploaded references through
 `get_merged_context` (which supplies reference IDs), then `list_codebase_files`,
@@ -545,7 +546,9 @@ writable for VulnScout's database and metadata; only the source mount is read-on
 **Remote workstation paths are not automatically accessible**: copy the snapshot
 to the server or mount storage available to that server.
 
-The embedded Agent still has no shell or arbitrary filesystem access. Merged
+The embedded Agent has no direct host filesystem access. Its isolated read-only
+shell can inspect a filtered snapshot of a directory or attached folder; see
+[AI Agent Development](agent-chat.md). Merged
 context returns `codebase_directory.file_id="directory"` for a provisioned
 directory, and `list_codebase_files`, `read_codebase_file` and
 `read_codebase_files` accept that ID within the variant's existing scope. Directory
