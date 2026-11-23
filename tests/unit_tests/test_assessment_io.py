@@ -1195,7 +1195,10 @@ class TestCustomDataVersion2:
             _observe_finding(openssl, variant_a.id)
             _observe_finding(zlib, variant_b.id)
 
-            snapshot = {"risk_id": "R1", "risk_description": "When assessed"}
+            snapshot = {"risk_id": "R1", "risk_description": "When assessed", "threat_id": "T1",
+                        "threat_description": "Unchanged threat"}
+            if origin == "custom":
+                snapshot["threat_target_ids"] = ["C2"]
             original = Assessment.create(
                 status="not_affected", origin=origin,
                 justification="component_not_present",
@@ -1209,7 +1212,8 @@ class TestCustomDataVersion2:
 
             original.delete()
             VariantContext.get_or_create(variant_b.id).stride_model = {
-                "risks": [{"id": "R1", "description": "Reused ID"}],
+                "risks": [{"id": "R1", "description": "When assessed", "threat_ids": ["T1"]}],
+                "threats": [{"id": "T1", "description": "Unchanged threat", "target_ids": ["C1"]}],
             }
 
             # Scalar-column queries can't see a genuine multi-target row (its
@@ -1232,7 +1236,7 @@ class TestCustomDataVersion2:
             pairs = {t["variant_id"]: t for t in restored[0].target_pairs}
             assert "risk_links" not in pairs[str(variant_a.id)]
             link = pairs[str(variant_b.id)]["risk_links"][0]
-            assert link["stale"] and link["risk_description"] == "When assessed"
+            assert link == {**snapshot, "stale": True}
             section = "ai_assessments" if origin == "ai" else "assessments"
             exported = next(t for t in payload[section][0]["targets"] if t["variant"] == variant_b.name)
             exported["risk_links"][0]["risk_description"] = "Different saved evidence"

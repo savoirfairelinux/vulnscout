@@ -30,9 +30,9 @@ type AssessmentTargetPair = {
 
 export type RiskReference = { risk_id: string; threat_id?: string };
 export type ModeledRiskLink = RiskReference & {
-    risk_description?: string; threat_description?: string; stale?: boolean;
+    risk_description?: string; threat_description?: string; threat_target_ids?: string[]; stale?: boolean;
 };
-export type RiskLinkPreview = {risk_description: string; threat_description?: string; revision: string};
+export type RiskLinkPreview = {risk_description: string; threat_description?: string; threat_target_ids?: string[]; revision: string};
 export type TargetRiskEdit = {
     variant_id: string; package: string; risk_links: (RiskReference & {confirmed_revision?: string})[];
 };
@@ -248,6 +248,7 @@ const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
                     ...(typeof link.threat_id === 'string' && { threat_id: link.threat_id }),
                     ...(typeof link.risk_description === 'string' && { risk_description: link.risk_description }),
                     ...(typeof link.threat_description === 'string' && { threat_description: link.threat_description }),
+                    ...(Array.isArray(link.threat_target_ids) && { threat_target_ids: link.threat_target_ids }),
                     stale: link.stale === true,
                 })) } : {}),
             ...(typeof item.outdated === "boolean" ? { outdated: item.outdated } : {}),

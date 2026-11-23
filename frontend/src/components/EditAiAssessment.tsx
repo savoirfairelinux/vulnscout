@@ -100,6 +100,7 @@ function EditAiAssessment({
                         onChange={e => setConfirmations({ ...confirmations, [k]: e.target.checked ? revision : '' })} />
                     Reconfirm {id} using the current description: {risk_description}
                     {threat_description && `; ${threat_description}`}
+                    {preview.threat_target_ids && `; current targets: ${preview.threat_target_ids.join(', ') || 'none'}`}
                 </label>;
             })}
         </div>;

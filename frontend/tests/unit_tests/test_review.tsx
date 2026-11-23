@@ -1328,17 +1328,20 @@ describe('Review — AI Assessments tab', () => {
 
     test('reconfirms a stale pair only against the displayed revision', async () => {
         const targets = [{ package: 'pkgA@1.0.0', variant_id: 'v1', risk_links: [{
-            risk_id: 'R1', risk_description: 'Previously reviewed', stale: true,
+            risk_id: 'R1', threat_id: 'T1', risk_description: 'Previously reviewed', stale: true,
         }] }];
         mockNetwork([], { aiReviewList: [{ ...makeAssessment('ai1', 'v1'), targets, approval_fingerprint: 'original' }] });
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
         await user.click(await screen.findByText('AI Assessments'));
         await user.click(await screen.findByTitle('Edit AI suggestion'));
-        fetchMock.mockResponseOnce(JSON.stringify({ risk_description: 'New description', revision: 'reviewed-revision' }));
-        await user.click(screen.getByRole('button', { name: 'Compare current R1' }));
-        expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('risk-link-preview?variant_id=v1&package=pkgA%401.0.0&risk_id=R1');
-        const confirm = await screen.findByRole('checkbox', { name: /Reconfirm R1.*New description/ });
+        expect(within(screen.getByRole('dialog')).getByText(/saved targets: not recorded/)).toBeVisible();
+        fetchMock.mockResponseOnce(JSON.stringify({
+            risk_description: 'New description', threat_target_ids: ['I2'], revision: 'reviewed-revision',
+        }));
+        await user.click(screen.getByRole('button', { name: 'Compare current R1/T1' }));
+        expect(String(fetchMock.mock.calls.at(-1)?.[0])).toContain('risk-link-preview?variant_id=v1&package=pkgA%401.0.0&risk_id=R1&threat_id=T1');
+        const confirm = await screen.findByRole('checkbox', { name: /Reconfirm R1.*New description.*current targets: I2/ });
         expect(confirm).not.toBeChecked();
         await user.click(confirm);
         await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
@@ -1347,7 +1350,7 @@ describe('Review — AI Assessments tab', () => {
         expect(JSON.parse(String((approve![1] as RequestInit).body))).toEqual({
             expected_fingerprint: 'original', target_risk_links: [{
                 variant_id: 'v1', package: 'pkgA@1.0.0',
-                risk_links: [{ risk_id: 'R1', confirmed_revision: 'reviewed-revision' }],
+                risk_links: [{ risk_id: 'R1', threat_id: 'T1', confirmed_revision: 'reviewed-revision' }],
             }],
         });
     });

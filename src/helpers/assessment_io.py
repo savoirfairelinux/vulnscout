@@ -16,7 +16,7 @@ from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
 
 from .datetime_utils import normalize_timestamp_for_sort
-from .assessment_risk_links import MAX_SNAPSHOT_BYTES, RiskLinkError, charge_snapshots, portable_snapshots
+from .assessment_risk_links import MAX_SNAPSHOT_BYTES, RiskLinkError, RiskSnapshot, charge_snapshots, portable_snapshots
 
 if TYPE_CHECKING:
     from ..models.variant import Variant as _Variant
@@ -554,7 +554,7 @@ def duplicate_multitarget_assessment_exists(
     impact_statement: str | None = None,
     workaround: str | None = None,
     responses: "list[str] | None" = None,
-    risk_snapshots: dict[tuple[_uuid.UUID, _uuid.UUID], list[dict[str, str]]] | None = None,
+    risk_snapshots: dict[tuple[_uuid.UUID, _uuid.UUID], list[RiskSnapshot]] | None = None,
 ) -> bool:
     """Return True when an assessment with exactly this target set already exists.
 
@@ -634,7 +634,7 @@ def duplicate_multitarget_assessment_exists(
         ).where(AssessmentTarget.assessment_id.in_(matching_ids))
     ).all()
 
-    by_assessment: dict[_uuid.UUID, dict[tuple[_uuid.UUID, _uuid.UUID], list[dict[str, str]]]] = {}
+    by_assessment: dict[_uuid.UUID, dict[tuple[_uuid.UUID, _uuid.UUID], list[RiskSnapshot]]] = {}
     for assessment_id, v, f, links in rows:
         by_assessment.setdefault(assessment_id, {})[v, f] = links or []
 
@@ -1235,7 +1235,7 @@ def import_custom_data(
 
                 resolved_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
                 seen_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
-                snapshots: dict[tuple[_uuid.UUID, _uuid.UUID], list[dict[str, str]]] = {}
+                snapshots: dict[tuple[_uuid.UUID, _uuid.UUID], list[RiskSnapshot]] = {}
                 remaining = MAX_SNAPSHOT_BYTES
                 for raw_target in raw_targets:
                     pkg_string = (
