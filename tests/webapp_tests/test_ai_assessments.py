@@ -355,12 +355,13 @@ def test_edited_approval_conflicts_after_partial_replacement(client, app):
     }).status_code == 200
 
 
-def _risk_model(app, variant, description, extra_risks=(), target_ids=("C1",)):
+def _risk_model(app, variant, description, extra_risks=(), target_ids=("C1",), endpoints=("C1", "C2")):
     from src.models.variant_context import VariantContext
 
     with app.app_context():
         context = VariantContext.get_or_create(uuid.UUID(variant))
         context.stride_model = {
+            "interactions": [{"id": "I1", "source_id": endpoints[0], "destination_id": endpoints[1]}],
             "risks": [{"id": "R1", "description": description, "threat_ids": ["T1"]}, *extra_risks],
             "threats": [{"id": "T1", "description": f"{description} threat", "target_ids": list(target_ids)},
                         {"id": "T2", "description": "Unrelated threat"}],
@@ -451,7 +452,10 @@ def test_reconfirm_requires_the_description_current_at_approval(client, app):
     }]
 
 
-def test_retargeted_threat_requires_confirmation_even_when_descriptions_match(client, app):
+@pytest.mark.parametrize("new_targets,endpoints", [
+    (["C2"], ("C1", "C2")), (["C1", "I1"], ("C3", "C2")), (["C1", "I1"], ("C1", "C3")),
+])
+def test_retargeted_threat_requires_confirmation_even_when_descriptions_match(client, app, new_targets, endpoints):
     variant = str(VARIANT_UUID)
     _risk_model(app, variant, "Unchanged", target_ids=["I1", "C1"])
     ref = {"risk_id": "R1", "threat_id": "T1"}
@@ -470,16 +474,22 @@ def test_retargeted_threat_requires_confirmation_even_when_descriptions_match(cl
     first = preview()
     _risk_model(app, variant, "Unchanged", target_ids=["C1", "I1"])
     assert preview() == first
-    _risk_model(app, variant, "Unchanged", target_ids=["C2"])
+    _risk_model(app, variant, "Unchanged", target_ids=new_targets, endpoints=endpoints)
     stored = client.get(url).json["targets"][0]["risk_links"][0]
     assert stored["stale"] and stored["threat_target_ids"] == ["C1", "I1"]
+    assert stored["interaction_endpoints"] == {"I1": {"source_id": "C1", "destination_id": "C2"}}
     assert client.post(url + "/approve").status_code == 400
     assert approve(first["revision"]).status_code == 400
     current = preview()
-    assert current["threat_target_ids"] == ["C2"]
+    assert current["threat_target_ids"] == new_targets
+    if "I1" in new_targets:
+        assert current["interaction_endpoints"] == {"I1": {"source_id": endpoints[0], "destination_id": endpoints[1]}}
+    else:
+        assert "interaction_endpoints" not in current
     approved = approve(current["revision"]).json["assessments"][0]
     assert approved["status"] == row["status"]
-    assert approved["targets"][0]["risk_links"] == [{**stored, "stale": False, "threat_target_ids": ["C2"]}]
+    assert approved["targets"][0]["risk_links"] == [{k: v for k, v in current.items() if k != "revision"}
+                                                    | {"stale": False}]
 
 
 def test_link_limits_reject_expanded_edits_and_replacements_atomically(app, client):

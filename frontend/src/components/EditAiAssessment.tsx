@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import EditAssessment from "./EditAssessment";
 import ModeledRiskLinks from "./ModeledRiskLinks";
-import Assessments, { initialStatusNotes } from "../handlers/assessments";
+import Assessments, { describeThreatTargets, initialStatusNotes } from "../handlers/assessments";
 import type { EditAssessmentData } from "./EditAssessment";
 import type { AiAssessmentEdits, Assessment, RiskLinkPreview, TargetRiskEdit } from "../handlers/assessments";
 
@@ -106,7 +106,7 @@ function EditAiAssessment({
                     }} />
                     Reconfirm {id} using the current description: {risk_description}
                     {threat_description && `; ${threat_description}`}
-                    {threat_target_ids && `; current targets: ${threat_target_ids.join(', ') || 'none'}`}
+                    {threat_target_ids && `; current targets: ${describeThreatTargets(preview.current) || 'none'}`}
                 </label>;
             })}
         </div>;

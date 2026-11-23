@@ -1193,8 +1193,14 @@ class TestCustomDataVersion2:
         assert "variant_id" not in payload["assessments"][0]
         assert "variant" not in payload["assessments"][0]
 
-    @pytest.mark.parametrize("origin", ["ai", "custom"])
-    def test_version_2_export_round_trips_a_cross_variant_assessment(self, app, origin):
+    @pytest.mark.parametrize("origin,evidence", [
+        ("ai", {}),
+        ("ai", {"threat_target_ids": ["I1"]}),
+        ("custom", {"threat_target_ids": ["I1"], "interaction_endpoints": {
+            "I1": {"source_id": "C2", "destination_id": "C1"},
+        }}),
+    ])
+    def test_version_2_export_round_trips_a_cross_variant_assessment(self, app, origin, evidence):
         """A genuine multi-target (cross-variant) assessment created via
         Assessment.create(targets=...) round-trips through export/import."""
         from src.models.project import Project
@@ -1211,9 +1217,7 @@ class TestCustomDataVersion2:
             _observe_finding(zlib, variant_b.id)
 
             snapshot = {"risk_id": "R1", "risk_description": "When assessed", "threat_id": "T1",
-                        "threat_description": "Unchanged threat"}
-            if origin == "custom":
-                snapshot["threat_target_ids"] = ["C2"]
+                        "threat_description": "Unchanged threat", **evidence}
             original = Assessment.create(
                 status="not_affected", origin=origin,
                 justification="component_not_present",
@@ -1228,7 +1232,8 @@ class TestCustomDataVersion2:
             original.delete()
             VariantContext.get_or_create(variant_b.id).stride_model = {
                 "risks": [{"id": "R1", "description": "When assessed", "threat_ids": ["T1"]}],
-                "threats": [{"id": "T1", "description": "Unchanged threat", "target_ids": ["C1"]}],
+                "threats": [{"id": "T1", "description": "Unchanged threat", "target_ids": ["I1"]}],
+                "interactions": [{"id": "I1", "source_id": "C1", "destination_id": "C2"}],
             }
 
             # Scalar-column queries can't see a genuine multi-target row (its
@@ -1254,7 +1259,10 @@ class TestCustomDataVersion2:
             assert link == {**snapshot, "stale": True}
             section = "ai_assessments" if origin == "ai" else "assessments"
             exported = next(t for t in payload[section][0]["targets"] if t["variant"] == variant_b.name)
-            exported["risk_links"][0]["risk_description"] = "Different saved evidence"
+            if "threat_target_ids" in evidence:
+                exported["risk_links"][0]["interaction_endpoints"] = {"I1": {"source_id": "C1", "destination_id": "C2"}}
+            else:
+                exported["risk_links"][0]["risk_description"] = "Different saved evidence"
             assert import_custom_data(payload, variant_by_name)[section + "_imported"] == 1
             assert import_custom_data(payload, variant_by_name)[section + "_skipped"] == 1
 

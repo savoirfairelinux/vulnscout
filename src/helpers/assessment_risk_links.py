@@ -23,10 +23,16 @@ class _RiskSnapshot(TypedDict):
     risk_description: str
 
 
+class InteractionEndpoints(TypedDict):
+    source_id: str
+    destination_id: str
+
+
 class RiskSnapshot(_RiskSnapshot, total=False):
     threat_id: str
     threat_description: str
     threat_target_ids: list[str]
+    interaction_endpoints: dict[str, InteractionEndpoints]
 
 
 def _sorted_target_ids(raw: object) -> list[str]:
@@ -41,6 +47,20 @@ def _check_count(raw: object) -> list:
     if not isinstance(raw, list) or len(raw) > MAX_LINKS_PER_TARGET:
         raise RiskLinkError(f"risk_links must be a list of at most {MAX_LINKS_PER_TARGET} references")
     return raw
+
+
+def _endpoints(raw: object, ids: list[str]) -> dict[str, InteractionEndpoints]:
+    if not isinstance(raw, dict) or len(raw) > MAX_ROWS or raw.keys() != set(ids):
+        raise RiskLinkError("Expected endpoints for each linked interaction")
+    result: dict[str, InteractionEndpoints] = {}
+    for interaction in ids:
+        ends = raw[interaction]
+        if (not isinstance(ends, dict) or ends.keys() != {"source_id", "destination_id"}
+                or any(not isinstance(v, str) or not re.fullmatch(r"C[1-9]\d*", v) for v in ends.values())
+                or ends["source_id"] == ends["destination_id"]):
+            raise RiskLinkError("Invalid modeled interaction endpoints")
+        result[interaction] = {"source_id": ends["source_id"], "destination_id": ends["destination_id"]}
+    return result
 
 
 def charge_snapshots(remaining: int, links: list[RiskSnapshot]) -> int:
@@ -66,6 +86,9 @@ def portable_snapshots(raw: object) -> list[RiskSnapshot]:
         # A missing field in a legacy snapshot is unknown, not an empty set.
         targets = (_sorted_target_ids(values.pop("threat_target_ids"))
                    if "threat_id" in link and "threat_target_ids" in link else None)
+        interaction_ids = [t for t in targets or [] if t.startswith("I")]
+        endpoints = (_endpoints(values.pop("interaction_endpoints"), interaction_ids)
+                     if interaction_ids and "interaction_endpoints" in values else None)
         if set(values) != fields or any(not isinstance(v, str) for v in values.values()):
             raise RiskLinkError("Invalid modeled risk snapshot fields")
         if any(len(link[k]) > MAX_TEXT for k in fields if k.endswith("_description")):
@@ -77,6 +100,8 @@ def portable_snapshots(raw: object) -> list[RiskSnapshot]:
         seen.add(pair)
         if targets is not None:
             values["threat_target_ids"] = targets
+        if endpoints is not None:
+            values["interaction_endpoints"] = endpoints
         result.append(cast(RiskSnapshot, values))
     return result
 
@@ -97,7 +122,8 @@ def _records(model: dict | None, section: str) -> dict[str, dict]:
     return {r["id"]: r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
 
 
-def _resolve(link: object, risks: dict[str, dict], threats: dict[str, dict]) -> RiskSnapshot:
+def _resolve(link: object, risks: dict[str, dict], threats: dict[str, dict],
+             interactions: dict[str, dict]) -> RiskSnapshot:
     if not isinstance(link, dict) or link.keys() - {"risk_id", "threat_id"}:
         raise RiskLinkError("Expected risk_id and optional threat_id")
     rid = link.get("risk_id")
@@ -113,6 +139,12 @@ def _resolve(link: object, risks: dict[str, dict], threats: dict[str, dict]) -> 
         record["threat_id"] = tid
         record["threat_description"] = threats[tid].get("description") or ""
         record["threat_target_ids"] = _sorted_target_ids(threats[tid].get("target_ids"))
+        interaction_ids = [t for t in record["threat_target_ids"] if t.startswith("I")]
+        if interaction_ids:
+            record["interaction_endpoints"] = _endpoints({
+                i: {k: interactions.get(i, {}).get(k) for k in ("source_id", "destination_id")}
+                for i in interaction_ids
+            }, interaction_ids)
     return record
 
 
@@ -121,11 +153,12 @@ def resolve_links(
 ) -> list[RiskSnapshot]:
     links = _check_count(raw)
     risks, threats = _records(model, "risks"), _records(model, "threats")
+    interactions = _records(model, "interactions")
     resolved = {}
     for link in links:
         check_revision = confirmed is not None and isinstance(link, dict) and "confirmed_revision" in link
         ids = {k: v for k, v in link.items() if k != "confirmed_revision"} if check_revision else link
-        record = _resolve(ids, risks, threats)
+        record = _resolve(ids, risks, threats, interactions)
         pair = (record["risk_id"], record.get("threat_id"))
         if check_revision and confirmed is not None:
             if link["confirmed_revision"] != _revision(record):
@@ -139,12 +172,13 @@ def describe_links(stored: list[RiskSnapshot], model: dict | None) -> list[dict[
     """Keep reviewed descriptions visible even when the model removes or reuses an ID."""
     links = []
     risks, threats = _records(model, "risks"), _records(model, "threats")
+    interactions = _records(model, "interactions")
     for record in stored:
         ids = {"risk_id": record["risk_id"]}
         if "threat_id" in record:
             ids["threat_id"] = record["threat_id"]
         try:
-            stale = _resolve(ids, risks, threats) != record
+            stale = _resolve(ids, risks, threats, interactions) != record
         except RiskLinkError:
             stale = True
         links.append({**record, "stale": stale})
