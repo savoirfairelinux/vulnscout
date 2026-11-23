@@ -763,7 +763,8 @@ SCHEMAS: dict[str, Any] = {
             "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS,
             "context_configured": {**_BOOL, "description": (
                 "False skips the variant. True permits an explicitly blank replacement. "
-                "If omitted, the variant must contain Context text, System text or STRIDE rows."
+                "If omitted, Context text alone replaces only the Context text fields. "
+                "System text or STRIDE rows request a full replacement; a completely blank entry fails."
             )},
             "system": _ref("ContextSystem"), "stride_model": _ref("StrideModel"),
             "files": _array(

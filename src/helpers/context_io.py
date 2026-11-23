@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, TypedDict
+from typing import NotRequired, Optional, TypedDict
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..models.project import Project
@@ -34,7 +34,7 @@ class ExportedFile(TypedDict):
 class VariantEntry(TypedDict):
     """One exported variant's context (nested under its project)."""
     variant_name: str
-    context_configured: bool
+    context_configured: NotRequired[bool]
     variant_description: Optional[str]
     environment: Optional[str]
     other_info: Optional[str]
@@ -70,13 +70,8 @@ def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntr
             "system": {key: getattr(vc, f"system_{key}") for key in SYSTEM_KEYS},
             "stride_model": vc.stride_model if vc.stride_model is not None else empty_stride_model(),
         }
-    # Drafts and uploads can create a row without saving any editable context.
-    return {
+    entry: VariantEntry = {
         "variant_name": variant.name,
-        "context_configured": vc is not None and (vc.stride_model is not None or any(
-            value and value.strip() for value in
-            (vc.variant_description, vc.environment, vc.other_info, *editor["system"].values())
-        )),
         "variant_description": vc.variant_description if vc else None,
         "environment": vc.environment if vc else None,
         "other_info": vc.other_info if vc else None,
@@ -86,6 +81,12 @@ def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntr
             for f in sorted(vc.files, key=lambda f: f.original_name)
         ] if vc else [],
     }
+    if vc and (vc.stride_model is not None or any(v and v.strip() for v in editor["system"].values())):
+        entry["context_configured"] = True
+    elif not vc or not any(v and v.strip() for v in (vc.variant_description, vc.environment, vc.other_info)):
+        entry["context_configured"] = False
+    # Text-only saves carry no authority to clear the destination's System or STRIDE.
+    return entry
 
 
 def project_entry(project: Project, pc: Optional[ProjectContext],
@@ -324,7 +325,7 @@ def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[st
 
     try:
         VariantContextController.save_editor(variant.id, _editor_payload(entry), commit=False,
-                                             allow_blank=entry.get("context_configured") is True)
+                                             replace_empty_model=entry.get("context_configured") is True)
     except StrideValidationError as exc:
         return str(exc)
     ProjectContextController.upsert(project.id, description=description, commit=False)

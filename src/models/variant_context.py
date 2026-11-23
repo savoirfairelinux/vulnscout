@@ -314,12 +314,14 @@ class VariantContext(Base):
 
     @staticmethod
     def save_editor(variant_id: uuid.UUID, payload: dict, commit: bool = True, *,
-                    allow_blank: bool = True) -> "VariantContext":
+                    replace_empty_model: bool = True) -> "VariantContext":
         """Store an editor-shape payload; raises ``StrideValidationError``."""
         values = _editor_values(payload)
-        if not allow_blank and not (any(values[key] for key in (*_EDITOR_TEXT_KEYS, *_SYSTEM_COLUMNS.values()))
-                                    or any(values["stride_model"].values())):
-            raise StrideValidationError({"context": "blank imports require context_configured: true"})
+        if not replace_empty_model and not _has_structured_context(values):
+            text = {key: values[key] for key in _EDITOR_TEXT_KEYS}
+            if not any(text.values()):
+                raise StrideValidationError({"context": "blank imports require context_configured: true"})
+            return VariantContext.upsert(variant_id, commit=commit, **text)
         existing = VariantContext.get_by_variant(variant_id)
         if existing is None:
             vc = VariantContext(variant_id=variant_id, updated_at=datetime.now(timezone.utc), **values)

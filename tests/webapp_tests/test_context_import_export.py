@@ -469,7 +469,7 @@ class TestExportImportStructuredContext:
         ]}
         assert _export_variants(client) == before
 
-    @pytest.mark.parametrize("source", ["untouched", "metadata_only", "explicit_clear"])
+    @pytest.mark.parametrize("source", ["untouched", "metadata_only", "text_only", "editor_text", "explicit_clear"])
     def test_bulk_round_trip_distinguishes_unsaved_and_cleared_context(self, app_with_data, source):
         import uuid
         from src.helpers.stride_model import empty_stride_model
@@ -481,11 +481,14 @@ class TestExportImportStructuredContext:
             variant_id = Variant.create("Gateway", uuid.UUID(data["project_a_id"])).id
             if source != "untouched":
                 VariantContext.get_or_create(variant_id)
-            if source == "explicit_clear":
-                VariantContext.save_editor(variant_id, {"stride": {}})
         client = app.test_client()
-        exported = client.get("/api/context/export").get_json()
         url = f"/api/variants/{variant_id}/context"
+        if source in ("text_only", "editor_text", "explicit_clear"):
+            payload = {} if source == "text_only" else {"stride": {}}
+            if source != "explicit_clear":
+                payload["environment"] = "Lab"
+            assert client.put(url, json=payload).status_code == 200
+        exported = client.get("/api/context/export").get_json()
         saved = client.put(url, json={
             "variant_description": "Destination", "system": {"scope": "Firmware"}, "stride": _STRIDE_MODEL,
         })
@@ -495,11 +498,16 @@ class TestExportImportStructuredContext:
         result = _post_json(client, exported).get_json()
         assert result["failed"] == []
         after = client.get(load_url).get_json()
-        if source == "explicit_clear":
+        if source in ("explicit_clear", "editor_text", "text_only"):
             assert {"project_name": "ProjectA", "variant_name": "Gateway"} in result["imported"]
             assert after["variant_description"] is None
-            assert not any(after["editor"]["system"].values())
-            assert after["editor"]["stride"] == empty_stride_model()
+            assert after["environment"] == (None if source == "explicit_clear" else "Lab")
+            if source == "text_only":
+                assert after["editor"]["system"] == before["editor"]["system"]
+                assert after["editor"]["stride"] == before["editor"]["stride"]
+            else:
+                assert not any(after["editor"]["system"].values())
+                assert after["editor"]["stride"] == empty_stride_model()
         else:
             assert result["ignored"] == [{"project_name": "ProjectA", "variant_name": "Gateway",
                                           "reason": "Source variant has no saved context"}]
@@ -609,16 +617,23 @@ class TestExportImportStructuredContext:
         # A sibling entry updates the shared project description, not this variant.
         assert {**after, "description": before["description"]} == before
 
-    def test_import_context_without_threats(self, client_and_data):
-        client, _ = client_and_data
-        result = json.loads(_post_json(client, [{
+    def test_unmarked_v3_text_only_import_preserves_system_and_stride(self, app_with_data):
+        app, data = app_with_data
+        _make_stride(app, data["variant_a1_id"])
+        client = app.test_client()
+        result = _post_json(client, {"version": "3.0", "projects": [{
             "project_name": "ProjectA", "project_description": "d",
-            "variants": [{"variant_name": "VariantA1", "environment": "Lab", **_tm("")}],
-        }]).data)
+            "variants": [{"variant_name": "VariantA1", "environment": "Lab", "variant_description": None,
+                          "other_info": None, "files": [],
+                          "system": dict.fromkeys(("scope", "actors", "entry_points", "trust_boundaries")),
+                          "stride_model": {"components": [], "interactions": [], "threats": [], "risks": []}}],
+        }]}).get_json()
         assert result["failed"] == []
         entry = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
         assert entry["environment"] == "Lab"
-        assert entry["stride_model"] == {"components": [], "interactions": [], "threats": [], "risks": []}
+        assert entry["variant_description"] is None
+        assert entry["system"]["scope"] == "Firmware"
+        assert entry["stride_model"] == _STRIDE_MODEL
 
     def test_import_v2_0_legacy_risks_are_upgraded(self, client_and_data):
         client, _ = client_and_data
