@@ -1,3 +1,4 @@
+import asyncio
 import json
 import pytest
 import respx
@@ -5,6 +6,7 @@ import httpx
 
 # conftest.py adds repository root to sys.path
 from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+from vulnscout_mcp.server import create_server
 from vulnscout_mcp.tools.assessments import _write_assessment_impl, _has_ai_assessment_impl, _update_ai_assessment_impl
 
 
@@ -215,15 +217,19 @@ class TestWriteAssessmentImpl:
             )
         assert result == "Error: packages is required when targets is not provided"
 
-    def test_sparse_multi_variant_targets_are_forwarded_exactly(self, client):
+    def test_sparse_multi_variant_targets_are_forwarded_exactly(self, monkeypatch):
         # A multi-variant group where each variant has a different affected
         # package version cannot be expressed as packages x variant_ids
         # (that would cross-join and assess pairs never observed) — only the
         # exact (package, variant_id) pairs via `targets`.
         targets = [
-            {"package": "openssl@1.0.0", "variant_id": "variant-uuid-111"},
-            {"package": "openssl@1.0.1", "variant_id": "variant-uuid-222"},
+            {"package": "openssl@1.0.0", "variant_id": "variant-uuid-111",
+             "risk_links": [{"risk_id": "R1", "threat_id": "T1"}]},
+            {"package": "openssl@1.0.1", "variant_id": "variant-uuid-222",
+             "risk_links": [{"risk_id": "R1"}]},
         ]
+        monkeypatch.delenv("VULNSCOUT_AGENT_SCOPE", raising=False)
+        server = create_server(BASE_URL)
         with respx.mock:
             route = respx.post(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234/assessments").mock(
                 return_value=httpx.Response(
@@ -240,12 +246,10 @@ class TestWriteAssessmentImpl:
                     },
                 )
             )
-            result = _write_assessment_impl(
-                client,
-                vuln_id="CVE-2024-1234",
-                status="affected",
-                targets=targets,
-            )
+            response = asyncio.run(server.call_tool("write_assessment", {
+                "vuln_id": "CVE-2024-1234", "status": "affected", "targets": targets,
+            }))
+            result = response.content[0].text
         body = json.loads(route.calls[0].request.content)
         assert body["targets"] == targets
         assert "packages" not in body
