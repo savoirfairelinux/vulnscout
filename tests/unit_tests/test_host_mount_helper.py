@@ -3,11 +3,14 @@
 """Host folder helper: exact grants, traversal/symlink containment, bounds and socket permissions."""
 
 import ctypes
+import hashlib
+import io
 import json
 import os
 import shutil
 import socket
 import stat
+import struct
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -132,7 +135,8 @@ def test_upgrade_requires_reapproval_for_older_grants(helper, tree, version, ide
     restarted = hh.Helper(helper.state_dir)
     assert err(restarted, "list", variant_id=VARIANT, alias="src")[0] == "not_found"
     assert err(restarted, "activate", **binding, approval_proof=old_proof)[0] == "forbidden"
-    staged = ok(restarted, "stage", **binding)
+    assert err(restarted, "stage", **binding)[0] == "forbidden"
+    staged = ok(restarted, "stage", **{**binding, "host_permit": host_permit(restarted, VARIANT, src=tree["app"])})
     ok(restarted, "activate", attachment_id=binding["attachment_id"], **staged)
 
 
@@ -182,6 +186,7 @@ def test_handle_survives_restart_but_rejects_reused_inode(helper, tree, monkeypa
         return 0
 
     monkeypatch.setattr(os, "fstat", reused_inode)
+    monkeypatch.setattr(hh, "_root_anchor", lambda _: None)
     monkeypatch.setattr(hh, "_NAME_TO_HANDLE_AT", get_handle)
     binding = grant(helper, root)
     staged = ok(helper, "stage", **binding)
@@ -197,6 +202,103 @@ def test_handle_survives_restart_but_rejects_reused_inode(helper, tree, monkeypa
     for server in (restarted, hh.Helper(helper.state_dir)):
         assert err(server, "activate", **binding)[0] == "unavailable"
         assert err(server, "read", variant_id=VARIANT, alias="src", path="new")[0] == "unavailable"
+
+
+@pytest.fixture
+def kernel(tree, monkeypatch):
+    """Model the kernel answers for the actual descriptors opened by the helper."""
+    state = {"boot": b"a" * 16, "root": 42, "key": 42, "folder": 42, "gen": 9, "key_gen": 1,
+             "uuid": bytes(range(16)), "fs": b"ext4", "kind": 1}
+    original_open = open
+
+    def open_file(path, *args, **kwargs):
+        if path == "/proc/self/mountinfo":
+            return io.BytesIO(b"8 1 1:2 / / rw - " + state["fs"] + b" /dev/test rw\n")
+        if str(path).startswith("/proc/self/fdinfo/"):
+            return io.BytesIO(b"mnt_id:\t8\n")
+        return original_open(path, *args, **kwargs)
+
+    def handle(fd, name, handle_ptr, mount_ptr, flags):
+        path = os.readlink(f"/proc/self/fd/{fd}")
+        target = "root" if path == "/" else "key" if path.endswith("/.approval.key") else "folder"
+        result = ctypes.cast(handle_ptr, ctypes.POINTER(hh._FileHandle)).contents
+        result.kind = state["kind"] if target == "folder" else 1
+        result.size = 8
+        generation = {"folder": state["gen"], "key": state["key_gen"], "root": 0}[target]
+        result.data[:8] = struct.pack("=II", os.fstat(fd).st_ino & 0xffffffff, generation)
+        ctypes.cast(mount_ptr, ctypes.POINTER(ctypes.c_uint64))[0] = state[target]
+        return 0
+
+    def fsuuid(fd, op, arg):
+        assert op == 0x80111500 and arg == bytes(17) and os.readlink(f"/proc/self/fd/{fd}") == "/"
+        return bytes([16]) + state["uuid"]
+
+    monkeypatch.setattr(hh, "open", open_file, raising=False)
+    monkeypatch.setattr(hh, "_boot_id", lambda: state["boot"])
+    monkeypatch.setattr(hh, "_NAME_TO_HANDLE_AT", handle)
+    monkeypatch.setattr(hh.fcntl, "ioctl", fsuuid)
+    return state
+
+
+def reboot(kernel):
+    kernel.update(boot=b"b" * 16, root=67, key=67, folder=67)
+
+
+def test_reboot_verifies_signed_binding_and_each_read(tree, kernel):
+    state = tree["tmp"] / "state"
+    state.mkdir()
+    binding = attached(hh.Helper(str(state)), tree)
+    reboot(kernel)
+    restarted = hh.Helper(str(state))
+    proof = binding["approval_proof"]
+    forged = proof[:-1] + ("1" if proof[-1] == "0" else "0")
+    assert err(restarted, "activate", **{**binding, "approval_proof": forged})[0] == "forbidden"
+    ok(restarted, "activate", **binding)
+    scope = dict(variant_id=VARIANT, alias="src", path="README")
+    assert ok(restarted, "read", **scope)["content"].startswith("line 1")
+    kernel["folder"] += 1  # Same filesystem and directory, different bind mount.
+    assert err(restarted, "read", **scope)[0] == "unavailable"
+    assert err(hh.Helper(str(state)), "activate", **binding)[0] == "unavailable"
+
+
+@pytest.mark.parametrize("changed", [
+    {"gen": 10}, {"uuid": b"x" * 16}, {"uuid": bytes(16)}, {"key": 99},
+    {"kind": 2}, {"fs": b"overlay"}, {"boot": None}, {"key_gen": 11},
+])
+def test_reboot_cannot_reauthorize_an_unverified_object(tree, kernel, changed):
+    state = tree["tmp"] / "state"
+    state.mkdir()
+    binding = attached(hh.Helper(str(state)), tree)
+    reboot(kernel)
+    kernel.update(changed)
+    restarted = hh.Helper(str(state))
+    for op in ("activate", "list"):
+        code, message = err(restarted, op, **binding)
+        assert code == "unavailable" and "reattach" in message and "moved" not in message
+        if changed in ({"gen": 10}, {"uuid": b"x" * 16}, {"key_gen": 11}):
+            assert "identity changed" in message
+
+
+def test_boot_only_and_legacy_proofs_never_gain_durable_authority(tree, kernel):
+    state = tree["tmp"] / "state"
+    state.mkdir()
+    kernel["key"] += 1
+    server = hh.Helper(str(state))
+    binding = attached(server, tree)
+    assert binding["identity"].startswith("b")
+    # Construct the old v4 MAC using its original handle digest.
+    scope = {k: binding[k] for k in ("attachment_id", "variant_id", "alias", "path")}
+    fid = struct.pack("=II", tree["app"].stat().st_ino & 0xffffffff, kernel["gen"])
+    digest = hashlib.sha256(kernel["boot"] + struct.pack("!Qi", kernel["folder"], 1) + fid).hexdigest()
+    legacy = {**scope, "approval_proof": server._proof(**scope, identity="h" + digest)}
+    ok(server, "activate", **legacy)
+    reboot(kernel)  # Even if the new configuration supports a durable anchor.
+    restarted = hh.Helper(str(state))
+    assert "after host reboot" in err(restarted, "activate", **binding)[1]
+    assert "cannot distinguish reboot" in err(restarted, "activate", **legacy)[1]
+    assert "reattach" in err(restarted, "list", **scope)[1]
+    new = ok(restarted, "stage", **scope, host_permit=host_permit(restarted, VARIANT, src=tree["app"]))
+    ok(restarted, "activate", **{**scope, **new})
 
 
 def test_session_pin_survives_edits_not_replacement_or_restart(helper, tree, monkeypatch):
@@ -410,6 +512,9 @@ def test_discovered_paths_round_trip_from_scoped_folder(helper, tree):
 
 def test_staging_requires_a_single_use_scoped_permit_and_never_grants_access(helper, tree):
     params = grant(helper, tree["app"])
+    legacy = host_permit(helper, VARIANT, src=tree["app"])
+    (tree["tmp"] / "state" / legacy / "src").write_bytes(VARIANT.encode() + b"\0" + os.fsencode(tree["app"]))
+    assert err(helper, "stage", **{**params, "host_permit": legacy})[0] == "forbidden"
     for changed in ({"host_permit": None}, {"exact": True, "host_permit": None},
                     {"path": str(tree["app"] / "src")}, {"alias": "other"}, {"variant_id": str(uuid.uuid4())}):
         assert err(helper, "stage", **{**params, **changed})[0] == "forbidden"

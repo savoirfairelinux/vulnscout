@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import errno
+import fcntl
 import hashlib
 import hmac
 import io
@@ -84,7 +85,11 @@ _SENSITIVE_NAMES = (
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | _CLOEXEC
 _LINK_ERRNOS = (errno.ELOOP, errno.ENOTDIR)
-_MOVED = "Attached folder was moved or replaced; attach it again."
+_MOVED = "Attached folder or its mount was moved or replaced; attach it again."
+_UNVERIFIED = "Cannot verify the previously approved folder; check the host path and reattach with the host CLI."
+_LEGACY = "Earlier approval cannot distinguish reboot from replacement; check the path and reattach with the host CLI."
+_REBOOT = "Approval cannot be verified after host reboot; check the host path and reattach with the host CLI."
+_IDENTITY = r"(?:h[0-9a-f]{64}|s[0-9a-f]{32}|b[0-9a-f]{32}\.[0-9a-f]{64}|d[0-9a-f]{32}(?:\.[0-9a-f]{64}){2})"
 
 
 class HelperError(Exception):
@@ -231,9 +236,9 @@ def _boot_id() -> bytes | None:
         return None
 
 
-def _directory_handle(fd: int, boot: bytes | None) -> str | None:
-    """Digest an exportable handle scoped to a non-recycled mount ID within this boot."""
-    if boot is None or _NAME_TO_HANDLE_AT is None:
+def _file_handle(fd: int) -> tuple[int, bytes] | None:
+    """Read the unique mount ID and typed export handle from the already-open object."""
+    if _NAME_TO_HANDLE_AT is None:
         return None
     handle = _FileHandle()
     handle.size = len(handle.data)
@@ -241,10 +246,52 @@ def _directory_handle(fd: int, boot: bytes | None) -> str | None:
     # AT_EMPTY_PATH | AT_HANDLE_MNT_ID_UNIQUE: identify this fd, not a second path lookup.
     if _NAME_TO_HANDLE_AT(fd, b"", ctypes.byref(handle), ctypes.byref(mount), 0x1000 | 0x001) != 0:
         return None
-    if not 0 < handle.size <= len(handle.data):
+    if not mount.value or not 0 < handle.size <= len(handle.data):
         return None
-    identity = boot + struct.pack("!Qi", mount.value, handle.kind) + bytes(handle.data[:handle.size])
-    return "h" + hashlib.sha256(identity).hexdigest()
+    return mount.value, struct.pack("!i", handle.kind) + bytes(handle.data[:handle.size])
+
+
+def _ext4_generation_handle(fid: bytes) -> bool:
+    # FILEID_INO32_GEN contains exactly the inode number and generation.
+    return len(fid) == 12 and fid[:4] == struct.pack("!i", 1) and any(fid[-4:])
+
+
+def _root_anchor(key_fd: int) -> tuple[int, bytes] | None:
+    """Only the host root mount carrying our private key can anchor grants across boots."""
+    try:
+        root = os.open("/", _DIRECTORY_FLAGS)
+    except OSError:
+        return None
+    try:
+        # Do not infer durability from arbitrary export handles (e.g. network/overlay filesystems).
+        with open("/proc/self/mountinfo", "rb") as mounts:
+            roots = [fields for fields in map(bytes.split, mounts) if fields[4] == b"/"]
+        with open(f"/proc/self/fdinfo/{root}", "rb") as info:
+            mount_ids = [line.split()[1] for line in info if line.startswith(b"mnt_id:")]
+        if (len(roots) != 1 or mount_ids != [roots[0][0]] or roots[0][3] != b"/"
+                or roots[0][roots[0].index(b"-") + 1] != b"ext4"):
+            return None
+        root_handle, key_handle = _file_handle(root), _file_handle(key_fd)
+        if (not root_handle or not key_handle or root_handle[0] != key_handle[0]
+                or not _ext4_generation_handle(key_handle[1])):
+            return None
+        # Linux FS_IOC_GETFSUUID (_IOR(0x15, 0, struct fsuuid2)); unknown ABI => boot-only.
+        fsuuid = fcntl.ioctl(root, 0x80111500, bytes(17))
+        if fsuuid[0] != 16 or not any(fsuuid[1:]):
+            return None
+        return root_handle[0], fsuuid[1:] + key_handle[1]
+    except (OSError, IndexError, ValueError):
+        return None
+    finally:
+        os.close(root)
+
+
+def _durable_digest(anchor: tuple[int, bytes] | None, handle: tuple[int, bytes]) -> str | None:
+    mount, fid = handle
+    # A bind mount of even the original directory cannot match this mount ID.
+    if not anchor or mount != anchor[0] or not _ext4_generation_handle(fid):
+        return None
+    return hashlib.sha256(anchor[1] + fid).hexdigest()
 
 
 class _ExpiredPin(HelperError):
@@ -263,7 +310,7 @@ class _SessionPin:
         self.expires = time.monotonic() + STAGED_PIN_SECONDS
 
 
-def _proof_key(directory: str) -> bytes:
+def _proof_key(directory: str) -> tuple[bytes, tuple[int, bytes] | None]:
     """Publish a complete private key exactly once, including across competing starts."""
     path = os.path.join(directory, ".approval.key")
     if not os.path.exists(path):
@@ -282,9 +329,10 @@ def _proof_key(directory: str) -> bytes:
     _sync_directory(directory)
     with open(path, "rb") as handle:
         key = handle.read(33)
+        anchor = _root_anchor(handle.fileno())
     if len(key) != 32:
         raise ValueError("Invalid host folder approval key.")
-    return key
+    return key, anchor
 
 
 class Registry:
@@ -575,8 +623,10 @@ class Helper:
     def __init__(self, state_dir: str):
         self.state_dir = state_dir
         self.registry = Registry(state_dir)
-        self._key = _proof_key(state_dir)
+        self._key, self._anchor = _proof_key(state_dir)
         self._boot = _boot_id()
+        self._boot_tag = hmac.digest(self._key, self._boot, "sha256")[:16].hex() if self._boot else None
+        self.permit_epoch = uuid.uuid4().hex
         self._pins: dict[str, _SessionPin] = {}
         self._pin_lock = threading.Lock()
         self._mutation_lock = threading.Lock()
@@ -628,9 +678,11 @@ class Helper:
             pin.close()
 
     def _approval_identity(self, fd: int, attachment_id: str) -> str:
-        durable = _directory_handle(fd, self._boot)
-        if durable is not None:
-            return durable
+        handle = _file_handle(fd)
+        if self._boot is not None and handle:
+            scoped = self._boot_digest(handle)
+            durable = _durable_digest(self._anchor, handle)
+            return f"d{self._boot_tag}.{scoped}.{durable}" if durable else f"b{self._boot_tag}.{scoped}"
         self.expire_pending_pins()
         info = os.fstat(fd)
         with self._pin_lock:
@@ -643,6 +695,29 @@ class Helper:
             key = "s" + uuid.uuid4().hex
             self._pins[key] = _SessionPin(fd, attachment_id, info)
             return key
+
+    def _boot_digest(self, handle: tuple[int, bytes]) -> str:
+        assert self._boot is not None
+        return hashlib.sha256(self._boot + struct.pack("!Q", handle[0]) + handle[1]).hexdigest()
+
+    def _check_handle(self, fd: int, identity: str) -> None:
+        handle = _file_handle(fd)
+        if not handle or self._boot is None or not re.fullmatch(_IDENTITY, identity):
+            raise HelperError("unavailable", _UNVERIFIED)
+        if identity.startswith("h"):
+            # Legacy signatures contain neither a separate boot tag nor a durable anchor.
+            if identity[1:] != self._boot_digest(handle):
+                raise HelperError("unavailable", _LEGACY)
+            return
+        tag, scoped, *durable = identity[1:].split(".")
+        if tag == self._boot_tag:
+            if scoped != self._boot_digest(handle):
+                raise HelperError("unavailable", _MOVED)
+        elif not durable or (current := _durable_digest(self._anchor, handle)) is None:
+            raise HelperError("unavailable", _REBOOT)
+        elif current != durable[0]:
+            raise HelperError("unavailable", "Folder or host filesystem identity changed; verify it and reattach "
+                              "with the host CLI.")
 
     def _open_approved(self, path: str, identity: str) -> int:
         fd = self._open_folder(path)
@@ -660,7 +735,8 @@ class Helper:
                         return os.open(".", _DIRECTORY_FLAGS, dir_fd=pinned_fd)
                 finally:
                     os.close(pinned_fd)
-            elif _directory_handle(fd, self._boot) == identity:
+            else:
+                self._check_handle(fd, identity)
                 return os.dup(fd)
             raise HelperError("unavailable", _MOVED)
         finally:
@@ -714,7 +790,9 @@ class Helper:
                 approval = handle.read()
         except FileNotFoundError:
             raise HelperError("forbidden", "Host attachment permit has expired.") from None
-        if (approval != variant_id.encode() + b"\0" + os.fsencode(path)
+        if not approval.startswith(self.permit_epoch.encode() + b"\0"):
+            raise HelperError("forbidden", "Stale host permit; rerun attach with the matching host launcher.")
+        if (approval != b"\0".join((self.permit_epoch.encode(), variant_id.encode(), os.fsencode(path)))
                 or not os.path.isabs(path) or path == "/" or os.path.realpath(path) != path):
             raise HelperError("forbidden", "Host attachment permit does not authorize this folder.")
         if any(_excluded(part) for part in path.split("/") if part):
@@ -748,7 +826,7 @@ class Helper:
         attachment_id = _string(request, "attachment_id", maximum=36)
         proof = request.get("approval_proof")
         if (not isinstance(proof, str)
-                or not (match := re.fullmatch(r"(h[a-f0-9]{64}|s[a-f0-9]{32}):[a-f0-9]{64}", proof))
+                or not (match := re.fullmatch(rf"({_IDENTITY}):[a-f0-9]{{64}}", proof))
                 or not hmac.compare_digest(proof, self._proof(attachment_id, variant_id, alias, path, match[1]))):
             raise HelperError("forbidden", "No valid host approval; reattach this folder with the host CLI.")
         try:
@@ -1309,6 +1387,10 @@ def _serve(args: argparse.Namespace) -> int:
         os.chmod(args.state_dir, 0o700)
         helper = Helper(args.state_dir)
         server = HelperServer(os.path.abspath(args.socket), helper, args.socket_label)
+        # The host launcher reads this before issuing its one-shot permits. An
+        # interrupted attach from a previous helper must never mint a new proof.
+        with open(os.path.join(args.state_dir, "permit.epoch"), "w", encoding="ascii") as epoch:
+            epoch.write(helper.permit_epoch + "\n")
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

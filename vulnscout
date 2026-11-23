@@ -1976,7 +1976,7 @@ verb_ai_context() {
 }
 
 ai_context_attach() (
-    local arg alias path scope permit seen=" "
+    local arg alias path scope permit epoch seen=" "
     local -a pairs=()
     if [ $# -eq 0 ]; then
         die "'ai-context attach' needs at least one <alias>=<host path> pair, e.g. src=/work/app."
@@ -2007,10 +2007,12 @@ ai_context_attach() (
     set_explicit_scope_args
     scope="$(exec_container "${SCOPE_ARGS[@]}" --ai-context-list --variant-id-only)" || exit 1
     [[ "$scope" =~ ^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$ ]] || die "could not resolve the variant ID."
+    IFS= read -r epoch < "$HOST_HELPER_STATE_DIR/permit.epoch" && [[ "$epoch" =~ ^[a-f0-9]{32}$ ]] ||
+        die "cannot verify the running host helper; use matching launcher and image versions and restart the helper."
     permit="$(mktemp -d -- "$HOST_HELPER_STATE_DIR/permit.XXXXXXXXXXXX")"
     trap 'for arg in "${pairs[@]}"; do rm -f -- "$permit/${arg%%=*}"; done; rmdir -- "$permit"' EXIT
     for arg in "${pairs[@]}"; do
-        printf '%s\0%s' "$scope" "${arg#*=}" > "$permit/${arg%%=*}"
+        printf '%s\0%s\0%s' "$epoch" "$scope" "${arg#*=}" > "$permit/${arg%%=*}"
     done
     exec_container "${SCOPE_ARGS[@]}" --ai-context-attach --host-permit "${permit##*/}" "${pairs[@]}"
 )

@@ -11,5 +11,6 @@ def host_permit(helper, variant_id, **folders):
     directory = Path(helper.state_dir) / f"permit.{uuid.uuid4().hex[:12]}"
     directory.mkdir(mode=0o700)
     for alias, path in folders.items():
-        (directory / alias).write_bytes(str(variant_id).encode() + b"\0" + os.fsencode(path))
+        (directory / alias).write_bytes(b"\0".join((helper.permit_epoch.encode(), str(variant_id).encode(),
+                                                   os.fsencode(path))))
     return directory.name
