@@ -110,7 +110,7 @@ def _revision(record: RiskSnapshot) -> str:
 
 
 def preview_link(ids: dict[str, str], model: dict | None) -> dict[str, Any]:
-    record = resolve_links([ids], model)[0]
+    record = resolve_links([ids], RiskModelIndex(model))[0]
     return {**record, "revision": _revision(record)}
 
 
@@ -121,16 +121,30 @@ def _records(model: dict | None, section: str) -> dict[str, dict]:
     return {r["id"]: r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
 
 
-def _resolve(link: object, risks: dict[str, dict], threats: dict[str, dict],
-             interactions: dict[str, dict]) -> RiskSnapshot:
+class RiskModelIndex:
+    """Index each referenced section of one variant's model on first use."""
+
+    def __init__(self, model: dict | None):
+        self.model = model
+        self.sections: dict[str, dict[str, dict]] = {}
+
+    def records(self, section: str) -> dict[str, dict]:
+        if section not in self.sections:
+            self.sections[section] = _records(self.model, section)
+        return self.sections[section]
+
+
+def _resolve(link: object, index: RiskModelIndex) -> RiskSnapshot:
     if not isinstance(link, dict) or link.keys() - {"risk_id", "threat_id"}:
         raise RiskLinkError("Expected risk_id and optional threat_id")
     rid = link.get("risk_id")
+    risks = index.records("risks")
     if not isinstance(rid, str) or rid not in risks:
         raise RiskLinkError("Unknown modeled risk for this variant")
     risk = risks[rid]
     record: RiskSnapshot = {"risk_id": rid, "risk_description": risk.get("description") or ""}
     if "threat_id" in link:
+        threats = index.records("threats")
         tid = link["threat_id"]
         associated = risk.get("threat_ids")
         if not isinstance(tid, str) or tid not in threats or not isinstance(associated, list) or tid not in associated:
@@ -140,6 +154,7 @@ def _resolve(link: object, risks: dict[str, dict], threats: dict[str, dict],
         record["threat_target_ids"] = _sorted_target_ids(threats[tid].get("target_ids"))
         interaction_ids = [t for t in record["threat_target_ids"] if t.startswith("I")]
         if interaction_ids:
+            interactions = index.records("interactions")
             record["interaction_endpoints"] = _endpoints({
                 i: {k: interactions.get(i, {}).get(k) for k in ("source_id", "destination_id")}
                 for i in interaction_ids
@@ -148,16 +163,14 @@ def _resolve(link: object, risks: dict[str, dict], threats: dict[str, dict],
 
 
 def resolve_links(
-    raw: object, model: dict | None, *, confirmed: set[tuple[str, str | None]] | None = None,
+    raw: object, index: RiskModelIndex, *, confirmed: set[tuple[str, str | None]] | None = None,
 ) -> list[RiskSnapshot]:
     links = _check_count(raw)
-    risks, threats = _records(model, "risks"), _records(model, "threats")
-    interactions = _records(model, "interactions")
     resolved = {}
     for link in links:
         check_revision = confirmed is not None and isinstance(link, dict) and "confirmed_revision" in link
         ids = {k: v for k, v in link.items() if k != "confirmed_revision"} if check_revision else link
-        record = _resolve(ids, risks, threats, interactions)
+        record = _resolve(ids, index)
         pair = (record["risk_id"], record.get("threat_id"))
         if check_revision and confirmed is not None:
             if link["confirmed_revision"] != _revision(record):
@@ -167,17 +180,15 @@ def resolve_links(
     return list(resolved.values())
 
 
-def describe_links(stored: list[RiskSnapshot], model: dict | None) -> list[dict[str, Any]]:
+def describe_links(stored: list[RiskSnapshot], index: RiskModelIndex) -> list[dict[str, Any]]:
     """Keep reviewed descriptions visible even when the model removes or reuses an ID."""
     links = []
-    risks, threats = _records(model, "risks"), _records(model, "threats")
-    interactions = _records(model, "interactions")
     for record in stored:
         ids = {"risk_id": record["risk_id"]}
         if "threat_id" in record:
             ids["threat_id"] = record["threat_id"]
         try:
-            stale = _resolve(ids, risks, threats, interactions) != record
+            stale = _resolve(ids, index) != record
         except RiskLinkError:
             stale = True
         links.append({**record, "stale": stale})
