@@ -36,6 +36,7 @@ MAX_TEXT = 20000
 MAX_MODEL_CHARS = 1_000_000
 MAX_EXPANDED_TARGET_CHARS = 200_000
 SYSTEM_KEYS: tuple[str, ...] = ("scope", "actors", "entry_points", "trust_boundaries")
+_STRIDE_TABLES = ("components", "interactions", "threats", "risks")
 
 _COMPONENT_ID = re.compile(r"^C[1-9]\d*$")
 _INTERACTION_ID = re.compile(r"^I[1-9]\d*$")
@@ -52,12 +53,7 @@ class StrideValidationError(ValueError):
 
 
 def empty_stride_model() -> dict[str, Any]:
-    return {
-        "components": [],
-        "interactions": [],
-        "threats": [],
-        "risks": [],
-    }
+    return {table: [] for table in _STRIDE_TABLES}
 
 
 class _Errors:
@@ -226,6 +222,8 @@ def normalize_stride_model(raw: object) -> dict[str, Any]:
     """Return a canonical copy of ``raw`` or raise ``StrideValidationError``."""
     if not isinstance(raw, dict):
         raise StrideValidationError({"model": "must be an object"})
+    if raw and not any(table in raw for table in _STRIDE_TABLES):
+        raise StrideValidationError({"model": f"expected at least one of: {', '.join(_STRIDE_TABLES)}"})
     errs = _Errors()
     components, component_ids = _components(raw.get("components", []), errs)
     interactions, interaction_ids = _interactions(raw.get("interactions", []), component_ids, errs)

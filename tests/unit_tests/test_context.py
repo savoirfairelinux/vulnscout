@@ -1342,10 +1342,12 @@ class TestVariantEditorSave:
 
     @pytest.mark.parametrize("stride,system,errors", [
         (None, {"scope": "Gateway"}, {"model": "must be an object"}),
+        ({"threat": [{"id": "T1"}]}, {},
+         {"model": "expected at least one of: components, interactions, threats, risks"}),
         *[({table: None}, {}, {table: "must be a list"})
           for table in ("components", "interactions", "threats", "risks")],
     ])
-    def test_null_stride_or_table_preserves_saved_context(self, client, project, variant, stride, system, errors):
+    def test_invalid_stride_preserves_saved_context(self, client, project, variant, stride, system, errors):
         save_url = f"/api/variants/{variant.id}/context"
         load_url = f"/api/context?project_id={project.id}&variant_id={variant.id}"
         assert client.put(save_url, json=_editor_payload()).status_code == 200

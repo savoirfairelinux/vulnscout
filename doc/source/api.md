@@ -366,6 +366,7 @@ Two body shapes are accepted.
 `stride` (`components`, `interactions`, `threats`, `risks`).
 An editor save replaces all editable fields; it does not merge rows. Within `stride`,
 an omitted table or `[]` clears that table. Neither `stride` nor a table may be `null`.
+A nonempty `stride` object must contain at least one of the four named tables.
 Clients that previously sent `stride: null` with System text must send `stride: {}` to
 save System with no rows, or include the existing rows to keep them.
 Validation failures leave the saved context unchanged and return `400` with
@@ -409,7 +410,8 @@ contents are not exported, and import ignores `files`. Directory names,
 mounts and contents are not transferred; provision each destination variant's own directory.
 Every entry is imported through the editor path and needs a `stride_model` object.
 It replaces the matching variant's model: `{}` clears all tables, an omitted table or `[]` clears that
-table, and an explicitly `null` model or table fails the entry without changing its context.
+table. An explicitly `null` model or table, or a nonempty object with no recognized
+table names, fails the entry without changing its context.
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
 Files exported as `2.x` still import, but their removed source selector and external paths are discarded.
 For `2.0`, each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
