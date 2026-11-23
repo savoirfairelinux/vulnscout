@@ -1143,7 +1143,10 @@ start_host_helper_locked() {
     local -a label_args=()
     script="$(host_helper_script)" || { stop_host_helper_locked >/dev/null; return 1; }
     image_id="$(call_container_engine image inspect "$DOCKER_IMAGE" --format '{{.Id}}')" || return 1
-    [[ "$image_id" =~ ^sha256:[[:xdigit:]]{64}$ ]] || return 1
+    [[ "$image_id" =~ ^(sha256:)?[[:xdigit:]]{64}$ ]] || {
+        console_err error "Error: cannot identify the configured helper image."
+        return 1
+    }
     engine="$(command -v "$CONTAINER_ENGINE")" || return 1
     label="$(host_helper_socket_label)" || return 1
     [[ -z "$label" ]] || label_args=(--socket-label "$label")
