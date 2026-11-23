@@ -638,7 +638,11 @@ def duplicate_multitarget_assessment_exists(
     for assessment_id, v, f, links in rows:
         by_assessment.setdefault(assessment_id, {})[v, f] = links or []
 
-    expected = {pair: (risk_snapshots or {}).get(pair, []) for pair in wanted}
+    # OpenVEX cannot express snapshots; a portable backup can explicitly
+    # represent a linkless assessment with an empty snapshot mapping.
+    if risk_snapshots is None:
+        return any(pairs.keys() == wanted for pairs in by_assessment.values())
+    expected = {pair: risk_snapshots.get(pair, []) for pair in wanted}
     return any(pairs == expected for pairs in by_assessment.values())
 
 

@@ -674,6 +674,21 @@ class TestImportStatementsMultiTarget:
     """One OpenVEX statement (one vuln_id, multiple products) now produces one
     multi-target assessment instead of one assessment per product."""
 
+    @pytest.mark.parametrize("original_timestamps", [False, True])
+    def test_openvex_roundtrip_preserves_linked_assessment(self, variant_and_project, original_timestamps):
+        from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
+
+        _, variant = variant_and_project
+        vuln = "CVE-2099-LINKED"
+        pair = (variant.id, _make_finding(vuln, "linked", "1").id)
+        snapshot = {"risk_id": "R1", "risk_description": "Original evidence"}
+        original = Assessment.create(status="affected", simplified_status=STATUS_TO_SIMPLIFIED["affected"],
+                                     origin="custom", targets=[pair], risk_snapshots={pair: [snapshot]})
+        doc = build_openvex_doc([original], "author")
+        assert import_statements(doc["statements"], variant.id, original_timestamps) == ([], [], 1)
+        assert Assessment.get_by_vulnerability(vuln) == [original]
+        assert original.target_rows[0].risk_links == [snapshot]
+
     def test_openvex_import_creates_one_assessment_for_three_products(self, app, variant_and_project):
         """GIVEN one statement covering 3 products WHEN imported THEN one
         assessment is created with 3 targets."""
