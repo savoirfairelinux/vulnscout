@@ -16,6 +16,7 @@ from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
 
 from .datetime_utils import normalize_timestamp_for_sort
+from .assessment_risk_links import MAX_SNAPSHOT_BYTES, RiskLinkError, charge_snapshots, portable_snapshots
 
 if TYPE_CHECKING:
     from ..models.variant import Variant as _Variant
@@ -264,6 +265,10 @@ def _is_valid_v2_target(target: object) -> bool:
     if not isinstance(target, dict):
         return False
     if not isinstance(target.get("package"), str):
+        return False
+    try:
+        portable_snapshots(target.get("risk_links", []))
+    except RiskLinkError:
         return False
     return (
         isinstance(target.get("variant"), str)
@@ -549,6 +554,7 @@ def duplicate_multitarget_assessment_exists(
     impact_statement: str | None = None,
     workaround: str | None = None,
     responses: "list[str] | None" = None,
+    risk_snapshots: dict[tuple[_uuid.UUID, _uuid.UUID], list[dict[str, str]]] | None = None,
 ) -> bool:
     """Return True when an assessment with exactly this target set already exists.
 
@@ -624,14 +630,16 @@ def duplicate_multitarget_assessment_exists(
             AssessmentTarget.assessment_id,
             AssessmentTarget.variant_id,
             AssessmentTarget.finding_id,
+            AssessmentTarget.risk_links,
         ).where(AssessmentTarget.assessment_id.in_(matching_ids))
     ).all()
 
-    by_assessment: "dict[_uuid.UUID, set[tuple[_uuid.UUID, _uuid.UUID]]]" = {}
-    for assessment_id, v, f in rows:
-        by_assessment.setdefault(assessment_id, set()).add((v, f))
+    by_assessment: dict[_uuid.UUID, dict[tuple[_uuid.UUID, _uuid.UUID], list[dict[str, str]]]] = {}
+    for assessment_id, v, f, links in rows:
+        by_assessment.setdefault(assessment_id, {})[v, f] = links or []
 
-    return any(pairs == wanted for pairs in by_assessment.values())
+    expected = {pair: (risk_snapshots or {}).get(pair, []) for pair in wanted}
+    return any(pairs == expected for pairs in by_assessment.values())
 
 
 def import_statements(
@@ -889,6 +897,7 @@ def build_custom_data_export(
                     {
                         "variant": row.variant.name if row.variant is not None else None,
                         "package": row.finding.package.string_id,
+                        **({"risk_links": row.risk_links} if row.risk_links else {}),
                     }
                     for row in target_rows
                 ],
@@ -1222,6 +1231,8 @@ def import_custom_data(
 
                 resolved_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
                 seen_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
+                snapshots: dict[tuple[_uuid.UUID, _uuid.UUID], list[dict[str, str]]] = {}
+                remaining = MAX_SNAPSHOT_BYTES
                 for raw_target in raw_targets:
                     pkg_string = (
                         raw_target.get("package")
@@ -1238,8 +1249,20 @@ def import_custom_data(
                     assert v_id is not None and f_id is not None
 
                     pair = (v_id, f_id)
+                    try:
+                        links = portable_snapshots(raw_target.get("risk_links", []))
+                        if pair in seen_pairs and links != snapshots.get(pair, []):
+                            raise RiskLinkError("Conflicting snapshots for the same target")
+                        if pair not in seen_pairs:
+                            remaining = charge_snapshots(remaining, links)
+                    except RiskLinkError as exc:
+                        result["errors"].append({"vuln_id": vuln_name, "package": pkg_string, "error": str(exc)})
+                        resolved_targets.clear()
+                        break
                     if pair in seen_pairs:
                         continue
+                    if links:
+                        snapshots[pair] = links
                     seen_pairs.add(pair)
                     resolved_targets.append(pair)
 
@@ -1248,6 +1271,7 @@ def import_custom_data(
 
                 if duplicate_multitarget_assessment_exists(
                     resolved_targets, status=status, origin=origin, timestamp=imported_ts,
+                    risk_snapshots=snapshots,
                     simplified_status=imported_simplified_status,
                     status_notes=status_notes,
                     justification=justification,
@@ -1271,7 +1295,7 @@ def import_custom_data(
                         timestamp=imported_ts,
                         commit=True,
                     )
-                    DBAssessment.create(targets=resolved_targets, **create_kwargs)
+                    DBAssessment.create(targets=resolved_targets, risk_snapshots=snapshots, **create_kwargs)
                     result[imported_key] += 1
                 except Exception as e:
                     # A single catch-all: GroupInvariantError (targets can't

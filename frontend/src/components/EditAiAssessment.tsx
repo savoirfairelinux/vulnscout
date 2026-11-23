@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import EditAssessment from "./EditAssessment";
 import ModeledRiskLinks from "./ModeledRiskLinks";
-import { initialStatusNotes } from "../handlers/assessments";
+import Assessments, { initialStatusNotes } from "../handlers/assessments";
 import type { EditAssessmentData } from "./EditAssessment";
-import type { AiAssessmentEdits, Assessment, TargetRiskEdit } from "../handlers/assessments";
+import type { AiAssessmentEdits, Assessment, RiskLinkPreview, TargetRiskEdit } from "../handlers/assessments";
 
 type Props = {
     assessment: Assessment;
@@ -50,20 +50,24 @@ function EditAiAssessment({
     triggerBanner,
 }: Readonly<Props>) {
     const [drafts, setDrafts] = useState<Record<string, string>>({});
+    const [confirmations, setConfirmations] = useState<Record<string, string>>({});
+    const [previews, setPreviews] = useState<Record<string, RiskLinkPreview | string>>({});
     const [contentChanged, setContentChanged] = useState(false);
     const edits: TargetRiskEdit[] = [];
     let invalid = false;
     const controls = (assessment.targets ?? []).map(t => {
-        if (!t.variant_id) return null;
+        if (!t.variant_id || t.risk_links_out_of_scope) return null;
         const key = JSON.stringify([t.variant_id, t.package]);
+        const confirmationKey = (id: string) => JSON.stringify([key, id]);
         const initial = (t.risk_links ?? []).map(l => [l.risk_id, l.threat_id].filter(Boolean).join('/')).join(', ');
         const text = drafts[key] ?? initial;
-        if (text !== initial) {
-            const ids = text.trim() ? text.split(',').map(item => item.trim()) : [];
+        const ids = text.trim() ? text.split(',').map(item => item.trim()) : [];
+        if (text !== initial || ids.some(id => confirmations[confirmationKey(id)])) {
             if (ids.some(id => !/^R[1-9]\d*(\/T[1-9]\d*)?$/.test(id))) invalid = true;
             edits.push({ package: t.package, variant_id: t.variant_id, risk_links: ids.map(id => {
                 const [risk_id, threat_id] = id.split('/');
-                return threat_id ? { risk_id, threat_id } : { risk_id };
+                const confirmed_revision = confirmations[confirmationKey(id)];
+                return { risk_id, ...(threat_id && { threat_id }), ...(confirmed_revision && { confirmed_revision }) };
             }) });
         }
         const label = `${variantNames?.[t.variant_id] ?? t.variant_id} · ${t.package}`;
@@ -74,6 +78,30 @@ function EditAiAssessment({
                     onChange={event => setDrafts({ ...drafts, [key]: event.target.value })} />
             </label>
             <ModeledRiskLinks links={t.risk_links} />
+            {t.risk_links?.map(link => {
+                const id = [link.risk_id, link.threat_id].filter(Boolean).join('/');
+                if (!link.stale || !ids.includes(id)) return null;
+                const k = confirmationKey(id);
+                const preview = previews[k];
+                if (!preview || typeof preview === 'string') return <div key={id}>
+                    <button type="button" onClick={async () => {
+                        try {
+                            const current = await Assessments.previewRiskLink(assessment.id, t.variant_id!, t.package, link);
+                            setPreviews(old => ({ ...old, [k]: current }));
+                        } catch (error) {
+                            setPreviews(old => ({ ...old, [k]: String(error) }));
+                        }
+                    }}>Compare current {id}</button>
+                    {preview && <span role="alert">{preview}</span>}
+                </div>;
+                const { risk_description, threat_description, revision } = preview;
+                return <label key={id} className="block">
+                    <input type="checkbox" checked={confirmations[k] === revision}
+                        onChange={e => setConfirmations({ ...confirmations, [k]: e.target.checked ? revision : '' })} />
+                    Reconfirm {id} using the current description: {risk_description}
+                    {threat_description && `; ${threat_description}`}
+                </label>;
+            })}
         </div>;
     });
     const linksChanged = edits.length > 0;

@@ -384,6 +384,14 @@ def test_risk_links_are_scoped_to_exact_targets_and_reviewed_atomically(client, 
     assert links[first] == {**ref, "risk_description": "First model", "threat_description": "First model threat",
                             "stale": False}
     assert links[second]["risk_description"] == "Second model"
+    for path in (f"/api/reviews/assessments?origin=ai&variant_id={first}",
+                 f"/api/reviews/assessments?origin=ai&variant_id={first}&project_id={PROJECT_UUID}",
+                 f"/api/assessments/review/ai?variant_id={first}"):
+        scoped = client.get(path).json[0]
+        pairs = {t["variant_id"]: t for t in scoped["targets"]}
+        assert pairs[first]["risk_links"] == [links[first]]
+        assert pairs[second]["risk_links_out_of_scope"] and "risk_links" not in pairs[second]
+        assert "Second model" not in json.dumps(scoped)
     for invalid in ({**a, "package": PKG2, "risk_links": []},
                     {**b, "risk_links": [{"risk_id": "R1", "threat_id": "T2"}]},
                     {**b, "risk_links": [{"risk_id": "R2"}]}):
@@ -412,6 +420,50 @@ def test_risk_links_are_scoped_to_exact_targets_and_reviewed_atomically(client, 
     listing = client.get("/api/assessments?format=list").json
     listed = next(a for a in listing if a["id"] == row["id"])
     assert next(t for t in listed["targets"] if t["variant_id"] == second)["risk_links"][0]["risk_id"] == "R1"
+
+
+def test_reconfirm_requires_the_description_current_at_approval(client, app):
+    variant = str(VARIANT_UUID)
+    _risk_model(app, variant, "Saved")
+    ref = {"risk_id": "R1", "threat_id": "T1"}
+    target = {"variant_id": variant, "package": PKG}
+    row = _post_ai(client, targets=[{**target, "risk_links": [ref]}]).json["assessment"]
+    url = f"/api/assessments/{row['id']}"
+
+    def confirmation(description):
+        current = client.get(url + "/risk-link-preview", query_string={**target, **ref}).json
+        assert current["risk_description"] == description and current["threat_description"] == f"{description} threat"
+        return {"target_risk_links": [{**target, "risk_links": [{**ref, "confirmed_revision": current["revision"]}]}]}
+
+    _risk_model(app, variant, "First revision")
+    assert client.get(url + "/risk-link-preview", query_string={
+        **target, **ref, "package": PKG2,
+    }).status_code == 404
+    reviewed = confirmation("First revision")
+    _risk_model(app, variant, "Another revision")
+    assert client.post(url + "/approve", json=reviewed).status_code == 400
+    assert client.get(url).json["approval_fingerprint"] == row["approval_fingerprint"]
+    result = client.post(url + "/approve", json=confirmation("Another revision")).json["assessments"][0]
+    assert (result["origin"], result["status"]) == ("custom", row["status"])
+    assert result["targets"][0]["risk_links"] == [{
+        **ref, "risk_description": "Another revision", "threat_description": "Another revision threat", "stale": False,
+    }]
+
+
+def test_link_limits_reject_expanded_edits_and_replacements_atomically(app, client):
+    variant = str(VARIANT_UUID)
+    # Each target fits individually; together their repeated descriptions exceed the byte budget.
+    desc = "x" * 20000
+    refs = [{"risk_id": f"R{i}"} for i in range(1, 9)]
+    _risk_model(app, variant, desc, [{"id": r["risk_id"], "description": desc} for r in refs[1:]])
+    targets = [{"variant_id": variant, "package": pkg} for pkg in (PKG, PKG2)]
+    row = _post_ai(client, targets=[{**targets[0], "risk_links": refs}, targets[1]]).json["assessment"]
+    url = f"/api/assessments/{row['id']}"
+    edit = {**targets[1], "risk_links": refs}
+    for edits in ([edit], [{**targets[0], "risk_links": [refs[0]] * 17}]):
+        assert client.post(url + "/approve", json={"target_risk_links": edits}).status_code == 400
+    assert _post_ai(client, targets=[{**t, "risk_links": refs} for t in targets]).status_code == 400
+    assert client.get(url).json["approval_fingerprint"] == row["approval_fingerprint"]
 
 
 def test_bad_replacement_preserves_links_and_valid_replacement_trims_only_its_target(client, app):

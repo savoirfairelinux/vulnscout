@@ -1318,10 +1318,10 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             id: 'modeled_risks',
             header: 'Modeled risk links',
             size: 240,
-            cell: ({ row }) => row.original.targets.some(t => t.risk_links?.length)
+            cell: ({ row }) => row.original.targets.some(t => t.risk_links?.length || t.risk_links_out_of_scope)
                 ? <ul>{row.original.targets.map(t => <li key={JSON.stringify([t.variant_id, t.package])}>
                     <strong>{variantNames[t.variant_id ?? ''] ?? t.variant_id} · {t.package}</strong>
-                    <ModeledRiskLinks links={t.risk_links} />
+                    {t.risk_links_out_of_scope ? 'Outside selected scope' : <ModeledRiskLinks links={t.risk_links} />}
                 </li>)}</ul>
                 : <ModeledRiskLinks />,
         }),

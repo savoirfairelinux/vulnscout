@@ -1163,11 +1163,13 @@ class TestCustomDataVersion2:
         assert "variant_id" not in payload["assessments"][0]
         assert "variant" not in payload["assessments"][0]
 
-    def test_version_2_export_round_trips_a_cross_variant_assessment(self, app):
+    @pytest.mark.parametrize("origin", ["ai", "custom"])
+    def test_version_2_export_round_trips_a_cross_variant_assessment(self, app, origin):
         """A genuine multi-target (cross-variant) assessment created via
         Assessment.create(targets=...) round-trips through export/import."""
         from src.models.project import Project
         from src.models.assessment import Assessment
+        from src.models.variant_context import VariantContext
 
         with app.app_context():
             project = Project.create("io-v2-roundtrip-proj")
@@ -1178,10 +1180,12 @@ class TestCustomDataVersion2:
             _observe_finding(openssl, variant_a.id)
             _observe_finding(zlib, variant_b.id)
 
+            snapshot = {"risk_id": "R1", "risk_description": "When assessed"}
             original = Assessment.create(
-                status="not_affected", origin="custom",
+                status="not_affected", origin=origin,
                 justification="component_not_present",
                 targets=[(variant_a.id, openssl.id), (variant_b.id, zlib.id)],
+                risk_snapshots={(variant_b.id, zlib.id): [snapshot]},
                 commit=True,
             )
 
@@ -1189,6 +1193,9 @@ class TestCustomDataVersion2:
             assert payload["version"] == 2
 
             original.delete()
+            VariantContext.get_or_create(variant_b.id).stride_model = {
+                "risks": [{"id": "R1", "description": "Reused ID"}],
+            }
 
             # Scalar-column queries can't see a genuine multi-target row (its
             # scalar finding_id/variant_id are None), so match via the
@@ -1207,6 +1214,15 @@ class TestCustomDataVersion2:
             assert set(restored[0].targets) == {
                 (variant_a.id, openssl.id), (variant_b.id, zlib.id),
             }
+            pairs = {t["variant_id"]: t for t in restored[0].target_pairs}
+            assert "risk_links" not in pairs[str(variant_a.id)]
+            link = pairs[str(variant_b.id)]["risk_links"][0]
+            assert link["stale"] and link["risk_description"] == "When assessed"
+            section = "ai_assessments" if origin == "ai" else "assessments"
+            exported = next(t for t in payload[section][0]["targets"] if t["variant"] == variant_b.name)
+            exported["risk_links"][0]["risk_description"] = "Different saved evidence"
+            assert import_custom_data(payload, variant_by_name)[section + "_imported"] == 1
+            assert import_custom_data(payload, variant_by_name)[section + "_skipped"] == 1
 
     def test_v2_import_resolves_the_portable_variant_name(self, app, variant_and_project):
         """A backup restores without transporting instance-local UUIDs."""

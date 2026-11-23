@@ -146,6 +146,7 @@ See [AI Assessments](../doc/source/ai-assessments.md) for the agent assessment a
 `{"package":"example@1","variant_id":"<uuid>","risk_links":[{"risk_id":"R1","threat_id":"T2"}]}`.
 Use the target variant's saved STRIDE records (`get_merged_context` with `include_model=true`).
 The optional threat must be associated with the risk. No links does not mean no risk.
+An assessment accepts up to 16 references per target and 256 KiB of serialized snapshots in total.
 
 ### SBOM discovery and lifecycle analysis
 

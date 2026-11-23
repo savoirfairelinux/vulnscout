@@ -28,6 +28,8 @@ The columns include:
 
 In **AI Assessments → Edit AI suggestion**, correct the risk IDs on the relevant target, or clear its field. `R1/T2` links a risk and one of its associated threats; `R1` links just the risk. **Confirm and approve** saves these changes without changing the verdict or target set. If a linked record or association disappears, or its description changes, Review retains the original description and labels the link stale. Correct or remove stale links before approval.
 
+If the same IDs still apply, compare the saved and current descriptions and explicitly reconfirm the displayed revision. If the description changes again before approval, reload and review it again. Variant-filtered Review hides other variants' links; open the full project to review those targets. VulnScout JSON backups preserve the saved descriptions, even when the destination model uses the same ID differently.
+
 The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state.
 
 On the **Assessments** and **AI Assessments** tabs, the **Outdated** selector defaults to **All**. Choose **Outdated** to show only rows with at least one target marked outdated or, for AI assessments, an outdated AI context. Choose **Not outdated** to exclude those rows. **Reset Filters** restores **All** and the other filter defaults.
