@@ -15,7 +15,9 @@ from ..models.assessment_review import AssessmentReview, fingerprint_assessment
 from ..extensions import db, batch_session, hold_write_lock, write_lock
 from ..models.variant import Variant as DBVariant
 from ..models.variant_context import VariantContext
-from ..helpers.assessment_risk_links import RiskLinkError, describe_links, resolve_links
+from ..helpers.assessment_risk_links import (
+    MAX_SNAPSHOT_BYTES, RiskLinkError, charge_snapshots, describe_links, preview_link, resolve_links,
+)
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 from ._scan_diff import invalidate_scan_list_cache
@@ -152,7 +154,9 @@ def _resolve_pending_ai_row(
 _APPROVAL_REQUEST_MAX_BYTES = 64 * 1024
 
 
-def _reviewed_links(row: DBAssessment, edits: object) -> dict[AssessmentTarget, list[dict[str, str]]]:
+def _reviewed_links(
+    row: DBAssessment, edits: object, *, approval: bool = False,
+) -> dict[AssessmentTarget, list[dict[str, str]]]:
     """Validate all proposed replacements and retained references before applying any."""
     if not isinstance(edits, list):
         raise RiskLinkError("target_risk_links must be a list")
@@ -173,16 +177,20 @@ def _reviewed_links(row: DBAssessment, edits: object) -> dict[AssessmentTarget, 
         .where(VariantContext.variant_id.in_(variants)).order_by(VariantContext.variant_id).with_for_update()
     ).tuples().all())
     replacements = {}
+    remaining = MAX_SNAPSHOT_BYTES
     for target in members.values():
         model = models.get(target.variant_id)
         retained = target.risk_links or []
+        confirmed: set[tuple[str, str | None]] = set()
         if target in requested:
             try:
-                replacements[target] = resolve_links(requested[target], model)
+                replacements[target] = resolve_links(requested[target], model,
+                                                     confirmed=confirmed if approval else None)
             except RiskLinkError as exc:
                 raise RiskLinkError(f"{target.finding.package.string_id} ({target.variant_id}): {exc}") from exc
             kept = {(r["risk_id"], r.get("threat_id")) for r in replacements[target]}
-            retained = [r for r in retained if (r["risk_id"], r.get("threat_id")) in kept]
+            retained = [r for r in retained if (r["risk_id"], r.get("threat_id")) in kept - confirmed]
+        remaining = charge_snapshots(remaining, replacements.get(target, retained))
         if retained and any(link["stale"] for link in describe_links(retained, model)):
             raise RiskLinkError(f"Stale modeled risk link for {target.finding.package.string_id} "
                                 f"({target.variant_id}): correct or remove it before approval")
@@ -285,7 +293,8 @@ def _approve_row(
         else:
             hold_write_lock()
         try:
-            link_edits = _reviewed_links(row, payload.get("target_risk_links", [])) if check_links else {}
+            link_edits = (_reviewed_links(row, payload.get("target_risk_links", []), approval=True)
+                          if check_links else {})
         except RiskLinkError as exc:
             return {"error": str(exc)}, 400
         result = db.session.execute(
@@ -641,7 +650,7 @@ def init_app(app: Flask) -> None:
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
-        variant_ids: list[UUID] | None
+        variant_ids: list[UUID] | None = None
         if variant_id:
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -649,18 +658,18 @@ def init_app(app: Flask) -> None:
             if vid is None:
                 return {"error": "Internal error"}, 500
             variant_ids = [vid]
-            assessments = DBAssessment.get_by_origin([vid], origin=origin)
-        elif project_id:
+        if project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
             if pid is None:
                 return {"error": "Internal error"}, 500
-            variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
-            assessments = DBAssessment.get_by_origin(variant_ids, origin=origin)
-        else:
-            variant_ids = None
-            assessments = DBAssessment.get_by_origin(origin=origin)
+            project_variants = [v.id for v in DBVariant.get_by_project(pid)]
+            variant_ids = (project_variants if variant_ids is None else
+                           [vid for vid in variant_ids if vid in project_variants])
+        if variant_ids == []:
+            return [], 200
+        assessments = DBAssessment.get_by_origin(variant_ids, origin=origin)
 
         # Enrich with vulnerability texts for front-end tooltips (single DB pass)
         vuln_ids = {a.vuln_id for a in assessments if a.vuln_id}
@@ -669,8 +678,9 @@ def init_app(app: Flask) -> None:
         context_updates = _current_context_updates(assessments) if origin == "ai" else {}
 
         assessments_serialized = []
+        link_scope = set(variant_ids) if variant_ids is not None else None
         for a in assessments:
-            a_ser = a.to_dict()
+            a_ser = a.to_dict(link_scope=link_scope)
             a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
             if origin == "ai":
                 a_ser["context_outdated"] = _is_context_outdated(a, context_updates)
@@ -1234,6 +1244,34 @@ def init_app(app: Flask) -> None:
         status_code = 200 if result["status"] == "success" else 400
         return result, status_code
 
+    @app.get('/api/assessments/<assessment_id>/risk-link-preview')
+    def assessment_risk_link_preview(assessment_id: str) -> ResponseReturnValue:
+        """Compare one saved link with its current model without expanding every Review row.
+
+        OpenAPI:
+        query variant_id uuid required Target variant.
+        query package string required Target package string ID.
+        query risk_id string required Saved risk ID.
+        query threat_id string optional Saved associated threat ID.
+        response 200 RiskLinkPreview Current modeled descriptions and revision.
+        response 404 Error Pending suggestion, link or model record no longer available.
+        """
+        row = DBAssessment.get_by_id(assessment_id)
+        variant, package = request.args.get("variant_id"), request.args.get("package")
+        ids = {k: request.args[k] for k in ("risk_id", "threat_id") if k in request.args}
+        if row and row.origin == "ai" and "risk_id" in ids:
+            for target in row.target_rows:
+                if str(target.variant_id) != variant or target.finding.package.string_id != package:
+                    continue
+                if any((r["risk_id"], r.get("threat_id")) == (ids["risk_id"], ids.get("threat_id"))
+                       for r in target.risk_links or []):
+                    context = target.variant.context
+                    try:
+                        return preview_link(ids, context.stride_model if context else None), 200
+                    except RiskLinkError:
+                        break
+        return {"error": "This modeled link is no longer available; correct or remove it"}, 404
+
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str) -> ResponseReturnValue:
         """Return a single assessment by identifier.
@@ -1289,7 +1327,7 @@ def init_app(app: Flask) -> None:
             ).scalars())
 
         rows = _assessments_for_vulnerability(vuln_id, project_variant_ids)
-        assessments = annotate_targets(rows)
+        assessments = annotate_targets(rows, project_variant_ids)
 
         ai_rows = [row for row in rows if row.origin == "ai"]
         if ai_rows:
@@ -1404,7 +1442,8 @@ def init_app(app: Flask) -> None:
                 query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
                 joined_targets = True
             query = query.where(AssessmentTarget.variant_id.in_(project_variant_ids))
-            variant_ids = project_variant_ids
+            variant_ids = (project_variant_ids if variant_ids is None else
+                           [vid for vid in variant_ids if vid in project_variant_ids])
 
         origin = request.args.get('origin')
         if origin:
@@ -1414,7 +1453,7 @@ def init_app(app: Flask) -> None:
             query = query.distinct()
 
         rows = list(db.session.execute(query).scalars())
-        assessments = annotate_targets(rows)
+        assessments = annotate_targets(rows, set(variant_ids) if variant_ids is not None else None)
 
         # Enrich with vulnerability texts for front-end tooltips (single DB
         # pass) — the review table spans several CVEs, unlike the vuln-scoped

@@ -9,6 +9,7 @@ Package string IDs and vulnerability identifiers are not database UUIDs.
 
 from typing import Any
 
+from .assessment_risk_links import MAX_LINKS_PER_TARGET
 from .stride_model import MAX_ROWS, RATINGS, STRIDE_CATEGORIES, SYSTEM_KEYS
 
 
@@ -41,6 +42,8 @@ _INT = {"type": "integer"}
 _COUNT = {"type": "integer", "minimum": 0}
 _NUMBER = {"type": "number", "nullable": True}
 _STRINGS = _array(_STRING)
+_RISK_IDS = {"risk_id": _STRING, "threat_id": _STRING}
+_RISK_SNAPSHOT = {**_RISK_IDS, "risk_description": _STRING, "threat_description": _STRING}
 _UUIDS = _array(_UUID)
 _PACKAGE_ID = {
     "type": "string",
@@ -188,17 +191,17 @@ SCHEMAS: dict[str, Any] = {
         "description": "List (including compact Explorer rows) or format=dict keyed by vulnerability identifier.",
         "anyOf": [_array(_ref("Vulnerability")), _map(_ref("Vulnerability"))],
     },
-    "RiskReference": _object({
-        "risk_id": _STRING, "threat_id": _STRING,
-    }, ("risk_id",), additionalProperties=False),
+    "RiskReference": _object(_RISK_IDS, ("risk_id",), additionalProperties=False),
+    "RiskLinkPreview": _object({**_RISK_SNAPSHOT, "revision": _STRING}, ("risk_id", "risk_description", "revision")),
     "LinkedAssessmentTarget": _object({
-        "variant_id": _UUID, "package": _PACKAGE_ID, "risk_links": _array(_ref("RiskReference")),
+        "variant_id": _UUID, "package": _PACKAGE_ID,
+        "risk_links": _array(_ref("RiskReference"), maxItems=MAX_LINKS_PER_TARGET),
     }, ("variant_id", "package")),
     "AssessmentTarget": _object({
         "variant_id": _UUID, "package": _PACKAGE_ID, "project_id": _UUID, "outdated": _BOOL,
+        "risk_links_out_of_scope": _BOOL,
         "risk_links": _array(_object({
-            "risk_id": _STRING, "risk_description": _STRING, "threat_id": _STRING,
-            "threat_description": _STRING, "stale": _BOOL,
+            **_RISK_SNAPSHOT, "stale": _BOOL,
         }, ("risk_id",))),
     }, ("variant_id", "package"), description=(
         "One actual target pair. packages and variant_ids are projections of this sparse set, "
@@ -270,7 +273,9 @@ SCHEMAS: dict[str, Any] = {
     }, description="Partial content update; targeting is changed through reconcile."),
     "AssessmentApproval": _object({
         "target_risk_links": _array(_object({
-            "variant_id": _UUID, "package": _PACKAGE_ID, "risk_links": _array(_ref("RiskReference")),
+            "variant_id": _UUID, "package": _PACKAGE_ID, "risk_links": _array(_object({
+                **_RISK_IDS, "confirmed_revision": _STRING,
+            }, ("risk_id",), additionalProperties=False), maxItems=MAX_LINKS_PER_TARGET),
         }, ("variant_id", "package", "risk_links"), additionalProperties=False)),
         **{name: _VEX_FIELDS[name]
            for name in ("status_notes", "justification", "impact_statement", "workaround")},
@@ -921,6 +926,8 @@ SCHEMAS: dict[str, Any] = {
         "timestamp": _DATE, "packages": _PACKAGES, "variant": _TEXT, "variant_id": _NULL_UUID,
         "targets": _array(_object({
             "variant": _TEXT, "package": _PACKAGE_ID,
+            "risk_links": _array(_object(_RISK_SNAPSHOT, ("risk_id", "risk_description"),
+                                         additionalProperties=False), maxItems=MAX_LINKS_PER_TARGET),
         }, ("variant", "package"))),
     }, ("vuln_id", "status", "packages"), description=(
         "Portable version-2 targets use variant names, not variant UUIDs, and preserve sparse package/variant pairs."

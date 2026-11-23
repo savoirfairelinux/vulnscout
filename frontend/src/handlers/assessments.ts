@@ -25,13 +25,17 @@ type AssessmentTargetPair = {
     package: string;
     outdated?: boolean;
     risk_links?: ModeledRiskLink[];
+    risk_links_out_of_scope?: boolean;
 };
 
 export type RiskReference = { risk_id: string; threat_id?: string };
 export type ModeledRiskLink = RiskReference & {
     risk_description?: string; threat_description?: string; stale?: boolean;
 };
-export type TargetRiskEdit = { variant_id: string; package: string; risk_links: RiskReference[] };
+export type RiskLinkPreview = {risk_description: string; threat_description?: string; revision: string};
+export type TargetRiskEdit = {
+    variant_id: string; package: string; risk_links: (RiskReference & {confirmed_revision?: string})[];
+};
 
 type Assessment = {
     id: string;
@@ -236,6 +240,7 @@ const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
         .map((item: any) => ({
             variant_id: item.variant_id,
             package: item.package,
+            ...(item.risk_links_out_of_scope === true && { risk_links_out_of_scope: true }),
             ...(Array.isArray(item.risk_links) ? { risk_links: item.risk_links
                 .filter((link: any) => typeof link?.risk_id === 'string')
                 .map((link: any) => ({
@@ -347,6 +352,15 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
 const isMultiTarget = (targets: AssessmentTargetPair[]): boolean => targets.length > 1;
 
 class Assessments {
+    static async previewRiskLink(id: string, variant: string, pkg: string, link: RiskReference): Promise<RiskLinkPreview> {
+        const params = new URLSearchParams({ variant_id: variant, package: pkg, risk_id: link.risk_id });
+        if (link.threat_id) params.set('threat_id', link.threat_id);
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/assessments/${encodeURIComponent(id)}/risk-link-preview?${params}`);
+        if (!response.ok) throw new Error(response.status === 404
+            ? 'This link is no longer available; correct or remove it.' : 'Could not load current description.');
+        return response.json();
+    }
+
     /**
      * Fetch server API to list all packages
      * @returns {Promise<Assessment[]>} A promise that resolves to a list of packages

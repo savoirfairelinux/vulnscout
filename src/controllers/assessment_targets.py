@@ -7,11 +7,13 @@ Single source of truth for how an assessment's targets are annotated and
 ordered, so the front-ends stop reimplementing it and drifting apart.
 """
 
+from uuid import UUID
+
 from ..helpers.assessment_staleness import annotate_assessments_outdated
 from ..models.assessment import Assessment
 
 
-def annotate_targets(assessments: list[Assessment]) -> list[dict]:
+def annotate_targets(assessments: list[Assessment], link_scope: set[UUID] | None = None) -> list[dict]:
     """Render assessments as dicts, newest first, with per-target staleness.
 
     Each dict is ``Assessment.to_dict()`` with its ``targets`` entries
@@ -20,7 +22,7 @@ def annotate_targets(assessments: list[Assessment]) -> list[dict]:
     if not assessments:
         return []
 
-    dicts = [a.to_dict() for a in assessments]
+    dicts = [a.to_dict(link_scope=link_scope) for a in assessments]
     annotate_assessments_outdated(dicts)
     # Keyed on the (variant, package name) pair, not on the package alone:
     # ``stale_packages`` unions every variant the assessment targets, so it
