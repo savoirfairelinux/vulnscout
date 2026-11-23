@@ -1341,6 +1341,7 @@ class TestVariantEditorSave:
         assert "threats[0].target_ids" in exc.value.fields
 
     @pytest.mark.parametrize("stride,system,errors", [
+        ({}, {"trust_boundary": "Between services"}, {"system.trust_boundary": "unknown field in empty replacement"}),
         (None, {"scope": "Gateway"}, {"model": "must be an object"}),
         ({"threat": [{"id": "T1"}]}, {},
          {"model": "expected at least one of: components, interactions, threats, risks"}),

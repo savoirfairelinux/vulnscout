@@ -434,6 +434,18 @@ def _post_json(client, payload):
 
 class TestExportImportStructuredContext:
 
+    def test_unknown_system_key_cannot_clear_model(self, app_with_data):
+        app, data = app_with_data
+        _make_stride(app, data["variant_a1_id"])
+        client = app.test_client()
+        before = _export_variants(client)
+        result = _post_json(client, [{"project_name": "ProjectA", "project_description": "Do not overwrite",
+                                     "variants": [{"variant_name": "VariantA1", "context_configured": True,
+                                                   "system": {"trust_boundary": "Between services"},
+                                                   "stride_model": {}}]}]).get_json()
+        assert result["failed"][0]["reason"] == "system.trust_boundary: unknown field in empty replacement"
+        assert _export_variants(client) == before
+
     @pytest.mark.parametrize("marker,reason", [
         ({}, "context: blank imports require context_configured: true"),
         *[({"context_configured": value}, "context_configured must be a boolean")

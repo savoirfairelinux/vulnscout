@@ -66,6 +66,10 @@ def _validated(call: typing.Callable[[object], typing.Any], raw: object, errors:
         return None
 
 
+def _has_structured_context(values: dict[str, typing.Any]) -> bool:
+    return any(values[column] for column in _SYSTEM_COLUMNS.values()) or any(values["stride_model"].values())
+
+
 def _editor_values(payload: object) -> dict[str, typing.Any]:
     """Validate an editor-shape payload and return the column values to store."""
     if not isinstance(payload, dict):
@@ -74,10 +78,14 @@ def _editor_values(payload: object) -> dict[str, typing.Any]:
     values: dict[str, typing.Any] = {
         key: _optional_text(payload.get(key), key, errors) for key in _EDITOR_TEXT_KEYS
     }
-    system = _validated(normalize_system, payload.get("system"), errors) or {}
+    raw_system = payload.get("system")
+    system = _validated(normalize_system, raw_system, errors) or {}
     for key, column in _SYSTEM_COLUMNS.items():
         values[column] = _blank_to_none(system.get(key))
     values["stride_model"] = _validated(normalize_stride_model, payload.get("stride"), errors)
+    if not errors and isinstance(raw_system, dict) and not _has_structured_context(values):
+        for key in raw_system.keys() - _SYSTEM_COLUMNS.keys():
+            errors[f"system.{key}"] = "unknown field in empty replacement"
     if errors:
         raise StrideValidationError(errors)
     return values
