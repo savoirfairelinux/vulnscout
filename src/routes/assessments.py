@@ -14,6 +14,8 @@ from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
 from ..extensions import db, batch_session, hold_write_lock, write_lock
 from ..models.variant import Variant as DBVariant
+from ..models.variant_context import VariantContext
+from ..helpers.assessment_risk_links import RiskLinkError, describe_links, resolve_links
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 from ._scan_diff import invalidate_scan_list_cache
@@ -150,6 +152,43 @@ def _resolve_pending_ai_row(
 _APPROVAL_REQUEST_MAX_BYTES = 64 * 1024
 
 
+def _reviewed_links(row: DBAssessment, edits: object) -> dict[AssessmentTarget, list[dict[str, str]]]:
+    """Validate all proposed replacements and retained references before applying any."""
+    if not isinstance(edits, list):
+        raise RiskLinkError("target_risk_links must be a list")
+    members = {(str(t.variant_id), t.finding.package.string_id): t for t in row.target_rows}
+    requested: dict[AssessmentTarget, object] = {}
+    for edit in edits:
+        if not isinstance(edit, dict) or set(edit) != {"variant_id", "package", "risk_links"}:
+            raise RiskLinkError("Each risk link edit requires variant_id, package and risk_links")
+        if not isinstance(edit["variant_id"], str) or not isinstance(edit["package"], str):
+            raise RiskLinkError("Invalid risk link target")
+        target = members.get((edit["variant_id"], edit["package"]))
+        if target is None or target in requested:
+            raise RiskLinkError("Unknown or repeated risk link target")
+        requested[target] = edit["risk_links"]
+    variants = {t.variant_id for t in members.values() if t in requested or t.risk_links}
+    models = dict(db.session.execute(
+        select(VariantContext.variant_id, VariantContext.stride_model)
+        .where(VariantContext.variant_id.in_(variants)).order_by(VariantContext.variant_id).with_for_update()
+    ).tuples().all())
+    replacements = {}
+    for target in members.values():
+        model = models.get(target.variant_id)
+        retained = target.risk_links or []
+        if target in requested:
+            try:
+                replacements[target] = resolve_links(requested[target], model)
+            except RiskLinkError as exc:
+                raise RiskLinkError(f"{target.finding.package.string_id} ({target.variant_id}): {exc}") from exc
+            kept = {(r["risk_id"], r.get("threat_id")) for r in replacements[target]}
+            retained = [r for r in retained if (r["risk_id"], r.get("threat_id")) in kept]
+        if retained and any(link["stale"] for link in describe_links(retained, model)):
+            raise RiskLinkError(f"Stale modeled risk link for {target.finding.package.string_id} "
+                                f"({target.variant_id}): correct or remove it before approval")
+    return replacements
+
+
 def _validate_content_edit(
     existing: "DBAssessment", payload: dict[str, Any], *, preserve_omitted: bool = False,
 ) -> "tuple[DBAssessment | None, str | None]":
@@ -209,9 +248,10 @@ def _approve_row(
     conflict = "Assessment changed before approval; reload and review it again"
     expected_targets = None
     expected_responses = None
-    if "expected_fingerprint" in payload:
-        if payload["expected_fingerprint"] != row.approval_fingerprint():
-            return {"error": conflict}, 409
+    if "expected_fingerprint" in payload and payload["expected_fingerprint"] != row.approval_fingerprint():
+        return {"error": conflict}, 409
+    check_links = "target_risk_links" in payload or any(t.risk_links for t in row.target_rows)
+    if "expected_fingerprint" in payload or check_links:
         expected_targets = {(t.variant_id, t.finding_id) for t in row.target_rows}
         expected_responses = list(row.responses or [])
     has_edits = any(key in payload for key in APPROVAL_EDIT_FIELDS)
@@ -244,6 +284,10 @@ def _approve_row(
                 return {"error": conflict}, 409
         else:
             hold_write_lock()
+        try:
+            link_edits = _reviewed_links(row, payload.get("target_risk_links", [])) if check_links else {}
+        except RiskLinkError as exc:
+            return {"error": str(exc)}, 400
         result = db.session.execute(
             db.update(DBAssessment)
             .where(condition)
@@ -252,6 +296,9 @@ def _approve_row(
         )
         if cast(CursorResult[Any], result).rowcount != 1:
             return {"error": conflict}, 409
+        for target, links in link_edits.items():
+            target.risk_links = links or None
+        db.session.flush()
         db.session.refresh(row)
     return {"status": "success", "assessments": [row.to_dict()]}, 200
 
@@ -347,6 +394,7 @@ def init_app(app: Flask) -> None:
                     DBAssessment.source.label("source"),
                     DBAssessment.origin.label("origin"),
                     AssessmentTarget.variant_id.label("variant_id"),
+                    AssessmentTarget.risk_links,
                     DBAssessment.timestamp.label("timestamp"),
                     DBAssessment.status.label("status"),
                     DBAssessment.status_notes.label("status_notes"),
@@ -382,6 +430,7 @@ def init_app(app: Flask) -> None:
             )
 
         full_by_id: dict[str, AssessmentDict] = {}
+        linked_pairs: dict[UUID, list[dict[str, Any]]] = {}
         compact_result: list[CompactAssessment] = []
         for row in db.session.execute(query):
             package_id = ""
@@ -433,12 +482,24 @@ def init_app(app: Flask) -> None:
             # The pair, kept alongside the two flattened sets: those describe
             # the cross-product, which a sparse target set is not.
             if package_id and variant_id:
-                pair = {"variant_id": variant_id, "package": package_id}
+                pair: dict[str, Any] = {"variant_id": variant_id, "package": package_id}
                 if pair not in entry["targets"]:
                     entry["targets"].append(pair)
+                    if row.risk_links:
+                        pair["risk_links"] = row.risk_links
+                        linked_pairs.setdefault(row.variant_id, []).append(pair)
 
         if compact:
             return compact_result
+
+        if linked_pairs:
+            models = dict(db.session.execute(
+                select(VariantContext.variant_id, VariantContext.stride_model)
+                .where(VariantContext.variant_id.in_(linked_pairs))
+            ).tuples().all())
+            for vid, linked in linked_pairs.items():
+                for pair in linked:
+                    pair["risk_links"] = describe_links(pair["risk_links"], models.get(vid))
 
         for entry in full_by_id.values():
             entry["variant_ids"].sort()
@@ -1448,6 +1509,9 @@ def init_app(app: Flask) -> None:
             return {"error": "Invalid vuln_id"}, 400
 
         explicit_targets: list[tuple[str, UUID]] | None = None
+        link_edits = []
+        if "risk_links" in payload_data or "target_risk_links" in payload_data:
+            return {"error": "Specify risk_links inside each exact target"}, 400
         raw_targets = payload_data.get("targets")
         if raw_targets is not None:
             if not isinstance(raw_targets, list) or not raw_targets:
@@ -1469,6 +1533,9 @@ def init_app(app: Flask) -> None:
                 if target_variant_id is None:
                     return {"error": "Invalid variant_id"}, 400
                 pair = (package_id, target_variant_id)
+                if "risk_links" in target:
+                    link_edits.append({"variant_id": str(target_variant_id), "package": package_id,
+                                       "risk_links": target["risk_links"]})
                 if pair not in explicit_targets:
                     explicit_targets.append(pair)
             payload_data["packages"] = list(dict.fromkeys(
@@ -1570,7 +1637,10 @@ def init_app(app: Flask) -> None:
                 # overwrite previous user assessments on the same target set.
                 db_a = create_assessment_record(
                     assessment, targets, timestamp=shared_timestamp, origin=target_origin)
-        except GroupInvariantError as e:
+                if link_edits:
+                    for target_row, links in _reviewed_links(db_a, link_edits).items():
+                        target_row.risk_links = links or None
+        except (GroupInvariantError, RiskLinkError) as e:
             return {"error": str(e)}, 400
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
@@ -1893,9 +1963,9 @@ def init_app(app: Flask) -> None:
                     return {"error": "Invalid request data"}, 400
         except RequestEntityTooLarge:
             return {"error": "Request body exceeds the approval size limit"}, 413
-        if payload.keys() - (*APPROVAL_EDIT_FIELDS, "expected_fingerprint"):
-            return {"error": "Approval accepts only rationale fields and expected_fingerprint"}, 400
-        if any(not isinstance(value, str) for value in payload.values()):
+        if payload.keys() - (*APPROVAL_EDIT_FIELDS, "expected_fingerprint", "target_risk_links"):
+            return {"error": "Approval accepts only rationale fields, target_risk_links and expected_fingerprint"}, 400
+        if any(not isinstance(value, str) for k, value in payload.items() if k != "target_risk_links"):
             return {"error": "Assessment edit fields must be strings"}, 400
         for field in APPROVAL_EDIT_FIELDS:
             if field in payload and "\x00" in payload[field]:

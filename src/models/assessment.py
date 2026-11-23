@@ -5,13 +5,14 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
 
 from ..extensions import db, Base
 from ..helpers.assessment_io import parse_imported_timestamp
+from ..helpers.assessment_risk_links import describe_links
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
@@ -224,7 +225,7 @@ class Assessment(Base):
         return [(t.variant_id, t.finding_id) for t in self.target_rows]
 
     @property
-    def target_pairs(self) -> "list[dict[str, str]]":
+    def target_pairs(self) -> "list[dict[str, Any]]":
         """Every target as a serialisable ``(variant_id, package)`` pair.
 
         ``packages`` and ``variant_ids`` are two independent flattened sets, so
@@ -235,7 +236,7 @@ class Assessment(Base):
         must read this instead.  Ordered like :attr:`packages`, and empty for a
         DTO, which has no stored targets.
         """
-        pairs: list[dict[str, str]] = []
+        pairs: list[dict[str, Any]] = []
         try:
             for target in self._sorted_target_rows():
                 if target.finding is None or target.finding.package is None:
@@ -244,6 +245,10 @@ class Assessment(Base):
                     "variant_id": str(target.variant_id),
                     "package": target.finding.package.string_id,
                 })
+                if target.risk_links:
+                    context = target.variant.context
+                    pairs[-1]["risk_links"] = describe_links(
+                        target.risk_links, context.stride_model if context else None)
         except Exception as e:
             verbose(f"[Assessment.target_pairs {self.id!r}] {e}")
         return pairs
@@ -458,7 +463,11 @@ class Assessment(Base):
     def approval_fingerprint(self) -> str:
         values = [getattr(self, field) or "" for field in APPROVAL_CONTENT_FIELDS]
         pairs = sorted((str(t.variant_id), str(t.finding_id)) for t in self.target_rows)
-        content = json.dumps([values, self.responses or [], pairs], separators=(",", ":"))
+        fields: list[Any] = [values, self.responses or [], pairs]
+        links = sorted((str(t.variant_id), str(t.finding_id), t.risk_links) for t in self.target_rows if t.risk_links)
+        if links:
+            fields.append(links)
+        content = json.dumps(fields, separators=(",", ":"), sort_keys=True)
         return hashlib.sha256(content.encode()).hexdigest()
 
     def to_dict(self) -> dict:
