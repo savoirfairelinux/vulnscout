@@ -138,6 +138,7 @@ type MergedContext = ProjectContext & VariantContext;
 /** One variant's context, as used by the import/export file format. */
 type VariantEntry = {
     variant_name: string;
+    context_configured?: boolean;
     variant_description: string | null;
     environment: string | null;
     other_info: string | null;

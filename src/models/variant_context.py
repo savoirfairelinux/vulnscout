@@ -313,10 +313,7 @@ class VariantContext(Base):
             vc = VariantContext(variant_id=variant_id, updated_at=datetime.now(timezone.utc), **values)
             db.session.add(vc)
         else:
-            # A never-filled STRIDE model (NULL) equals the empty model.
-            stored = existing.stride_model if existing.stride_model is not None else empty_stride_model()
-            if stored == values["stride_model"]:
-                values = {k: v for k, v in values.items() if k != "stride_model"}
+            # Persist even an explicit empty model to distinguish it from a never-configured row on export.
             existing._apply(values)
             vc = existing
         if commit:
