@@ -434,6 +434,29 @@ def _post_json(client, payload):
 
 class TestExportImportStructuredContext:
 
+    @pytest.mark.parametrize("marker,reason", [
+        ({}, "context: blank imports require context_configured: true"),
+        *[({"context_configured": value}, "context_configured must be a boolean")
+          for value in ("false", 0, None)],
+    ])
+    def test_ambiguous_blank_import_preserves_destination(self, app_with_data, marker, reason):
+        app, data = app_with_data
+        _make_stride(app, data["variant_a1_id"])
+        client = app.test_client()
+        before = _export_variants(client)
+        # Shape written by the previous 3.0 exporter for an untouched variant.
+        variant = {"variant_name": "VariantA1", "variant_description": None, "environment": None,
+                   "other_info": None, "system": dict.fromkeys(("scope", "actors", "entry_points", "trust_boundaries")),
+                   "stride_model": {"components": [], "interactions": [], "threats": [], "risks": []},
+                   "files": [], **marker}
+        result = _post_json(client, {"version": "3.0", "projects": [{
+            "project_name": "ProjectA", "project_description": "Do not overwrite", "variants": [variant],
+        }]}).get_json()
+        assert result == {"imported": [], "ignored": [], "failed": [
+            {"project_name": "ProjectA", "variant_name": "VariantA1", "reason": reason},
+        ]}
+        assert _export_variants(client) == before
+
     @pytest.mark.parametrize("source", ["untouched", "metadata_only", "explicit_clear"])
     def test_bulk_round_trip_distinguishes_unsaved_and_cleared_context(self, app_with_data, source):
         import uuid

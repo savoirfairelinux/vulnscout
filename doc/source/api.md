@@ -409,10 +409,14 @@ Export format `3.0` carries `system` and `stride_model` per variant, alongside t
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
 contents are not exported, and import ignores `files`. Directory names,
 mounts and contents are not transferred; provision each destination variant's own directory.
-Variants with no saved editable context are still listed with `context_configured: false`;
-import ignores those entries without changing the destination. An explicitly saved empty editor
-context is a replacement, not a placeholder. Older exports lack the marker: remove any
-unintended blank entries before importing them.
+Exports mark variants with no saved editable context as `context_configured: false`;
+import ignores those entries without changing the destination. Saved contexts, including
+deliberate clears, are exported with `context_configured: true`. When present, this marker
+must be a JSON boolean; strings, numbers and `null` fail the entry.
+Older exports without the marker still import if the variant contains Context text, System
+text or STRIDE rows. An unmarked, completely blank variant fails without changing the
+destination, even if the project has a description or files are listed. To deliberately
+clear the destination with such an entry, set `context_configured: true` on that variant.
 Every unmarked or configured entry is imported through the editor path and needs a `stride_model` object.
 It replaces the matching variant's model: `{}` clears all tables, an omitted table or `[]` clears that
 table. An explicitly `null` model or table, or an unknown table name without any recognized

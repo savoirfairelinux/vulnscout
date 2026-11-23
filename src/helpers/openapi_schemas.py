@@ -761,7 +761,10 @@ SCHEMAS: dict[str, Any] = {
         "project_name": _STRING, "project_description": _TEXT,
         "variants": _array(_object({
             "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS,
-            "context_configured": {**_BOOL, "description": "False for an unsaved source context; ignored on import."},
+            "context_configured": {**_BOOL, "description": (
+                "False skips the variant. True permits an explicitly blank replacement. "
+                "If omitted, the variant must contain Context text, System text or STRIDE rows."
+            )},
             "system": _ref("ContextSystem"), "stride_model": _ref("StrideModel"),
             "files": _array(
                 _object({"original_name": _STRING, "description": _TEXT}, ("original_name", "description")),
