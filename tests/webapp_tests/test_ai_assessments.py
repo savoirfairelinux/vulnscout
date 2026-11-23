@@ -492,6 +492,31 @@ def test_retargeted_threat_requires_confirmation_even_when_descriptions_match(cl
                                                     | {"stale": False}]
 
 
+def test_compare_preserves_exact_saved_endpoint_ids(client, app):
+    from src.models.variant_context import VariantContext
+
+    model = {
+        "components": [{"id": i, "name": i} for i in ("C1", "C1\n")],
+        "interactions": [{"id": "I1", "source_id": "C1\n", "destination_id": "C1"}],
+        "threats": [{"id": "T1", "category": "spoofing", "target_ids": ["I1"]}],
+        "risks": [{"id": "R1", "threat_ids": ["T1"]}],
+    }
+    with app.app_context():
+        VariantContext.save_editor(VARIANT_UUID, {"stride": model})
+    ref = {"risk_id": "R1", "threat_id": "T1"}
+    target = {"variant_id": str(VARIANT_UUID), "package": PKG}
+    row = _post_ai(client, targets=[{**target, "risk_links": [ref]}]).json["assessment"]
+    url = f"/api/assessments/{row['id']}"
+    preview = client.get(url + "/risk-link-preview", query_string={**target, **ref}).json
+    assert preview["interaction_endpoints"] == {"I1": {"source_id": "C1\n", "destination_id": "C1"}}
+    model["interactions"][0].update(source_id="C1", destination_id="C1\n")
+    with app.app_context():
+        VariantContext.save_editor(VARIANT_UUID, {"stride": model})
+    current = client.get(url + "/risk-link-preview", query_string={**target, **ref}).json
+    assert current["revision"] != preview["revision"]
+    assert client.get(url).json["targets"][0]["risk_links"][0]["stale"]
+
+
 def test_link_limits_reject_expanded_edits_and_replacements_atomically(app, client):
     variant = str(VARIANT_UUID)
     # Each target fits individually; together their repeated descriptions exceed the byte budget.

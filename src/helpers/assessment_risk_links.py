@@ -5,10 +5,9 @@
 
 import hashlib
 import json
-import re
 from typing import Any, TypedDict, cast
 
-from .stride_model import MAX_ROWS, MAX_TEXT
+from .stride_model import COMPONENT_ID, INTERACTION_ID, MAX_ROWS, MAX_TEXT, RISK_ID, THREAT_ID, matches_model_id
 
 MAX_LINKS_PER_TARGET = 16
 MAX_SNAPSHOT_BYTES = 256 * 1024
@@ -37,7 +36,7 @@ class RiskSnapshot(_RiskSnapshot, total=False):
 
 def _sorted_target_ids(raw: object) -> list[str]:
     if (not isinstance(raw, list) or len(raw) > 2 * MAX_ROWS
-            or any(not isinstance(v, str) or not re.fullmatch(r"[CI][1-9]\d*", v) for v in raw)
+            or any(not matches_model_id(v, COMPONENT_ID, INTERACTION_ID) for v in raw)
             or len(set(raw)) != len(raw)):
         raise RiskLinkError("Invalid modeled threat target IDs")
     return sorted(raw)
@@ -56,7 +55,7 @@ def _endpoints(raw: object, ids: list[str]) -> dict[str, InteractionEndpoints]:
     for interaction in ids:
         ends = raw[interaction]
         if (not isinstance(ends, dict) or ends.keys() != {"source_id", "destination_id"}
-                or any(not isinstance(v, str) or not re.fullmatch(r"C[1-9]\d*", v) for v in ends.values())
+                or any(not matches_model_id(v, COMPONENT_ID) for v in ends.values())
                 or ends["source_id"] == ends["destination_id"]):
             raise RiskLinkError("Invalid modeled interaction endpoints")
         result[interaction] = {"source_id": ends["source_id"], "destination_id": ends["destination_id"]}
@@ -94,8 +93,8 @@ def portable_snapshots(raw: object) -> list[RiskSnapshot]:
         if any(len(link[k]) > MAX_TEXT for k in fields if k.endswith("_description")):
             raise RiskLinkError("Modeled risk snapshot description is too long")
         pair = (link["risk_id"], link.get("threat_id"))
-        if (not re.fullmatch(r"R[1-9]\d*", pair[0])
-                or (pair[1] is not None and not re.fullmatch(r"T[1-9]\d*", pair[1])) or pair in seen):
+        if (not matches_model_id(pair[0], RISK_ID)
+                or (pair[1] is not None and not matches_model_id(pair[1], THREAT_ID)) or pair in seen):
             raise RiskLinkError("Invalid or repeated modeled risk snapshot IDs")
         seen.add(pair)
         if targets is not None:

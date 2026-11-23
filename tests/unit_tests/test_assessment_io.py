@@ -1199,6 +1199,9 @@ class TestCustomDataVersion2:
         ("custom", {"threat_target_ids": ["I1"], "interaction_endpoints": {
             "I1": {"source_id": "C2", "destination_id": "C1"},
         }}),
+        ("custom", {"threat_target_ids": ["I1"], "interaction_endpoints": {
+            "I1": {"source_id": "C1\n", "destination_id": "C1"},
+        }}),
     ])
     def test_version_2_export_round_trips_a_cross_variant_assessment(self, app, origin, evidence):
         """A genuine multi-target (cross-variant) assessment created via
