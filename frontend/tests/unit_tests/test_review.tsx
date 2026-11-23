@@ -1301,6 +1301,31 @@ describe('Review — AI Assessments tab', () => {
         expect(screen.queryByRole('button', { name: 'Confirm and approve' })).not.toBeInTheDocument();
     });
 
+    test('displays variant-local risk descriptions and clears only the edited target', async () => {
+        const targets = ['v1', 'v2'].map((variant_id, i) => ({
+            variant_id, package: 'pkgA@1.0.0', risk_links: [{
+                risk_id: 'R1', threat_id: 'T1', risk_description: `Risk ${i}`, threat_description: `Threat ${i}`,
+                stale: i === 1,
+            }],
+        }));
+        mockNetwork([], { aiReviewList: [{ ...makeAssessment('ai1', 'v1'), targets, approval_fingerprint: 'original' }] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        expect(await screen.findByText(/R1 — Risk 0; T1 — Threat 0/)).toBeVisible();
+        expect(screen.getByText(/R1 — Risk 1; T1 — Threat 1/)).toHaveTextContent('stale reference');
+        await user.click(screen.getByTitle('Edit AI suggestion'));
+        const inputs = within(screen.getByRole('dialog')).getAllByRole('textbox', { name: /Modeled risk IDs for/ });
+        await user.clear(inputs[1]);
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+        await screen.findByText('AI assessment approved!');
+        const approve = postCalls().find(c => String(c[0]).includes('/ai1/approve'));
+        expect(JSON.parse(String((approve![1] as RequestInit).body))).toEqual({
+            expected_fingerprint: 'original',
+            target_risk_links: [{ variant_id: 'v2', package: 'pkgA@1.0.0', risk_links: [] }],
+        });
+    });
+
     test('shows missing rationale inside the AI editor until the reviewer corrects it', async () => {
         mockNetwork([], { aiReviewList: [{
             ...makeAssessment('ai1', 'v1'), status: 'not_affected',

@@ -15,6 +15,7 @@ import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
 import EditAiAssessment from '../components/EditAiAssessment';
+import ModeledRiskLinks from '../components/ModeledRiskLinks';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
@@ -1313,6 +1314,17 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 );
             },
         }),
+        columnHelper.display({
+            id: 'modeled_risks',
+            header: 'Modeled risk links',
+            size: 240,
+            cell: ({ row }) => row.original.targets.some(t => t.risk_links?.length)
+                ? <ul>{row.original.targets.map(t => <li key={JSON.stringify([t.variant_id, t.package])}>
+                    <strong>{variantNames[t.variant_id ?? ''] ?? t.variant_id} · {t.package}</strong>
+                    <ModeledRiskLinks links={t.risk_links} />
+                </li>)}</ul>
+                : <ModeledRiskLinks />,
+        }),
         columnHelper.accessor("simplified_status", {
             header: () => <div className="flex items-center justify-center">Status</div>,
             size: 110,
@@ -2187,6 +2199,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 >
                     <EditAiAssessment
                         assessment={aiEditingRow}
+                        variantNames={variantNames}
                         onConfirm={edits => { void handleConfirmAiEdit(edits); }}
                         onCancel={closeAiAssessmentEditor}
                         onFieldsChange={setAiEditHasChanges}

@@ -15,6 +15,7 @@ The columns include:
 - **Vulnerability**: the CVE identifier. Clicking it opens the vulnerability detail modal in read-only mode, letting you inspect the full context without leaving the review page.
 - **SBOM Affected**: the list of packages this assessment covers.
 - **Variants**: the variant tags associated with the assessment.
+- **Modeled risk links**: references and descriptions from the saved STRIDE model for each exact variant/package target. An empty list means *no modeled risk linked*, not *no risk*. The same ID can mean something different in another variant.
 - **Status**: the triage status (e.g. Not affected, Exploitable, Fixed).
 - **Justification**: the VEX justification reason, if one was provided (e.g. "component not present", "vulnerable code not reachable").
 - **Impact**: the impact statement describing how the vulnerability affects (or doesn't affect) the product.
@@ -24,6 +25,8 @@ The columns include:
 - **AI review**: a second opinion on each target of a user-authored assessment. A single target shows ✓ when the review agrees, ⚠ when it differs, ⚠ stale when the assessment was edited since the review, or — when it has not been reviewed. Multi-target rows show counts for each state; hover for a breakdown. Open the vulnerability detail modal to read each target's review and rationale.
 
 ## Search and Filters
+
+In **AI Assessments → Edit AI suggestion**, correct the risk IDs on the relevant target, or clear its field. `R1/T2` links a risk and one of its associated threats; `R1` links just the risk. **Confirm and approve** saves these changes without changing the verdict or target set. If a linked record or association disappears, or its description changes, Review retains the original description and labels the link stale. Correct or remove stale links before approval.
 
 The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state.
 

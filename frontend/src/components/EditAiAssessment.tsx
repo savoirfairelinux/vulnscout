@@ -1,10 +1,13 @@
+import { useState, useEffect } from "react";
 import EditAssessment from "./EditAssessment";
+import ModeledRiskLinks from "./ModeledRiskLinks";
 import { initialStatusNotes } from "../handlers/assessments";
 import type { EditAssessmentData } from "./EditAssessment";
-import type { AiAssessmentEdits, Assessment } from "../handlers/assessments";
+import type { AiAssessmentEdits, Assessment, TargetRiskEdit } from "../handlers/assessments";
 
 type Props = {
     assessment: Assessment;
+    variantNames?: Record<string, string>;
     /** Persist the edited content and approve the suggestion. */
     onConfirm: (edits: AiAssessmentEdits) => void;
     /** Discard the edits and leave edit mode. */
@@ -37,6 +40,7 @@ function toAiAssessmentEdits(data: EditAssessmentData, original: Assessment): Ai
  *  Targets are not editable here: the suggestion keeps its packages/variants. */
 function EditAiAssessment({
     assessment,
+    variantNames,
     onConfirm,
     onCancel,
     saving = false,
@@ -45,12 +49,50 @@ function EditAiAssessment({
     onFieldsChange,
     triggerBanner,
 }: Readonly<Props>) {
-    return (
+    const [drafts, setDrafts] = useState<Record<string, string>>({});
+    const [contentChanged, setContentChanged] = useState(false);
+    const edits: TargetRiskEdit[] = [];
+    let invalid = false;
+    const controls = (assessment.targets ?? []).map(t => {
+        if (!t.variant_id) return null;
+        const key = JSON.stringify([t.variant_id, t.package]);
+        const initial = (t.risk_links ?? []).map(l => [l.risk_id, l.threat_id].filter(Boolean).join('/')).join(', ');
+        const text = drafts[key] ?? initial;
+        if (text !== initial) {
+            const ids = text.trim() ? text.split(',').map(item => item.trim()) : [];
+            if (ids.some(id => !/^R[1-9]\d*(\/T[1-9]\d*)?$/.test(id))) invalid = true;
+            edits.push({ package: t.package, variant_id: t.variant_id, risk_links: ids.map(id => {
+                const [risk_id, threat_id] = id.split('/');
+                return threat_id ? { risk_id, threat_id } : { risk_id };
+            }) });
+        }
+        const label = `${variantNames?.[t.variant_id] ?? t.variant_id} · ${t.package}`;
+        return <div key={key} className="my-2">
+            <label className="block">{label}
+                <input aria-label={`Modeled risk IDs for ${label}`} value={text}
+                    placeholder="R1/T2, R3" className="mx-2 px-2 bg-gray-700"
+                    onChange={event => setDrafts({ ...drafts, [key]: event.target.value })} />
+            </label>
+            <ModeledRiskLinks links={t.risk_links} />
+        </div>;
+    });
+    const linksChanged = edits.length > 0;
+    useEffect(() => onFieldsChange?.(contentChanged || linksChanged), [onFieldsChange, contentChanged, linksChanged]);
+    return (<>
+        <fieldset disabled={saving || replaced} className="p-4 text-sm">
+            <legend>Modeled risk links by target</legend>
+            <p>Enter IDs from this variant’s model, separated by commas. Use R1 or R1/T2.
+                Clear the field to remove its links. The original links are shown below each field.</p>
+            {controls}
+            {invalid && <p role="alert">Use a risk ID, optionally followed by / and a threat ID.</p>}
+        </fieldset>
         <EditAssessment
             assessment={assessment}
-            onSaveAssessment={data => onConfirm(toAiAssessmentEdits(data, assessment))}
+            onSaveAssessment={data => onConfirm({
+                ...toAiAssessmentEdits(data, assessment), ...(linksChanged && { target_risk_links: edits }),
+            })}
             onCancel={onCancel}
-            onFieldsChange={onFieldsChange}
+            onFieldsChange={setContentChanged}
             triggerBanner={triggerBanner}
             contentOnly={true}
             requireMessage={true}
@@ -59,10 +101,10 @@ function EditAiAssessment({
             saveLabel={saving ? "Approving…" : "Confirm and approve"}
             cancelLabel="Cancel changes"
             saving={saving}
-            saveDisabled={replaced}
+            saveDisabled={replaced || invalid}
             errorMessage={replaced ? "This suggestion is no longer pending here. Copy your draft or cancel changes." : errorMessage}
         />
-    );
+    </>);
 }
 
 export default EditAiAssessment;
