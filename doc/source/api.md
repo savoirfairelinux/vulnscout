@@ -418,6 +418,8 @@ must be a JSON boolean; strings, numbers and `null` fail the entry.
 For an unmarked entry (including older exports), Context text alone replaces the three
 Context text fields without changing the destination's System or STRIDE. Nonblank System
 text or populated STRIDE rows instead request a full replacement.
+Every successful entry, including a text-only import, also replaces the destination
+project description. All variants in that project share the new description.
 An unmarked, completely blank variant fails without changing the
 destination, even if the project has a description or files are listed. To deliberately
 clear the destination with such an entry, set `context_configured: true` on that variant.

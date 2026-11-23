@@ -68,10 +68,12 @@ def import_context_command(file_path: str, project: str | None, variant: str | N
     """Import AI assessment context from a JSON file.
 
     Accepts either the versioned export envelope or a bare array of entries.
-    Existing context for each matching project/variant is overwritten. Entries
-    whose project or variant does not exist are ignored; entries missing
-    mandatory fields fail. --project/--variant retarget the file's entries
-    and must name an existing project/variant.
+    Each successful entry replaces the project description shared by all its
+    variants. It also replaces the matching variant's context, except that an
+    unmarked entry with only Context text preserves System and STRIDE.
+    Unknown projects or variants and entries marked as never configured are
+    ignored; entries missing mandatory fields fail. --project/--variant retarget
+    the file's entries and must name an existing project/variant.
     """
     if variant and not project:
         echo("Error: --variant requires --project.", err=True, role="error")
