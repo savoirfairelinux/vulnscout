@@ -998,6 +998,7 @@ SCHEMAS.update({
     }, description=(
         "With stride, replace all editable fields. An empty object clears all STRIDE rows; "
         "omitted or empty tables clear their rows. Neither stride nor a table may be null. "
+        "A nonempty stride object must contain at least one recognized table. "
         "Without stride, a full replacement of the text fields; "
         "threat_model and risks are read-only. Source code is accessed through the variant's directory."
     )),

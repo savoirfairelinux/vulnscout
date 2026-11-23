@@ -516,6 +516,7 @@ class TestExportImportStructuredContext:
         (None, "model: must be an object"),
         ({"components": "nope"}, "components: must be a list"),
         ({"threats": None}, "threats: must be a list"),
+        ({"threat": [{"id": "T1"}]}, "model: expected at least one of: components, interactions, threats, risks"),
     ])
     def test_import_v2_invalid_model_fails_entry(self, client_and_data, stride, reason):
         client, _ = client_and_data
