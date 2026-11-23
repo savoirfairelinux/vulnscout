@@ -57,7 +57,7 @@ def test_provision_inherits_corrected_cache_ownership_only_for_new_root_created_
     assert changes == ([(root.stat().st_ino, *cache_ids)] if effective_uid == 0 and not existing else [])
 
 
-def test_list_read_and_search_with_pagination(tree):
+def test_list_and_read_with_pagination(tree):
     cache, name, root = tree
     (root / "z.c").write_text("needle again\n")
     with CodebaseDirectory(str(cache), name) as ref:
@@ -65,8 +65,6 @@ def test_list_read_and_search_with_pagination(tree):
             "files": [{"path": "src/main.c", "size": 18}], "total": 2, "next_offset": 1,
         }
         assert ref.read_lines("src/main.c", 2, 1)["content"] == "needle\n"
-        assert ref.search("needle", max_results=1)["truncated"] is True
-        assert len(ref.search("needle")["matches"]) == 2
         for path in ("../outside", "/etc/passwd", "src/../../outside"):
             with pytest.raises(LookupError):
                 ref.read_lines(path)
@@ -88,7 +86,6 @@ def test_sensitive_names_links_and_special_files_are_never_exposed(tree, tmp_pat
     os.mkfifo(root / "fifo")
     with CodebaseDirectory(str(cache), name) as ref:
         assert [row["path"] for row in ref.list_files()["files"]] == ["src/main.c"]
-        assert ref.search("private")["matches"] == []
         with pytest.raises(LookupError):
             ref.read_lines(".env")
 
@@ -146,16 +143,12 @@ def test_directory_limits_binary_and_encoding_errors(tree, monkeypatch):
     (root / "binary").write_bytes(b"\0needle")
     (root / "latin").write_bytes(b"\xff")
     with CodebaseDirectory(str(cache), name) as ref:
-        assert ref.search("needle")["skipped_binary_files"] == 2
         for path, error in (("binary", "binary"), ("latin", "UTF-8")):
             with pytest.raises(ValueError, match=error):
                 ref.read_lines(path)
         monkeypatch.setattr(module, "MAX_FILE_BYTES", 8)
         with pytest.raises(ValueError, match="maximum readable"):
             ref.read_lines("src/main.c")
-        monkeypatch.setattr(module, "MAX_EXPANDED_BYTES", 8)
-        with pytest.raises(ValueError, match="search budget"):
-            ref.search("needle")
     monkeypatch.setattr(module, "MAX_ENTRIES", 1)
     with pytest.raises(ValueError, match="entry browsing limit"):
         with CodebaseDirectory(str(cache), name):
@@ -188,17 +181,6 @@ def test_directory_entry_count_boundary(tree, monkeypatch, count):
             }
 
 
-def test_search_budget_handles_files_growing_after_index(tree, monkeypatch):
-    cache, name, root = tree
-    (root / "z.c").write_text("x")
-    monkeypatch.setattr(module, "MAX_EXPANDED_BYTES", 20)
-    with CodebaseDirectory(str(cache), name) as ref:
-        (root / "z.c").write_text("x" * 10)
-        with pytest.raises(ValueError, match="search budget"):
-            ref.search("missing")
-        assert ref.read_lines("z.c")["content"] == "x" * 10
-
-
 def test_fifo_replacement_after_index_is_rejected_without_blocking(tree):
     cache, name, root = tree
     with CodebaseDirectory(str(cache), name) as ref:
@@ -206,24 +188,3 @@ def test_fifo_replacement_after_index_is_rejected_without_blocking(tree):
         os.mkfifo(root / "src" / "main.c")
         with pytest.raises(ValueError, match="special"):
             ref.read_lines("src/main.c")
-
-
-def test_search_accounts_for_reads_rejected_after_concurrent_growth(tree, monkeypatch):
-    from types import SimpleNamespace
-    cache, name, root = tree
-    (root / "src" / "main.c").write_text("x")
-    (root / "z.c").write_text("x")
-    monkeypatch.setattr(module, "MAX_FILE_BYTES", 2)
-    monkeypatch.setattr(module, "MAX_EXPANDED_BYTES", 4)
-    with CodebaseDirectory(str(cache), name) as ref:
-        (root / "src" / "main.c").write_text("xxx")
-        (root / "z.c").write_text("xxx")
-        fstat = os.fstat
-
-        def stat_before_growth(fd):
-            info = fstat(fd)
-            return SimpleNamespace(st_mode=info.st_mode, st_nlink=info.st_nlink, st_size=1)
-
-        monkeypatch.setattr(module.os, "fstat", stat_before_growth)
-        with pytest.raises(ValueError, match="search budget"):
-            ref.search("missing")

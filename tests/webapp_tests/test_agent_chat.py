@@ -992,10 +992,8 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
             chosen_id, file_id, {"operation": "read", "path": "main.c", "start_line": 2},
         )
         assert source["content"] == "unsafe_call();\n"
-        matches = agent_client.get_codebase_source(
-            chosen_id, file_id, {"operation": "search", "query": "unsafe_call"},
-        )
-        assert matches["matches"] == [{"path": "main.c", "line": 2, "text": "unsafe_call();"}]
+        with pytest.raises(VulnScoutError, match="list or read"):
+            agent_client.get_codebase_source(chosen_id, file_id, {"operation": "search", "query": "unsafe_call"})
         with pytest.raises(VulnScoutError, match="outside"):
             agent_client.get_codebase_source(other_id, other_file_id, {"operation": "list"})
         with pytest.raises(VulnScoutError, match="File not found"):
@@ -1009,9 +1007,6 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
         directory_id = context["codebase_directory"]["file_id"]
         listing = json.loads(_codebase_source_impl(agent_client, chosen_id, directory_id, {"operation": "list"}))
         assert listing["files"] == [{"path": "source.c", "size": 25}]
-        matches = agent_client.get_codebase_source(
-            chosen_id, directory_id, {"operation": "search", "query": "vulnerable_call"})
-        assert matches["matches"] == [{"path": "source.c", "line": 2, "text": "vulnerable_call();"}]
         source = agent_client.get_codebase_source(
             chosen_id, directory_id, {"operation": "read", "path": "source.c", "start_line": 2})
         assert source["content"] == "vulnerable_call();\n"

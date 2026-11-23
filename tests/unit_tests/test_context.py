@@ -640,7 +640,7 @@ class TestCodebaseSource:
         assert response.status_code == 201
         return response.get_json()["id"]
 
-    def test_upload_list_search_read_delete(self, client, variant, project, tmp_path):
+    def test_upload_list_read_delete(self, client, variant, project, tmp_path):
         file_id = self._upload(client, variant, tmp_path)
         context = client.get(f"/api/context?project_id={project.id}&variant_id={variant.id}").get_json()
         assert context["files"] == [{"id": file_id, "original_name": "source.zip", "description": None}]
@@ -649,9 +649,7 @@ class TestCodebaseSource:
         assert listing["total"] == 2
         assert listing["next_offset"] == 1
         assert "file_path" not in str(listing)
-        result = client.get(base, query_string={"operation": "search", "query": "unsafe_call"}).get_json()
-        assert result["matches"] == [{"path": "repo/main.c", "line": 2, "text": "unsafe_call();"}]
-        assert result["skipped_binary_files"] == 1
+        assert client.get(base, query_string={"operation": "search", "query": "unsafe_call"}).status_code == 400
         read = client.get(base, query_string={
             "operation": "read", "path": "repo/main.c", "start_line": 2, "max_lines": 1,
         }).get_json()
@@ -846,9 +844,6 @@ class TestCodebaseDirectory:
             assert status["status"] == "ready" and status["file_count"] == 1
             assert self._source(client, variant).get_json()["files"] == [{"path": "main.c", "size": 13}]
             assert self._source(client, variant, operation="read", path="main.c").get_json()["content"] == "first\nneedle\n"
-            assert self._source(client, variant, operation="search", query="needle").get_json()["matches"] == [
-                {"path": "main.c", "line": 2, "text": "needle"},
-            ]
             assert vc.to_dict()["updated_at"] == after["updated_at"]
 
     def test_discovery_does_not_create_cache_or_context_when_directory_is_absent(
@@ -971,9 +966,6 @@ class TestCodebaseDirectory:
         assert merged["codebase_directory"] == {"file_id": "directory", "path": str(directory)}
         assert self._source(client, variant).get_json()["files"] == [{"path": "main.c", "size": 7}]
         assert self._source(client, variant, operation="read", path="main.c").get_json()["content"] == "needle\n"
-        assert self._source(client, variant, operation="search", query="needle").get_json()["matches"] == [
-            {"path": "main.c", "line": 1, "text": "needle"},
-        ]
 
     def test_directory_uses_existing_tools_and_preserves_attachments(self, client, project, variant, directory):
         from io import BytesIO
@@ -993,9 +985,6 @@ class TestCodebaseDirectory:
         assert self._source(client, variant).get_json()["files"] == [{"path": "main.c", "size": 18}]
         assert self._source(client, variant, operation="read", path="main.c", start_line=2,
                             max_lines=1).get_json()["content"] == "needle\n"
-        assert self._source(client, variant, operation="search", query="needle").get_json()["matches"] == [
-            {"path": "main.c", "line": 2, "text": "needle"},
-        ]
         assert self._source(client, variant, operation="read", path="../outside").status_code == 404
         other = Variant.create("Other", variant.project_id)
         assert self._source(client, other).status_code == 404
@@ -1129,7 +1118,7 @@ class TestCodebaseDirectory:
         self._select(client, variant)
         (directory / "main.c").write_text("needle " + "x" * 1000)
         monkeypatch.setattr(codebase_reference, "MAX_RESPONSE_BYTES", 400)
-        response = self._source(client, variant, operation="search", query="needle")
+        response = self._source(client, variant, operation="read", path="main.c")
         assert response.status_code == 400 and "64 KB" in response.get_json()["error"]
         for params in ({"limit": 201}, {"offset": -1}, {"operation": "search", "query": ""},
                        {"operation": "read", "path": "main.c", "max_lines": 201}, {"operation": "bad"}):

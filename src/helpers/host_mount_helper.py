@@ -11,8 +11,8 @@ It listens on a private Unix socket (directory ``0700``, socket ``0600``) inside
 VulnScout cache directory, which the container already mounts, so attaching folders
 later needs no container restart. Every request is scoped by variant ID and alias:
 the helper serves only exact folders approved by a host-side CLI permit, opens every path
-component without following symbolic links, and bounds result counts, read sizes,
-search time and bytes. No operation creates, changes or deletes anything under an
+component without following symbolic links, and bounds result counts and read sizes.
+No operation creates, changes or deletes anything under an
 attached folder; the helper only writes its own registry file.
 """
 
@@ -56,13 +56,8 @@ MAX_CONTENT_BYTES = 64 * 1024
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_WALK_ENTRIES = 500_000
 LIST_TIME_LIMIT = 10.0
-SEARCH_TIME_LIMIT = 20.0
-SEARCH_BYTE_BUDGET = 100 * 1024 * 1024
 MAX_LIST_LIMIT = 200
 MAX_READ_LINES = 200
-MAX_SEARCH_RESULTS = 100
-MAX_SNIPPET_CHARS = 500
-MAX_QUERY_CHARS = 200
 MAX_PATTERN_CHARS = 512
 # Few wildcards keep glob matching linear enough: a regex match cannot be interrupted by the time limits.
 MAX_PATTERN_WILDCARDS = 16
@@ -150,7 +145,7 @@ def _pattern(request: dict) -> tuple[Callable[[str], bool], str]:
 
 
 def _folder_parts(request: dict) -> list[str]:
-    """Optional sub-folder of the attachment that scopes a list or search."""
+    """Optional sub-folder of the attachment that scopes a list or snapshot."""
     folder = _string(request, "folder", required=False, maximum=1024)
     return _relative_path(folder.rstrip("/")) if folder else []
 
@@ -606,11 +601,6 @@ def _exhausted_message(reason: str, operation: str, walk: "_Walk | None" = None)
               "or attach a smaller folder.")
     if reason == "entries":
         return f"The {operation} stopped after visiting {MAX_WALK_ENTRIES} entries{detail}; {advice}"
-    if reason == "bytes":
-        mebibytes = SEARCH_BYTE_BUDGET / (1024 * 1024)
-        return f"The next file would exceed the {mebibytes:g} MiB search byte budget{detail}; narrow the pattern."
-    if reason == "results":
-        return f"The {operation} reached its match limit{detail}; narrow the query or pattern."
     return f"The {operation} stopped at its time limit{detail}; {advice}"
 
 
@@ -643,7 +633,7 @@ class Helper:
         self.operations: dict[str, Callable[[dict], dict]] = {
             "status": self.status, "detach": self.detach,
             "source": self.source, "stage": self.stage, "activate": self.activate,
-            "list": self.list_files, "read": self.read, "search": self.search,
+            "list": self.list_files, "read": self.read,
             "shell": self.shell,
         }
 
@@ -1057,12 +1047,11 @@ class Helper:
         """Require the current host-approved alias to match the database mount path."""
         _string(request, "mount_path")
         operation = request.get("source_operation")
-        if operation not in ("list", "read", "search"):
-            raise HelperError("invalid", "Operation must be list, read, or search.")
+        if operation not in ("list", "read"):
+            raise HelperError("invalid", "Operation must be list or read.")
         return {
             "list": self.list_files,
             "read": self.read,
-            "search": self.search,
         }[operation](request)
 
     def list_files(self, request: dict) -> dict:
@@ -1142,7 +1131,7 @@ class Helper:
                     raise HelperError("unavailable", "Source changed while preparing the shell snapshot; retry.")
             if budget is not None:
                 budget[0] -= len(content)
-                # A growing file must not spend past the budget, or be searched as if complete.
+                # A growing file must not spend past the budget.
                 if len(content) == limit and budget[0] == 0 and (
                         not limit or len(content) != os.fstat(fd).st_size):
                     raise _Exhausted("bytes")
@@ -1196,65 +1185,6 @@ class Helper:
             "total_lines": total_lines, "next_line": end_line + 1 if end_line < total_lines else None,
             **({"partial_line": True} if partial else {}),
         }
-
-    def search(self, request: dict) -> dict:
-        query = _string(request, "query", maximum=MAX_QUERY_CHARS)
-        matches_pattern, pattern = _pattern(request)
-        max_results = _integer(request, "max_results", MAX_SEARCH_RESULTS, 1, MAX_SEARCH_RESULTS)
-        fd, base = self._scoped_fd(request)
-        matches: list[dict] = []
-        searched = skipped_binary = skipped_large = 0
-        budget = [SEARCH_BYTE_BUDGET]
-        walk = _Walk(fd, SEARCH_TIME_LIMIT, matches_pattern, pattern)
-        message = None
-        try:
-            for path, size in walk.files(base):
-                if size > MAX_FILE_BYTES:
-                    skipped_large += 1
-                    continue
-                try:
-                    content = self._read_file(fd, path.split("/"), budget)
-                except HelperError as exc:
-                    if exc.code == "limit":
-                        skipped_large += 1
-                    else:
-                        walk.io_errors += 1
-                    continue
-                except OSError:
-                    walk.io_errors += 1
-                    continue
-                try:
-                    text = self._text(content)
-                except HelperError:
-                    skipped_binary += 1
-                    continue
-                searched += 1
-                if query not in text:
-                    continue
-                for number, line in enumerate(io.StringIO(text), 1):
-                    if number % 256 == 0:
-                        walk.check_time()
-                    if query not in line:
-                        continue
-                    if len(matches) == max_results:
-                        raise _Exhausted("results")
-                    snippet = line.rstrip("\r\n")[:MAX_SNIPPET_CHARS]
-                    matches.append({"path": base + path, "line": number, "text": snippet})
-        except _Exhausted as exc:
-            message = _exhausted_message(str(exc), "search", walk)
-        finally:
-            os.close(fd)
-        message = _walk_message(message, walk)
-        result: dict[str, Any] = {
-            "matches": matches, "truncated": message is not None, "searched_files": searched, "engine": walk.engine,
-            "skipped_binary_files": skipped_binary, "skipped_large_files": skipped_large,
-            "skipped_paths": walk.skipped_paths,
-            "io_errors": walk.io_errors, "bytes_read": SEARCH_BYTE_BUDGET - budget[0],
-            "visited_entries": walk.visited, "elapsed_seconds": round(walk.elapsed, 2),
-        }
-        if message:
-            result["message"] = message
-        return _fit_page(result, "matches")
 
 
 # -- socket server ------------------------------------------------------------------------------

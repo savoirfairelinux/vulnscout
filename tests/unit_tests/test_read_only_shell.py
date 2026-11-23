@@ -49,6 +49,42 @@ def test_snapshot_rejects_hardlinks(worker, tmp_path):
         os.close(root)
 
 
+def test_snapshot_rejects_concurrent_changes(worker, tmp_path, monkeypatch):
+    from src.helpers import host_mount_helper
+
+    helper, source = worker
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    read = os.read
+
+    def mutate_then_read(fd, size):
+        (source / "source.c").write_text("different content\n")
+        return read(fd, size)
+
+    monkeypatch.setattr(host_mount_helper.os, "read", mutate_then_read)
+    try:
+        with pytest.raises(HelperError, match="changed"):
+            helper._shell_snapshot(root, str(snapshot))
+    finally:
+        os.close(root)
+
+
+def test_snapshot_rejects_budget_overflow(worker, tmp_path, monkeypatch):
+    from src.helpers import host_mount_helper
+
+    helper, _ = worker
+    monkeypatch.setattr(host_mount_helper, "SHELL_SNAPSHOT_BYTES", 4)
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    try:
+        with pytest.raises(HelperError, match="snapshot limit"):
+            helper._shell_snapshot(root, str(snapshot))
+    finally:
+        os.close(root)
+
+
 def test_shell_rejects_unconfigured_worker(worker):
     helper, _ = worker
     helper.engine = None

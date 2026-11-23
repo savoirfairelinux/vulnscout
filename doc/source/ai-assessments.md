@@ -569,12 +569,11 @@ files/directories and names matching `*secret*`, `*credential*`, `*password*`,
 administrators must remove sensitive content from otherwise eligible files.
 Only UTF-8 source is readable. There is no aggregate directory/upload-size cap,
 but each operation visits at most **500,000 entries** (excluded directories are not
-traversed), each read is limited to **10 MiB/file**, listings/reads/searches to
-**64 KiB of serialized response**, pages to **200 files/lines**, and searches to
-**100 MiB of candidate files**, **100 matches**, **500 characters/snippet** and
-**200 query characters**. Oversized responses fail explicitly; reduce the page
-size, line count or match count. Narrow the source snapshot or search pattern
-when a budget is exceeded. Excluded/binary/oversized files and partial inventories
+traversed), each read is limited to **10 MiB/file**, listings/reads to
+**64 KiB of serialized response**, and pages to **200 files/lines**. Oversized
+responses fail explicitly; reduce the page size or line count. The embedded
+agent's isolated shell has separate snapshot and output limits; see
+[AI Agent Development](agent-chat.md). Excluded/binary/oversized files and partial inventories
 cannot establish absence of vulnerable code.
 
 Directory contents are live, not immutable evidence. Administrator edits and
@@ -726,15 +725,14 @@ to manage attachments.
   (including a directory swapped for a link) cannot escape. Hard-linked regular
   files inside the folder are readable.
 - The helper is **read-only**: it can check status, stage
-  and activate approvals, update its private registry, and list, read or search
-  source files. No operation creates, writes or deletes
+  and activate approvals, update its private registry, list or read source
+  files, and run commands against a filtered snapshot in an isolated worker.
+  No operation creates, writes or deletes
   anything under an attached folder.
 - Bounds: listings visit at most **500,000 entries** or **10 s**, return pages of
   200 files and report `truncated=true` (with `total` as a lower bound) when a
   budget stops them; reads are limited to **10 MiB/file**, 200 lines and
-  **64 KiB**; searches are limited to **500,000 entries**, **100 matches**, **100 MiB** read or **20 s**
-  (`truncated=true` with a message), skip binary files and count files over
-  10 MiB as `skipped_large_files`. File patterns are limited to 512 characters
+  **64 KiB**. File patterns are limited to 512 characters
   and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
   time limits. At most 8 requests run at once.
 - Large trees (for example a Yocto build directory):
@@ -757,15 +755,13 @@ to manage attachments.
   - Without `folder`, start `pattern` with a literal path
     from metadata or the listing instead of `*curl*`: folders that cannot match the
     literal prefix are never opened and non-matching files are never stat'ed.
-  - Listing and search use the same bounded Python walk (`engine="python"`).
+  - Listing uses a bounded Python walk (`engine="python"`).
     `visited_entries` includes nonmatching and excluded entries encountered during
-    traversal. Search `bytes_read` includes nonmatching and binary content; the
-    helper does not read a file known to exceed the remaining budget.
+    traversal.
   - A budget limit, I/O error or skipped path sets `truncated=true` with a message.
-    `skipped_paths` counts files whose paths cannot be used in a read request. Search
-    reports `io_errors` separately from binary and oversized skips and keeps
-    matches it could verify. Narrow `folder` or `pattern` for a budget limit;
-    check access and retry for an I/O error. An incomplete search cannot establish absence.
+    `skipped_paths` counts files whose paths cannot be used in a read request.
+    Narrow `folder` or `pattern` for a budget limit; check access and retry for an
+    I/O error. An incomplete listing cannot establish absence.
 
 **Unavailability is explicit.** When the helper is not running, the AI Context
 page shows **Host folder helper unavailable** and each folder as

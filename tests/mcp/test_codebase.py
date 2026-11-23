@@ -21,10 +21,10 @@ def test_reference_metadata_contains_ids():
     ]
 
 
-@pytest.mark.parametrize("operation", ["list", "read", "search"])
+@pytest.mark.parametrize("operation", ["list", "read"])
 @pytest.mark.parametrize("file_id", ["f1", "directory"])
 def test_client_source_operation(operation, file_id):
-    params = {"operation": operation, "path": "repo/a.c", "query": "needle"}
+    params = {"operation": operation, "path": "repo/a.c"}
     with respx.mock:
         route = respx.get(f"{BASE_URL}/api/variants/v1/context/files/{file_id}/source", params=params).mock(
             return_value=httpx.Response(200, json={"file_id": "f1", "content": "needle"}),
@@ -171,7 +171,7 @@ def test_merged_context_lists_mount_file_ids():
     assert "mounts=[]" in _fmt_merged_context({})
 
 
-@pytest.mark.parametrize("operation", ["list", "read", "search"])
+@pytest.mark.parametrize("operation", ["list", "read"])
 def test_client_targets_one_mount_alias(operation):
     with respx.mock:
         route = respx.get(f"{BASE_URL}/api/variants/v1/context/files/mount%3Asrc/source").mock(
