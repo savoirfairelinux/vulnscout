@@ -368,7 +368,7 @@ An editor save replaces all editable fields; it does not merge rows. Within `str
 an omitted table or `[]` clears that table. Neither `stride` nor a table may be `null`.
 A nonempty `stride` object must contain at least one of the four named tables.
 To clear all rows, use only recognized table names; extra keys are ignored only on populated models.
-If both System and STRIDE would be cleared, unknown keys in `system` are rejected as well.
+If both System and STRIDE would be cleared, unknown keys at the top level or in `system` are rejected.
 Clients that previously sent `stride: null` with System text must send `stride: {}` to
 save System with no rows, or include the existing rows to keep them.
 Validation failures leave the saved context unchanged and return `400` with

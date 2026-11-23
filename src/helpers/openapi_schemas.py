@@ -1004,7 +1004,7 @@ SCHEMAS.update({
         "With stride, replace all editable fields. An empty object clears all STRIDE rows; "
         "omitted or empty tables clear their rows. Neither stride nor a table may be null. "
         "Unknown table names are accepted only alongside populated, valid tables. "
-        "Unknown System fields cannot accompany an empty System and STRIDE replacement. "
+        "Unknown top-level or System fields cannot accompany an empty System and STRIDE replacement. "
         "Without stride, a full replacement of the text fields; "
         "threat_model and risks are read-only. Source code is accessed through the variant's directory."
     )),
