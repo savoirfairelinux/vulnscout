@@ -608,8 +608,10 @@ def duplicate_multitarget_assessment_exists(
         return False
 
     candidates = db.session.execute(
-        db.select(DBAssessment).where(DBAssessment.id.in_(candidate_ids))
-    ).scalars().all()
+        db.select(DBAssessment.id, DBAssessment.source, DBAssessment.simplified_status, DBAssessment.status_notes,
+                  DBAssessment.justification, DBAssessment.impact_statement, DBAssessment.workaround,
+                  DBAssessment.responses).where(DBAssessment.id.in_(candidate_ids))
+    ).all()
     expected_responses = sorted(str(value) for value in (responses or []))
     matching_ids = {
         assessment.id
@@ -625,23 +627,20 @@ def duplicate_multitarget_assessment_exists(
     if not matching_ids:
         return False
 
-    rows = db.session.execute(
-        db.select(
-            AssessmentTarget.assessment_id,
-            AssessmentTarget.variant_id,
-            AssessmentTarget.finding_id,
-            AssessmentTarget.risk_links,
-        ).where(AssessmentTarget.assessment_id.in_(matching_ids))
-    ).all()
+    target_ids = db.select(
+        AssessmentTarget.assessment_id, AssessmentTarget.variant_id, AssessmentTarget.finding_id,
+    ).where(AssessmentTarget.assessment_id.in_(matching_ids))
+    # OpenVEX carries no snapshots. Compare membership without loading the JSON.
+    if risk_snapshots is None:
+        target_sets: dict[_uuid.UUID, set[tuple[_uuid.UUID, _uuid.UUID]]] = {}
+        for assessment_id, v, f in db.session.execute(target_ids):
+            target_sets.setdefault(assessment_id, set()).add((v, f))
+        return any(pairs == wanted for pairs in target_sets.values())
 
     by_assessment: dict[_uuid.UUID, dict[tuple[_uuid.UUID, _uuid.UUID], list[RiskSnapshot]]] = {}
-    for assessment_id, v, f, links in rows:
+    for assessment_id, v, f, links in db.session.execute(target_ids.add_columns(AssessmentTarget.risk_links)):
         by_assessment.setdefault(assessment_id, {})[v, f] = links or []
 
-    # OpenVEX cannot express snapshots; a portable backup can explicitly
-    # represent a linkless assessment with an empty snapshot mapping.
-    if risk_snapshots is None:
-        return any(pairs.keys() == wanted for pairs in by_assessment.values())
     expected = {pair: risk_snapshots.get(pair, []) for pair in wanted}
     return any(pairs == expected for pairs in by_assessment.values())
 
