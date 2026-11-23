@@ -676,6 +676,8 @@ class TestImportStatementsMultiTarget:
 
     @pytest.mark.parametrize("original_timestamps", [False, True])
     def test_openvex_roundtrip_preserves_linked_assessment(self, variant_and_project, original_timestamps):
+        from sqlalchemy import event
+        from src.extensions import db
         from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 
         _, variant = variant_and_project
@@ -685,9 +687,22 @@ class TestImportStatementsMultiTarget:
         original = Assessment.create(status="affected", simplified_status=STATUS_TO_SIMPLIFIED["affected"],
                                      origin="custom", targets=[pair], risk_snapshots={pair: [snapshot]})
         doc = build_openvex_doc([original], "author")
-        assert import_statements(doc["statements"], variant.id, original_timestamps) == ([], [], 1)
-        assert Assessment.get_by_vulnerability(vuln) == [original]
-        assert original.target_rows[0].risk_links == [snapshot]
+        variant_id, original_id = variant.id, original.id
+        db.session.expunge_all()
+        queries = []
+
+        def record_query(conn, cursor, statement, parameters, context, executemany):
+            queries.append(statement.lower())
+
+        event.listen(db.engine, "before_cursor_execute", record_query)
+        try:
+            assert import_statements(doc["statements"], variant_id, original_timestamps) == ([], [], 1)
+        finally:
+            event.remove(db.engine, "before_cursor_execute", record_query)
+        assert any("assessment_targets" in q for q in queries)
+        assert not any("risk_links" in q for q in queries)
+        restored, = Assessment.get_by_vulnerability(vuln)
+        assert restored.id == original_id and restored.target_rows[0].risk_links == [snapshot]
 
     def test_openvex_import_creates_one_assessment_for_three_products(self, app, variant_and_project):
         """GIVEN one statement covering 3 products WHEN imported THEN one
