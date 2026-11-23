@@ -85,9 +85,9 @@ _SENSITIVE_NAMES = (
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | _CLOEXEC
 _LINK_ERRNOS = (errno.ELOOP, errno.ENOTDIR)
-_MOVED = "Attached folder or its mount was moved or replaced; attach it again."
-_UNVERIFIED = "Cannot verify the previously approved folder; check the host path and reattach with the host CLI."
-_LEGACY = "Earlier approval cannot distinguish reboot from replacement; check the path and reattach with the host CLI."
+_MOVED = "Attached folder or its mount was moved or replaced. Attach it again."
+_UNVERIFIED = "Cannot verify the previously approved folder. Check the host path and reattach with the host CLI."
+_LEGACY = "Earlier approval cannot distinguish reboot from replacement. Check the path and reattach with the host CLI."
 _REBOOT = "Approval cannot be verified after host reboot; check the host path and reattach with the host CLI."
 _IDENTITY = r"(?:h[0-9a-f]{64}|s[0-9a-f]{32}|b[0-9a-f]{32}\.[0-9a-f]{64}|d[0-9a-f]{32}(?:\.[0-9a-f]{64}){2})"
 

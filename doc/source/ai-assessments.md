@@ -700,6 +700,12 @@ to manage attachments.
   then repeat the original host `ai-context attach` with the same project, variant,
   aliases and paths; there is no need to detach first. Use a matching wrapper
   and image: unconsumed permits from old helpers are not valid.
+- **Rolling back the wrapper and image:** the previous helper reports the same
+  protocol version but cannot read the new boot-scoped (`b`) or reboot-persistent
+  (`d`) proofs. This affects folders first attached **or reapproved** with those
+  proofs, even if the host has not rebooted. Check the directories and rerun
+  `ai-context attach` with the rolled-back launcher and the original project,
+  variant, aliases and paths. You do not need to detach first.
 - The database saves the proof so activation can retry. If the CLI reports
   `activation pending`, the attachment
   was saved. Run `ai-context list` to retry and check availability. Keep the
