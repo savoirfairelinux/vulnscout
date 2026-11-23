@@ -350,7 +350,87 @@ def test_edited_approval_conflicts_after_partial_replacement(client, app):
     assert current["origin"] == "ai"
     assert current["variant_ids"] == [other_variant]
     assert current["status_notes"] == first["status_notes"]
-    assert client.post(url + "/approve", json={"expected_fingerprint": current["approval_fingerprint"]}).status_code == 200
+    assert client.post(url + "/approve", json={
+        "expected_fingerprint": current["approval_fingerprint"],
+    }).status_code == 200
+
+
+def _risk_model(app, variant, description, extra_risks=()):
+    from src.models.variant_context import VariantContext
+
+    with app.app_context():
+        context = VariantContext.get_or_create(uuid.UUID(variant))
+        context.stride_model = {
+            "risks": [{"id": "R1", "description": description, "threat_ids": ["T1"]}, *extra_risks],
+            "threats": [{"id": "T1", "description": f"{description} threat"},
+                        {"id": "T2", "description": "Unrelated threat"}],
+        }
+        db.session.commit()
+
+
+def test_risk_links_are_scoped_to_exact_targets_and_reviewed_atomically(client, app):
+    first, second = str(VARIANT_UUID), str(uuid.uuid4())
+    _add_variant(app, second)
+    _risk_model(app, first, "First model", [{"id": "R2", "description": "First variant only", "threat_ids": []}])
+    _risk_model(app, second, "Second model")
+    ref = {"risk_id": "R1", "threat_id": "T1"}
+    a, b = {"variant_id": first, "package": PKG}, {"variant_id": second, "package": PKG2}
+    response = _post_ai(client, targets=[{**a, "risk_links": [ref]}, {**b, "risk_links": [ref]}])
+    assert response.status_code == 200
+    row = response.json["assessment"]
+    url = f"/api/assessments/{row['id']}"
+    reviewed = client.get("/api/reviews/assessments?origin=ai").json[0]
+    links = {t["variant_id"]: t["risk_links"][0] for t in reviewed["targets"]}
+    assert links[first] == {**ref, "risk_description": "First model", "threat_description": "First model threat",
+                            "stale": False}
+    assert links[second]["risk_description"] == "Second model"
+    for invalid in ({**a, "package": PKG2, "risk_links": []},
+                    {**b, "risk_links": [{"risk_id": "R1", "threat_id": "T2"}]},
+                    {**b, "risk_links": [{"risk_id": "R2"}]}):
+        response = client.post(url + "/approve", json={
+            "target_risk_links": [{**a, "risk_links": []}, invalid], "status_notes": "Should not persist",
+        })
+        assert response.status_code == 400
+        assert client.get(url).json["approval_fingerprint"] == row["approval_fingerprint"]
+
+    _risk_model(app, first, "Repurposed ID")
+    assert client.post(url + "/approve").status_code == 400
+    assert client.post(url + "/approve", json={
+        "target_risk_links": [{**a, "risk_links": [ref, {"risk_id": "R1"}]}],
+    }).status_code == 400
+    stale = next(t for t in client.get(url).json["targets"] if t["variant_id"] == first)
+    assert stale["risk_links"] == [{**links[first], "stale": True}]
+    response = client.post(url + "/approve", json={
+        "target_risk_links": [{**a, "risk_links": []}, {**b, "risk_links": [{"risk_id": "R1"}]}],
+        "expected_fingerprint": row["approval_fingerprint"],
+    })
+    assert response.status_code == 200
+    approved = client.get(url).json
+    assert (approved["origin"], approved["status"]) == ("custom", row["status"])
+    assert {t["variant_id"]: t.get("risk_links", []) for t in approved["targets"]} == {
+        first: [], second: [{"risk_id": "R1", "risk_description": "Second model", "stale": False}]}
+    listing = client.get("/api/assessments?format=list").json
+    listed = next(a for a in listing if a["id"] == row["id"])
+    assert next(t for t in listed["targets"] if t["variant_id"] == second)["risk_links"][0]["risk_id"] == "R1"
+
+
+def test_bad_replacement_preserves_links_and_valid_replacement_trims_only_its_target(client, app):
+    v = str(VARIANT_UUID)
+    _risk_model(app, v, "Existing risk")
+    a = {"variant_id": v, "package": PKG, "risk_links": [{"risk_id": "R1"}]}
+    b = {**a, "package": PKG2}
+    row = _post_ai(client, targets=[a, b]).json["assessment"]
+    url = f"/api/assessments/{row['id']}"
+    for invalid in (None, {"risk_id": "R1"}, [{"risk_id": []}], [{"threat_id": "T1"}],
+                    [{"risk_id": "R1", "threat_id": "T9"}]):
+        assert _post_ai(client, targets=[{**a, "risk_links": invalid}]).status_code == 400
+        assert client.get(url).json["approval_fingerprint"] == row["approval_fingerprint"]
+    assert _post_ai(client, targets=[{**a, "risk_links": []}]).status_code == 200
+    preserved = client.get(url).json["targets"]
+    assert len(preserved) == 1 and preserved[0]["package"] == PKG2
+    assert preserved[0]["risk_links"][0]["risk_id"] == "R1"
+    assert client.post(url + "/approve").status_code == 200
+    assert client.get(url).json["targets"] == preserved
 
 
 def test_ai_post_without_pending_reports_nothing_replaced(client):
@@ -882,7 +962,8 @@ def test_approve_rejects_empty_merged_required_justification(client, app, impact
 
 
 @pytest.mark.parametrize("payload, error", [
-    ({"simplified_status": "Fixed"}, "Approval accepts only rationale fields and expected_fingerprint"),
+    ({"simplified_status": "Fixed"},
+     "Approval accepts only rationale fields, target_risk_links and expected_fingerprint"),
     ({"justification": "bogus"}, "Invalid justification"),
     *[({field: "reviewed\x00text"}, f"{field} must not contain NUL characters")
       for field in ("status_notes", "impact_statement", "workaround", "justification")],

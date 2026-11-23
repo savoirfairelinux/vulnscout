@@ -188,8 +188,18 @@ SCHEMAS: dict[str, Any] = {
         "description": "List (including compact Explorer rows) or format=dict keyed by vulnerability identifier.",
         "anyOf": [_array(_ref("Vulnerability")), _map(_ref("Vulnerability"))],
     },
+    "RiskReference": _object({
+        "risk_id": _STRING, "threat_id": _STRING,
+    }, ("risk_id",), additionalProperties=False),
+    "LinkedAssessmentTarget": _object({
+        "variant_id": _UUID, "package": _PACKAGE_ID, "risk_links": _array(_ref("RiskReference")),
+    }, ("variant_id", "package")),
     "AssessmentTarget": _object({
         "variant_id": _UUID, "package": _PACKAGE_ID, "project_id": _UUID, "outdated": _BOOL,
+        "risk_links": _array(_object({
+            "risk_id": _STRING, "risk_description": _STRING, "threat_id": _STRING,
+            "threat_description": _STRING, "stale": _BOOL,
+        }, ("risk_id",))),
     }, ("variant_id", "package"), description=(
         "One actual target pair. packages and variant_ids are projections of this sparse set, "
         "not an implicit Cartesian product."
@@ -244,7 +254,7 @@ SCHEMAS: dict[str, Any] = {
     "AssessmentCreate": _object({
         **_VEX_FIELDS, "vuln_id": _VULN_ID, "packages": _array(_PACKAGE_ID, minItems=1),
         "variant_id": _UUID, "variant_ids": _array(_UUID, minItems=1),
-        "targets": _array(_ref("AssessmentTarget"), minItems=1),
+        "targets": _array(_ref("LinkedAssessmentTarget"), minItems=1),
         "timestamp": _STRING, "ai_generated": _BOOL,
     }, ("status",), anyOf=[
         {"required": ["targets"]},
@@ -259,11 +269,15 @@ SCHEMAS: dict[str, Any] = {
         "allowed_variant_ids": _array(_UUID, minItems=1),
     }, description="Partial content update; targeting is changed through reconcile."),
     "AssessmentApproval": _object({
+        "target_risk_links": _array(_object({
+            "variant_id": _UUID, "package": _PACKAGE_ID, "risk_links": _array(_ref("RiskReference")),
+        }, ("variant_id", "package", "risk_links"), additionalProperties=False)),
         **{name: _VEX_FIELDS[name]
            for name in ("status_notes", "justification", "impact_statement", "workaround")},
         "expected_fingerprint": _STRING,
     }, additionalProperties=False, description=(
-        "Optional rationale edits applied in the same transaction as approval. "
+        "Optional rationale and per-target risk link edits applied in the same transaction as approval. "
+        "An empty risk_links list clears only that target; omitted targets retain their links. "
         "Status cannot be supplied, even if unchanged. Omit every field to approve unchanged."
     )),
     "AssessmentBatch": _object({

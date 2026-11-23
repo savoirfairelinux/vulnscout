@@ -38,15 +38,12 @@ def annotate_targets(assessments: list[Assessment]) -> list[dict]:
 
     for assessment, d in zip(assessments, dicts):
         stale = stale_by_assessment.get(d["id"], set())
-        targets = [
-            {
-                "variant_id": str(row.variant_id),
-                "package": row.finding.package.string_id,
-                "outdated": (
-                    str(row.variant_id), row.finding.package.name) in stale,
-            }
+        outdated = {
+            (str(row.variant_id), row.finding.package.string_id):
+                (str(row.variant_id), row.finding.package.name) in stale
             for row in assessment.target_rows
-        ]
+        }
+        targets = [{**t, "outdated": outdated[t["variant_id"], t["package"]]} for t in d["targets"]]
         d["targets"] = sorted(
             targets, key=lambda t: (t["variant_id"] or "", t["package"]))
 
