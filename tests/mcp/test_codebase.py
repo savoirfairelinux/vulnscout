@@ -21,10 +21,10 @@ def test_reference_metadata_contains_ids():
     ]
 
 
-@pytest.mark.parametrize("operation", ["list", "read", "search"])
+@pytest.mark.parametrize("operation", ["list", "read"])
 @pytest.mark.parametrize("file_id", ["f1", "directory"])
 def test_client_source_operation(operation, file_id):
-    params = {"operation": operation, "path": "repo/a.c", "query": "needle"}
+    params = {"operation": operation, "path": "repo/a.c"}
     with respx.mock:
         route = respx.get(f"{BASE_URL}/api/variants/v1/context/files/{file_id}/source", params=params).mock(
             return_value=httpx.Response(200, json={"file_id": "f1", "content": "needle"}),
@@ -120,6 +120,7 @@ def test_registered_tools_forward_parameters():
     server = Server()
     client = VulnScoutClient(BASE_URL)
     register_tools(server, client)
+    assert "search_codebase" not in server.tools
     with patch.object(client, "get_codebase_source", return_value={"ok": True}) as source:
         assert json.loads(server.tools["list_codebase_files"]("v1", "f1", "*.c", 10, 20)) == {"ok": True}
         source.assert_called_with("v1", "f1", {"operation": "list", "pattern": "*.c", "offset": 10, "limit": 20})
@@ -127,18 +128,38 @@ def test_registered_tools_forward_parameters():
         source.assert_called_with("v1", "mount:src", {
             "operation": "list", "pattern": "*.c", "offset": 0, "limit": 5, "folder": "build/tmp",
         })
-        server.tools["search_codebase"]("v1", "mount:src", "needle", "*", 3, "build/tmp")
-        source.assert_called_with("v1", "mount:src", {
-            "operation": "search", "query": "needle", "pattern": "*", "max_results": 3, "folder": "build/tmp",
-        })
         server.tools["read_codebase_file"]("v1", "f1", "a.c", 3, 5)
         source.assert_called_with("v1", "f1", {
             "operation": "read", "path": "a.c", "start_line": 3, "max_lines": 5,
         })
-        server.tools["search_codebase"]("v1", "f1", "needle", "*.c", 3)
-        source.assert_called_with("v1", "f1", {
-            "operation": "search", "query": "needle", "pattern": "*.c", "max_results": 3,
-        })
+
+
+def test_shell_tool_is_embedded_only_and_scope_checked(monkeypatch):
+    class Server:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self):
+            def register(function):
+                self.tools[function.__name__] = function
+                return function
+            return register
+
+    client = ScopedVulnScoutClient(BASE_URL, {"project_ids": ["p1"], "variant_ids": ["v1"]})
+    monkeypatch.delenv("VULNSCOUT_AGENT_SHELL", raising=False)
+    external = Server()
+    register_tools(external, client)
+    assert "run_codebase_shell" not in external.tools
+    monkeypatch.setenv("VULNSCOUT_AGENT_SHELL", "1")
+    embedded = Server()
+    register_tools(embedded, client)
+    with patch.object(VulnScoutClient, "run_codebase_shell", return_value={"output": "found", "exit_code": 0}) as run:
+        assert json.loads(embedded.tools["run_codebase_shell"]("v1", "directory", "grep x a", "src"))["output"] == (
+            "found"
+        )
+        run.assert_called_once_with("v1", "directory", "grep x a", "src")
+        assert "outside" in embedded.tools["run_codebase_shell"]("v2", "directory", "ls")
+        assert run.call_count == 1
 
 
 def test_merged_context_lists_mount_file_ids():
@@ -150,7 +171,7 @@ def test_merged_context_lists_mount_file_ids():
     assert "mounts=[]" in _fmt_merged_context({})
 
 
-@pytest.mark.parametrize("operation", ["list", "read", "search"])
+@pytest.mark.parametrize("operation", ["list", "read"])
 def test_client_targets_one_mount_alias(operation):
     with respx.mock:
         route = respx.get(f"{BASE_URL}/api/variants/v1/context/files/mount%3Asrc/source").mock(

@@ -211,9 +211,10 @@ Assess and review actions follow the repository's `cve-assessment` and
 `assessment-review` skills, so the built-in Agent and external clients use the
 same methodology. The Agent can read VulnScout data, uploaded source references
 and the skill files, and fetch public advisory pages such as NVD and GHSA
-(disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no shell or host
-filesystem access**; provision a **Codebase directory** or attach host folders
-as described below to expose source through the bounded MCP tools. Missing evidence remains an uncertainty, never proof that the
+(disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no direct host
+filesystem access**. Provision a **Codebase directory** or attach host folders
+as described below to expose source through the bounded MCP tools or the isolated
+read-only shell described in [AI Agent Development](agent-chat.md). Missing evidence remains an uncertainty, never proof that the
 product is safe.
 
 Submitted AI assessments remain pending until a human approves them.
@@ -437,11 +438,11 @@ may be stored/listed but cannot provide text evidence. Other archive formats
 are not unpacked.
 
 There is no external source-path setting. Administrators populate or mount the
-variant's provisioned directory; the embedded Agent has no shell or arbitrary
+variant's provisioned directory; the embedded Agent has no direct host
 filesystem access.
 Both embedded and external agents can inspect uploaded references through
 `get_merged_context` (which supplies reference IDs), then `list_codebase_files`,
-`search_codebase` and `read_codebase_file`. The embedded Agent and external
+`read_codebase_file` and `read_codebase_files`. The embedded Agent and external
 assessment skills use each variant's own uploads as additional evidence and
 cite IDs, archive member paths and line numbers.
 
@@ -551,10 +552,12 @@ writable for VulnScout's database and metadata; only the source mount is read-on
 **Remote workstation paths are not automatically accessible**: copy the snapshot
 to the server or mount storage available to that server.
 
-The embedded Agent still has no shell or arbitrary filesystem access. Merged
+The embedded Agent has no direct host filesystem access. Its isolated read-only
+shell can inspect a filtered snapshot of a directory or attached folder; see
+[AI Agent Development](agent-chat.md). Merged
 context returns `codebase_directory.file_id="directory"` for a provisioned
 directory, and `list_codebase_files`, `read_codebase_file` and
-`search_codebase` accept that ID within the variant's existing scope. Directory
+`read_codebase_files` accept that ID within the variant's existing scope. Directory
 availability takes precedence over uploads and external paths in merged source
 evidence without deleting their stored data. An empty `files` list means there
 are no active uploaded references, not that the directory is empty. Text context
@@ -572,12 +575,11 @@ files/directories and names matching `*secret*`, `*credential*`, `*password*`,
 administrators must remove sensitive content from otherwise eligible files.
 Only UTF-8 source is readable. There is no aggregate directory/upload-size cap,
 but each operation visits at most **500,000 entries** (excluded directories are not
-traversed), each read is limited to **10 MiB/file**, listings/reads/searches to
-**64 KiB of serialized response**, pages to **200 files/lines**, and searches to
-**100 MiB of candidate files**, **100 matches**, **500 characters/snippet** and
-**200 query characters**. Oversized responses fail explicitly; reduce the page
-size, line count or match count. Narrow the source snapshot or search pattern
-when a budget is exceeded. Excluded/binary/oversized files and partial inventories
+traversed), each read is limited to **10 MiB/file**, listings/reads to
+**64 KiB of serialized response**, and pages to **200 files/lines**. Oversized
+responses fail explicitly; reduce the page size or line count. The embedded
+agent's isolated shell has separate snapshot and output limits; see
+[AI Agent Development](agent-chat.md). Excluded/binary/oversized files and partial inventories
 cannot establish absence of vulnerable code.
 
 Directory contents are live, not immutable evidence. Administrator edits and
@@ -729,15 +731,14 @@ to manage attachments.
   (including a directory swapped for a link) cannot escape. Hard-linked regular
   files inside the folder are readable.
 - The helper is **read-only**: it can check status, stage
-  and activate approvals, update its private registry, and list, read or search
-  source files. No operation creates, writes or deletes
+  and activate approvals, update its private registry, list or read source
+  files, and run commands against a filtered snapshot in an isolated worker.
+  No operation creates, writes or deletes
   anything under an attached folder.
 - Bounds: listings visit at most **500,000 entries** or **10 s**, return pages of
   200 files and report `truncated=true` (with `total` as a lower bound) when a
   budget stops them; reads are limited to **10 MiB/file**, 200 lines and
-  **64 KiB**; searches are limited to **500,000 entries**, **100 matches**, **100 MiB** read or **20 s**
-  (`truncated=true` with a message), skip binary files and count files over
-  10 MiB as `skipped_large_files`. File patterns are limited to 512 characters
+  **64 KiB**. File patterns are limited to 512 characters
   and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
   time limits. At most 8 requests run at once.
 - Large trees (for example a Yocto build directory):
@@ -747,7 +748,7 @@ to manage attachments.
     of **file paths**. `limit` bounds the page, not the walk. If no path gives a
     relevant prefix, ask for the mount-relative workdir or a narrower attachment
     rather than paging the unfiltered root or declaring the mount unavailable.
-  - `list_codebase_files` and `search_codebase` accept `folder`, a sub-folder of the
+  - `list_codebase_files` accepts `folder`, a sub-folder of the
     attachment. For the CLI example above, `build` is already rooted at the Yocto
     work directory: use `<tuple>/<recipe>` from discovered paths, not
     `build/tmp/work/<tuple>/<recipe>`. On an enclosing mount, retain the observed
@@ -760,15 +761,13 @@ to manage attachments.
   - Without `folder`, start `pattern` with a literal path
     from metadata or the listing instead of `*curl*`: folders that cannot match the
     literal prefix are never opened and non-matching files are never stat'ed.
-  - Listing and search use the same bounded Python walk (`engine="python"`).
+  - Listing uses a bounded Python walk (`engine="python"`).
     `visited_entries` includes nonmatching and excluded entries encountered during
-    traversal. Search `bytes_read` includes nonmatching and binary content; the
-    helper does not read a file known to exceed the remaining budget.
+    traversal.
   - A budget limit, I/O error or skipped path sets `truncated=true` with a message.
-    `skipped_paths` counts files whose paths cannot be used in a read request. Search
-    reports `io_errors` separately from binary and oversized skips and keeps
-    matches it could verify. Narrow `folder` or `pattern` for a budget limit;
-    check access and retry for an I/O error. An incomplete search cannot establish absence.
+    `skipped_paths` counts files whose paths cannot be used in a read request.
+    Narrow `folder` or `pattern` for a budget limit; check access and retry for an
+    I/O error. An incomplete listing cannot establish absence.
 
 **Unavailability is explicit.** When the helper is not running, the AI Context
 page shows **Host folder helper unavailable** and each folder as

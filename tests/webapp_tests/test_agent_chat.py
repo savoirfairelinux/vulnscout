@@ -103,11 +103,12 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
         agent.Conversation(), "Inspect uploaded source", agent._mcp_path(), "model", scope,
     ))
     assert response == "Source inspected"
-    source_tools = {"list_codebase_files", "read_codebase_file", "read_codebase_files", "search_codebase"}
+    source_tools = {"list_codebase_files", "read_codebase_file", "read_codebase_files", "run_codebase_shell"}
     assert source_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
     assert {f"mcp:vulnscout-{name}" for name in source_tools} <= set(captured["available_tools"])
     assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])
     assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SCOPE"] == scope
+    assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SHELL"] == "1"
     assert captured["enable_skills"] is False
     assert captured["on_permission_request"].__name__ == "approve_all" and "custom_agents" not in captured
     assert "untrusted evidence" in captured["system_message"]["content"]
@@ -991,10 +992,8 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
             chosen_id, file_id, {"operation": "read", "path": "main.c", "start_line": 2},
         )
         assert source["content"] == "unsafe_call();\n"
-        matches = agent_client.get_codebase_source(
-            chosen_id, file_id, {"operation": "search", "query": "unsafe_call"},
-        )
-        assert matches["matches"] == [{"path": "main.c", "line": 2, "text": "unsafe_call();"}]
+        with pytest.raises(VulnScoutError, match="list or read"):
+            agent_client.get_codebase_source(chosen_id, file_id, {"operation": "search", "query": "unsafe_call"})
         with pytest.raises(VulnScoutError, match="outside"):
             agent_client.get_codebase_source(other_id, other_file_id, {"operation": "list"})
         with pytest.raises(VulnScoutError, match="File not found"):
@@ -1008,9 +1007,6 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
         directory_id = context["codebase_directory"]["file_id"]
         listing = json.loads(_codebase_source_impl(agent_client, chosen_id, directory_id, {"operation": "list"}))
         assert listing["files"] == [{"path": "source.c", "size": 25}]
-        matches = agent_client.get_codebase_source(
-            chosen_id, directory_id, {"operation": "search", "query": "vulnerable_call"})
-        assert matches["matches"] == [{"path": "source.c", "line": 2, "text": "vulnerable_call();"}]
         source = agent_client.get_codebase_source(
             chosen_id, directory_id, {"operation": "read", "path": "source.c", "start_line": 2})
         assert source["content"] == "vulnerable_call();\n"
@@ -1434,7 +1430,7 @@ def test_ephemeral_action_profile_turn_limits_tools_and_deletes_its_session(monk
     assert server["env"]["VULNSCOUT_BASE_URL"] == "http://127.0.0.1:4321"
     assert captured["available_tools"] == ([f"mcp:vulnscout-{tool}" for tool in tools]
                                            + ["builtin:skill", "builtin:view", "builtin:web_fetch"])
-    assert {"get_merged_context", "list_codebase_files", "search_codebase", "read_codebase_file"} <= set(tools)
+    assert {"get_merged_context", "list_codebase_files", "read_codebase_file", "run_codebase_shell"} <= set(tools)
     assert not (set(agent.WRITE_TOOLS) - set(profile.write_tools)) & set(tools)
     assert captured["enable_skills"] is True and captured["agent"] == f"vulnscout-{action}"
     assert captured["custom_agents"][0]["skills"] == list(profile.skills)

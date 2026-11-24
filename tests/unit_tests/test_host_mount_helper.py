@@ -519,7 +519,7 @@ def test_symlink_swapped_in_for_a_directory_component_is_not_followed(helper, tr
     assert err(helper, "read", variant_id=VARIANT, alias="src", path="src/plain.c")[0] == "invalid"
 
 
-# -- list / search ------------------------------------------------------------------------------
+# -- listing ------------------------------------------------------------------------------------
 
 def test_list_excludes_hidden_sensitive_and_linked_entries(helper, tree):
     attached(helper, tree)
@@ -550,29 +550,6 @@ def test_list_reports_truncation_at_the_time_limit(helper, tree, monkeypatch):
     assert result["truncated"] is True and "time limit" in result["message"]
 
 
-def test_search_skips_excluded_binary_and_linked_files(helper, tree):
-    attached(helper, tree)
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")
-    assert result["matches"] == [{"path": "src/main.c", "line": 2, "text": "    return 0; /* needle */"}]
-    assert result["skipped_binary_files"] == 1 and result["truncated"] is False
-
-
-def test_search_bounds_results_bytes_and_query(helper, tree, monkeypatch):
-    attached(helper, tree)
-    for index in range(3):
-        (tree["app"] / f"many{index}.c").write_text("needle\n")
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle", max_results=2)
-    assert len(result["matches"]) == 2 and result["truncated"] is True
-    monkeypatch.setattr(hh, "SEARCH_BYTE_BUDGET", 10)
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")
-    assert result["truncated"] is True and "MiB" in result["message"]
-    monkeypatch.setattr(hh, "MAX_FILE_BYTES", 4)
-    monkeypatch.setattr(hh, "SEARCH_BYTE_BUDGET", 1024)
-    assert ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")["skipped_large_files"] >= 4
-    assert err(helper, "search", variant_id=VARIANT, alias="src", query="x" * 201)[0] == "invalid"
-    assert err(helper, "search", variant_id=VARIANT, alias="src", query="")[0] == "invalid"
-
-
 def test_discovered_paths_round_trip_from_scoped_folder(helper, tree):
     attached(helper, tree)
     folder = "/".join(["a" * 198] * 5)
@@ -582,13 +559,11 @@ def test_discovered_paths_round_trip_from_scoped_folder(helper, tree):
         (directory / name).write_text("needle")
     scope = {"variant_id": VARIANT, "alias": "src"}
     listing = ok(helper, "list", folder=folder, **scope)
-    search = ok(helper, "search", folder=folder, query="needle", **scope)
-    for result, key in ((listing, "files"), (search, "matches")):
-        assert result["truncated"] and "skipped 3" in result["message"]
-        assert result["skipped_paths"] == 3 and result["io_errors"] == 0
-        rows = result[key]
-        assert [row["path"] for row in rows] == [folder + "/ok"]
-        assert ok(helper, "read", path=rows[0]["path"], **scope)["content"] == "needle"
+    assert listing["truncated"] and "skipped 3" in listing["message"]
+    assert listing["skipped_paths"] == 3 and listing["io_errors"] == 0
+    rows = listing["files"]
+    assert [row["path"] for row in rows] == [folder + "/ok"]
+    assert ok(helper, "read", path=rows[0]["path"], **scope)["content"] == "needle"
 
 
 def test_staging_requires_a_single_use_scoped_permit_and_never_grants_access(helper, tree):
@@ -919,7 +894,7 @@ def test_serve_rejects_legacy_root_argument(tree, capsys):
 
 # -- file patterns ------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("op, params", [("list", {}), ("search", {"query": "needle"})])
+@pytest.mark.parametrize("op, params", [("list", {})])
 def test_patterns_with_too_many_wildcards_are_rejected(helper, tree, op, params):
     attached(helper, tree)
     code, message = err(helper, op, variant_id=VARIANT, alias="src", pattern="*?" * 20 + "Z", **params)
@@ -948,8 +923,7 @@ def test_pattern_is_compiled_once_per_request(helper, tree, monkeypatch):
     original = hh.translate
     monkeypatch.setattr(hh, "translate", lambda pattern: compiled.append(pattern) or original(pattern))
     ok(helper, "list", variant_id=VARIANT, alias="src", pattern="*.c")
-    ok(helper, "search", variant_id=VARIANT, alias="src", query="needle", pattern="*")
-    assert compiled == ["*.c", "*"]
+    assert compiled == ["*.c"]
 
 
 def test_helper_requires_python_3_9(monkeypatch, capsys):
@@ -985,18 +959,18 @@ def test_wide_root_direct_lookup_and_partial_listing(helper, tree, monkeypatch):
     for pattern in ("wide/9", "escape_dir/plain.c", "../plain.c", "/etc/passwd"):
         result = ok(helper, "list", variant_id=VARIANT, alias="src", pattern=pattern)
         assert [row["path"] for row in result["files"]] == (["wide/9"] if pattern == "wide/9" else [])
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", folder="wide", query="match")
-    assert result["truncated"] and len(result["matches"]) == 3
+    result = ok(helper, "list", variant_id=VARIANT, alias="src", folder="wide")
+    assert result["truncated"] and len(result["files"]) == 3
 
 
-def test_folder_scopes_list_and_search_inside_the_attachment(helper, tree):
+def test_folder_scopes_listing_inside_the_attachment(helper, tree):
     (tree["app"] / "docs").mkdir()
     (tree["app"] / "docs" / "guide.c").write_text("needle docs\n")
     attached(helper, tree)
     listing = ok(helper, "list", variant_id=VARIANT, alias="src", folder="src", pattern="*.c")
     assert [item["path"] for item in listing["files"]] == ["src/main.c"]
-    found = ok(helper, "search", variant_id=VARIANT, alias="src", folder="docs/", query="needle")
-    assert [(item["path"], item["line"]) for item in found["matches"]] == [("docs/guide.c", 1)]
+    found = ok(helper, "list", variant_id=VARIANT, alias="src", folder="docs/")
+    assert [item["path"] for item in found["files"]] == ["docs/guide.c"]
     # Returned paths stay relative to the attachment, so they can be read directly.
     assert ok(helper, "read", variant_id=VARIANT, alias="src", path="src/main.c")["total_lines"] == 3
 
@@ -1025,10 +999,7 @@ def test_discover_recipe_task_log_relative_to_attachment(helper, tree, mount_wor
     listing = ok(helper, "list", **scope, folder=str(tuple_path), pattern=f"{recipe}/*/temp/log.do_cve_check*")
     path, = (PurePosixPath(item["path"]) for item in listing["files"])
     assert path.relative_to(tuple_path) == PurePosixPath(recipe, "2.4+git/temp/log.do_cve_check.17")
-    result = ok(helper, "search", **scope, folder=str(path.parent), pattern="log.do_cve_check*", query=cve)
-    match, = result["matches"]
-    assert not result["truncated"] and match["path"] == str(path)
-    read = ok(helper, "read", **scope, path=match["path"], start_line=match["line"] - 1, max_lines=2)
+    read = ok(helper, "read", **scope, path=str(path), start_line=1, max_lines=2)
     assert read["content"].splitlines() == [f"recipe: {recipe}", f"{cve}: not vulnerable"]
 
 
@@ -1067,11 +1038,13 @@ def test_task_log_candidates_need_run_and_exact_cve_evidence(helper, tree):
     attached(helper, tree)
     scope = dict(variant_id=VARIANT, alias="src")
 
-    found = ok(helper, "search", **scope, folder=workdir, pattern="log.do_cve_check*", query=cve)
+    found = ok(helper, "list", **scope, folder=workdir, pattern="log.do_cve_check*")
     candidates = {}
-    for hit in found["matches"]:
-        line = ok(helper, "read", **scope, path=hit["path"], start_line=hit["line"], max_lines=1)["content"]
-        candidates[hit["path"], hit["line"]] = line.strip()
+    for hit in found["files"]:
+        content = ok(helper, "read", **scope, path=hit["path"])["content"]
+        for line_number, line in enumerate(content.splitlines(), 1):
+            if cve in line:
+                candidates[hit["path"], line_number] = line.strip()
     assert not found["truncated"]
     assert candidates == {
         (target_log, 1): f"{cve}5: vulnerable",
@@ -1088,75 +1061,5 @@ def test_folder_rejects_traversal_links_hidden_and_missing_folders(helper, tree)
     attached(helper, tree)
     for folder in ("/", "///", "../outside", "/etc", "src/../..", ".git", "escape_dir", "api_token.txt", "src//x"):
         assert err(helper, "list", variant_id=VARIANT, alias="src", folder=folder)[0] in ("invalid", "not_found")
-        assert err(helper, "search", variant_id=VARIANT, alias="src", folder=folder, query="needle")[0] in (
-            "invalid", "not_found")
     assert err(helper, "list", variant_id=VARIANT, alias="src", folder="missing")[0] == "not_found"
     assert err(helper, "list", variant_id=VARIANT, alias="src", folder="README")[0] == "invalid"
-
-
-def test_nonmatching_content_spends_the_byte_budget(helper, tree, monkeypatch):
-    attached(helper, tree)
-    folder = tree["app"] / "docs"
-    folder.mkdir()
-    (folder / "a").write_bytes(b"xxxx")
-    (folder / "b").write_bytes(b"yyyy")
-    monkeypatch.setattr(hh, "SEARCH_BYTE_BUDGET", 4)
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", folder="docs", query="absent")
-    assert result["engine"] == "python" and result["matches"] == []
-    assert result["truncated"] and "byte budget" in result["message"]
-    assert result["searched_files"] == 1 and result["bytes_read"] == 4
-    (folder / "b").unlink()
-    assert not ok(helper, "search", variant_id=VARIANT, alias="src", folder="docs", query="absent")["truncated"]
-
-
-def test_growing_file_cannot_overread_remaining_budget(helper, tree, monkeypatch):
-    attached(helper, tree)
-    path = tree["app"] / "README"
-    path.write_bytes(b"x")
-    monkeypatch.setattr(hh, "SEARCH_BYTE_BUDGET", 3)
-    read_sizes = []
-
-    read = hh.os.read
-
-    def read_after_growth(fd, size):
-        path.write_bytes(b"later match")
-        data = read(fd, size)
-        read_sizes.append(len(data))
-        return data
-
-    monkeypatch.setattr(hh.os, "read", read_after_growth)
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", pattern="README", query="match")
-    assert result["truncated"] and "byte budget" in result["message"]
-    assert result["searched_files"] == 0 and result["bytes_read"] == 3 and read_sizes == [3]
-
-
-@pytest.mark.parametrize("limit,value,reason", [
-    ("MAX_WALK_ENTRIES", 2, "entries"),
-    ("SEARCH_TIME_LIMIT", -1.0, "time limit"),
-])
-def test_no_match_still_reports_walk_limits(helper, tree, monkeypatch, limit, value, reason):
-    attached(helper, tree)
-    monkeypatch.setattr(hh, limit, value)
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", query="absent")
-    assert not result["matches"] and result["truncated"] and reason in result["message"]
-    assert result["visited_entries"] <= hh.MAX_WALK_ENTRIES
-
-
-def test_search_reports_file_and_subtree_io_errors_alongside_matches(helper, tree, monkeypatch):
-    attached(helper, tree)
-    (tree["app"] / "unreadable").mkdir()
-    (tree["app"] / "back\\slash").touch()
-    (tree["app"] / "invalid.txt").write_bytes(b"\xff")
-    real_open = hh.os.open
-
-    def deny(path, *args, **kwargs):
-        if path in ("README", "unreadable"):
-            raise PermissionError()
-        return real_open(path, *args, **kwargs)
-
-    monkeypatch.setattr(hh.os, "open", deny)
-    result = ok(helper, "search", variant_id=VARIANT, alias="src", query="needle")
-    assert [item["path"] for item in result["matches"]] == ["src/main.c"]
-    assert result["truncated"] and "I/O" in result["message"] and result["io_errors"] == 2
-    assert result["skipped_paths"] == 1 and "skipped 1" in result["message"]
-    assert result["skipped_binary_files"] == 2 and result["searched_files"] == 1

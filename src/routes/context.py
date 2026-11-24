@@ -14,7 +14,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..extensions import db
-from ..helpers import context_draft
+from ..helpers import context_draft, host_mounts as host_helper
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.codebase_reference import (
     ARCHIVE_SUFFIXES, MAX_ENTRIES, MAX_FILE_BYTES, MAX_RESPONSE_BYTES, CodebaseReference, validate_reference,
@@ -154,7 +154,8 @@ def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
-def _browse_reference(file_path: str, name: str, label: str, *, directory: bool = False) -> tuple[dict, int]:
+def _browse_reference(file_path: str, name: str, label: str, *, directory: bool = False,
+                      allow_search: bool = False) -> tuple[dict, int]:
     """List, read or search a stored file or archive as the request's query asks."""
     try:
         operation = request.args.get("operation", "list")
@@ -180,19 +181,20 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
                     _integer("start_line", 1, 1, 10 * 1024 * 1024),
                     _integer("max_lines", 200, 1, 200),
                 )
-            elif operation == "search":
+            elif operation == "search" and allow_search:
                 query = request.args.get("query", "")
                 if not query or len(query) > 200:
                     raise ValueError("Search query must contain 1-200 characters.")
                 result = reference.search(query, pattern, _integer("max_results", 100, 1, 100))
             else:
-                raise ValueError("Operation must be list, read, or search.")
+                raise ValueError("Operation must be list or read." if not allow_search
+                                 else "Operation must be list, read, or search.")
             if directory:
                 from flask import current_app
                 from ..helpers.codebase_reference import MAX_RESPONSE_BYTES
                 result = {"file_id": "directory", "original_name": "Codebase directory", **result}
                 if len(current_app.json.dumps(result).encode("utf-8")) > MAX_RESPONSE_BYTES:
-                    raise ValueError("Source response exceeds 64 KB; reduce limit, max_lines or max_results.")
+                    raise ValueError("Source response exceeds 64 KB; reduce limit or max_lines.")
     except LookupError as exc:
         return {"error": str(exc)}, 404
     except ValueError as exc:
@@ -206,7 +208,7 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
 
 
 def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
-    """List, read or search an attached host folder through the host folder helper."""
+    """List or read an attached host folder through the host folder helper."""
     try:
         alias = host_mounts.mount_alias(file_id)
         assert alias is not None
@@ -214,7 +216,7 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
         pattern = request.args.get("pattern", "*")
         if len(pattern) > 512:
             raise ValueError("File pattern must be at most 512 characters.")
-        if operation in ("list", "search"):
+        if operation == "list":
             validate_mount_pattern(pattern)
         folder = request.args.get("folder", "")
         if len(folder) > 1024:
@@ -227,14 +229,8 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
             params = {"path": request.args.get("path", ""),
                       "start_line": _integer("start_line", 1, 1, 10 * 1024 * 1024),
                       "max_lines": _integer("max_lines", 200, 1, 200)}
-        elif operation == "search":
-            query = request.args.get("query", "")
-            if not query or len(query) > 200:
-                raise ValueError("Search query must contain 1-200 characters.")
-            params = {"query": query, "pattern": pattern, "folder": folder,
-                      "max_results": _integer("max_results", 100, 1, 100)}
         else:
-            raise ValueError("Operation must be list, read, or search.")
+            raise ValueError("Operation must be list or read.")
         result = host_mounts.browse(variant_uuid, alias, operation, params)
     except LookupError as exc:
         return {"error": str(exc)}, 404
@@ -246,8 +242,8 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
         return {"error": exc.message, "code": exc.code}, exc.http_status
     body = {"file_id": file_id, "original_name": f"Host folder {alias}", **result}
     if len(jsonify(body).get_data()) > MAX_RESPONSE_BYTES:
-        if operation in ("list", "search"):
-            key = "files" if operation == "list" else "matches"
+        if operation == "list":
+            key = "files"
             entries = body[key]
             reason = "Source response limited to 64 KiB."
             body.update(truncated=True, message=" ".join(filter(None, (body.get("message"), reason))))
@@ -759,7 +755,7 @@ def init_app(app):
                 if path is None:
                     return jsonify({"error": "No import source uploaded."}), 404
                 name = os.path.basename(path)
-                body, status = _browse_reference(path, name, "import source")
+                body, status = _browse_reference(path, name, "import source", allow_search=True)
         except OSError:
             logger.exception("Failed to read the import source")
             return jsonify({"error": "Stored import source is unavailable."}), 500
@@ -922,26 +918,70 @@ def init_app(app):
 
         return jsonify(cf.to_dict()), 201
 
+    @app.route('/api/variants/<variant_id>/context/shell', methods=['POST'])
+    def run_codebase_shell(variant_id):
+        """Run an isolated shell against a filtered snapshot of one variant source."""
+        if error := _access_error():
+            return error
+        variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
+        if err:
+            return err
+        assert variant_uuid is not None
+        if Variant.get_by_id(variant_uuid) is None:
+            return jsonify(error="Variant not found"), 404
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) - {"file_id", "folder", "command"}:
+            return jsonify(error="Invalid shell request."), 400
+        file_id, folder, command = body.get("file_id"), body.get("folder", ""), body.get("command")
+        if (not isinstance(file_id, str) or not isinstance(folder, str) or not isinstance(command, str)
+                or not command or len(command) > 4096 or "\x00" in command or len(folder) > 1024):
+            return jsonify(error="Invalid shell source, folder or command."), 400
+        try:
+            if file_id == "directory":
+                vc, err = _directory_context(variant_uuid)
+                if err:
+                    return err
+                if vc is None or vc.codebase_directory is None:
+                    return jsonify(error="No codebase directory found."), 404
+                result = host_helper.call("shell", timeout=60, source="directory",
+                                          directory=vc.codebase_directory, folder=folder, command=command)
+            elif file_id.startswith(MOUNT_FILE_ID_PREFIX):
+                alias = host_mounts.mount_alias(file_id)
+                assert alias is not None
+                mount = HostMount.get(variant_uuid, alias)
+                if mount is None:
+                    return jsonify(error="Attached host folder not found."), 404
+                host_mounts._activate(host_mounts._binding(mount))
+                result = host_helper.call("shell", timeout=60, source="mount", variant_id=str(variant_uuid),
+                                          alias=alias, mount_path=mount.host_path, folder=folder, command=command)
+            else:
+                return jsonify(error="Shell supports only the variant directory or an attached host folder."), 400
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except HostHelperUnavailable as exc:
+            return jsonify(error=exc.message), 503
+        except HostHelperError as exc:
+            return jsonify(error=exc.message, code=exc.code), exc.http_status
+        return jsonify({"file_id": file_id, "folder": folder, **result})
+
     @app.route('/api/variants/<variant_id>/context/files/<file_id>/source', methods=['GET'])
     def get_codebase_source(variant_id, file_id):
-        """List, read or search an upload, the active directory (file_id=directory) or a host folder.
+        """List or read an upload, the active directory (file_id=directory) or a host folder.
 
         Host folders attached to the variant use file_id=mount:<alias> and are served
         read-only by the host folder helper.
 
         OpenAPI:
         path file_id string required Upload UUID, directory for the active server directory, or mount:<alias>.
-        query operation string optional list (default), read, or search.
+        query operation string optional list (default) or read.
         query path string optional Exact member path for read.
-        query pattern string optional File-path glob for list or search (default *), relative to folder.
-        query folder string optional Host folders only: sub-folder scoping list or search.
+        query pattern string optional File-path glob for list (default *), relative to folder.
+        query folder string optional Host folders only: sub-folder scoping list.
         query offset integer optional List offset (default 0).
         query limit integer optional List page size, 1-200 (default 200).
         query start_line integer optional First line for read (default 1).
         query max_lines integer optional Read line count, 1-200 (default 200).
-        query query string optional Literal case-sensitive search text, required for search.
-        query max_results integer optional Search limit, 1-100 (default 100).
-        response 200 SourceReferenceResult Source files, line-numbered content, or search matches.
+        response 200 SourceReferenceResult Source files or line-numbered content.
         response 400 Error Invalid parameters or unreadable reference.
         response 404 Error Variant, reference, or source member not found.
         response 409 Error Directory name ownership conflicts or is ambiguous, or host folder unavailable.

@@ -127,7 +127,7 @@ PY
         ;;
     image)
         [[ "$2" = inspect ]] || exit 99
-        printf 'sha256:%064d\n' "${VULNSCOUT_TEST_IMAGE_GENERATION:-1}"
+        printf '%s%064d\n' "${VULNSCOUT_TEST_IMAGE_PREFIX:-}" "${VULNSCOUT_TEST_IMAGE_GENERATION:-1}"
         ;;
     *)
         echo "Unexpected podman command: $*" >&2
@@ -889,6 +889,9 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
 
     # An unchanged configuration reuses the running helper.
     pid="$(cat "$state/helper.pid")"
+    VULNSCOUT_TEST_IMAGE_PREFIX=sha256: run_ok ai-context helper status
+    VULNSCOUT_TEST_IMAGE_PREFIX=sha256: run_ok ai-context helper start
+    [[ "$(cat "$state/helper.pid")" == "$pid" ]]
     run_ok config set VULNSCOUT_HOST_HELPER_STATE_DIR "$state/."
     expect_fail "before changing the host helper state directory" config set VULNSCOUT_HOST_HELPER_STATE_DIR "$roots"
     mv "$socket" "$socket.saved"
