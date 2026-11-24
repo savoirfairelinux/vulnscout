@@ -571,6 +571,13 @@ class TestSourceBrowsing:
         assert last["next_offset"] is None
         assert [row["path"] for row in first["files"] + last["files"]] == [f"{folder}/{name}" for name in names]
 
+        first = page("children", limit=200)
+        assert not first["complete"] and 0 < len(first["children"]) < len(names)
+        last = page("children", limit=200, cursor=first["next_cursor"])
+        assert last["complete"] and last["next_cursor"] is None
+        assert sorted(row["path"] for row in first["children"] + last["children"]) == [
+            f"{folder}/{name}" for name in names]
+
     def test_wire_budget_preserves_lines_and_marks_partial_preview(self, client, variant, host, helper_server):
         long = "\t" * 40000
         (host["app"] / "escaped").write_text(f"first\n{long}\nlast\n")

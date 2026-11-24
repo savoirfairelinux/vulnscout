@@ -18,7 +18,7 @@ paste. Labels in **bold** are the exact labels shown on the page.
   `include_model=true` for the System text and table rows). Edits the user has
   not saved are invisible to you, so ask the user to paste them when they matter.
 - Start from evidence: the saved context, uploaded codebase references or the active server directory
-  (`list_codebase_files`, `read_codebase_file`, `read_codebase_files`; use
+  (`list_codebase_children`, `list_codebase_files`, `read_codebase_file`, `read_codebase_files`; use
   `codebase_directory.file_id="directory"` when provisioned) and the SBOM
   (`list_dependency_documents`, `list_dependency_packages`,
   `get_package_dependencies`). Cite where a value came from. Never invent
@@ -111,7 +111,7 @@ Context or System on its own; threats and risks can be added later.
   per-variant server directory; an administrator copies source there or mounts
   it read-only. **Refresh directory status** shows eligible file/subdirectory
   counts. Provisioned directories are immediately available through the scoped
-  list/read/search tools, without **Save changes**, and take precedence over
+  navigation and read tools, without **Save changes**, and take precedence over
   legacy uploaded references or external paths. The page has no source selector,
   upload panel or path table. Empty `files` metadata does not mean the directory
   is empty; use `codebase_directory.file_id="directory"` to inspect it.

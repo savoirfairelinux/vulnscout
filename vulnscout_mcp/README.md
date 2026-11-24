@@ -9,7 +9,7 @@ An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that e
 - **Look up vulnerabilities** with variant-scoped details.
 - **Review user-authored assessments** with a separate AI second opinion per (variant, package) target, without changing the original assessment.
 - **Read and update variant context** (description, environment, notes, the System text and the STRIDE threat model and risks) by variant UUID or by project/variant name.
-- **Inspect codebase directories**: list, read and search source files through scoped HTTP tools, without host filesystem access.
+- **Inspect codebase directories**: navigate immediate children, match filenames in a narrowed folder and read source through scoped HTTP tools, without host filesystem access.
 - **Explore SBOM dependencies**: discover active sources/packages and trace direct or transitive dependencies and reverse dependents within a board variant, retaining per-source version evidence.
 - Thin, dependency-light implementation: a single `httpx`-based API client plus tool modules registered on the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)'s `MCPServer`.
 
@@ -122,7 +122,8 @@ python vulnscout_mcp/server.py
 | `list_dependency_packages`     | Search/paginate the complete SBOM inventory, including isolated packages and per-document version evidence |
 | `get_package_dependencies`     | Traverse direct/transitive dependencies or reverse dependents with paths and source provenance |
 | `get_package_source_files`     | Paginate an exact package's recorded SPDX files and build associations within one variant, retaining coverage and provenance |
-| `list_codebase_files`          | List paths/sizes in a variant upload; follow `next_offset` for pagination |
+| `list_codebase_children`       | Navigate immediate children of a variant directory or mount; follow `next_cursor` until `complete` |
+| `list_codebase_files`          | List paths/sizes in an upload or recursively match filenames inside a narrowed folder; follow `next_offset` |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
 | `read_codebase_files`          | Read up to 8 files in parallel with the same line range (128 KiB combined response) |
 | `get_ai_context_form_guide`    | Return the static AI Context form guide (fields, tables, STRIDE categories, limits) and the copy-ready reply format for helping users fill it |
@@ -248,7 +249,7 @@ is used.
 
 Host folders attached with `./vulnscout ai-context attach`
 appear in `get_merged_context` as `mounts`. Pass one folder's
-`file_id="mount:<alias>"` (for example `mount:src`) to the same list/read/search
+`file_id="mount:<alias>"` (for example `mount:src`) to the same navigation and read
 tools to inspect only that folder; a host helper serves the approved folder
 read-only. A `helper is not running` or unavailable error is
 missing evidence, not proof of absence. See

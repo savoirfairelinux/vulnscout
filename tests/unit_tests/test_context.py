@@ -810,6 +810,97 @@ class TestCodebaseDirectory:
         assert response.status_code == 200
         return response.get_json()
 
+    @pytest.mark.parametrize("log_present", [True, False])
+    def test_target_build_evidence_via_registered_tools(self, app, directory, variant, monkeypatch, log_present):
+        """Scripted tool sequence via real MCP functions, HTTP routes and a disposable build tree; no LLM."""
+        import json
+        from functools import partial
+        import httpx
+        from src.helpers.codebase_directory import CodebaseDirectory
+        from vulnscout_mcp.client import ScopedVulnScoutClient
+        from vulnscout_mcp.tools.context import register_tools
+
+        target = "CVE-2026-1234"
+        build = {"package": "libsample", "recipe": "sample", "tuple": "board-linux",
+                 "version": "2.1+git-r3", "run": "image-42"}
+        (directory / "target-sbom.json").write_text(json.dumps(build))
+        (directory / "image-42.tasks").write_text("sample board-linux 2.1+git-r3 log.do_cve_check.17\n")
+        for arch, recipe in ((build["tuple"], "another"), ("host-linux", "sample-native"),
+                             (build["tuple"], build["recipe"])):
+            temp = directory / "work" / arch / recipe / build["version"] / "temp"
+            temp.mkdir(parents=True)
+            (temp / "log.do_cve_check.99").write_text(f"other run: {target} patched\n")
+        if log_present:
+            (temp / "log.do_cve_check.17").write_text(f"{target}0 patched\n{target} unpatched\n")
+        (directory / "work" / build["tuple"] / build["recipe"] / "2.0-r0").mkdir()
+        (directory / "image-manifest").write_text(f"{build['run']}: {build['package']} installed\n")
+
+        scope = {"variant_ids": [str(variant.id)], "project_ids": [str(variant.project_id)]}
+        api = ScopedVulnScoutClient("http://localhost", scope)
+        monkeypatch.setattr(httpx, "Client", partial(httpx.Client, transport=httpx.WSGITransport(app=app)))
+        tools = {}
+
+        class Server:
+            def tool(self):
+                return lambda fn: tools.setdefault(fn.__name__, fn)
+
+        register_tools(Server(), api)
+        assert "outside" in tools["list_codebase_children"](str(uuid.uuid4()), "directory")
+
+        def call(name, **kwargs):
+            return json.loads(tools[name](str(variant.id), "directory", **kwargs))
+
+        walk = CodebaseDirectory._walk
+        walked = []
+
+        def only_temp(self, fd, prefix, visited):
+            assert os.path.samefile(f"/proc/self/fd/{fd}", temp)
+            walked.append(prefix)
+            return walk(self, fd, prefix, visited)
+
+        monkeypatch.setattr(CodebaseDirectory, "_walk", only_temp)
+        meta = json.loads(call("read_codebase_file", path="target-sbom.json")["content"])
+        folder = ""
+        for part in ("work", meta["tuple"], meta["recipe"], meta["version"], "temp"):
+            children = call("list_codebase_children", folder=folder)["children"]
+            folder = next(c["path"] for c in children if c["type"] == "directory" and c["path"].split("/")[-1] == part)
+        assert not walked
+        logs = call("list_codebase_files", folder=folder, pattern="log.do_cve_check*")
+        assert walked == [""]
+        task = call("read_codebase_file", path=f"{meta['run']}.tasks")
+        recipe, arch, version, log_name = task["content"].split()
+        assert (recipe, arch, version) == (meta["recipe"], meta["tuple"], meta["version"])
+        assert (task["file_id"], task["path"], task["start_line"]) == ("directory", "image-42.tasks", 1)
+        path = f"{folder}/{log_name}"
+        if path in {row["path"] for row in logs["files"]}:
+            log = call("read_codebase_file", path=path)
+            citations = [(log["file_id"], log["path"], n, line) for n, line in
+                         enumerate(log["content"].splitlines(), log["start_line"]) if target in line.split()]
+            assert log_present and citations == [("directory", path, 2, f"{target} unpatched")]
+        else:
+            missing = tools["read_codebase_file"](str(variant.id), "directory", path)
+            assert missing.startswith("Error:") and "not found" in missing
+            manifest = call("read_codebase_file", path="image-manifest")
+            assert not log_present and manifest["content"] == "image-42: libsample installed\n"
+            assert (manifest["file_id"], manifest["path"], manifest["start_line"]) == ("directory", "image-manifest", 1)
+            # The image manifest verifies inclusion, not the missing run-specific checker verdict.
+            assert path.endswith("/log.do_cve_check.17") and target not in manifest["content"]
+
+    def test_children_preserve_directory_boundaries(self, client, variant, directory):
+        (directory / "src").mkdir()
+        (directory / "src" / "file.c").touch()
+        (directory / ".hidden").mkdir()
+        (directory / "private.key").touch()
+        (directory / "link").symlink_to(directory.parent)
+        assert self._source(client, variant, operation="children").get_json()["children"] == [
+            {"path": "src", "type": "directory"}]
+        assert self._source(client, variant, operation="children", folder="src").get_json()["children"] == [
+            {"path": "src/file.c", "type": "file"}]
+        for folder in ("../", "/src", ".hidden", "link", "src/../src"):
+            assert self._source(client, variant, operation="children", folder=folder).status_code in (400, 404)
+        other = Variant.create("Other", variant.project_id)
+        assert self._source(client, other, operation="children").status_code == 404
+
     @pytest.mark.parametrize("first_read", ["merged", "status", "source"])
     @pytest.mark.parametrize("saved_context", [False, True])
     def test_ci_directory_is_discovered_without_provisioning(

@@ -559,8 +559,7 @@ Host-folder management, browsing and source reads are restricted to local operat
 Browser requests must be same-origin; remote clients and cross-origin browser requests receive
 `403`. This does not change local Agent or MCP access.
 
-The source route accepts the same `operation=list|read` parameters as uploads and the
-codebase directory. Host listings return `engine="python"` and mark results
+The source route supports `operation=children|list|read`. Recursive host listings return `engine="python"` and mark results
 `truncated` with a `message` when a budget, an I/O error or an unreadable path format
 limits coverage. `skipped_paths` counts files omitted because their paths cannot
 be passed to the read operation.
@@ -581,12 +580,18 @@ GET /api/variants/<variant_id>/context/files/<file_id>/source
 
 For an upload, the file UUID must belong to that variant. For the variant's active server directory,
 use the literal `file_id=directory`; unprovisioned directories return `404`.
-`operation` selects `list` (default) or `read`.
+`operation` selects `list` (recursive, default), `children` (directories or mounts only) or `read`.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
-| `list` | `pattern` (case-sensitive path glob, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
+| `children` | `folder` (relative, default root), `cursor` (opaque continuation), `limit` (1–200, default 50) | `children` with root-relative `path` and `type` (`directory` or `file`), `visited_entries`, `complete`, `next_cursor`; no total |
+| `list` | `folder` (directory or mount only), `pattern` (case-sensitive glob relative to folder, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
 | `read` | `path` (exact listed member path), `start_line` (1-based, default 1), `max_lines` (1-200, default 200) | UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`; at most 64 KB of content |
+
+Use `children` to navigate without opening descendants or making a snapshot. Each page stops
+after at most 256 directory records (including exclusions), or earlier at its item/response limit.
+Pages are not sorted. Follow `next_cursor` even if `children` is empty and `complete` is false.
+Restart if the live folder changes and its cursor becomes stale. Read known paths without listing first.
 
 For `mount:<alias>` reads, `partial_line: true` means only a prefix of the
 requested line fits in the serialized response. Its suffix is omitted;

@@ -153,8 +153,8 @@ uploaded attachments in `files` (`id`, `original_name`,
 project and variant descriptions. Apply them exactly as `cve-assessment`
 Phases 0, 2 and 3 describe, including **STRIDE Context** and
 **Uploaded Reference Inspection**:
-use `vulnscout-list_codebase_files` and
-`vulnscout-read_codebase_file` for each target variant's own references.
+read known paths directly with `vulnscout-read_codebase_file`. Navigate directories and mounts with
+`vulnscout-list_codebase_children`; use `vulnscout-list_codebase_files` for uploads or scoped filename matching.
 For an active directory use `codebase_directory.file_id="directory"` with those
 same tools, following the directory rules in `cve-assessment`; attached host
 folders (`mounts`) use the same tools with their `file_id` (`"mount:<alias>"`). A provisioned

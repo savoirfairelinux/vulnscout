@@ -3,21 +3,17 @@
 
 """Bounded access to administrator-provided source, relative to pinned directory descriptors."""
 
+import errno
 import io
 import os
 import re
 import stat
 from contextlib import contextmanager, ExitStack
-from fnmatch import fnmatchcase
 
 from .codebase_reference import CodebaseReference, MAX_ENTRIES, MAX_FILE_BYTES, _safe_path
+from .host_mount_helper import children_page, _excluded
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-_SENSITIVE_NAMES = (
-    "*secret*", "*credential*", "*password*", "*token*", "*.pem", "*.key", "*.p12", "*.pfx",
-    "*.keystore", "id_rsa*", "id_ed25519*", "id_dsa*", "id_ecdsa*", "kubeconfig",
-    "*.kdbx", "*.sqlite*", "*.db", "*~", "*.bak",
-)
 
 
 class EmptyCodebaseDirectory(ValueError):
@@ -75,31 +71,40 @@ def provision_directory(cache_dir: str, name: str) -> None:
                 os.fchown(directory_fd, owner.st_uid, owner.st_gid)
 
 
-def _excluded(name: str) -> bool:
-    return name.startswith(".") or any(fnmatchcase(name.lower(), pattern) for pattern in _SENSITIVE_NAMES)
-
-
 class CodebaseDirectory(CodebaseReference):
     """Reuse the source response format, never following symlinks or opening special files."""
 
-    def __init__(self, cache_dir: str, name: str):
+    def __init__(self, cache_dir: str, name: str, *, folder: str = "", index: bool = True):
         super().__init__(io.BytesIO(), name)
         directory_path(cache_dir, name)
         self.cache_dir = cache_dir
+        self.folder = folder.rstrip("/")
+        if folder and (not self.folder or _safe_path(self.folder) != self.folder
+                       or any(_excluded(part) for part in self.folder.split("/"))):
+            raise ValueError("Invalid or excluded codebase folder.")
+        self.index = index
         self.root_fd = -1
         self.directory_count = 0
 
     def _index(self) -> None:
         cache_fd = self.stack.enter_context(_open_directory(self.cache_dir))
         self.root_fd = self.stack.enter_context(_open_directory(self.name, cache_fd))
+        if self.folder:
+            try:
+                for part in self.folder.split("/"):
+                    self.root_fd = self.stack.enter_context(_open_directory(part, self.root_fd))
+            except FileNotFoundError as exc:
+                raise LookupError("Codebase folder not found.") from exc
+        if not self.index:
+            return
         self._walk(self.root_fd, "", [0])
-        if not self.entries:
+        if not self.entries and not self.folder:
             raise EmptyCodebaseDirectory("Codebase directory is empty or contains no eligible source files.")
 
     def __enter__(self) -> "CodebaseDirectory":
         try:
             self._index()
-        except (OSError, ValueError):
+        except (OSError, ValueError, LookupError):
             self.stack.close()
             raise
         return self
@@ -115,6 +120,8 @@ class CodebaseDirectory(CodebaseReference):
                 if _excluded(entry.name):
                     continue
                 path = _safe_path(prefix + entry.name)
+                if self.folder:
+                    _safe_path(self.folder + "/" + path)
                 info = entry.stat(follow_symlinks=False)
                 if stat.S_ISDIR(info.st_mode):
                     with _open_directory(entry.name, directory_fd) as child_fd:
@@ -123,15 +130,33 @@ class CodebaseDirectory(CodebaseReference):
                 elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
                     self.entries[path] = (info.st_size, None)
 
+    def list_children(self, cursor: str, limit: int) -> dict:
+        base = self.folder + "/" if self.folder else ""
+        return children_page(self.root_fd, base, {"cursor": cursor, "limit": limit}, provisioned=True)
+
     def read_bytes(self, path: str) -> bytes:
-        if path not in self.entries:
+        if self.index and path not in self.entries:
             raise LookupError("Source file not found or excluded.")
-        parts = _safe_path(path).split("/")
+        try:
+            parts = _safe_path(path).split("/")
+        except ValueError as exc:
+            raise LookupError("Source file not found or excluded.") from exc
+        if "/".join(parts) != path or any(_excluded(part) for part in parts):
+            raise LookupError("Source file not found or excluded.")
         with ExitStack() as stack:
             parent_fd = self.root_fd
             for part in parts[:-1]:
                 parent_fd = stack.enter_context(_open_directory(part, parent_fd))
-            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+            entry = os.open(parts[-1], os.O_PATH | os.O_NOFOLLOW, dir_fd=parent_fd)
+            try:
+                info = os.fstat(entry)
+                if stat.S_ISLNK(info.st_mode):
+                    raise OSError(errno.ELOOP, "Source file is a symlink.")
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ValueError("Links and special source files cannot be read.")
+                fd = os.open(f"/proc/self/fd/{entry}", os.O_RDONLY)
+            finally:
+                os.close(entry)
             with io.FileIO(fd) as source:
                 info = os.fstat(source.fileno())
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:

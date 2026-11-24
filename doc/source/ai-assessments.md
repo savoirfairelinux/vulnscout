@@ -729,13 +729,14 @@ to manage attachments.
   component, including each ancestor of the attached folder, is opened relative to a
   verified directory descriptor without following symbolic links, so links
   (including a directory swapped for a link) cannot escape. Hard-linked regular
-  files inside the folder are readable.
+  files inside the folder are readable with the legacy read operation, but are not
+  returned by shallow navigation or copied into shell snapshots.
 - The helper is **read-only**: it can check status, stage
   and activate approvals, update its private registry, list or read source
   files, and run commands against a filtered snapshot in an isolated worker.
   No operation creates, writes or deletes
   anything under an attached folder.
-- Bounds: listings visit at most **500,000 entries** or **10 s**, return pages of
+- Bounds: recursive listings visit at most **500,000 entries** or **10 s**, return pages of
   200 files and report `truncated=true` (with `total` as a lower bound) when a
   budget stops them; reads are limited to **10 MiB/file**, 200 lines and
   **64 KiB**. File patterns are limited to 512 characters

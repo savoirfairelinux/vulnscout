@@ -83,6 +83,80 @@ def attached(helper, tree, alias="src", path=None):
     return binding
 
 
+def test_shallow_pages_bound_actual_work_and_do_not_open_children(helper, tree, monkeypatch):
+    root = tree["app"]
+    wide = root / "wide"
+    wide.mkdir()
+    for n in range(600):
+        (wide / f"item-{n}").touch()
+    (wide / "deep" / "unrelated" / "more").mkdir(parents=True)
+    (wide / ".hidden").touch()
+    (wide / "key.pem").touch()
+    (wide / "linked").symlink_to(tree["outside"])
+    os.link(wide / "item-1", wide / "hardlink")
+    os.mkfifo(wide / "pipe")
+    attached(helper, tree)
+    params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), source_operation="children", folder="wide")
+    records = []
+    read = hh._directory_records
+
+    def observed(fd, cookie):
+        assert os.path.samefile(f"/proc/self/fd/{fd}", wide)
+        for record in read(fd, cookie):
+            records.append(record[1])
+            yield record
+
+    original_open = os.open
+
+    def monitored_open(path, *args, dir_fd=None, **kwargs):
+        if dir_fd is not None:
+            assert not Path(os.readlink(f"/proc/self/fd/{dir_fd}")).is_relative_to(wide)
+        return original_open(path, *args, dir_fd=dir_fd, **kwargs)
+
+    monkeypatch.setattr(hh, "_directory_records", observed)
+    monkeypatch.setattr(os, "open", monitored_open)
+    monkeypatch.setattr(os, "scandir", lambda *a: pytest.fail("Unexpected recursive inventory"))
+    monkeypatch.setattr(helper, "_shell_snapshot", lambda *a: pytest.fail("Unexpected snapshot"))
+    page = ok(helper, "source", **params, limit=1)
+    assert len(page["children"]) == 1 and 0 < len(records) < 10
+    seen = list(page["children"])
+    while not page["complete"]:
+        page = ok(helper, "source", **params, cursor=page["next_cursor"], limit=97)
+        seen.extend(page["children"])
+    assert page["next_cursor"] is None
+    assert len(records) == len(set(records))  # Continuations do not replay earlier names.
+    assert len(seen) == 600
+    assert {row["path"] for row in seen if row["type"] == "file"} == {
+        f"wide/item-{n}" for n in range(600) if n != 1
+    }
+    assert {"path": "wide/deep", "type": "directory"} in seen
+
+
+def test_excluded_children_progress_and_scope(helper, tree):
+    root = tree["app"]
+    excluded = root / "ignored"
+    excluded.mkdir()
+    for n in range(600):
+        (excluded / f".hidden-{n}").touch()
+    attached(helper, tree)
+    params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), source_operation="children", folder="ignored")
+    page = ok(helper, "source", **params)
+    assert not page["children"] and not page["complete"] and page["visited_entries"] == 256
+    cursor = page["next_cursor"]
+    assert err(helper, "source", **{**params, "folder": ""}, cursor=cursor)[0] == "invalid"
+    for change, code in (({"folder": "../outside"}, "invalid"), ({"folder": ".git"}, "not_found"),
+                         ({"folder": "escape_dir"}, "invalid"), ({"variant_id": str(uuid.uuid4())}, "not_found"),
+                         ({"mount_path": str(tree["outside"])}, "forbidden")):
+        assert err(helper, "source", **{**params, **change})[0] == code
+    while not page["complete"]:
+        page = ok(helper, "source", **params, cursor=page["next_cursor"])
+        assert not page["children"] and page["visited_entries"] <= 256
+    assert page["next_cursor"] is None
+    old = excluded.stat()
+    os.utime(excluded, ns=(old.st_atime_ns, old.st_mtime_ns + 2_000_000_000))
+    assert err(helper, "source", **params, cursor=cursor)[0] == "invalid"
+
+
 @pytest.mark.parametrize("make_path, code", [
     (lambda t: "/", "forbidden"),
     (lambda t: "relative", "forbidden"),

@@ -57,6 +57,7 @@ MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_WALK_ENTRIES = 500_000
 LIST_TIME_LIMIT = 10.0
 MAX_LIST_LIMIT = 200
+MAX_CHILD_RECORDS = 256
 MAX_READ_LINES = 200
 MAX_PATTERN_CHARS = 512
 # Few wildcards keep glob matching linear enough: a regex match cannot be interrupted by the time limits.
@@ -77,7 +78,6 @@ SHELL_SNAPSHOT_BYTES = 100 * 1024 * 1024
 ALIAS_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 ALIAS_RULE = "Alias must be 1-32 lowercase letters, digits, '_' or '-', starting with a letter or digit."
 
-# Keep in sync with src/helpers/codebase_directory.py.
 _SENSITIVE_NAMES = (
     "*secret*", "*credential*", "*password*", "*token*", "*.pem", "*.key", "*.p12", "*.pfx",
     "*.keystore", "id_rsa*", "id_ed25519*", "id_dsa*", "id_ecdsa*", "kubeconfig",
@@ -186,6 +186,79 @@ def _relative_path(path: str) -> list[str]:
         if _excluded(part):
             raise HelperError("not_found", "Source file not found or excluded.")
     return parts
+
+
+def _directory_records(fd: int, cookie: int) -> Iterator[tuple[int, str]]:
+    """Read Linux dirent64 records in fixed-size batches; d_off resumes without replay."""
+    # The standalone Linux helper cannot import application dependencies. scandir()
+    # hides the per-entry filesystem cookie and its buffered descriptor offset
+    # can already point past entries the caller has not consumed.
+    os.lseek(fd, cookie, os.SEEK_SET)
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.fdopendir.argtypes = (ctypes.c_int,)
+    libc.fdopendir.restype = ctypes.c_void_p
+    libc.closedir.argtypes = (ctypes.c_void_p,)
+    # musl uses the 64-bit layout for readdir; glibc also exports readdir64.
+    read = getattr(libc, "readdir64", libc.readdir)
+    read.argtypes = (ctypes.c_void_p,)
+    read.restype = ctypes.c_void_p
+    duplicate = os.dup(fd)
+    stream = libc.fdopendir(duplicate)
+    if not stream:
+        os.close(duplicate)
+        raise OSError(ctypes.get_errno(), "Cannot open directory stream.")
+    header = struct.Struct("=QqHB")
+    try:
+        while True:
+            ctypes.set_errno(0)
+            entry = read(stream)
+            if not entry:
+                if ctypes.get_errno():
+                    raise OSError(ctypes.get_errno(), "Cannot enumerate directory.")
+                return
+            _, after, length, _ = header.unpack(ctypes.string_at(entry, header.size))
+            if length <= header.size:
+                raise OSError("Invalid directory record.")
+            name = ctypes.string_at(entry + header.size, length - header.size).split(b"\0", 1)[0]
+            yield after, os.fsdecode(name)
+    finally:
+        libc.closedir(stream)
+
+
+def children_page(fd: int, base: str, request: dict, *, provisioned: bool = False) -> dict:
+    limit = _integer(request, "limit", 50, 1, MAX_LIST_LIMIT)
+    cursor = _string(request, "cursor", required=False, maximum=100)
+    info = os.fstat(fd)
+    key = hashlib.sha256(f"{info.st_dev}:{info.st_ino}:{info.st_mtime_ns}:{base}".encode()).hexdigest()[:24]
+    cookie = 0
+    if cursor:
+        match = re.fullmatch(re.escape(key) + r":([0-9a-f]{1,16})", cursor)
+        if not match or int(match[1], 16) >= 2**63:
+            raise HelperError("invalid", "Invalid or stale cursor; restart this folder listing.")
+        cookie = int(match[1], 16)
+    children: list[dict] = []
+    visited = size = 0
+    complete = False
+    for after, name in _directory_records(fd, cookie):
+        visited += 1
+        path = base + name
+        if (not _excluded(name) and _member_path_fits(path)
+                and (not provisioned or (":" not in path and len(path.encode()) <= 512))):
+            item = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISDIR(item.st_mode) or (stat.S_ISREG(item.st_mode) and item.st_nlink == 1):
+                child = {"path": path, "type": "directory" if stat.S_ISDIR(item.st_mode) else "file"}
+                cost = len(json.dumps(child)) + 2
+                if size + cost > MAX_CONTENT_BYTES - 1024:
+                    break  # Resume before this entry.
+                children.append(child)
+                size += cost
+        cookie = after
+        if len(children) == limit or visited >= MAX_CHILD_RECORDS:
+            break
+    else:
+        complete = True
+    return {"children": children, "complete": complete, "visited_entries": visited,
+            "next_cursor": None if complete else f"{key}:{cookie:x}"}
 
 
 def _open_absolute(path: str, *, create: bool = False) -> int:
@@ -1052,12 +1125,22 @@ class Helper:
         """Require the current host-approved alias to match the database mount path."""
         _string(request, "mount_path")
         operation = request.get("source_operation")
-        if operation not in ("list", "read"):
-            raise HelperError("invalid", "Operation must be list or read.")
+        if operation not in ("list", "read", "children"):
+            raise HelperError("invalid", "Operation must be list, children or read.")
         return {
             "list": self.list_files,
             "read": self.read,
+            "children": self.list_children,
         }[operation](request)
+
+    def list_children(self, request: dict) -> dict:
+        fd, base = self._scoped_fd(request)
+        try:
+            return children_page(fd, base, request)
+        except OSError as exc:
+            raise HelperError("unavailable", "Folder changed or cannot be inspected; retry this lookup.") from exc
+        finally:
+            os.close(fd)
 
     def list_files(self, request: dict) -> dict:
         matches_pattern, pattern = _pattern(request)

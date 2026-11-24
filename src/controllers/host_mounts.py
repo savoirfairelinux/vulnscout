@@ -193,8 +193,8 @@ def browse(variant_id: uuid.UUID, alias: str, operation: str, params: dict) -> d
     mount = HostMount.get(variant_id, alias)
     if mount is None:
         raise LookupError(f"No folder is attached as '{alias}' for this variant.")
-    if operation not in ("list", "read"):
-        raise ValueError("Operation must be list or read.")
+    if operation not in ("list", "read", "children"):
+        raise ValueError("Operation must be list, children or read.")
     _activate(_binding(mount))
     return helper.call(
         "source", variant_id=str(variant_id), alias=alias, mount_path=mount.host_path,
