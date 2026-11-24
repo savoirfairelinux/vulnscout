@@ -739,6 +739,8 @@ describe('Review — bulk AI reviews', () => {
         expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 3);
 
         await act(async () => { releaseReviews(); });
+        expect(await screen.findByText('Failed to refresh review data after an AI write.')).toBeInTheDocument();
+        expect(screen.getAllByTitle('Select').length).toBeGreaterThan(0);
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 6));
     });
 

@@ -899,7 +899,12 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         setAiAssessments(aiRows.value.map(toReviewRow));
     }, [variantId, projectId, beginListRequest]);
 
-    useAgentWriteRefresh(() => Promise.allSettled([refreshAssessmentLists(), refreshReviews()]), {
+    useAgentWriteRefresh(async () => {
+        const results = await Promise.allSettled([refreshAssessmentLists(), refreshReviews()]);
+        if (activeListScope.current === listScope && results.some(result => result.status === 'rejected')) {
+            showMessage('Failed to refresh review data after an AI write.', 'error');
+        }
+    }, {
         scopeKey: JSON.stringify([projectId, variantId]),
     });
 

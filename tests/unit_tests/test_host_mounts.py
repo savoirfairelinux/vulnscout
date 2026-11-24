@@ -94,13 +94,10 @@ def _source(client, variant, file_id, **params):
 class TestAccessControl:
 
     @pytest.mark.parametrize("peer", ["192.0.2.1", "192.0.2.2"])
-    @pytest.mark.parametrize("loopback_published", [False, True])
-    def test_forwarded_host_folder_access(self, client, variant, host, helper_server, tmp_path, monkeypatch,
-                                          peer, loopback_published):
+    def test_forwarded_host_folder_access(self, client, variant, host, helper_server, monkeypatch, peer):
         from src.routes import agent
         monkeypatch.setattr(agent, "_container_gateway", lambda: "192.0.2.1")
         monkeypatch.setattr(agent, "_container_host_forward_ip", lambda _: "192.0.2.2")
-        monkeypatch.setattr(agent, "_LOOPBACK_PUBLICATION", Path("/") if loopback_published else tmp_path / "absent")
         _attach(helper_server, variant, "src", host["app"])
         url = "http://127.0.0.2:7275"
         forwarded = {"environ_overrides": {"REMOTE_ADDR": peer}, "base_url": url, "headers": {"Origin": url}}
@@ -108,7 +105,7 @@ class TestAccessControl:
         responses = [client.get(f"{base}/mounts", **forwarded),
                      client.get(f"{base}/files/mount:src/source", **forwarded),
                      client.delete(f"{base}/mounts/src", **forwarded)]
-        assert [response.status_code for response in responses] == [200 if loopback_published else 403] * 3
+        assert [response.status_code for response in responses] == [200] * 3
 
     def test_host_folder_routes_reject_remote_clients(self, client, variant, host):
         remote = {"environ_overrides": {"REMOTE_ADDR": "192.0.2.10"}}

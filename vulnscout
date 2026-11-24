@@ -1216,9 +1216,6 @@ do_start() {
     local bind_address="${VULNSCOUT_BIND_ADDRESS-127.0.0.1}"
     validate_bind_address "$bind_address"
     local -a publish_args=(-p "$bind_address:7275:7275")
-    if [[ "$bind_address" == 127.* ]]; then
-        publish_args+=(--tmpfs "/run/vulnscout-loopback-published:ro,size=4k")
-    fi
     call_container_engine rm -f "$CONTAINER_NAME" 2>/dev/null || true
     mkdir -p "$VULNSCOUT_CACHE_DIR" "$VULNSCOUT_OUTPUTS_DIR"
 
