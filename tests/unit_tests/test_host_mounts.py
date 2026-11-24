@@ -626,8 +626,10 @@ class TestSourceBrowsing:
         read = _source(client, variant, "mount:build", operation="read", path="log.txt").get_json()
         assert read["content"] == "needle in build\n" and read["original_name"] == "Host folder build"
         search = _source(client, variant, "mount:build", operation="search_file", path="log.txt", query="needle")
-        assert search.json["complete"] and search.json["matches"] == [
-            {"path": "log.txt", "line": 1, "text": "needle in build"}]
+        hit, = search.json["matches"]
+        assert search.json["complete"] and hit["line"] == 1 and hit["text"] == "needle in build"
+        context = _source(client, variant, "mount:build", operation="read", path=hit["path"], position=hit["position"])
+        assert context.json["match_line"] == 1 and context.json["content"] == read["content"]
 
     def test_folder_scopes_host_folder_browsing(self, client, variant, host, helper_server):
         _attach(helper_server, variant, "src", host["app"])

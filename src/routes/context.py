@@ -160,6 +160,9 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory_varian
     try:
         directory = directory_variant is not None
         operation = request.args.get("operation", "list")
+        position = request.args.get("position")
+        if position is not None and (not directory or operation != "read"):
+            raise ValueError("A read position is only supported for directory or mount reads.")
         pattern = request.args.get("pattern", "*")
         if len(pattern) > 512:
             raise ValueError("File pattern must be at most 512 characters.")
@@ -197,12 +200,16 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory_varian
                 result = source.search_file(str(directory_variant), request.args.get("path", ""),
                                             request.args.get("query", ""), request.args.get("cursor", ""))
             elif operation == "read":
+                path = request.args.get("path", "")
+                start = _integer("start_line", 1, 1, 10 * 1024 * 1024)
+                lines = _integer("max_lines", 200, 1, 200)
                 try:
-                    result = reference.read_lines(
-                        request.args.get("path", ""),
-                        _integer("start_line", 1, 1, 10 * 1024 * 1024),
-                        _integer("max_lines", 200, 1, 200),
-                    )
+                    if position is not None:
+                        if start != 1:
+                            raise ValueError("Use position or start_line, not both.")
+                        result = source.read_match(str(directory_variant), path, position, lines)
+                    else:
+                        result = reference.read_lines(path, start, lines)
                 except FileNotFoundError as exc:
                     raise LookupError("Source file not found or excluded.") from exc
             else:  # Validated import-source search.
@@ -245,6 +252,8 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
         if len(folder) > 1024:
             raise ValueError("folder must be at most 1024 characters.")
         params: dict
+        if "position" in request.args and operation != "read":
+            raise ValueError("A read position is only supported for read.")
         if operation == "list":
             params = {"pattern": pattern, "folder": folder, "offset": _integer("offset", 0, 0, MAX_ENTRIES),
                       "limit": _integer("limit", 200, 1, 200)}
@@ -255,6 +264,10 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
             params = {"path": request.args.get("path", ""),
                       "start_line": _integer("start_line", 1, 1, 10 * 1024 * 1024),
                       "max_lines": _integer("max_lines", 200, 1, 200)}
+            if "position" in request.args:
+                if folder:
+                    raise ValueError("Use an exact path, not folder, for a positioned read.")
+                params["position"] = request.args["position"]
         elif operation == "search_file":
             if folder:
                 raise ValueError("Use an exact path, not folder, for single-file search.")
@@ -293,7 +306,7 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
                     hi = n - 1
             if page is not None:
                 return page, 200
-        if operation == "read" and body["content"]:
+        if operation == "read" and "position" not in params and body["content"]:
             # Fit complete lines first. Only shorten a line if it cannot fit alone.
             content = body["content"]
             start = body["start_line"]
@@ -1005,6 +1018,7 @@ def init_app(app):
         path file_id string required Upload UUID, directory for the active server directory, or mount:<alias>.
         query operation string optional Recursive list (default), read, children or search_file (directory or mount).
         query path string optional Exact member path for read or search_file.
+        query position string optional Signed search match position for a bounded directory or mount context read.
         query query string optional Single-line literal for search_file. CVE IDs match whole tokens.
         query pattern string optional File-path glob for list (default *), relative to folder.
         query folder string optional Directory or mount: sub-folder scoping list or children.

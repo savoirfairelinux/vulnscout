@@ -586,8 +586,15 @@ use the literal `file_id=directory`; unprovisioned directories return `404`.
 |-----------|------------|--------|
 | `children` | `folder` (relative, default root), `cursor` (opaque continuation), `limit` (1–200, default 50) | `children` with root-relative `path` and `type` (`directory` or `file`), `visited_entries`, `complete`, `next_cursor`; no total |
 | `list` | `folder` (directory or mount only), `pattern` (case-sensitive glob relative to folder, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
-| `read` | `path` (exact listed member path), `start_line` (1-based, default 1), `max_lines` (1-200, default 200) | UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`; at most 64 KB of content |
-| `search_file` | Directory or mount only: exact `path`, literal `query` (1-200 characters), optional `cursor` | `matches` with `path`, 1-based `line` and short `text`, `bytes_scanned`, `complete`, `next_cursor` |
+| `read` | Exact `path`, `start_line` (1-based, default 1), `max_lines` (1-200, default 200); optional match `position` on a directory or mount | Plain reads return UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`. For positioned reads see below. |
+| `search_file` | Directory or mount only: exact `path`, literal `query` (1-200 characters), optional `cursor` | `matches` with `path`, 1-based `line`, short `text` and opaque `position`; `bytes_scanned`, `complete`, `next_cursor` |
+
+For nearby lines, use `read` with a match's `position` and the same variant, source and path.
+Leave `start_line` at its default. This window uses at most 4 KiB on either side of the match start
+and at most `min(max_lines, 21)` lines, even for files over 10 MiB. It returns `content` with
+1-based `start_line`, `match_line` and `end_line`, not a whole-file line count or continuation.
+`truncated_before`/`truncated_after` indicate omitted file content; `partial_first_line` and
+`partial_last_line` flag clipped lines. Positions are not search cursors. Search again if stale.
 
 Search opens one regular file, without inventorying siblings. CVE IDs match whole tokens.
 Each page scans up to 1 MiB in chunks with a one-second scanning budget, at most 100 matches

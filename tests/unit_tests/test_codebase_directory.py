@@ -205,6 +205,46 @@ def test_search_validates_current_file_and_directory_scope(tree, monkeypatch):
             ref.search_file("v", "log", query, cursor)
 
 
+@pytest.mark.parametrize("replace_parent", [False, True])
+def test_position_checks_variant_and_current_member_after_pread(tree, monkeypatch, replace_parent):
+    from src.helpers import host_mount_helper as hh
+
+    cache, name, root = tree
+    path = root / "src/main.c"
+    with CodebaseDirectory(str(cache), name, index=False) as ref:
+        hit, = ref.search_file("v", "src/main.c", "needle", "")["matches"]
+        with pytest.raises(hh.HelperError, match="Invalid or stale"):
+            ref.read_match("other", hit["path"], hit["position"], 21)
+
+        pread = os.pread
+
+        def mutate(*args):
+            data = pread(*args)
+            if replace_parent:
+                path.parent.rename(root / "old-src")
+                path.parent.mkdir()
+            path.write_text("new build")
+            return data
+
+        monkeypatch.setattr(os, "pread", mutate)
+        with pytest.raises(hh.HelperError, match="changed"):
+            ref.read_match("v", hit["path"], hit["position"], 21)
+
+
+def test_position_limits_lines_around_the_hit(tree):
+    cache, name, root = tree
+    (root / "log").write_text("before\n" * 40 + "needle\n" + "after\n" * 40)
+    with CodebaseDirectory(str(cache), name, index=False) as ref:
+        hit, = ref.search_file("v", "log", "needle", "")["matches"]
+        page = ref.read_match("v", "log", hit["position"], 200)
+        assert page["content"] == "before\n" * 10 + "needle\n" + "after\n" * 10
+        assert (page["start_line"], page["match_line"], page["end_line"]) == (31, 41, 51)
+        assert page["truncated_before"] and page["truncated_after"]
+        assert not page["partial_first_line"] and not page["partial_last_line"]
+        one = ref.read_match("v", "log", hit["position"], 1)
+        assert one["content"] == "needle\n" and one["start_line"] == one["end_line"] == 41
+
+
 @pytest.mark.parametrize("count", [500_000, 500_001])
 def test_directory_entry_count_boundary(tree, monkeypatch, count):
     from contextlib import contextmanager

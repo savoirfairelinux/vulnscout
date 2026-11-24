@@ -19,6 +19,7 @@ attached folder; the helper only writes its own registry file.
 from __future__ import annotations
 
 import argparse
+import base64
 import codecs
 import ctypes
 import errno
@@ -46,7 +47,7 @@ import weakref
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from fnmatch import fnmatchcase, translate
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, ContextManager, Iterator
 
 PROTOCOL_VERSION = 4
 SOCKET_NAME = "helper.sock"
@@ -59,6 +60,8 @@ SEARCH_BYTES = 1024 * 1024
 SEARCH_CHUNK = 32 * 1024
 SEARCH_MATCHES = 100
 SEARCH_SECONDS = 1.0
+POSITION_RADIUS = 4096
+POSITION_LINES = 21
 _CURSOR_KEY = os.urandom(32)
 MAX_WALK_ENTRIES = 500_000
 LIST_TIME_LIMIT = 10.0
@@ -202,6 +205,85 @@ def _signed_cursor(binding: bytes, position: str) -> str:
     return position + "." + hmac.digest(_CURSOR_KEY, binding + b":" + position.encode(), "sha256").hex()
 
 
+def _file_version(fd: int) -> tuple[int, ...]:
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise HelperError("invalid", "Expected a regular file without links.")
+    return info.st_dev, info.st_ino, info.st_ctime_ns, info.st_mtime_ns, info.st_size
+
+
+def _position_binding(scope: str, path: str, version: tuple[int, ...]) -> bytes:
+    return json.dumps(["read-position-v1", scope, path, version]).encode()
+
+
+def _position_token(binding: bytes, offset: int, line: int) -> str:
+    data = struct.pack("!QQ", offset, line)
+    return base64.urlsafe_b64encode(data + hmac.digest(_CURSOR_KEY, binding + data, "sha256")).decode("ascii")
+
+
+def read_position(open_current: Callable[[], ContextManager[int]], scope: str, path: str,
+                  position: str, max_lines: int) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{64}", position):
+        raise HelperError("invalid", "Invalid read position; search this file again.")
+    offset, line = struct.unpack("!QQ", base64.urlsafe_b64decode(position)[:16])
+    with open_current() as fd:
+        version = _file_version(fd)
+        binding = _position_binding(scope, path, version)
+        if not hmac.compare_digest(position, _position_token(binding, offset, line)):
+            raise HelperError("invalid", "Invalid or stale read position; search this file again.")
+        result = _position_window(fd, path, version[-1], offset, line, max_lines)
+        if _file_version(fd) != version:
+            raise HelperError("unavailable", "File changed during positioned read; search again.")
+        # An ancestor may have been replaced or the mount revoked without changing the pinned inode.
+        with open_current() as current:
+            if _file_version(current) != version:
+                raise HelperError("unavailable", "Source changed during positioned read; search again.")
+    return result
+
+
+def _position_window(fd: int, path: str, size: int, offset: int, line: int, max_lines: int) -> dict:
+    start = max(0, offset - POSITION_RADIUS)
+    end = min(size, offset + POSITION_RADIUS)
+    # One guard byte distinguishes a clipped line from a window starting just after LF.
+    guard = int(start > 0)
+    block = os.pread(fd, end - start + guard, start - guard)
+    if len(block) != end - start + guard:
+        raise HelperError("unavailable", "Incomplete positioned read; search this file again.")
+    if b"\0" in block:
+        raise HelperError("invalid", "Positioned read encountered binary content.")
+    cut = guard + offset - start
+    left, right = block[guard:cut], block[cut:]
+    partial_first = bool(guard and not block.startswith(b"\n"))
+    if guard:
+        # Drop only continuation bytes of a UTF-8 character cut by the left byte boundary.
+        for _ in range(3):
+            if not left or left[0] & 0xC0 != 0x80:
+                break
+            left = left[1:]
+    try:
+        before = left.decode("utf-8").split("\n")
+        after, _ = codecs.utf_8_decode(right, "strict", end == size)
+    except UnicodeDecodeError as exc:
+        raise HelperError("invalid", "Positioned read encountered invalid UTF-8.") from exc
+    limit = min(max_lines, POSITION_LINES)
+    preceding = min((limit - 1) // 2, len(before) - 1)
+    dropped = preceding < len(before) - 1
+    prefix = "\n".join(before[-(preceding + 1):])
+    # Split only at LF, the same delimiter used by search to sign the match line.
+    tail = after.split("\n", limit - preceding)
+    suffix = "\n".join(tail) if len(tail) <= limit - preceding else "\n".join(tail[:-1]) + "\n"
+    content = prefix + suffix
+    truncated_after = end < size or len(suffix) < len(after)
+    result = {"path": path, "content": content, "match_line": line, "start_line": line - preceding,
+              "end_line": line + suffix.count("\n") - int(suffix.endswith("\n")),
+              "truncated_before": bool(start or dropped), "truncated_after": truncated_after,
+              "partial_first_line": partial_first and not dropped,
+              "partial_last_line": truncated_after and not suffix.endswith("\n")}
+    if len(json.dumps(result)) > MAX_CONTENT_BYTES - 1024:
+        raise HelperError("limit", "Positioned read exceeds the serialized response limit.")
+    return result
+
+
 def search_file_page(fd: int, scope: str, request: dict) -> dict:
     """Scan a pinned regular file. Offsets identify the first untested character, not the read head."""
     path = _string(request, "path", maximum=1024)
@@ -210,15 +292,10 @@ def search_file_page(fd: int, scope: str, request: dict) -> dict:
         raise HelperError("invalid", "Search query must be a single-line UTF-8 literal.")
     cursor = _string(request, "cursor", required=False, maximum=160)
 
-    def identity() -> tuple[int, ...]:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            raise HelperError("invalid", "Only a regular file without links can be searched.")
-        return info.st_dev, info.st_ino, info.st_ctime_ns, info.st_mtime_ns, info.st_size
-
-    version = identity()
+    version = _file_version(fd)
     size = version[-1]
     binding = json.dumps([scope, path, query, version]).encode()
+    position_binding = _position_binding(scope, path, version)
 
     offset, line, left_word = 0, 1, False
     if cursor:
@@ -252,32 +329,36 @@ def search_file_page(fd: int, scope: str, request: dict) -> dict:
         text = ("a" if left_word else " ") + decoded
         end = len(text) if eof else len(text) - len(query)
         pos = 1
+        byte_pos = offset
         while pos < end:
             hit = pattern.search(text, pos)
             stop = hit.start() if hit and hit.start() < end else end
             line += text.count("\n", pos, stop)
+            byte_pos += len(text[pos:stop].encode())
             pos = stop
             if pos == end:
                 break
             assert hit is not None
             before = text[max(1, pos - 60):pos].rsplit("\n", 1)[-1]
             after = text[hit.end():hit.end() + 60].split("\n", 1)[0]
-            row = {"path": path, "line": line, "text": before + query + after}
+            row = {"path": path, "line": line, "text": before + query + after,
+                   "position": _position_token(position_binding, byte_pos, line)}
             # Also allow separators and indentation when Flask pretty-prints the envelope.
             cost = len(json.dumps(row, ensure_ascii=True)) + 48
             if wire + cost > MAX_CONTENT_BYTES - 1024:  # Reserve the response envelope and cursor.
                 break
             matches.append(row)
             wire += cost
+            byte_pos += len(text[pos].encode())
             pos += 1  # Also find overlapping literal occurrences.
             if len(matches) == SEARCH_MATCHES or time.monotonic() >= deadline:
                 break
-        offset += len(text[1:pos].encode())
+        offset = byte_pos
         left_word = text[pos - 1].isalnum() or text[pos - 1] == "_"
         complete = eof and pos == len(text)
         if complete or pos < end or len(matches) == SEARCH_MATCHES or time.monotonic() >= deadline:
             break
-    if identity() != version:
+    if _file_version(fd) != version:
         raise HelperError("unavailable", "Source changed during search; restart this search.")
     return {"matches": matches, "bytes_scanned": scanned, "complete": complete,
             "next_cursor": None if complete else _signed_cursor(binding, f"{offset}:{line}:{int(left_word)}")}
@@ -1310,16 +1391,21 @@ class Helper:
             result["message"] = message
         return _fit_page(result, "files", offset)
 
-    def search_file(self, request: dict) -> dict:
-        parts = _relative_path(_string(request, "path", maximum=1024))
+    @contextmanager
+    def _approved_member(self, request: dict, parts: list[str]) -> Iterator[int]:
         root = self._attachment_fd(request)
         try:
             with self._open_member(root, parts, reject_hardlinks=True) as fd:
-                return search_file_page(fd, f"{_variant_id(request)}/mount:{request['alias']}", request)
+                yield fd
         except OSError as exc:
-            raise HelperError("unavailable", "Source file could not be searched.") from exc
+            raise HelperError("unavailable", "Source file could not be inspected.") from exc
         finally:
             os.close(root)
+
+    def search_file(self, request: dict) -> dict:
+        parts = _relative_path(_string(request, "path", maximum=1024))
+        with self._approved_member(request, parts) as fd:
+            return search_file_page(fd, f"{_variant_id(request)}/mount:{request['alias']}", request)
 
     @staticmethod
     @contextmanager
@@ -1378,6 +1464,14 @@ class Helper:
         parts = _relative_path(path)
         start_line = _integer(request, "start_line", 1, 1, 10 * 1024 * 1024)
         max_lines = _integer(request, "max_lines", MAX_READ_LINES, 1, MAX_READ_LINES)
+        if "position" in request:
+            position = _string(request, "position", maximum=160)
+            if _folder_parts(request):
+                raise HelperError("invalid", "Use an exact path, not folder, for a positioned read.")
+            if start_line != 1:
+                raise HelperError("invalid", "Use position or start_line, not both.")
+            scope = f"{_variant_id(request)}/mount:{validate_alias(request.get('alias'))}"
+            return read_position(lambda: self._approved_member(request, parts), scope, path, position, max_lines)
         fd = self._attachment_fd(request)
         try:
             text = self._text(self._read_file(fd, parts))
