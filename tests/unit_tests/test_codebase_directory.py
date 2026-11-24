@@ -92,6 +92,45 @@ def test_list_and_read_with_pagination(tree):
                 ref.read_lines(path)
 
 
+def test_config_must_be_a_single_link_regular_file_not_a_directory(tree):
+    cache, name, root = tree
+    path = "src/.config"
+    text = "# CONFIG_NET is not set\n"
+    (root / path).write_text(text)
+    (root / "src" / ".config.old").touch()
+    (root / ".config").mkdir()
+    (root / ".config" / "inner").touch()
+    with CodebaseDirectory(str(cache), name) as ref:
+        assert set(ref.entries) == {path, "src/main.c"}
+        assert ref.directory_count == 1
+    with CodebaseDirectory(str(cache), name, folder="src", index=False) as ref:
+        assert {"path": path, "type": "file"} in ref.list_children("v", "", 50)["children"]
+    with pytest.raises(ValueError, match="excluded"):
+        CodebaseDirectory(str(cache), name, folder=".config")
+    with CodebaseDirectory(str(cache), name, index=False) as ref:
+        page = ref.list_children("v", "", 50)
+        assert page["entries_filtered"] and page["children"] == [{"path": "src", "type": "directory"}]
+        with pytest.raises(LookupError, match="excluded"):
+            ref.read_lines(".config/inner")
+        assert ref.read_lines(path)["content"] == text
+        hit, = ref.search_file("v", path, "CONFIG_NET", "")["matches"]
+        assert ref.read_match("v", path, hit["position"], 5)["content"] == text
+        outside = cache / "outside"
+        outside.write_text("private")
+        for link in (os.link, os.symlink):
+            (root / path).unlink()
+            link(outside, root / path)
+            with pytest.raises((ValueError, OSError)):
+                ref.read_lines(path)
+            with pytest.raises((ValueError, OSError)):
+                ref.search_file("v", path, "private", "")
+            with pytest.raises((ValueError, OSError)):
+                ref.read_match("v", path, hit["position"], 5)
+            with CodebaseDirectory(str(cache), name, folder="src") as indexed:
+                assert ".config" not in indexed.entries
+                assert {"path": path, "type": "file"} not in indexed.list_children("v", "", 50)["children"]
+
+
 def test_sensitive_names_links_and_special_files_are_never_exposed(tree, tmp_path):
     cache, name, root = tree
     outside = tmp_path / "outside"

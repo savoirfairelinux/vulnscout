@@ -26,6 +26,11 @@ def test_snapshot_excludes_sensitive_and_linked_files(worker, tmp_path):
     (source / ".hidden").write_text("hidden")
     (source / "password.txt").write_text("secret")
     (source / "link").symlink_to(source / "source.c")
+    (source / ".config").write_text("CONFIG_NET=m\n")
+    (source / "build" / ".config").mkdir(parents=True)
+    (source / "build" / ".config" / "private").touch()
+    with pytest.raises(HelperError, match="excluded"):
+        helper._shell_root({"source": "directory", "directory": "context-p-v", "folder": "build/.config"})
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
@@ -33,10 +38,11 @@ def test_snapshot_excludes_sensitive_and_linked_files(worker, tmp_path):
         result = helper._shell_snapshot(root, str(snapshot))
     finally:
         os.close(root)
-    assert result["files"] == 1
-    assert result["bytes"] == len((source / "source.c").read_bytes())
+    assert result["files"] == 2
+    assert (snapshot / ".config").read_text() == "CONFIG_NET=m\n"
+    assert result["bytes"] == len((source / "source.c").read_bytes()) + len("CONFIG_NET=m\n")
     assert "Hidden" in result["excluded"]
-    assert sorted(p.name for p in snapshot.iterdir()) == ["source.c"]
+    assert sorted(p.name for p in snapshot.iterdir()) == [".config", "source.c"]
 
 
 def test_snapshot_rejects_hardlinks(worker, tmp_path):
