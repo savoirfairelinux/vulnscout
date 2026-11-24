@@ -246,27 +246,26 @@ class VulnScoutClient:
         """Browse a stored reference through HTTP, never the MCP host filesystem."""
         url = (f"{self.base_url}/api/variants/{quote(variant_id, safe='')}/context/files/"
                f"{quote(file_id, safe='')}/source")
-        try:
-            with httpx.Client(timeout=30) as http:
-                response = http.get(url, params=params)
-        except httpx.RequestError as exc:
-            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
-        if not response.is_success:
-            try:
-                error_msg = response.json().get("error", response.text)
-            except ValueError:
-                error_msg = response.text
-            raise VulnScoutError(error_msg)
-        return response.json()
+        return self._source_request(params.get("operation", "list"), "GET", url, 30, params=params)
 
     def run_codebase_shell(self, variant_id: str, file_id: str, command: str, folder: str = "") -> dict:
         """Run a bounded read-only worker for a selected variant source."""
         url = f"{self.base_url}/api/variants/{quote(variant_id, safe='')}/context/shell"
+        return self._source_request("shell", "POST", url, 70,
+                                    json={"file_id": file_id, "command": command, "folder": folder})
+
+    def _source_request(self, operation: str, method: str, url: str, timeout: int, **kwargs) -> dict:
         try:
-            with httpx.Client(timeout=70) as http:
-                response = http.post(url, json={"file_id": file_id, "command": command, "folder": folder})
+            with httpx.Client(timeout=timeout) as http:
+                response = http.request(method, url, **kwargs)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url} for {operation}: {exc}") from exc
+        except httpx.ReadTimeout as exc:
+            raise VulnScoutError(
+                f"{operation} response timed out after {timeout}s; lookup incomplete, not absence."
+            ) from exc
         except httpx.RequestError as exc:
-            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+            raise VulnScoutError(f"{operation} request failed ({type(exc).__name__}); lookup incomplete.") from exc
         if not response.is_success:
             try:
                 error_msg = response.json().get("error", response.text)

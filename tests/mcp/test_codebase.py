@@ -54,6 +54,20 @@ def test_connection_error():
         )
 
 
+@pytest.mark.parametrize("operation,seconds", [("search_file", 30), ("shell", 70)])
+def test_response_timeout_is_incomplete_not_connection_failure(operation, seconds):
+    client = VulnScoutClient(BASE_URL)
+    with respx.mock:
+        respx.route().mock(side_effect=httpx.ReadTimeout("slow"))
+        if operation == "shell":
+            with pytest.raises(VulnScoutError) as error:
+                client.run_codebase_shell("v1", "directory", "true")
+            message = str(error.value)
+        else:
+            message = _codebase_source_impl(client, "v1", "directory", {"operation": operation})
+        assert f"{operation} response timed out after {seconds}s" in message and "incomplete" in message
+
+
 @pytest.mark.parametrize("file_id", ["f1", "directory"])
 def test_scope_rejected_before_request(file_id):
     client = ScopedVulnScoutClient(BASE_URL, {"project_ids": ["p1"], "variant_ids": ["v1"]})

@@ -206,7 +206,7 @@ class CodebaseReference:
             raise LookupError("Source file not found.")
         size, member = self.entries[path]
         if size > MAX_FILE_BYTES:
-            raise ValueError("Source file exceeds the maximum readable file size.")
+            raise ValueError("Direct read exceeds the maximum readable file size of 10 MiB.")
         try:
             if isinstance(self.archive, zipfile.ZipFile) and isinstance(member, zipfile.ZipInfo):
                 with self.archive.open(member) as source:

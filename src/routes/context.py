@@ -191,7 +191,8 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory_varian
                     for entry in result["files"]:
                         entry["path"] = source.folder + "/" + entry["path"]
             elif operation == "children" and directory:
-                result = source.list_children(request.args.get("cursor", ""), _integer("limit", 50, 1, 200))
+                result = source.list_children(str(directory_variant), request.args.get("cursor", ""),
+                                              _integer("limit", 50, 1, 200))
             elif operation == "search_file" and directory:
                 result = source.search_file(str(directory_variant), request.args.get("path", ""),
                                             request.args.get("query", ""), request.args.get("cursor", ""))
@@ -1018,6 +1019,7 @@ def init_app(app):
         response 409 Error Directory name ownership conflicts or is ambiguous, or host folder unavailable.
         response 500 Error Stored reference is unavailable.
         response 503 Error Host folder helper is not running.
+        response 504 Error Host folder helper response timed out; lookup incomplete.
         """
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
         if err:

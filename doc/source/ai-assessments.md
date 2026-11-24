@@ -772,7 +772,8 @@ to manage attachments.
 **Unavailability is explicit.** When the helper is not running, the AI Context
 page shows **Host folder helper unavailable** and each folder as
 **Unavailable**. CLI attach fails if the helper cannot start. HTTP source reads
-return 503 if the helper cannot be reached; agents must report that as missing evidence. Restart it
+return 503 if the helper cannot be reached. A 504 instead means the helper response timed out;
+that lookup is incomplete, not proof the helper is stopped or evidence absent. Restart a stopped helper
 with `./vulnscout ai-context helper start` (or any `vulnscout` command). Its log
 is `helper.log` in the state directory.
 

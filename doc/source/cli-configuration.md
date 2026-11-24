@@ -53,6 +53,7 @@ container. The default cache and outputs are *children* of the build directory.
 settings in the old `cache/config.env`; it does not copy them into host policy:
 
 - `VULNSCOUT_HOST_HELPER_STATE_DIR`
+- `VULNSCOUT_SHELL_SNAPSHOT_MIB`
 - `VULNSCOUT_BIND_ADDRESS`
 - `VULNSCOUT_CONTAINER`, `VULNSCOUT_IMAGE`
 - `VULNSCOUT_CACHE_DIR`, `VULNSCOUT_OUTPUTS_DIR`, `VULNSCOUT_SBOM_CVE_CHECK_DB_DIR`
@@ -153,6 +154,7 @@ an already-running web server must be restarted to pick up config-file changes.
 | `USER_UID` | UID used to write output files | current user |
 | `USER_GID` | GID used to write output files | current group |
 | `VULNSCOUT_HOST_HELPER_STATE_DIR` | Host-only directory of the host folder helper (alias registry, PID and log); export on the host | `$VULNSCOUT_BUILD_DIR/host-helper` |
+| `VULNSCOUT_SHELL_SNAPSHOT_MIB` | Maximum aggregate shell snapshot size in MiB (positive integer). After `config set`, restart the host helper. Does not change direct reads or single-file searches. | `512` |
 
 The wrapper always publishes host port `7275` to container port `7275`; changing
 `FLASK_RUN_PORT` alone does not change this mapping. To use a different host

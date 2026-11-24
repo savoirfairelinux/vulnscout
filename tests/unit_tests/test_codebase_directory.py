@@ -16,6 +16,28 @@ def tree(tmp_path):
     return tmp_path, name, root
 
 
+def test_shallow_cursor_binds_variant_and_reports_only_visited_exclusions(tree):
+    from src.helpers.host_mount_helper import HelperError
+
+    cache, name, root = tree
+    (root / "empty").mkdir()
+    with CodebaseDirectory(str(cache), name, folder="empty", index=False) as ref:
+        page = ref.list_children("v", "", 50)
+        assert page["complete"] and page["visited_entries"] == 0 and not page["entries_filtered"]
+        for i in range(25):
+            (root / "empty" / f".hidden-{i}").touch()
+        page = ref.list_children("v", "", 50)
+        assert page["complete"] and page["visited_entries"] == 25 and page["entries_filtered"]
+        assert not page["children"] and ".hidden" not in str(page)
+    with CodebaseDirectory(str(cache), name, index=False) as ref:
+        cursor = ref.list_children("v", "", 1)["next_cursor"]
+        with pytest.raises(HelperError, match="restart"):
+            ref.list_children("another-variant", cursor, 1)
+        (root / "new").touch()
+        with pytest.raises(HelperError, match="restart"):
+            ref.list_children("v", cursor, 1)
+
+
 def test_directory_names_are_portable_sanitized_and_bounded():
     assert directory_name("demo", "dfdfdf") == "context-demo-dfdfdf"
     assert directory_name("../../a/b", " ! ") == "context-a-b-unnamed"

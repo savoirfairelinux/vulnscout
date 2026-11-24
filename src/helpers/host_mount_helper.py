@@ -79,7 +79,11 @@ MAX_CONNECTIONS = 8
 CONNECTION_TIMEOUT = 30.0
 SHELL_TIMEOUT = 15.0
 SHELL_OUTPUT_BYTES = 64 * 1024
-SHELL_SNAPSHOT_BYTES = 100 * 1024 * 1024
+DEFAULT_SNAPSHOT_MIB = 512
+SNAPSHOT_CHUNK = 256 * 1024
+DIRECT_READ_LIMIT_MESSAGE = (
+    "Direct read exceeds the maximum readable file size of 10 MiB; use search_codebase_file for a known log."
+)
 
 ALIAS_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 ALIAS_RULE = "Alias must be 1-32 lowercase letters, digits, '_' or '-', starting with a letter or digit."
@@ -194,6 +198,10 @@ def _relative_path(path: str) -> list[str]:
     return parts
 
 
+def _signed_cursor(binding: bytes, position: str) -> str:
+    return position + "." + hmac.digest(_CURSOR_KEY, binding + b":" + position.encode(), "sha256").hex()
+
+
 def search_file_page(fd: int, scope: str, request: dict) -> dict:
     """Scan a pinned regular file. Offsets identify the first untested character, not the read head."""
     path = _string(request, "path", maximum=1024)
@@ -212,13 +220,10 @@ def search_file_page(fd: int, scope: str, request: dict) -> dict:
     size = version[-1]
     binding = json.dumps([scope, path, query, version]).encode()
 
-    def token(position: str) -> str:
-        return position + "." + hmac.digest(_CURSOR_KEY, binding + b":" + position.encode(), "sha256").hex()
-
     offset, line, left_word = 0, 1, False
     if cursor:
         fields = re.fullmatch(r"(\d{1,20}):(\d{1,20}):([01])\.[0-9a-f]{64}", cursor, re.ASCII)
-        if not fields or not hmac.compare_digest(cursor, token(cursor.split(".")[0])):
+        if not fields or not hmac.compare_digest(cursor, _signed_cursor(binding, cursor.split(".")[0])):
             raise HelperError("invalid", "Search cursor is invalid or the file changed; restart this search.")
         offset, line = int(fields[1]), int(fields[2])
         left_word = fields[3] == "1"
@@ -275,7 +280,7 @@ def search_file_page(fd: int, scope: str, request: dict) -> dict:
     if identity() != version:
         raise HelperError("unavailable", "Source changed during search; restart this search.")
     return {"matches": matches, "bytes_scanned": scanned, "complete": complete,
-            "next_cursor": None if complete else token(f"{offset}:{line}:{int(left_word)}")}
+            "next_cursor": None if complete else _signed_cursor(binding, f"{offset}:{line}:{int(left_word)}")}
 
 
 def _directory_records(fd: int, cookie: int) -> Iterator[tuple[int, str]]:
@@ -315,26 +320,35 @@ def _directory_records(fd: int, cookie: int) -> Iterator[tuple[int, str]]:
         libc.closedir(stream)
 
 
-def children_page(fd: int, base: str, request: dict, *, provisioned: bool = False) -> dict:
+def children_page(fd: int, base: str, request: dict, scope: str, *, provisioned: bool = False) -> dict:
     limit = _integer(request, "limit", 50, 1, MAX_LIST_LIMIT)
     cursor = _string(request, "cursor", required=False, maximum=100)
-    info = os.fstat(fd)
-    key = hashlib.sha256(f"{info.st_dev}:{info.st_ino}:{info.st_mtime_ns}:{base}".encode()).hexdigest()[:24]
+
+    def directory_version() -> tuple[int, ...]:
+        info = os.fstat(fd)
+        return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns
+
+    version = directory_version()
+    binding = json.dumps(["children", scope, base, version]).encode()
     cookie = 0
     if cursor:
-        match = re.fullmatch(re.escape(key) + r":([0-9a-f]{1,16})", cursor)
-        if not match or int(match[1], 16) >= 2**63:
+        match = re.fullmatch(r"([0-9a-f]{1,16})\.[0-9a-f]{64}", cursor)
+        if not match or not hmac.compare_digest(cursor, _signed_cursor(binding, match[1])):
             raise HelperError("invalid", "Invalid or stale cursor; restart this folder listing.")
         cookie = int(match[1], 16)
     children: list[dict] = []
     visited = size = 0
-    complete = False
-    for after, name in _directory_records(fd, cookie):
-        visited += 1
+    complete = filtered = False
+    for records, (after, name) in enumerate(_directory_records(fd, cookie), 1):
         path = base + name
-        if (not _excluded(name) and _member_path_fits(path)
+        real = name not in (".", "..")
+        visited += int(real)
+        if (real and not _excluded(name) and _member_path_fits(path)
                 and (not provisioned or (":" not in path and len(path.encode()) <= 512))):
-            item = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            try:
+                item = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError as exc:
+                raise HelperError("invalid", "Directory changed; restart this folder listing.") from exc
             if stat.S_ISDIR(item.st_mode) or (stat.S_ISREG(item.st_mode) and item.st_nlink == 1):
                 child = {"path": path, "type": "directory" if stat.S_ISDIR(item.st_mode) else "file"}
                 cost = len(json.dumps(child)) + 2
@@ -342,13 +356,19 @@ def children_page(fd: int, base: str, request: dict, *, provisioned: bool = Fals
                     break  # Resume before this entry.
                 children.append(child)
                 size += cost
+            else:
+                filtered = True
+        elif real:
+            filtered = True
         cookie = after
-        if len(children) == limit or visited >= MAX_CHILD_RECORDS:
+        if len(children) == limit or records >= MAX_CHILD_RECORDS:
             break
     else:
         complete = True
-    return {"children": children, "complete": complete, "visited_entries": visited,
-            "next_cursor": None if complete else f"{key}:{cookie:x}"}
+    if directory_version() != version:
+        raise HelperError("invalid", "Directory changed; restart this folder listing.")
+    return {"children": children, "complete": complete, "visited_entries": visited, "entries_filtered": filtered,
+            "next_cursor": None if complete else _signed_cursor(binding, f"{cookie:x}")}
 
 
 def _open_absolute(path: str, *, create: bool = False) -> int:
@@ -764,7 +784,7 @@ def _exhausted_message(reason: str, operation: str, walk: "_Walk | None" = None)
               "or attach a smaller folder.")
     if reason == "entries":
         return f"The {operation} stopped after visiting {MAX_WALK_ENTRIES} entries{detail}; {advice}"
-    return f"The {operation} stopped at its time limit{detail}; {advice}"
+    return f"The {operation} stopped at its {LIST_TIME_LIMIT:g}s time limit{detail}; incomplete, not absence; {advice}"
 
 
 def _walk_message(message: str | None, walk: _Walk) -> str | None:
@@ -780,7 +800,10 @@ class Helper:
     """Request dispatcher for exact host-approved attachments."""
 
     def __init__(self, state_dir: str, cache_dir: str | None = None,
-                 engine: str | None = None, image: str | None = None):
+                 engine: str | None = None, image: str | None = None, snapshot_mib: int = DEFAULT_SNAPSHOT_MIB):
+        if snapshot_mib < 1:
+            raise ValueError("Shell snapshot limit must be a positive number of MiB.")
+        self.snapshot_bytes = snapshot_mib * 1024 * 1024
         self.state_dir = state_dir
         self.cache_dir = cache_dir
         self.engine = engine
@@ -968,30 +991,53 @@ class Helper:
 
     def _shell_snapshot(self, root: int, destination: str) -> dict:
         walk = _Walk(root, LIST_TIME_LIMIT)
-        budget = SHELL_SNAPSHOT_BYTES
+        budget = self.snapshot_bytes
         copied = 0
         try:
             for path, size in walk.files(""):
                 if size > budget:
-                    raise HelperError("limit", "Source exceeds the shell snapshot limit; choose a smaller folder.")
+                    raise _Exhausted("bytes")
                 parts = _relative_path(path)
-                content = self._read_file(root, parts, [budget], reject_hardlinks=True, max_bytes=SHELL_SNAPSHOT_BYTES)
-                budget -= len(content)
                 directory = os.path.join(destination, *parts[:-1])
                 os.makedirs(directory, mode=0o755, exist_ok=True)
                 current = destination
                 for part in parts[:-1]:
                     current = os.path.join(current, part)
                     os.chmod(current, 0o755)
-                with open(os.path.join(directory, parts[-1]), "xb") as target:
-                    target.write(content)
+                with self._open_member(root, parts, reject_hardlinks=True) as fd:
+                    before = os.fstat(fd)
+                    if before.st_nlink != 1:
+                        raise HelperError("invalid", "Links cannot be copied into a shell snapshot.")
+                    written = 0
+                    with open(os.path.join(directory, parts[-1]), "xb") as target:
+                        while True:
+                            walk.check_time()
+                            chunk = os.read(fd, min(SNAPSHOT_CHUNK, budget + 1))
+                            walk.check_time()
+                            if not chunk:
+                                break
+                            if len(chunk) > budget:
+                                raise _Exhausted("bytes")
+                            target.write(chunk)
+                            budget -= len(chunk)
+                            written += len(chunk)
+                    walk.check_time()
+                    after = os.fstat(fd)
+                    if (after.st_nlink != 1 or written != before.st_size or after.st_size != written
+                            or before.st_mtime_ns != after.st_mtime_ns or before.st_ctime_ns != after.st_ctime_ns):
+                        raise HelperError("unavailable", "Source changed while preparing the shell snapshot; retry.")
                 os.chmod(os.path.join(directory, parts[-1]), 0o644)
                 copied += 1
             if walk.io_errors or walk.skipped_paths:
                 raise HelperError("unavailable", "Source snapshot is incomplete due to inaccessible paths.")
         except _Exhausted as exc:
-            raise HelperError("limit", "Source snapshot traversal limit reached; choose a smaller folder.") from exc
-        return {"files": copied, "bytes": SHELL_SNAPSHOT_BYTES - budget,
+            limit = {"bytes": f"{self.snapshot_bytes} bytes", "entries": f"{MAX_WALK_ENTRIES} entries",
+                     "time": f"{LIST_TIME_LIMIT:g}s copy/traversal time"}[str(exc)]
+            raise HelperError("limit", f"Shell snapshot limit ({limit}) reached; inspection incomplete. "
+                              "Choose a smaller folder or use search_codebase_file for a known log.") from exc
+        except OSError as exc:
+            raise HelperError("unavailable", "Shell snapshot incomplete: source or destination I/O failure.") from exc
+        return {"files": copied, "bytes": self.snapshot_bytes - budget,
                 "excluded": "Hidden and sensitive names, links and special files are not included."}
 
     def shell(self, request: dict) -> dict:
@@ -1110,7 +1156,9 @@ class Helper:
             process.wait()
             process.stdout.close()
         return {"output": bytes(output[:SHELL_OUTPUT_BYTES]).decode("utf-8", errors="replace"),
-                "exit_code": process.returncode, "truncated": truncated, "timed_out": timed_out}
+                "exit_code": process.returncode, "truncated": truncated, "timed_out": timed_out,
+                **({"message": f"Shell command timed out at {SHELL_TIMEOUT:g}s; output is incomplete, not absence."}
+                   if timed_out else {})}
 
     def _validate_attach(self, request: dict, attachment_id: str) -> dict:
         variant_id = _variant_id(request)
@@ -1227,7 +1275,7 @@ class Helper:
     def list_children(self, request: dict) -> dict:
         fd, base = self._scoped_fd(request)
         try:
-            return children_page(fd, base, request)
+            return children_page(fd, base, request, f"{_variant_id(request)}/mount:{request['alias']}")
         except OSError as exc:
             raise HelperError("unavailable", "Folder changed or cannot be inspected; retry this lookup.") from exc
         finally:
@@ -1304,39 +1352,16 @@ class Helper:
         finally:
             os.close(fd)
 
-    def _read_file(self, root_fd: int, parts: list[str], budget: list[int] | None = None,
-                   *, reject_hardlinks: bool = False, max_bytes: int | None = None) -> bytes:
-        if max_bytes is None:
-            max_bytes = MAX_FILE_BYTES
-        with self._open_member(root_fd, parts, reject_hardlinks=reject_hardlinks) as fd:
+    def _read_file(self, root_fd: int, parts: list[str]) -> bytes:
+        with self._open_member(root_fd, parts, reject_hardlinks=False) as fd:
             info = os.fstat(fd)
-            if reject_hardlinks and info.st_nlink != 1:
-                raise HelperError("invalid", "Links and special files cannot be read.")
-            if info.st_size > max_bytes:
-                raise HelperError("limit", f"Source file exceeds the maximum readable file size of {max_bytes} bytes.")
-            if budget is not None and info.st_size > budget[0]:
-                raise _Exhausted("bytes")
-            limit = max_bytes + 1
-            if budget is not None:
-                limit = min(limit, budget[0])
-            content = os.read(fd, limit)
-            if reject_hardlinks:
-                after = os.fstat(fd)
-                if after.st_nlink != 1:
-                    raise HelperError("invalid", "Links and special files cannot be read.")
-                if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
-                        info.st_size, info.st_mtime_ns, info.st_ctime_ns):
-                    raise HelperError("unavailable", "Source changed while preparing the shell snapshot; retry.")
-            if budget is not None:
-                budget[0] -= len(content)
-                # A growing file must not spend past the budget.
-                if len(content) == limit and budget[0] == 0 and (
-                        not limit or len(content) != os.fstat(fd).st_size):
-                    raise _Exhausted("bytes")
+            if info.st_size > MAX_FILE_BYTES:
+                raise HelperError("limit", DIRECT_READ_LIMIT_MESSAGE)
+            content = os.read(fd, MAX_FILE_BYTES + 1)
+            if len(content) > MAX_FILE_BYTES:
+                raise HelperError("limit", DIRECT_READ_LIMIT_MESSAGE)
             if len(content) < info.st_size:
                 raise HelperError("unavailable", "Source file could not be read in full.")
-        if len(content) > max_bytes:
-            raise HelperError("limit", f"Source file exceeds the maximum readable file size of {max_bytes} bytes.")
         return content
 
     @staticmethod
@@ -1639,8 +1664,15 @@ def request(socket_path: str, payload: dict, timeout: float = 40.0, max_bytes: i
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout)
-            connection.connect(address)
-            connection.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            try:
+                connection.connect(address)
+            except socket.timeout as exc:
+                raise ConnectionError(f"Connection to the host helper timed out after {timeout:g}s.") from exc
+            try:
+                connection.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            except socket.timeout as exc:
+                raise ConnectionError(f"Sending the host helper request timed out after {timeout:g}s; "
+                                      "result incomplete.") from exc
             chunks: list[bytes] = []
             size = 0
             while True:
@@ -1702,7 +1734,7 @@ def _serve(args: argparse.Namespace) -> int:
     try:
         os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
         os.chmod(args.state_dir, 0o700)
-        helper = Helper(args.state_dir, args.cache_dir, args.engine, args.image)
+        helper = Helper(args.state_dir, args.cache_dir, args.engine, args.image, args.snapshot_mib)
         server = HelperServer(os.path.abspath(args.socket), helper, args.socket_label)
         # The host launcher reads this before issuing its one-shot permits. An
         # interrupted attach from a previous helper must never mint a new proof.
@@ -1765,6 +1797,7 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--cache-dir", help="Host cache directory containing provisioned codebases.")
     serve.add_argument("--engine", help="Host container engine executable for the shell worker.")
     serve.add_argument("--image", help="Trusted local image ID for the shell worker.")
+    serve.add_argument("--snapshot-mib", type=int, default=DEFAULT_SNAPSHOT_MIB, help="Shell snapshot byte cap in MiB.")
     serve.add_argument("--daemon", action="store_true")
     serve.add_argument("--pid-file")
     serve.add_argument("--log-file")

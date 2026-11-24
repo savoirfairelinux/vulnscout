@@ -597,7 +597,9 @@ Restart after a stale cursor. Invalid UTF-8 or NUL encountered during scanning i
 Use `children` to navigate without opening descendants or making a snapshot. Each page stops
 after at most 256 directory records (including exclusions), or earlier at its item/response limit.
 Pages are not sorted. Follow `next_cursor` even if `children` is empty and `complete` is false.
-Restart if the live folder changes and its cursor becomes stale. Read known paths without listing first.
+`entries_filtered` is true only if policy omitted a real entry visited on this page; neither it nor
+`visited_entries` counts `.` or `..`. It says nothing about unvisited entries. Reuse the cursor only
+for the same variant, source and folder. Restart on directory change. Read known paths without listing first.
 
 For `mount:<alias>` reads, `partial_line: true` means only a prefix of the
 requested line fits in the serialized response. Its suffix is omitted;

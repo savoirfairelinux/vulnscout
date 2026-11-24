@@ -72,16 +72,57 @@ def test_snapshot_rejects_concurrent_changes(worker, tmp_path, monkeypatch):
 
 
 def test_snapshot_rejects_budget_overflow(worker, tmp_path, monkeypatch):
-    from src.helpers import host_mount_helper
-
     helper, _ = worker
-    monkeypatch.setattr(host_mount_helper, "SHELL_SNAPSHOT_BYTES", 4)
+    monkeypatch.setattr(helper, "snapshot_bytes", 4)
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
     try:
-        with pytest.raises(HelperError, match="snapshot limit"):
+        with pytest.raises(HelperError, match=r"snapshot limit \(4 bytes\)"):
             helper._shell_snapshot(root, str(snapshot))
+    finally:
+        os.close(root)
+
+
+@pytest.mark.parametrize("reason", ["bytes", "time", "entries"])
+def test_snapshot_enforces_runtime_copy_and_walk_limits(worker, tmp_path, monkeypatch, reason):
+    from src.helpers import host_mount_helper as hh
+
+    helper, source = worker
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    path = source / "source.c"
+    path.write_bytes(b"A" * 64)
+    helper.snapshot_bytes = 64
+    monkeypatch.setattr(hh, "SNAPSHOT_CHUNK", 16)
+    clock = [0.0]
+    monkeypatch.setattr(hh.time, "monotonic", lambda: clock[0])
+    if reason == "entries":
+        monkeypatch.setattr(hh, "MAX_WALK_ENTRIES", 1)
+        (source / "other").touch()
+    read = os.read
+    reads = []
+
+    def bounded(fd, size):
+        assert size <= 16
+        reads.append(size)
+        if reason == "bytes" and len(reads) == 1:
+            with path.open("ab") as growing:
+                growing.write(b"+")
+        if reason == "time" and len(reads) == 2:
+            clock[0] += hh.LIST_TIME_LIMIT + 1
+        return read(fd, size)
+
+    monkeypatch.setattr(os, "read", bounded)
+    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    try:
+        limit = {"time": "10s copy/traversal time", "entries": "1 entries", "bytes": "64 bytes"}[reason]
+        with pytest.raises(HelperError, match=rf"Shell snapshot limit \({limit}\)"):
+            helper._shell_snapshot(root, str(snapshot))
+        if reason == "time":
+            assert (snapshot / path.name).stat().st_size == 16 and len(reads) == 2
+        elif reason == "bytes":
+            assert (snapshot / path.name).stat().st_size == 64 and reads[-1] == 1
     finally:
         os.close(root)
 
