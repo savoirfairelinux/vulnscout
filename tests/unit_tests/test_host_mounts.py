@@ -118,7 +118,7 @@ def test_shell_action_guard_is_variant_scoped(app, variant):
 def test_attached_folder_shell_end_to_end(client, variant, host, helper_server):
     import shutil
 
-    helper_server.engine = shutil.which("docker")
+    helper_server.engine = shutil.which("podman") or shutil.which("docker")
     helper_server.image = os.environ["VULNSCOUT_TEST_SHELL_IMAGE"]
     _attach(helper_server, variant, "src", host["app"])
     url = f"/api/variants/{variant.id}/context/shell"
