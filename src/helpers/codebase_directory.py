@@ -8,10 +8,11 @@ import io
 import os
 import re
 import stat
+from collections.abc import Iterator
 from contextlib import contextmanager, ExitStack
 
 from .codebase_reference import CodebaseReference, MAX_ENTRIES, MAX_FILE_BYTES, _safe_path
-from .host_mount_helper import children_page, _excluded
+from .host_mount_helper import children_page, search_file_page, _excluded
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
@@ -134,7 +135,8 @@ class CodebaseDirectory(CodebaseReference):
         base = self.folder + "/" if self.folder else ""
         return children_page(self.root_fd, base, {"cursor": cursor, "limit": limit}, provisioned=True)
 
-    def read_bytes(self, path: str) -> bytes:
+    @contextmanager
+    def _open_file(self, path: str) -> Iterator[tuple[io.FileIO, os.stat_result]]:
         if self.index and path not in self.entries:
             raise LookupError("Source file not found or excluded.")
         try:
@@ -161,12 +163,24 @@ class CodebaseDirectory(CodebaseReference):
                 info = os.fstat(source.fileno())
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise ValueError("Links and special source files cannot be read.")
-                if info.st_size > MAX_FILE_BYTES:
-                    raise ValueError("Source file exceeds the maximum readable file size of 10 MB.")
-                content = source.read(MAX_FILE_BYTES + 1)
-                if len(content) > MAX_FILE_BYTES:
-                    raise ValueError("Source file exceeds the maximum readable file size of 10 MB.")
-                return content
+                yield source, info
+
+    def search_file(self, variant_id: str, path: str, query: str, cursor: str) -> dict:
+        try:
+            with self._open_file(path) as (source, _):
+                return search_file_page(source.fileno(), f"{variant_id}/directory/{self.name}",
+                                        {"path": path, "query": query, "cursor": cursor})
+        except FileNotFoundError as exc:
+            raise LookupError("Source file not found or excluded.") from exc
+
+    def read_bytes(self, path: str) -> bytes:
+        with self._open_file(path) as (source, info):
+            if info.st_size > MAX_FILE_BYTES:
+                raise ValueError("Source file exceeds the maximum readable file size of 10 MB.")
+            content = source.read(MAX_FILE_BYTES + 1)
+            if len(content) > MAX_FILE_BYTES:
+                raise ValueError("Source file exceeds the maximum readable file size of 10 MB.")
+            return content
 
     def _iter_text_lines(self, path: str):
         content = self.read_bytes(path)

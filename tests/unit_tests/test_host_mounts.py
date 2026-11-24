@@ -603,6 +603,9 @@ class TestSourceBrowsing:
         assert _source(client, variant, "mount:src", operation="search", query="needle").status_code == 400
         read = _source(client, variant, "mount:build", operation="read", path="log.txt").get_json()
         assert read["content"] == "needle in build\n" and read["original_name"] == "Host folder build"
+        search = _source(client, variant, "mount:build", operation="search_file", path="log.txt", query="needle")
+        assert search.json["complete"] and search.json["matches"] == [
+            {"path": "log.txt", "line": 1, "text": "needle in build"}]
 
     def test_folder_scopes_host_folder_browsing(self, client, variant, host, helper_server):
         _attach(helper_server, variant, "src", host["app"])

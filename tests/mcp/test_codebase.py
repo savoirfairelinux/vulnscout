@@ -132,6 +132,10 @@ def test_registered_tools_forward_parameters():
         source.assert_called_with("v1", "f1", {
             "operation": "read", "path": "a.c", "start_line": 3, "max_lines": 5,
         })
+        server.tools["search_codebase_file"]("v1", "mount:src", "task.log", "CVE-2026-1234", "resume")
+        source.assert_called_with("v1", "mount:src", {
+            "operation": "search_file", "path": "task.log", "query": "CVE-2026-1234", "cursor": "resume",
+        })
 
 
 def test_shell_tool_is_embedded_only_and_scope_checked(monkeypatch):

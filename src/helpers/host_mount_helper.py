@@ -19,6 +19,7 @@ attached folder; the helper only writes its own registry file.
 from __future__ import annotations
 
 import argparse
+import codecs
 import ctypes
 import errno
 import fcntl
@@ -54,6 +55,11 @@ REGISTRY_NAME = "registry.json"
 MAX_RESPONSE_BYTES = 512 * 1024
 MAX_CONTENT_BYTES = 64 * 1024
 MAX_FILE_BYTES = 10 * 1024 * 1024
+SEARCH_BYTES = 1024 * 1024
+SEARCH_CHUNK = 32 * 1024
+SEARCH_MATCHES = 100
+SEARCH_SECONDS = 1.0
+_CURSOR_KEY = os.urandom(32)
 MAX_WALK_ENTRIES = 500_000
 LIST_TIME_LIMIT = 10.0
 MAX_LIST_LIMIT = 200
@@ -186,6 +192,90 @@ def _relative_path(path: str) -> list[str]:
         if _excluded(part):
             raise HelperError("not_found", "Source file not found or excluded.")
     return parts
+
+
+def search_file_page(fd: int, scope: str, request: dict) -> dict:
+    """Scan a pinned regular file. Offsets identify the first untested character, not the read head."""
+    path = _string(request, "path", maximum=1024)
+    query = _string(request, "query", maximum=200)
+    if "\n" in query or "\r" in query or not _printable(query.replace("\t", "")):
+        raise HelperError("invalid", "Search query must be a single-line UTF-8 literal.")
+    cursor = _string(request, "cursor", required=False, maximum=160)
+
+    def identity() -> tuple[int, ...]:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise HelperError("invalid", "Only a regular file without links can be searched.")
+        return info.st_dev, info.st_ino, info.st_ctime_ns, info.st_mtime_ns, info.st_size
+
+    version = identity()
+    size = version[-1]
+    binding = json.dumps([scope, path, query, version]).encode()
+
+    def token(position: str) -> str:
+        return position + "." + hmac.digest(_CURSOR_KEY, binding + b":" + position.encode(), "sha256").hex()
+
+    offset, line, left_word = 0, 1, False
+    if cursor:
+        fields = re.fullmatch(r"(\d{1,20}):(\d{1,20}):([01])\.[0-9a-f]{64}", cursor, re.ASCII)
+        if not fields or not hmac.compare_digest(cursor, token(cursor.split(".")[0])):
+            raise HelperError("invalid", "Search cursor is invalid or the file changed; restart this search.")
+        offset, line = int(fields[1]), int(fields[2])
+        left_word = fields[3] == "1"
+
+    literal = re.escape(query)
+    if re.fullmatch(r"CVE-[0-9]{4}-[0-9]{4,}", query, re.I):
+        literal = r"(?<!\w)" + literal + r"(?!\w)"
+    pattern = re.compile(literal)
+    deadline = time.monotonic() + SEARCH_SECONDS
+    scanned = wire = 0
+    matches: list[dict] = []
+    complete = False
+    while scanned + SEARCH_CHUNK <= SEARCH_BYTES:
+        block = os.pread(fd, SEARCH_CHUNK, offset)
+        scanned += len(block)
+        if len(block) != min(SEARCH_CHUNK, size - offset):
+            raise HelperError("unavailable", "File size changed or cannot be verified.")
+        eof = offset + len(block) == size
+        if b"\0" in block:
+            raise HelperError("invalid", "Source file is binary; only UTF-8 text can be searched.")
+        try:
+            decoded, _ = codecs.utf_8_decode(block, "strict", eof)
+        except UnicodeDecodeError as exc:
+            raise HelperError("invalid", "Source file is not UTF-8 text.") from exc
+        # Carry left word context and leave enough lookahead for a whole query and its right boundary.
+        text = ("a" if left_word else " ") + decoded
+        end = len(text) if eof else len(text) - len(query)
+        pos = 1
+        while pos < end:
+            hit = pattern.search(text, pos)
+            stop = hit.start() if hit and hit.start() < end else end
+            line += text.count("\n", pos, stop)
+            pos = stop
+            if pos == end:
+                break
+            assert hit is not None
+            before = text[max(1, pos - 60):pos].rsplit("\n", 1)[-1]
+            after = text[hit.end():hit.end() + 60].split("\n", 1)[0]
+            row = {"path": path, "line": line, "text": before + query + after}
+            # Also allow separators and indentation when Flask pretty-prints the envelope.
+            cost = len(json.dumps(row, ensure_ascii=True)) + 48
+            if wire + cost > MAX_CONTENT_BYTES - 1024:  # Reserve the response envelope and cursor.
+                break
+            matches.append(row)
+            wire += cost
+            pos += 1  # Also find overlapping literal occurrences.
+            if len(matches) == SEARCH_MATCHES or time.monotonic() >= deadline:
+                break
+        offset += len(text[1:pos].encode())
+        left_word = text[pos - 1].isalnum() or text[pos - 1] == "_"
+        complete = eof and pos == len(text)
+        if complete or pos < end or len(matches) == SEARCH_MATCHES or time.monotonic() >= deadline:
+            break
+    if identity() != version:
+        raise HelperError("unavailable", "Source changed during search; restart this search.")
+    return {"matches": matches, "bytes_scanned": scanned, "complete": complete,
+            "next_cursor": None if complete else token(f"{offset}:{line}:{int(left_word)}")}
 
 
 def _directory_records(fd: int, cookie: int) -> Iterator[tuple[int, str]]:
@@ -1125,12 +1215,13 @@ class Helper:
         """Require the current host-approved alias to match the database mount path."""
         _string(request, "mount_path")
         operation = request.get("source_operation")
-        if operation not in ("list", "read", "children"):
-            raise HelperError("invalid", "Operation must be list, children or read.")
+        if operation not in ("list", "read", "children", "search_file"):
+            raise HelperError("invalid", "Operation must be list, children, read or search_file.")
         return {
             "list": self.list_files,
             "read": self.read,
             "children": self.list_children,
+            "search_file": self.search_file,
         }[operation](request)
 
     def list_children(self, request: dict) -> dict:
@@ -1171,10 +1262,20 @@ class Helper:
             result["message"] = message
         return _fit_page(result, "files", offset)
 
-    def _read_file(self, root_fd: int, parts: list[str], budget: list[int] | None = None,
-                   *, reject_hardlinks: bool = False, max_bytes: int | None = None) -> bytes:
-        if max_bytes is None:
-            max_bytes = MAX_FILE_BYTES
+    def search_file(self, request: dict) -> dict:
+        parts = _relative_path(_string(request, "path", maximum=1024))
+        root = self._attachment_fd(request)
+        try:
+            with self._open_member(root, parts, reject_hardlinks=True) as fd:
+                return search_file_page(fd, f"{_variant_id(request)}/mount:{request['alias']}", request)
+        except OSError as exc:
+            raise HelperError("unavailable", "Source file could not be searched.") from exc
+        finally:
+            os.close(root)
+
+    @staticmethod
+    @contextmanager
+    def _open_member(root_fd: int, parts: list[str], *, reject_hardlinks: bool) -> Iterator[int]:
         directory_fd = root_fd
         opened: list[int] = []
         try:
@@ -1199,6 +1300,15 @@ class Helper:
             for item in opened:
                 os.close(item)
         try:
+            yield fd
+        finally:
+            os.close(fd)
+
+    def _read_file(self, root_fd: int, parts: list[str], budget: list[int] | None = None,
+                   *, reject_hardlinks: bool = False, max_bytes: int | None = None) -> bytes:
+        if max_bytes is None:
+            max_bytes = MAX_FILE_BYTES
+        with self._open_member(root_fd, parts, reject_hardlinks=reject_hardlinks) as fd:
             info = os.fstat(fd)
             if reject_hardlinks and info.st_nlink != 1:
                 raise HelperError("invalid", "Links and special files cannot be read.")
@@ -1225,8 +1335,6 @@ class Helper:
                     raise _Exhausted("bytes")
             if len(content) < info.st_size:
                 raise HelperError("unavailable", "Source file could not be read in full.")
-        finally:
-            os.close(fd)
         if len(content) > max_bytes:
             raise HelperError("limit", f"Source file exceeds the maximum readable file size of {max_bytes} bytes.")
         return content

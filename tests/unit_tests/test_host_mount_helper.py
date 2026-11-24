@@ -83,6 +83,97 @@ def attached(helper, tree, alias="src", path=None):
     return binding
 
 
+def test_search_large_known_file_resumes_without_inventory(helper, tree, monkeypatch):
+    root = tree["app"]
+    query = "CVE-2026-1234"
+    path = root / "task.log"
+    path.write_bytes(b"x" * (hh.SEARCH_CHUNK - 2) + "\u20ac".encode() + b"x" * hh.MAX_FILE_BYTES
+                     + f"\n{query}0\nnot{query}\n{query}_tag\n{query} patched\n".encode())
+    attached(helper, tree)
+    params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), source_operation="search_file",
+                  path=path.name, query=query)
+    assert "maximum readable" in err(helper, "read", variant_id=VARIANT, alias="src", path=path.name)[1]
+    monkeypatch.setattr(os, "scandir", lambda *a: pytest.fail("Unexpected inventory"))
+    monkeypatch.setattr(helper, "_shell_snapshot", lambda *a: pytest.fail("Unexpected snapshot"))
+    offsets = []
+    pread = os.pread
+
+    def track(fd, size, offset):
+        assert os.path.samefile(f"/proc/self/fd/{fd}", path)
+        offsets.append(offset)
+        return pread(fd, size, offset)
+
+    monkeypatch.setattr(os, "pread", track)
+    cursor = ""
+    rows = []
+    while True:
+        page = ok(helper, "source", **params, cursor=cursor)
+        assert page["bytes_scanned"] <= hh.SEARCH_BYTES
+        rows.extend(page["matches"])
+        if page["complete"]:
+            assert cursor and page["next_cursor"] is None
+            break
+        assert cursor != page["next_cursor"]
+        cursor = page["next_cursor"]
+    assert offsets == sorted(set(offsets))
+    assert rows == [{"path": "task.log", "line": 5, "text": f"{query} patched"}]
+
+
+def test_search_chunk_boundary_time_and_cursor_binding(helper, tree, monkeypatch):
+    root = tree["app"]
+    path = root / "log"
+    query = "CVE-2026-1234"
+    path.write_text(" " * (hh.SEARCH_CHUNK - 3) + query + "\n" + query + "0")
+    (root / "other").write_bytes(path.read_bytes())
+    attached(helper, tree)
+    params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), source_operation="search_file",
+                  query=query, path=path.name)
+    monkeypatch.setattr(hh, "SEARCH_SECONDS", 0)
+    first = ok(helper, "source", **params)
+    assert first["bytes_scanned"] == hh.SEARCH_CHUNK and not first["matches"] and not first["complete"]
+    params["cursor"] = first["next_cursor"]
+    second = ok(helper, "source", **params)
+    assert [m["line"] for m in second["matches"]] == [1]
+    assert ok(helper, "source", **params) == second
+    for change in ({"path": "other"}, {"query": query + "0"}, {"cursor": "1:99:0.bad"}):
+        assert "cursor" in err(helper, "source", **{**params, **change})[1]
+    path.write_text("different content")
+    assert "changed" in err(helper, "source", **params)[1]
+
+
+def test_search_match_and_serialized_budgets_resume_unreturned_hit(helper, tree, monkeypatch):
+    root = tree["app"]
+    (root / "log").write_text(("\U0001f600" * 50 + "??\n") * 140)
+    attached(helper, tree)
+    params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), source_operation="search_file",
+                  path="log", query="??")
+    monkeypatch.setattr(hh, "SEARCH_MATCHES", 3)
+    page = ok(helper, "source", **params)
+    assert not page["complete"] and len(page["matches"]) == 3
+    rows = page["matches"]
+    monkeypatch.setattr(hh, "SEARCH_MATCHES", 100)
+    monkeypatch.setattr(hh, "MAX_CONTENT_BYTES", 8192)
+    while not page["complete"]:
+        page = ok(helper, "source", **params, cursor=page["next_cursor"])
+        assert len(json.dumps(page)) < hh.MAX_CONTENT_BYTES
+        assert 0 < len(page["matches"]) < 100
+        rows.extend(page["matches"])
+    assert [row["line"] for row in rows] == list(range(1, 141))
+
+
+def test_search_rejects_forbidden_members(helper, tree):
+    root = tree["app"]
+    os.mkfifo(root / "fifo")
+    os.link(tree["outside"] / "plain.c", root / "hard")
+    (root / "invalid").write_bytes(b"needle\xff")
+    attached(helper, tree)
+    for path in ("../outside/plain.c", ".git/config", "api_token.txt", "escape_dir/plain.c", "escape.c",
+                 "fifo", "hard", "src", "blob.bin", "invalid"):
+        code, _ = err(helper, "source", variant_id=VARIANT, alias="src", mount_path=str(root),
+                      source_operation="search_file", query="needle", path=path)
+        assert code in ("invalid", "not_found"), path
+
+
 def test_shallow_pages_bound_actual_work_and_do_not_open_children(helper, tree, monkeypatch):
     root = tree["app"]
     wide = root / "wide"

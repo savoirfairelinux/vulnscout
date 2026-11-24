@@ -580,13 +580,19 @@ GET /api/variants/<variant_id>/context/files/<file_id>/source
 
 For an upload, the file UUID must belong to that variant. For the variant's active server directory,
 use the literal `file_id=directory`; unprovisioned directories return `404`.
-`operation` selects `list` (recursive, default), `children` (directories or mounts only) or `read`.
+`operation` selects `list` (recursive, default), `read`, or, for a directory or mount, `children` or `search_file`.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
 | `children` | `folder` (relative, default root), `cursor` (opaque continuation), `limit` (1–200, default 50) | `children` with root-relative `path` and `type` (`directory` or `file`), `visited_entries`, `complete`, `next_cursor`; no total |
 | `list` | `folder` (directory or mount only), `pattern` (case-sensitive glob relative to folder, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
 | `read` | `path` (exact listed member path), `start_line` (1-based, default 1), `max_lines` (1-200, default 200) | UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`; at most 64 KB of content |
+| `search_file` | Directory or mount only: exact `path`, literal `query` (1-200 characters), optional `cursor` | `matches` with `path`, 1-based `line` and short `text`, `bytes_scanned`, `complete`, `next_cursor` |
+
+Search opens one regular file, without inventorying siblings. CVE IDs match whole tokens.
+Each page scans up to 1 MiB in chunks with a one-second scanning budget, at most 100 matches
+and a 64 KiB serialized response. Continue even after empty pages; only `complete=true` indicates EOF.
+Restart after a stale cursor. Invalid UTF-8 or NUL encountered during scanning invalidates the lookup.
 
 Use `children` to navigate without opening descendants or making a snapshot. Each page stops
 after at most 256 directory records (including exclusions), or earlier at its item/response limit.
@@ -603,7 +609,8 @@ Missing references/members return 404; unavailable stored files return 500 with 
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
 Directory operations exclude hidden/sensitive names, symbolic/hard links and special files. They visit
-at most 500,000 entries, read at most 10 MiB/file and return at most 64 KiB of serialized JSON.
+at most 500,000 entries and return at most 64 KiB of serialized JSON. The 10 MiB whole-file
+read limit does not apply to single-file search.
 Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.
 Uploads are not extracted or executed.
 

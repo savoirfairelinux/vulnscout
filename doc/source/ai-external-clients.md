@@ -104,6 +104,7 @@ Once configured, the agent can call these assessment and context tools
 | `list_variants`            | List every variant across all projects                      |
 | `get_merged_context`       | Fetch the merged project + variant context (project description plus variant description, codebase directory, environment, STRIDE-rendered threat model and risks, other info). With `include_model=true`, it also returns the editable System text and STRIDE rows as JSON with their IDs |
 | `list_codebase_children` / `list_codebase_files` / `read_codebase_file` / `read_codebase_files` | Navigate the variant's directory (`file_id="directory"`) or an attached host folder (`file_id="mount:<alias>"`) one level at a time. Read known paths directly; scope recursive filename matching with `folder`. |
+| `search_codebase_file` | Stream a literal from one known directory or mount file, including large logs. Follow `next_cursor` until `complete`. |
 | `get_ai_context_form_guide` | Return the AI Context form guide: what each field and table expects, and the copy-ready reply format used to help fill it |
 | `get_project_context` / `update_project_context` | Read / replace a project's description |
 | `update_variant_context`   | Replace a variant's text context fields (description, environment, other info) — full replacement, not a partial update. The threat model and risks are edited with `update_variant_threat_model`; this tool does not change the variant's directory |

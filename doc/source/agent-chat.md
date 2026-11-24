@@ -33,7 +33,9 @@ on the Copilot runtime's own private-address guard. Set
 `VULNSCOUT_AGENT_WEB_ACCESS` to `off` (or `0`, `false`, `no`) to disable web
 fetch; the skills then report missing NVD/advisory evidence. The embedded agent
 uses `list_codebase_children` for navigation, direct reads for known paths, and
-`list_codebase_files` for filename matching in a narrowed folder. For a known
+`list_codebase_files` for filename matching in a narrowed folder. Use `search_codebase_file` directly
+for a literal in a known log, even over the 10 MiB direct-read limit. Follow `next_cursor` until
+`complete`; neither a 100 MiB snapshot limit nor a timeout establishes absence. For a known
 artifact requiring command-line inspection it can use `run_codebase_shell` on a filtered, read-only snapshot
 of a variant's provisioned directory or attached host folder. The host helper
 starts a separate container for each command with no network, a read-only root,

@@ -846,6 +846,7 @@ class TestCodebaseDirectory:
 
         register_tools(Server(), api)
         assert "outside" in tools["list_codebase_children"](str(uuid.uuid4()), "directory")
+        assert "outside" in tools["search_codebase_file"](str(uuid.uuid4()), "directory", "log", target)
 
         def call(name, **kwargs):
             return json.loads(tools[name](str(variant.id), "directory", **kwargs))
@@ -873,12 +874,11 @@ class TestCodebaseDirectory:
         assert (task["file_id"], task["path"], task["start_line"]) == ("directory", "image-42.tasks", 1)
         path = f"{folder}/{log_name}"
         if path in {row["path"] for row in logs["files"]}:
-            log = call("read_codebase_file", path=path)
-            citations = [(log["file_id"], log["path"], n, line) for n, line in
-                         enumerate(log["content"].splitlines(), log["start_line"]) if target in line.split()]
-            assert log_present and citations == [("directory", path, 2, f"{target} unpatched")]
+            log = call("search_codebase_file", path=path, query=target)
+            assert log_present and log["complete"] and log["file_id"] == "directory"
+            assert log["matches"] == [{"path": path, "line": 2, "text": f"{target} unpatched"}]
         else:
-            missing = tools["read_codebase_file"](str(variant.id), "directory", path)
+            missing = tools["search_codebase_file"](str(variant.id), "directory", path, target)
             assert missing.startswith("Error:") and "not found" in missing
             manifest = call("read_codebase_file", path="image-manifest")
             assert not log_present and manifest["content"] == "image-42: libsample installed\n"
