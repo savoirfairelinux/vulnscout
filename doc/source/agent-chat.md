@@ -35,7 +35,7 @@ fetch; the skills then report missing NVD/advisory evidence. The embedded agent
 uses `list_codebase_children` for navigation, direct reads for known paths, and
 `list_codebase_files` for filename matching in a narrowed folder. Use `search_codebase_file` directly
 for a literal in a known log, even over the 10 MiB direct-read limit. Follow `next_cursor` until
-`complete`; neither a 100 MiB snapshot limit nor a timeout establishes absence. For a known
+`complete`; neither snapshot exhaustion nor a timeout establishes absence. For a known
 artifact requiring command-line inspection it can use `run_codebase_shell` on a filtered, read-only snapshot
 of a variant's provisioned directory or attached host folder. The host helper
 starts a separate container for each command with no network, a read-only root,
@@ -51,8 +51,12 @@ The worker requires the host helper and a local Docker or Podman engine; it fail
 closed if unavailable. Build the current image and start VulnScout with the
 matching launcher, then start the helper with `./vulnscout ai-context helper start`.
 Only `directory` and `mount:<alias>` are supported, not
-uploads. Select a relative `folder` when a tree exceeds the 100 MiB snapshot
-or 500,000-entry limit. Hidden and sensitive names, symlinks and special files
+uploads. The default shell snapshot cap is **512 MiB** across all copied files, independent of
+the 10 MiB direct-read limit. On the host, for example, run
+`./vulnscout config set VULNSCOUT_SHELL_SNAPSHOT_MIB 768` followed by
+`./vulnscout ai-context helper restart`. The setting takes a positive integer in MiB.
+Narrow `folder` if copying reaches its byte, 500,000-entry or 10-second snapshot limit.
+Hidden and sensitive names, symlinks and special files
 are excluded; hardlinks, unreadable files and incomplete walks fail the snapshot.
 Commands time out after 15 seconds and output is limited to 64 KiB. Snapshot
 exclusions and truncation prevent conclusions from a missing match. The worker

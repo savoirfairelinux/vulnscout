@@ -210,9 +210,13 @@ def test_shallow_pages_bound_actual_work_and_do_not_open_children(helper, tree, 
     monkeypatch.setattr(helper, "_shell_snapshot", lambda *a: pytest.fail("Unexpected snapshot"))
     page = ok(helper, "source", **params, limit=1)
     assert len(page["children"]) == 1 and 0 < len(records) < 10
+    excluded = {".hidden", "key.pem", "linked", "item-1", "hardlink", "pipe"}
+    assert page["entries_filtered"] == bool(excluded.intersection(records))
     seen = list(page["children"])
     while not page["complete"]:
+        start = len(records)
         page = ok(helper, "source", **params, cursor=page["next_cursor"], limit=97)
+        assert page["entries_filtered"] == bool(excluded.intersection(records[start:]))
         seen.extend(page["children"])
     assert page["next_cursor"] is None
     assert len(records) == len(set(records))  # Continuations do not replay earlier names.
@@ -232,8 +236,14 @@ def test_excluded_children_progress_and_scope(helper, tree):
     attached(helper, tree)
     params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), source_operation="children", folder="ignored")
     page = ok(helper, "source", **params)
-    assert not page["children"] and not page["complete"] and page["visited_entries"] == 256
+    assert page["entries_filtered"] and not page["children"] and not page["complete"]
+    assert 254 <= page["visited_entries"] <= 256  # Directory cookies may include . and .. in any order.
     cursor = page["next_cursor"]
+    cookie, signature = cursor.split(".")
+    forged = f"{int(cookie, 16) ^ 1:x}.{signature}"
+    assert "restart" in err(helper, "source", **params, cursor=forged)[1]
+    attached(helper, tree, alias="other")
+    assert "restart" in err(helper, "source", **{**params, "alias": "other"}, cursor=cursor)[1]
     assert err(helper, "source", **{**params, "folder": ""}, cursor=cursor)[0] == "invalid"
     for change, code in (({"folder": "../outside"}, "invalid"), ({"folder": ".git"}, "not_found"),
                          ({"folder": "escape_dir"}, "invalid"), ({"variant_id": str(uuid.uuid4())}, "not_found"),
@@ -246,6 +256,32 @@ def test_excluded_children_progress_and_scope(helper, tree):
     old = excluded.stat()
     os.utime(excluded, ns=(old.st_atime_ns, old.st_mtime_ns + 2_000_000_000))
     assert err(helper, "source", **params, cursor=cursor)[0] == "invalid"
+
+
+@pytest.mark.parametrize("limit", [1, 50])
+@pytest.mark.parametrize("vanishes", [False, True])
+def test_shallow_page_rejects_changes_during_read(helper, tree, monkeypatch, limit, vanishes):
+    root = tree["app"]
+    folder = root / "one"
+    folder.mkdir()
+    member = folder / "file"
+    member.touch()
+    attached(helper, tree)
+    records = hh._directory_records
+
+    def change(fd, cookie):
+        for after, name in records(fd, cookie):
+            if name == member.name:
+                if vanishes:
+                    member.unlink()
+                else:
+                    (folder / "new").touch()
+            yield after, name
+
+    monkeypatch.setattr(hh, "_directory_records", change)
+    code, msg = err(helper, "source", variant_id=VARIANT, alias="src", mount_path=str(root),
+                    source_operation="children", folder="one", limit=limit)
+    assert code == "invalid" and "restart" in msg
 
 
 @pytest.mark.parametrize("make_path, code", [
@@ -1025,9 +1061,15 @@ def test_daemon_writes_pid_answers_ping_and_cleans_up_on_sigterm(tree):
     socket_path = tree["tmp"] / "cache" / "host-helper" / hh.SOCKET_NAME
     state = tree["tmp"] / "state"
     pid_file = state / "helper.pid"
+    cache = socket_path.parent.parent
+    folder = cache / "context-build"
+    folder.mkdir(parents=True)
+    with (folder / "log").open("wb") as member:
+        member.truncate(1024 * 1024 + 1)
     started = subprocess.run([
         sys.executable, script, "serve", "--daemon", "--socket", str(socket_path), "--state-dir", str(state),
         "--pid-file", str(pid_file), "--log-file", str(state / "helper.log"),
+        "--cache-dir", str(cache), "--snapshot-mib", "1", "--engine", "/bin/false", "--image", "fixture",
     ], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
     assert started.returncode == 0, started.stderr
     for _ in range(100):
@@ -1040,6 +1082,10 @@ def test_daemon_writes_pid_answers_ping_and_cleans_up_on_sigterm(tree):
                               capture_output=True, text=True, timeout=30)
         assert ping.returncode == 0 and ping.stdout == ""
         assert stat.S_IMODE(state.stat().st_mode) == 0o700
+        reply = hh.request(str(socket_path), {
+            "op": "shell", "source": "directory", "directory": folder.name, "command": "true",
+        })
+        assert reply["code"] == "limit" and "1048576 bytes" in reply["error"]
     finally:
         os.kill(pid, signal.SIGTERM)
     for _ in range(100):

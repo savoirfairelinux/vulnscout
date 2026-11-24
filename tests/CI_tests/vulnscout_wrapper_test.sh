@@ -858,6 +858,8 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
     mkdir -p "$roots/app" "$roots/build"
     socket="$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock"
     state="$TEST_DIR/private-state"
+    expect_fail "positive integer" config set VULNSCOUT_SHELL_SNAPSHOT_MIB 0
+    run_ok config set VULNSCOUT_SHELL_SNAPSHOT_MIB 768
     (cd "$TEST_DIR" && run_ok config set VULNSCOUT_HOST_HELPER_STATE_DIR private-state)
     run_ok config get VULNSCOUT_HOST_HELPER_STATE_DIR
     grep -Fxq "$state" "$TEST_DIR/stdout"
@@ -889,6 +891,7 @@ if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
 
     # An unchanged configuration reuses the running helper.
     pid="$(cat "$state/helper.pid")"
+    grep -zFxq -- '768' "/proc/$pid/cmdline"
     VULNSCOUT_TEST_IMAGE_PREFIX=sha256: run_ok ai-context helper status
     VULNSCOUT_TEST_IMAGE_PREFIX=sha256: run_ok ai-context helper start
     [[ "$(cat "$state/helper.pid")" == "$pid" ]]

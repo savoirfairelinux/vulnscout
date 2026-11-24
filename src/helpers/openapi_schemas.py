@@ -773,7 +773,9 @@ SCHEMAS: dict[str, Any] = {
                 "children": _array(_object({"path": _STRING, "type": {"type": "string", "enum": ["file", "directory"]}},
                                            ("path", "type"))),
                 "complete": _BOOL, "next_cursor": {**_STRING, "nullable": True}, "visited_entries": _COUNT,
-            }, ("file_id", "original_name", "children", "complete", "next_cursor", "visited_entries")),
+                "entries_filtered": _BOOL,
+            }, ("file_id", "original_name", "children", "complete", "next_cursor",
+                "visited_entries", "entries_filtered")),
             _object({
                 "file_id": _STRING, "original_name": _STRING,
                 "files": _array(_object({"path": _STRING, "size": _COUNT}, ("path", "size"))),

@@ -179,6 +179,21 @@ class TestAccessControl:
 
 class TestHelperUnavailable:
 
+    def test_slow_source_response_is_not_an_offline_helper(self, client, host, helper_server, variant, monkeypatch):
+        _attach(helper_server, variant, "src", host["app"])
+        original = hh.request
+
+        def slow(path, payload, **kwargs):
+            if payload["op"] == "source":
+                raise TimeoutError()
+            return original(path, payload, **kwargs)
+
+        monkeypatch.setattr(hh, "request", slow)
+        response = _source(client, variant, "mount:src", operation="children")
+        assert response.status_code == 504 and response.json["code"] == "timeout"
+        assert "children response timed out after 40s" in response.json["error"]
+        assert "incomplete" in response.json["error"] and "not running" not in response.json["error"]
+
     def test_denied_helper_socket_reports_permissions(self, helper_server, monkeypatch):
         from src.helpers import host_mounts as transport
 

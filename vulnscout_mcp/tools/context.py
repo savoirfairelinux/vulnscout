@@ -568,6 +568,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         order. No recursive walk, content read, shell snapshot or total. limit is 1–200.
         Even an empty page is incomplete until complete=true. To continue, pass its
         next_cursor unchanged for the same folder. Restart if the cursor is stale.
+        entries_filtered means policy omitted real entries on this page, not that the folder is empty.
         Read known paths directly; use list_codebase_files for narrowed filename matching.
         """
         return _codebase_source_impl(client, variant_id, file_id, {
@@ -664,7 +665,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
             are not supported. Scope folder to a known artifact's containing directory.
             Never use a snapshot for navigation; use list_codebase_children. Hidden and sensitive names,
             links, special files and hardlinks are excluded or rejected.
-            The 100 MiB snapshot cap is distinct from the 10 MiB direct read cap and a command timeout.
+            The configurable snapshot cap (default 512 MiB) is distinct from the 10 MiB direct read cap
+            and from snapshot traversal, copy or command timeouts.
             Use search_codebase_file for literal lookups in known logs instead.
             Commands run without network access and cannot modify source files.
             Output and time are limited. Report nonzero exit codes, truncated

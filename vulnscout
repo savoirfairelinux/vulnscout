@@ -227,7 +227,8 @@ HOST_CONFIG_FILE="$VULNSCOUT_BUILD_DIR/launcher.env"
 host_config_key() {
     case "$1" in
         VULNSCOUT_CONTAINER|VULNSCOUT_IMAGE|VULNSCOUT_CACHE_DIR|VULNSCOUT_OUTPUTS_DIR|\
-        VULNSCOUT_HOST_HELPER_STATE_DIR|VULNSCOUT_SBOM_CVE_CHECK_DB_DIR|VULNSCOUT_BIND_ADDRESS|VITE_API_URL)
+        VULNSCOUT_HOST_HELPER_STATE_DIR|VULNSCOUT_SHELL_SNAPSHOT_MIB|VULNSCOUT_SBOM_CVE_CHECK_DB_DIR|\
+        VULNSCOUT_BIND_ADDRESS|VITE_API_URL)
             return 0 ;;
         *) return 1 ;;
     esac
@@ -273,6 +274,7 @@ DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.25.1}"
 # Resolve the operator-selected root, never a socket path inside the shared cache.
 VULNSCOUT_CACHE_DIR="$(realpath -m -- "${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}")"
 VULNSCOUT_HOST_HELPER_STATE_DIR="$(realpath -m -- "${VULNSCOUT_HOST_HELPER_STATE_DIR:-$VULNSCOUT_BUILD_DIR/host-helper}")"
+VULNSCOUT_SHELL_SNAPSHOT_MIB="${VULNSCOUT_SHELL_SNAPSHOT_MIB-512}"
 VULNSCOUT_OUTPUTS_DIR="${VULNSCOUT_OUTPUTS_DIR:-$VULNSCOUT_BUILD_DIR/outputs}"
 VULNSCOUT_CONFIG_FILE="${VULNSCOUT_CACHE_DIR}/config.env"
 check_host_paths
@@ -1041,6 +1043,7 @@ config_set() {
     [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "config values must be single-line."
     case "$key" in
         VULNSCOUT_BIND_ADDRESS) validate_bind_address "$value" ;;
+        VULNSCOUT_SHELL_SNAPSHOT_MIB) validate_snapshot_mib "$value" ;;
         VULNSCOUT_CACHE_DIR|VULNSCOUT_HOST_HELPER_STATE_DIR)
             if [[ -n "$value" ]]; then
                 IFS= read -r -d '' value < <(realpath -mz -- "$value") || die "cannot resolve $key."
@@ -1138,6 +1141,14 @@ host_helper_socket_label() {
     call_container_engine inspect "$CONTAINER_NAME" --format '{{.ProcessLabel}}'
 }
 
+validate_snapshot_mib() {
+    [[ "$1" =~ ^[1-9][0-9]*$ ]] || die "VULNSCOUT_SHELL_SNAPSHOT_MIB must be a positive integer."
+}
+
+host_helper_identity() {
+    printf '%s\n' "${1##*/}${2:+|$2}|$3|$VULNSCOUT_CACHE_DIR|$VULNSCOUT_SHELL_SNAPSHOT_MIB"
+}
+
 start_host_helper_locked() {
     local script i label identity image_id engine
     local -a label_args=()
@@ -1150,7 +1161,8 @@ start_host_helper_locked() {
     engine="$(command -v "$CONTAINER_ENGINE")" || return 1
     label="$(host_helper_socket_label)" || return 1
     [[ -z "$label" ]] || label_args=(--socket-label "$label")
-    identity="${script##*/}${label:+|$label}|$engine|$VULNSCOUT_CACHE_DIR"
+    validate_snapshot_mib "$VULNSCOUT_SHELL_SNAPSHOT_MIB"
+    identity="$(host_helper_identity "$script" "$label" "$engine")"
     if [[ "$1" == start ]] && host_helper_running &&
         [ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null || true)" = "$identity" ]; then
         return 0
@@ -1159,6 +1171,7 @@ start_host_helper_locked() {
     if ! python3 -I "$script" serve --daemon --socket "$HOST_HELPER_SOCKET" "${label_args[@]}" \
         --state-dir "$HOST_HELPER_STATE_DIR" --pid-file "$HOST_HELPER_PID_FILE" \
         --cache-dir "$VULNSCOUT_CACHE_DIR" --engine "$engine" --image "$image_id" \
+        --snapshot-mib "$VULNSCOUT_SHELL_SNAPSHOT_MIB" \
         --log-file "$HOST_HELPER_STATE_DIR/helper.log" < /dev/null >&2; then
         console_err error "Error: the host folder helper did not start; see the message above."
         return 1
@@ -2080,8 +2093,8 @@ ai_context_helper() {
             local label engine
             label="$(host_helper_socket_label)" || return 1
             engine="$(command -v "$CONTAINER_ENGINE")" || return 1
-            if [[ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null)" != "${script##*/}${label:+|$label}|$engine|$VULNSCOUT_CACHE_DIR" ]]; then
-                die "helper image or container label has changed; run 'vulnscout ai-context helper restart'."
+            if [[ "$(cat "$HOST_HELPER_STATE_DIR/image.active" 2>/dev/null)" != "$(host_helper_identity "$script" "$label" "$engine")" ]]; then
+                die "helper configuration has changed; run 'vulnscout ai-context helper restart'."
             fi
             python3 -I "$script" ping --socket "$HOST_HELPER_SOCKET" >/dev/null || return 1
             console_out success "Host folder helper is running (PID $(host_helper_pid)) on $HOST_HELPER_SOCKET."
