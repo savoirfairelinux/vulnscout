@@ -179,7 +179,13 @@ class TestAccessControl:
 
 class TestHelperUnavailable:
 
-    def test_slow_source_response_is_not_an_offline_helper(self, client, host, helper_server, variant, monkeypatch):
+    @pytest.mark.parametrize("operation,advice", [
+        ("list", "list_codebase_children"), ("children", "search_codebase_file"),
+        ("search_file", "independent artifact"),
+    ])
+    def test_slow_source_response_is_not_an_offline_helper(
+        self, client, host, helper_server, variant, monkeypatch, operation, advice,
+    ):
         _attach(helper_server, variant, "src", host["app"])
         original = hh.request
 
@@ -189,9 +195,10 @@ class TestHelperUnavailable:
             return original(path, payload, **kwargs)
 
         monkeypatch.setattr(hh, "request", slow)
-        response = _source(client, variant, "mount:src", operation="children")
+        response = _source(client, variant, "mount:src", operation=operation, path="build.log", query="needle")
         assert response.status_code == 504 and response.json["code"] == "timeout"
-        assert "children response timed out after 40s" in response.json["error"]
+        assert f"{operation} response timed out after 40s" in response.json["error"]
+        assert advice in response.json["error"]
         assert "incomplete" in response.json["error"] and "not running" not in response.json["error"]
 
     def test_denied_helper_socket_reports_permissions(self, helper_server, monkeypatch):

@@ -5,6 +5,8 @@
 
 import os
 
+from vulnscout_mcp.source_timeout import timeout_recovery
+
 from . import host_mount_helper as protocol
 from .host_mount_helper import ALIAS_RE, ALIAS_RULE
 
@@ -78,8 +80,9 @@ def call(operation: str, timeout: float = CALL_TIMEOUT, **params: object) -> dic
             "and SELinux socket label; use matching VulnScout launcher and image versions."
         ) from exc
     except TimeoutError as exc:
-        raise HostHelperError("timeout", f"Host helper {name} response timed out after {timeout:g}s; "
-                              "result incomplete, not evidence of absence.") from exc
+        message = (f"Host helper {name} response timed out after {timeout:g}s; "
+                   "result incomplete, not evidence of absence.")
+        raise HostHelperError("timeout", f"{message} {timeout_recovery(str(name))}".rstrip()) from exc
     except (FileNotFoundError, ConnectionRefusedError) as exc:
         raise HostHelperUnavailable(f"{UNAVAILABLE_MESSAGE} Operation: {name} ({exc.__class__.__name__}).") from exc
     except OSError as exc:
