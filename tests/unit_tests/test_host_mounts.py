@@ -549,6 +549,27 @@ def test_first_concurrent_attaches_preserve_both_aliases(postgres_uri, helper_se
 
 class TestSourceBrowsing:
 
+    def test_positioned_read_fails_closed_with_older_helper(self, client, variant, host, helper_server, monkeypatch):
+        _attach(helper_server, variant, "build", host["build"])
+        operations = []
+
+        def legacy_source(request):
+            operations.append(request["source_operation"])
+            if request["source_operation"] != "read":
+                raise hh.HelperError("invalid", "Operation must be list, children, read or search_file.")
+            # A pre-position helper ignores unrecognized read fields.
+            return helper_server.read({k: v for k, v in request.items() if k != "position"})
+
+        monkeypatch.setitem(helper_server.operations, "source", legacy_source)
+        params = {"operation": "read", "path": "log.txt"}
+        response = _source(client, variant, "mount:build", **params, position="stale")
+        assert operations == ["read_position"]
+        assert response.status_code == 400 and response.json["code"] == "invalid"
+        assert response.json["error"] and "content" not in response.json
+        ordinary = _source(client, variant, "mount:build", **params)
+        assert ordinary.status_code == 200 and ordinary.json["content"] == "needle in build\n"
+        assert operations == ["read_position", "read"]
+
     def test_multibyte_paths_fit_helper_packets(self, client, variant, host, helper_server):
         folder = "/".join(["\u754c" * 80] * 11)
         directory = host["app"] / folder

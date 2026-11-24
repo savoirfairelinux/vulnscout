@@ -195,6 +195,9 @@ def browse(variant_id: uuid.UUID, alias: str, operation: str, params: dict) -> d
         raise LookupError(f"No folder is attached as '{alias}' for this variant.")
     if operation not in ("list", "read", "children", "search_file"):
         raise ValueError("Operation must be list, children, read or search_file.")
+    # Older protocol-4 helpers ignore extra read fields but reject unknown operations.
+    if operation == "read" and "position" in params:
+        operation = "read_position"
     _activate(_binding(mount))
     return helper.call(
         "source", variant_id=str(variant_id), alias=alias, mount_path=mount.host_path,

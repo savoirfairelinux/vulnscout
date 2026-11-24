@@ -1354,11 +1354,12 @@ class Helper:
         """Require the current host-approved alias to match the database mount path."""
         _string(request, "mount_path")
         operation = request.get("source_operation")
-        if operation not in ("list", "read", "children", "search_file"):
-            raise HelperError("invalid", "Operation must be list, children, read or search_file.")
+        if operation not in ("list", "read", "read_position", "children", "search_file"):
+            raise HelperError("invalid", "Operation must be list, children, read, read_position or search_file.")
         return {
             "list": self.list_files,
             "read": self.read,
+            "read_position": self.read,
             "children": self.list_children,
             "search_file": self.search_file,
         }[operation](request)
@@ -1480,7 +1481,7 @@ class Helper:
         parts = _relative_path(path)
         start_line = _integer(request, "start_line", 1, 1, 10 * 1024 * 1024)
         max_lines = _integer(request, "max_lines", MAX_READ_LINES, 1, MAX_READ_LINES)
-        if "position" in request:
+        if request.get("source_operation") == "read_position" or "position" in request:
             position = _string(request, "position", maximum=160)
             if _folder_parts(request):
                 raise HelperError("invalid", "Use an exact path, not folder, for a positioned read.")
