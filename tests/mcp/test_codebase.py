@@ -37,6 +37,8 @@ def test_client_source_operation(operation, file_id):
 @pytest.mark.parametrize("response,expected", [
     (httpx.Response(404, json={"error": "File not found"}), "File not found"),
     (httpx.Response(500, text="Storage failure"), "Storage failure"),
+    (httpx.Response(504, json={"error": "Host helper list timed out; use list_codebase_children."}),
+     "Host helper list timed out; use list_codebase_children."),
 ])
 def test_api_errors_are_reported(response, expected):
     with respx.mock:
@@ -54,18 +56,27 @@ def test_connection_error():
         )
 
 
-@pytest.mark.parametrize("operation,seconds", [("search_file", 30), ("shell", 70)])
-def test_response_timeout_is_incomplete_not_connection_failure(operation, seconds):
+@pytest.mark.parametrize("operation,file_id,seconds,advice", [
+    ("list", "mount:build", 30, "list_codebase_children"),
+    ("read", "directory", 30, "search_codebase_file"),
+    ("shell", "directory", 70, "search_codebase_file"),
+    ("search_file", "mount:build", 30, "independent artifact"),
+    ("read", "uploaded-file-id", 30, "independent reference"),
+])
+def test_response_timeout_is_incomplete_not_connection_failure(operation, file_id, seconds, advice):
     client = VulnScoutClient(BASE_URL)
     with respx.mock:
         respx.route().mock(side_effect=httpx.ReadTimeout("slow"))
         if operation == "shell":
             with pytest.raises(VulnScoutError) as error:
-                client.run_codebase_shell("v1", "directory", "true")
+                client.run_codebase_shell("v1", file_id, "true")
             message = str(error.value)
         else:
-            message = _codebase_source_impl(client, "v1", "directory", {"operation": operation})
+            message = _codebase_source_impl(client, "v1", file_id, {"operation": operation})
         assert f"{operation} response timed out after {seconds}s" in message and "incomplete" in message
+        assert advice in message
+        if operation == "search_file" or file_id == "uploaded-file-id":
+            assert "search_codebase_file" not in message
 
 
 @pytest.mark.parametrize("file_id", ["f1", "directory"])
