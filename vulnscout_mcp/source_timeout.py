@@ -9,7 +9,7 @@ def timeout_recovery(operation: str, *, upload: bool = False) -> str:
         return "Consult a smaller, independent reference from the same build."
     if operation == "list":
         return "Use list_codebase_children to navigate, or narrow the folder before matching filenames."
-    if operation in ("read", "children", "shell"):
+    if operation in ("read", "read_position", "children", "shell"):
         return ("For a literal in a known log, use search_codebase_file. Otherwise choose a narrower "
                 "artifact from the same build.")
     if operation == "search_file":

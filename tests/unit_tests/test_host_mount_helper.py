@@ -189,7 +189,8 @@ def test_position_is_bound_to_the_authorization_path_version_and_purpose(helper,
     monkeypatch.setattr(hh, "SEARCH_MATCHES", 1)
     page = ok(helper, "source", **params, source_operation="search_file", query="needle")
     token = page["matches"][0]["position"]
-    read = dict(**params, source_operation="read", position=token)
+    assert "position" in err(helper, "source", **params, source_operation="read_position")[1]
+    read = dict(**params, source_operation="read_position", position=token)
     forged = token[:-1] + ("a" if token[-1] != "a" else "b")
     for change in ({"alias": "other"}, {"path": "README"}, {"position": forged},
                    {"position": page["next_cursor"]}, {"position": ""}, {"start_line": 2}):
