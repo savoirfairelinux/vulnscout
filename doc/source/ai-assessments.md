@@ -482,7 +482,8 @@ directory discovery or source access.
 Status includes **Files** and **Directories** counts after a complete scan,
 including on refresh. Files count eligible regular files (even if binary or too
 large to read); directories count eligible subdirectories, including empty ones,
-but exclude the root. Hidden/sensitive names and linked entries are excluded.
+but exclude the root. Hidden/sensitive names and linked entries are excluded except for regular,
+single-link `.config` files.
 Empty trees report zero files. Missing/unreadable directories and incomplete or
 over-budget scans do not report counts; failed refreshes clear previous totals.
 
@@ -566,8 +567,9 @@ directory names, mounts or contents; provision the destination variant's own
 directory separately. **Copy from...** does not copy server-side source.
 
 Browsing rejects symbolic links (including the root and any replaced path
-component), hard-linked files and special files. It excludes all hidden
-files/directories and names matching `*secret*`, `*credential*`, `*password*`,
+component), hard-linked files and special files. A regular file named exactly `.config` is eligible
+inside the approved tree; a directory of that name is never traversed. Browsing excludes other hidden
+names and names matching `*secret*`, `*credential*`, `*password*`,
 `*token*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `id_rsa*`,
 `id_ed25519*`, `id_dsa*`, `id_ecdsa*`, `kubeconfig`, `*.kdbx`, `*.sqlite*`,
 `*.db`, `*~` and `*.bak`
@@ -725,7 +727,7 @@ to manage attachments.
   helper request, rather than resolving the alias a second time.
 - Requests are scoped by **variant ID and alias**. Paths are relative to the
   attached folder; absolute paths, `..`, empty components and hidden or sensitive
-  names (the same list as codebase directories) are rejected, and every path
+  names (except a single-link regular `.config` file) are rejected, and every path
   component, including each ancestor of the attached folder, is opened relative to a
   verified directory descriptor without following symbolic links, so links
   (including a directory swapped for a link) cannot escape. Hard-linked regular

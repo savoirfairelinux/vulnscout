@@ -83,6 +83,57 @@ def attached(helper, tree, alias="src", path=None):
     return binding
 
 
+def test_config_is_a_file_only_exception_inside_an_approved_mount(helper, tree):
+    root = tree["app"]
+    attached(helper, tree)
+    params = dict(variant_id=VARIANT, alias="src", mount_path=str(root))
+
+    def source(operation, **kwargs):
+        return ok(helper, "source", source_operation=operation, **params, **kwargs)
+
+    build = root / "build"
+    build.mkdir()
+    path = "build/.config"
+    text = "CONFIG_FIRST=y\n# CONFIG_LAST is not set\n"
+    (root / path).write_text(text)
+    (build / ".CONFIG").touch()
+    (build / ".config.old").touch()
+    for name in ("dir", "hard", "sym"):
+        (build / name).mkdir()
+    hidden = build / "dir" / ".config"
+    hidden.mkdir()
+    (hidden / "inner").touch()
+    os.link(tree["outside"] / "plain.c", build / "hard" / ".config")
+    (build / "sym" / ".config").symlink_to(tree["outside"] / "plain.c")
+
+    assert {"path": path, "type": "file"} in source("children", folder="build")["children"]
+    for pattern in ("*", "*/.config", ".config"):
+        assert [f["path"] for f in source("list", folder="build", pattern=pattern)["files"]] == (
+            [] if pattern == "*/.config" else [path])
+    assert source("read", path=path)["content"] == text
+    hit, = source("search_file", path=path, query="CONFIG_LAST")["matches"]
+    assert source("read", path=path, position=hit["position"])["match_line"] == 2
+    for name in ("dir", "hard", "sym"):
+        folder = f"build/{name}"
+        page = source("children", folder=folder)
+        assert not page["children"] and page["entries_filtered"]
+        assert not source("list", folder=folder, pattern=".config")["files"]
+        for op, kwargs in (("read", {}), ("search_file", {"query": "CONFIG_LAST"}),
+                           ("read", {"position": hit["position"]})):
+            err(helper, "source", source_operation=op, path=folder + "/.config", **params, **kwargs)
+    err(helper, "source", source_operation="read", path="build/dir/.config/inner", **params)
+    err(helper, "source", source_operation="children", folder="build/dir/.config", **params)
+    assert not source("list", folder="build", pattern="dir/.config/inner")["files"]
+    snapshot = tree["tmp"] / "snapshot"
+    snapshot.mkdir()
+    fd = helper._shell_root(dict(source="mount", folder="build", **params))
+    try:
+        assert helper._shell_snapshot(fd, str(snapshot))["files"] == 1
+    finally:
+        os.close(fd)
+    assert (snapshot / ".config").read_text() == text
+
+
 def test_search_large_known_file_resumes_without_inventory(helper, tree, monkeypatch):
     root = tree["app"]
     query = "CVE-2026-1234"

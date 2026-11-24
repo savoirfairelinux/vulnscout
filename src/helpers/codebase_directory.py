@@ -12,7 +12,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager, ExitStack
 
 from .codebase_reference import CodebaseReference, MAX_ENTRIES, MAX_FILE_BYTES, _safe_path
-from .host_mount_helper import DIRECT_READ_LIMIT_MESSAGE, children_page, read_position, search_file_page, _excluded
+from .host_mount_helper import (
+    DIRECT_READ_LIMIT_MESSAGE, children_page, read_position, search_file_page, _excluded, _excluded_config,
+)
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
@@ -118,12 +120,14 @@ class CodebaseDirectory(CodebaseReference):
                     raise ValueError(
                         f"Codebase directory exceeds the {MAX_ENTRIES}-entry browsing limit; provide a smaller tree."
                     )
-                if _excluded(entry.name):
+                if _excluded(entry.name, file_candidate=True):
+                    continue
+                info = entry.stat(follow_symlinks=False)
+                if _excluded_config(entry.name, info):
                     continue
                 path = _safe_path(prefix + entry.name)
                 if self.folder:
                     _safe_path(self.folder + "/" + path)
-                info = entry.stat(follow_symlinks=False)
                 if stat.S_ISDIR(info.st_mode):
                     with _open_directory(entry.name, directory_fd) as child_fd:
                         self.directory_count += 1
@@ -144,7 +148,8 @@ class CodebaseDirectory(CodebaseReference):
             parts = _safe_path(path).split("/")
         except ValueError as exc:
             raise LookupError("Source file not found or excluded.") from exc
-        if "/".join(parts) != path or any(_excluded(part) for part in parts):
+        if ("/".join(parts) != path or any(_excluded(part) for part in parts[:-1])
+                or _excluded(parts[-1], file_candidate=True)):
             raise LookupError("Source file not found or excluded.")
         with ExitStack() as stack:
             parent_fd = self.root_fd
@@ -181,6 +186,10 @@ class CodebaseDirectory(CodebaseReference):
             content = source.read(MAX_FILE_BYTES + 1)
             if len(content) > MAX_FILE_BYTES:
                 raise ValueError(DIRECT_READ_LIMIT_MESSAGE)
+            if path.rsplit("/", 1)[-1] == ".config":
+                after = os.fstat(source.fileno())
+                if after.st_nlink != 1 or after.st_ctime_ns != info.st_ctime_ns:
+                    raise ValueError("Source file changed during read.")
             return content
 
     def read_match(self, variant_id: str, path: str, position: str, max_lines: int) -> dict:

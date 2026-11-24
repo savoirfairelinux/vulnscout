@@ -569,6 +569,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         Even an empty page is incomplete until complete=true. To continue, pass its
         next_cursor unchanged for the same folder. Restart if the cursor is stale.
         entries_filtered means policy omitted real entries on this page, not that the folder is empty.
+        A single-link regular .config file is eligible; hidden directories are never traversed.
         Read known paths directly; use list_codebase_files for narrowed filename matching.
         """
         return _codebase_source_impl(client, variant_id, file_id, {
@@ -588,8 +589,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
         are relative to that folder; its pattern allows at most 16 '*'/'?' wildcards,
         and truncated=true means a traversal limit or I/O error prevented a
         complete listing (total is then a lower bound).
-        Directory browsing excludes hidden/sensitive names, links and special files,
-        and is limited to 500,000 visited entries. It never reads the MCP host filesystem.
+        Directory browsing permits single-link regular .config files but excludes other hidden/sensitive names,
+        links and special files. It visits at most 500,000 entries and never reads the MCP host filesystem.
         pattern is a case-sensitive file-path glob. Follow next_offset until null
         before claiming the list is complete. limit must be 1-200.
         This is recursive; limit bounds the page, not traversal. For navigation
@@ -670,8 +671,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
 
             file_id is "directory" or "mount:<alias>" from merged context; uploads
             are not supported. Scope folder to a known artifact's containing directory.
-            Never use a snapshot for navigation; use list_codebase_children. Hidden and sensitive names,
-            links, special files and hardlinks are excluded or rejected.
+            Never use a snapshot for navigation; use list_codebase_children. Single-link regular .config files
+            are included; other hidden/sensitive names, links and special files are excluded or rejected.
             The configurable snapshot cap (default 512 MiB) is distinct from the 10 MiB direct read cap
             and from snapshot traversal, copy or command timeouts.
             Use search_codebase_file for literal lookups in known logs instead.

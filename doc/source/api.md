@@ -517,7 +517,8 @@ Both return `200` with
 `{"file_id": "directory", "path": "<container-path-or-null>", "status": "...", "message": "...", "file_count": 0, "directory_count": 0}`.
 Status is `not_created`, `ready`, `missing`, `unreadable` or `unavailable` (for example empty or over budget).
 Counts reflect a complete scan of eligible regular files and subdirectories, excluding the root,
-hidden/sensitive names and linked entries. Empty trees return zero files and their eligible directory count.
+hidden/sensitive names and linked entries. A single-link regular `.config` counts as a file.
+Empty trees return zero files and their eligible directory count.
 Both counts are `null` when unprovisioned, missing, unreadable or incompletely scanned (including over budget);
 partial totals are never returned. Every `GET`, including the page's **Refresh directory status**, rescans.
 Invalid IDs return `400`, unknown variants `404`, and inspection/provisioning failures `500`.
@@ -617,7 +618,9 @@ Binary/non-UTF-8 files return 400 for reads.
 Missing references/members return 404; unavailable stored files return 500 with an explicit error.
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
-Directory operations exclude hidden/sensitive names, symbolic/hard links and special files. They visit
+Within a provisioned directory or approved mount, a regular file named exactly `.config` with one hard link
+is eligible for listing, reading, searching and shell snapshots. Directories named `.config` are never
+traversed. Other hidden/sensitive names and special files remain excluded. Directory operations visit
 at most 500,000 entries and return at most 64 KiB of serialized JSON. The 10 MiB whole-file
 read limit does not apply to single-file search.
 Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.

@@ -56,8 +56,9 @@ the 10 MiB direct-read limit. On the host, for example, run
 `./vulnscout config set VULNSCOUT_SHELL_SNAPSHOT_MIB 768` followed by
 `./vulnscout ai-context helper restart`. The setting takes a positive integer in MiB.
 Narrow `folder` if copying reaches its byte, 500,000-entry or 10-second snapshot limit.
-Hidden and sensitive names, symlinks and special files
-are excluded; hardlinks, unreadable files and incomplete walks fail the snapshot.
+The snapshot includes single-link regular `.config` files, never directories of that name.
+Other hidden and sensitive names, symlinks and special files are excluded; unreadable files,
+hardlinks encountered during copying and incomplete walks fail the snapshot.
 Commands time out after 15 seconds and output is limited to 64 KiB. Snapshot
 exclusions and truncation prevent conclusions from a missing match. The worker
 may run arbitrary programs inside the container: container isolation is not a

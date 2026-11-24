@@ -119,8 +119,14 @@ class _Exhausted(Exception):
     """A walk exceeded its entry or time budget."""
 
 
-def _excluded(name: str) -> bool:
+def _excluded(name: str, *, file_candidate: bool = False) -> bool:
+    if file_candidate and name == ".config":
+        return False  # The caller must verify a single-link regular file, never a directory.
     return name.startswith(".") or any(fnmatchcase(name.lower(), pattern) for pattern in _SENSITIVE_NAMES)
+
+
+def _excluded_config(name: str, info: os.stat_result) -> bool:
+    return name == ".config" and not (stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
 
 
 def _printable(name: str) -> bool:
@@ -160,7 +166,7 @@ def _pattern(request: dict) -> tuple[Callable[[str], bool], str]:
 def _folder_parts(request: dict) -> list[str]:
     """Optional sub-folder of the attachment that scopes a list or snapshot."""
     folder = _string(request, "folder", required=False, maximum=1024)
-    return _relative_path(folder.rstrip("/")) if folder else []
+    return _relative_path(folder.rstrip("/"), folder=True) if folder else []
 
 
 def _integer(request: dict, name: str, default: int, minimum: int, maximum: int) -> int:
@@ -188,15 +194,15 @@ def _member_path_fits(path: str) -> bool:
     return len(path) <= 1024 and "\\" not in path and _printable(path)
 
 
-def _relative_path(path: str) -> list[str]:
+def _relative_path(path: str, *, folder: bool = False) -> list[str]:
     """Split a member path, rejecting traversal, absolute paths and excluded components."""
     if not path or not _member_path_fits(path) or path.startswith("/"):
         raise HelperError("invalid", "Path must be a relative path inside the attached folder.")
     parts = path.split("/")
-    for part in parts:
+    for index, part in enumerate(parts):
         if part in ("", ".", ".."):
             raise HelperError("invalid", "Path must be a relative path inside the attached folder.")
-        if _excluded(part):
+        if _excluded(part, file_candidate=not folder and index == len(parts) - 1):
             raise HelperError("not_found", "Source file not found or excluded.")
     return parts
 
@@ -424,13 +430,14 @@ def children_page(fd: int, base: str, request: dict, scope: str, *, provisioned:
         path = base + name
         real = name not in (".", "..")
         visited += int(real)
-        if (real and not _excluded(name) and _member_path_fits(path)
+        if (real and not _excluded(name, file_candidate=True) and _member_path_fits(path)
                 and (not provisioned or (":" not in path and len(path.encode()) <= 512))):
             try:
                 item = os.stat(name, dir_fd=fd, follow_symlinks=False)
             except FileNotFoundError as exc:
                 raise HelperError("invalid", "Directory changed; restart this folder listing.") from exc
-            if stat.S_ISDIR(item.st_mode) or (stat.S_ISREG(item.st_mode) and item.st_nlink == 1):
+            if ((stat.S_ISDIR(item.st_mode) and not _excluded_config(name, item))
+                    or (stat.S_ISREG(item.st_mode) and item.st_nlink == 1)):
                 child = {"path": path, "type": "directory" if stat.S_ISDIR(item.st_mode) else "file"}
                 cost = len(json.dumps(child)) + 2
                 if size + cost > MAX_CONTENT_BYTES - 1024:
@@ -776,10 +783,10 @@ class _Walk:
                 directory = child
             if self.exact:
                 name = parts[-1]
-                if name and not _excluded(name):
+                if name and not _excluded(name, file_candidate=True):
                     self._tick()
                     info = os.stat(name, dir_fd=directory, follow_symlinks=False)
-                    if stat.S_ISREG(info.st_mode):
+                    if stat.S_ISREG(info.st_mode) and not _excluded_config(name, info):
                         yield self.literal, info.st_size
             else:
                 yield from self._walk(directory, self.literal[:len(self.literal) - len(parts[-1])])
@@ -814,7 +821,7 @@ class _Walk:
         entries.sort(key=lambda item: item.name)
         for entry in entries:
             self.check_time()
-            if _excluded(entry.name):
+            if _excluded(entry.name, file_candidate=True):
                 continue
             try:
                 is_dir = entry.is_dir(follow_symlinks=False)
@@ -823,7 +830,7 @@ class _Walk:
                 self.io_errors += 1
                 continue
             if is_dir:
-                if exhausted:
+                if exhausted or entry.name == ".config":
                     continue
                 directory = f"{prefix}{entry.name}/"
                 if not self._may_contain(directory):
@@ -843,7 +850,9 @@ class _Walk:
                 if self.matcher is not None and not self.matcher(path):
                     continue
                 try:
-                    yield path, entry.stat(follow_symlinks=False).st_size
+                    info = entry.stat(follow_symlinks=False)
+                    if stat.S_ISREG(info.st_mode) and not _excluded_config(entry.name, info):
+                        yield path, info.st_size
                 except OSError:
                     self.io_errors += 1
                     continue
@@ -1119,7 +1128,8 @@ class Helper:
         except OSError as exc:
             raise HelperError("unavailable", "Shell snapshot incomplete: source or destination I/O failure.") from exc
         return {"files": copied, "bytes": self.snapshot_bytes - budget,
-                "excluded": "Hidden and sensitive names, links and special files are not included."}
+                "excluded": "Hidden names except single-link regular .config files are excluded, "
+                            "as are sensitive names, links and special files."}
 
     def shell(self, request: dict) -> dict:
         if not self.engine or not self.image:
@@ -1439,8 +1449,10 @@ class Helper:
             os.close(fd)
 
     def _read_file(self, root_fd: int, parts: list[str]) -> bytes:
-        with self._open_member(root_fd, parts, reject_hardlinks=False) as fd:
+        with self._open_member(root_fd, parts, reject_hardlinks=parts[-1] == ".config") as fd:
             info = os.fstat(fd)
+            if _excluded_config(parts[-1], info):
+                raise HelperError("invalid", "Links cannot be read as .config files.")
             if info.st_size > MAX_FILE_BYTES:
                 raise HelperError("limit", DIRECT_READ_LIMIT_MESSAGE)
             content = os.read(fd, MAX_FILE_BYTES + 1)
@@ -1448,6 +1460,10 @@ class Helper:
                 raise HelperError("limit", DIRECT_READ_LIMIT_MESSAGE)
             if len(content) < info.st_size:
                 raise HelperError("unavailable", "Source file could not be read in full.")
+            if parts[-1] == ".config":
+                after = os.fstat(fd)
+                if after.st_nlink != 1 or after.st_ctime_ns != info.st_ctime_ns:
+                    raise HelperError("unavailable", "Source file changed during read.")
         return content
 
     @staticmethod
