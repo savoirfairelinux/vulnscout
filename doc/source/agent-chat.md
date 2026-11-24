@@ -31,11 +31,31 @@ only the skill files and fetch public `http(s)` pages; loopback, private,
 link-local and other non-public addresses are refused, and redirect targets rely
 on the Copilot runtime's own private-address guard. Set
 `VULNSCOUT_AGENT_WEB_ACCESS` to `off` (or `0`, `false`, `no`) to disable web
-fetch; the skills then report missing NVD/advisory evidence. Shell tools and
-host filesystem access stay disabled. Uploaded source is inspected through
-scoped codebase-reference tools, without extraction or execution. **Codebase
+fetch; the skills then report missing NVD/advisory evidence. The embedded agent
+can run commands through `run_codebase_shell` on a filtered, read-only snapshot
+of a variant's provisioned directory or attached host folder. The host helper
+starts a separate container for each command with no network, a read-only root,
+no Linux capabilities, an unprivileged user, and bounded time, output, memory,
+processes and temporary storage. It never mounts the application cache or
+credentials. Direct host filesystem access and the SDK's built-in shell remain
+disabled. Uploaded source is inspected through scoped codebase-reference tools,
+without extraction or execution. **Codebase
 Path** is an external-client hint, not a container mount. Dependency discovery
 does not establish runtime use or exploitability.
+
+The worker requires the host helper and a local Docker or Podman engine; it fails
+closed if unavailable. Build the current image and start VulnScout with the
+matching launcher, then start the helper with `./vulnscout ai-context helper start`.
+Only `directory` and `mount:<alias>` are supported, not
+uploads. Select a relative `folder` when a tree exceeds the 100 MiB snapshot
+or 500,000-entry limit. Hidden and sensitive names, symlinks and special files
+are excluded; hardlinks, unreadable files and incomplete walks fail the snapshot.
+Commands time out after 15 seconds and output is limited to 64 KiB. Snapshot
+exclusions and truncation prevent conclusions from a missing match. The worker
+may run arbitrary programs inside the container: container isolation is not a
+virtual machine and does not eliminate kernel or runtime vulnerabilities.
+The snapshot is not atomic across the tree; avoid changing source while it is
+being inspected.
 
 ```{warning}
 With web fetch enabled, the model that reads your project data can also request

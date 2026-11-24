@@ -18,7 +18,7 @@ paste. Labels in **bold** are the exact labels shown on the page.
   `include_model=true` for the System text and table rows). Edits the user has
   not saved are invisible to you, so ask the user to paste them when they matter.
 - Start from evidence: the saved context, uploaded codebase references or the active server directory
-  (`list_codebase_files`, `search_codebase`, `read_codebase_file`; use
+  (`list_codebase_files`, `read_codebase_file`, `read_codebase_files`; use
   `codebase_directory.file_id="directory"` when provisioned) and the SBOM
   (`list_dependency_documents`, `list_dependency_packages`,
   `get_package_dependencies`). Cite where a value came from. Never invent

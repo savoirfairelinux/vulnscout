@@ -11,8 +11,8 @@ It listens on a private Unix socket (directory ``0700``, socket ``0600``) inside
 VulnScout cache directory, which the container already mounts, so attaching folders
 later needs no container restart. Every request is scoped by variant ID and alias:
 the helper serves only exact folders approved by a host-side CLI permit, opens every path
-component without following symbolic links, and bounds result counts, read sizes,
-search time and bytes. No operation creates, changes or deletes anything under an
+component without following symbolic links, and bounds result counts and read sizes.
+No operation creates, changes or deletes anything under an
 attached folder; the helper only writes its own registry file.
 """
 
@@ -28,13 +28,16 @@ import io
 import json
 import os
 import re
+import selectors
 import signal
 import socket
 import socketserver
 import sqlite3
 import stat
 import struct
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -53,13 +56,8 @@ MAX_CONTENT_BYTES = 64 * 1024
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_WALK_ENTRIES = 500_000
 LIST_TIME_LIMIT = 10.0
-SEARCH_TIME_LIMIT = 20.0
-SEARCH_BYTE_BUDGET = 100 * 1024 * 1024
 MAX_LIST_LIMIT = 200
 MAX_READ_LINES = 200
-MAX_SEARCH_RESULTS = 100
-MAX_SNIPPET_CHARS = 500
-MAX_QUERY_CHARS = 200
 MAX_PATTERN_CHARS = 512
 # Few wildcards keep glob matching linear enough: a regex match cannot be interrupted by the time limits.
 MAX_PATTERN_WILDCARDS = 16
@@ -72,6 +70,9 @@ STAGED_PIN_SECONDS = 300
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_CONNECTIONS = 8
 CONNECTION_TIMEOUT = 30.0
+SHELL_TIMEOUT = 15.0
+SHELL_OUTPUT_BYTES = 64 * 1024
+SHELL_SNAPSHOT_BYTES = 100 * 1024 * 1024
 
 ALIAS_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 ALIAS_RULE = "Alias must be 1-32 lowercase letters, digits, '_' or '-', starting with a letter or digit."
@@ -144,7 +145,7 @@ def _pattern(request: dict) -> tuple[Callable[[str], bool], str]:
 
 
 def _folder_parts(request: dict) -> list[str]:
-    """Optional sub-folder of the attachment that scopes a list or search."""
+    """Optional sub-folder of the attachment that scopes a list or snapshot."""
     folder = _string(request, "folder", required=False, maximum=1024)
     return _relative_path(folder.rstrip("/")) if folder else []
 
@@ -600,11 +601,6 @@ def _exhausted_message(reason: str, operation: str, walk: "_Walk | None" = None)
               "or attach a smaller folder.")
     if reason == "entries":
         return f"The {operation} stopped after visiting {MAX_WALK_ENTRIES} entries{detail}; {advice}"
-    if reason == "bytes":
-        mebibytes = SEARCH_BYTE_BUDGET / (1024 * 1024)
-        return f"The next file would exceed the {mebibytes:g} MiB search byte budget{detail}; narrow the pattern."
-    if reason == "results":
-        return f"The {operation} reached its match limit{detail}; narrow the query or pattern."
     return f"The {operation} stopped at its time limit{detail}; {advice}"
 
 
@@ -620,8 +616,12 @@ def _walk_message(message: str | None, walk: _Walk) -> str | None:
 class Helper:
     """Request dispatcher for exact host-approved attachments."""
 
-    def __init__(self, state_dir: str):
+    def __init__(self, state_dir: str, cache_dir: str | None = None,
+                 engine: str | None = None, image: str | None = None):
         self.state_dir = state_dir
+        self.cache_dir = cache_dir
+        self.engine = engine
+        self.image = image
         self.registry = Registry(state_dir)
         self._key, self._anchor = _proof_key(state_dir)
         self._boot = _boot_id()
@@ -633,7 +633,8 @@ class Helper:
         self.operations: dict[str, Callable[[dict], dict]] = {
             "status": self.status, "detach": self.detach,
             "source": self.source, "stage": self.stage, "activate": self.activate,
-            "list": self.list_files, "read": self.read, "search": self.search,
+            "list": self.list_files, "read": self.read,
+            "shell": self.shell,
         }
 
     # -- dispatch -----------------------------------------------------------------------------
@@ -776,6 +777,173 @@ class Helper:
     def status(self, request: dict) -> dict:
         return {"protocol": PROTOCOL_VERSION, "read_only": True}
 
+    def _shell_root(self, request: dict) -> int:
+        if request.get("source") == "mount":
+            return self._scoped_fd(request)[0]
+        if request.get("source") != "directory" or not self.cache_dir:
+            raise HelperError("invalid", "A configured codebase directory or approved mount is required.")
+        name = _string(request, "directory", maximum=128)
+        if not re.fullmatch(r"context-[a-zA-Z0-9_-]+", name):
+            raise HelperError("invalid", "Invalid codebase directory name.")
+        try:
+            cache_fd = _open_absolute(self.cache_dir)
+            try:
+                root = os.open(name, _DIRECTORY_FLAGS, dir_fd=cache_fd)
+            finally:
+                os.close(cache_fd)
+            try:
+                for part in _folder_parts(request):
+                    child = os.open(part, _DIRECTORY_FLAGS, dir_fd=root)
+                    os.close(root)
+                    root = child
+                return root
+            except BaseException:
+                os.close(root)
+                raise
+        except OSError as exc:
+            raise HelperError("unavailable", "Codebase directory is missing or unreadable.") from exc
+
+    def _shell_snapshot(self, root: int, destination: str) -> dict:
+        walk = _Walk(root, LIST_TIME_LIMIT)
+        budget = SHELL_SNAPSHOT_BYTES
+        copied = 0
+        try:
+            for path, size in walk.files(""):
+                if size > budget:
+                    raise HelperError("limit", "Source exceeds the shell snapshot limit; choose a smaller folder.")
+                parts = _relative_path(path)
+                content = self._read_file(root, parts, [budget], reject_hardlinks=True, max_bytes=SHELL_SNAPSHOT_BYTES)
+                budget -= len(content)
+                directory = os.path.join(destination, *parts[:-1])
+                os.makedirs(directory, mode=0o755, exist_ok=True)
+                current = destination
+                for part in parts[:-1]:
+                    current = os.path.join(current, part)
+                    os.chmod(current, 0o755)
+                with open(os.path.join(directory, parts[-1]), "xb") as target:
+                    target.write(content)
+                os.chmod(os.path.join(directory, parts[-1]), 0o644)
+                copied += 1
+            if walk.io_errors or walk.skipped_paths:
+                raise HelperError("unavailable", "Source snapshot is incomplete due to inaccessible paths.")
+        except _Exhausted as exc:
+            raise HelperError("limit", "Source snapshot traversal limit reached; choose a smaller folder.") from exc
+        return {"files": copied, "bytes": SHELL_SNAPSHOT_BYTES - budget,
+                "excluded": "Hidden and sensitive names, links and special files are not included."}
+
+    def shell(self, request: dict) -> dict:
+        if not self.engine or not self.image:
+            raise HelperError("unavailable", "Read-only shell worker is not configured; restart the host helper.")
+        command = _string(request, "command", maximum=4096)
+        root = self._shell_root(request)
+        try:
+            with tempfile.TemporaryDirectory(prefix="shell-", dir=self.state_dir) as temporary:
+                snapshot = os.path.join(temporary, "source")
+                os.mkdir(snapshot, 0o755)
+                os.chmod(temporary, 0o755)
+                os.chmod(snapshot, 0o755)
+                metadata = self._shell_snapshot(root, snapshot)
+                return {**self._run_shell(snapshot, command), "snapshot": metadata}
+        finally:
+            os.close(root)
+
+    def _run_shell(self, snapshot: str, command: str) -> dict:
+        if not self.engine or not self.image:
+            raise HelperError("unavailable", "Read-only shell worker is not configured.")
+        if "," in snapshot:
+            raise HelperError("invalid", "Shell worker state path cannot contain a comma.")
+        env = os.environ.copy()
+        engine_name = os.path.basename(self.engine)
+        if engine_name == "docker":
+            endpoint = env.get("DOCKER_HOST")
+            if not endpoint:
+                try:
+                    inspection = subprocess.run(
+                        [self.engine, "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+                        stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=True, text=True,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    raise HelperError("unavailable", "Cannot verify the local Docker endpoint.") from exc
+                endpoint = inspection.stdout.strip()
+            if not endpoint.startswith("unix:///"):
+                raise HelperError("unavailable", "The shell worker requires a local Docker Unix socket.")
+            env.pop("DOCKER_HOST", None)
+            env.pop("DOCKER_CONTEXT", None)
+            engine = [self.engine, "--host", endpoint]
+        elif engine_name == "podman":
+            if env.get("CONTAINER_HOST") or env.get("CONTAINER_CONNECTION"):
+                raise HelperError("unavailable", "The shell worker does not support remote Podman connections.")
+            engine = [self.engine, "--remote=false"]
+        else:
+            raise HelperError("unavailable", "The shell worker requires Docker or Podman.")
+        name = f"vulnscout-shell-{uuid.uuid4().hex}"
+        args = engine + [
+            "run", "--rm", "--name", name, "--pull=never",
+            "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+            "--pids-limit=64", "--memory=256m", "--cpus=1", "--user=65534:65534",
+            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=16m",
+            "--tmpfs=/scan:ro,nosuid,nodev,noexec,size=4k",
+            "--tmpfs=/cache:ro,nosuid,nodev,noexec,size=4k",
+            "--mount", f"type=bind,src={snapshot},dst=/source,readonly",
+            "--workdir=/source", "--entrypoint=/usr/bin/timeout", self.image,
+            "-s", "KILL", str(int(SHELL_TIMEOUT)), "/bin/sh", "-c", command,
+        ]
+        output = bytearray()
+        truncated = False
+        timed_out = False
+        try:
+            process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, close_fds=True, env=env)
+        except OSError as exc:
+            raise HelperError("unavailable", "Cannot start the isolated shell worker.") from exc
+        assert process.stdout is not None
+        deadline = time.monotonic() + SHELL_TIMEOUT
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    events = selector.select(remaining)
+                    if not events:
+                        timed_out = True
+                        break
+                    data = os.read(process.stdout.fileno(), min(8192, SHELL_OUTPUT_BYTES + 1 - len(output)))
+                    if not data:
+                        break
+                    output.extend(data)
+                    if len(output) > SHELL_OUTPUT_BYTES:
+                        truncated = True
+                        break
+            if not timed_out and not truncated:
+                try:
+                    process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+        finally:
+            if process.poll() is None or timed_out or truncated:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+                process.stdout.close()
+                try:
+                    cleanup = subprocess.run(engine + ["rm", "-f", name], stdin=subprocess.DEVNULL,
+                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+                                             check=False, env=env)
+                    if (cleanup.returncode and b"No such container" not in cleanup.stderr
+                            and b"no container with name" not in cleanup.stderr.lower()):
+                        raise HelperError("unavailable", "Could not stop the shell worker; check the container engine.")
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    raise HelperError(
+                        "unavailable", "Could not stop the shell worker; check the container engine."
+                    ) from exc
+            process.wait()
+            process.stdout.close()
+        return {"output": bytes(output[:SHELL_OUTPUT_BYTES]).decode("utf-8", errors="replace"),
+                "exit_code": process.returncode, "truncated": truncated, "timed_out": timed_out}
+
     def _validate_attach(self, request: dict, attachment_id: str) -> dict:
         variant_id = _variant_id(request)
         alias = validate_alias(request.get("alias"))
@@ -879,12 +1047,11 @@ class Helper:
         """Require the current host-approved alias to match the database mount path."""
         _string(request, "mount_path")
         operation = request.get("source_operation")
-        if operation not in ("list", "read", "search"):
-            raise HelperError("invalid", "Operation must be list, read, or search.")
+        if operation not in ("list", "read"):
+            raise HelperError("invalid", "Operation must be list or read.")
         return {
             "list": self.list_files,
             "read": self.read,
-            "search": self.search,
         }[operation](request)
 
     def list_files(self, request: dict) -> dict:
@@ -916,7 +1083,10 @@ class Helper:
             result["message"] = message
         return _fit_page(result, "files", offset)
 
-    def _read_file(self, root_fd: int, parts: list[str], budget: list[int] | None = None) -> bytes:
+    def _read_file(self, root_fd: int, parts: list[str], budget: list[int] | None = None,
+                   *, reject_hardlinks: bool = False, max_bytes: int | None = None) -> bytes:
+        if max_bytes is None:
+            max_bytes = MAX_FILE_BYTES
         directory_fd = root_fd
         opened: list[int] = []
         try:
@@ -925,7 +1095,8 @@ class Helper:
                 opened.append(directory_fd)
             entry = os.open(parts[-1], os.O_PATH | os.O_NOFOLLOW | _CLOEXEC, dir_fd=directory_fd)
             try:
-                if not stat.S_ISREG(os.fstat(entry).st_mode):
+                info = os.fstat(entry)
+                if not stat.S_ISREG(info.st_mode) or (reject_hardlinks and info.st_nlink != 1):
                     raise HelperError("invalid", "Directories, links and special files cannot be read.")
                 fd = os.open(f"/proc/self/fd/{entry}", os.O_RDONLY | _CLOEXEC)
             finally:
@@ -941,17 +1112,26 @@ class Helper:
                 os.close(item)
         try:
             info = os.fstat(fd)
-            if info.st_size > MAX_FILE_BYTES:
-                raise HelperError("limit", "Source file exceeds the maximum readable file size of 10 MiB.")
+            if reject_hardlinks and info.st_nlink != 1:
+                raise HelperError("invalid", "Links and special files cannot be read.")
+            if info.st_size > max_bytes:
+                raise HelperError("limit", f"Source file exceeds the maximum readable file size of {max_bytes} bytes.")
             if budget is not None and info.st_size > budget[0]:
                 raise _Exhausted("bytes")
-            limit = MAX_FILE_BYTES + 1
+            limit = max_bytes + 1
             if budget is not None:
                 limit = min(limit, budget[0])
             content = os.read(fd, limit)
+            if reject_hardlinks:
+                after = os.fstat(fd)
+                if after.st_nlink != 1:
+                    raise HelperError("invalid", "Links and special files cannot be read.")
+                if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+                        info.st_size, info.st_mtime_ns, info.st_ctime_ns):
+                    raise HelperError("unavailable", "Source changed while preparing the shell snapshot; retry.")
             if budget is not None:
                 budget[0] -= len(content)
-                # A growing file must not spend past the budget, or be searched as if complete.
+                # A growing file must not spend past the budget.
                 if len(content) == limit and budget[0] == 0 and (
                         not limit or len(content) != os.fstat(fd).st_size):
                     raise _Exhausted("bytes")
@@ -959,8 +1139,8 @@ class Helper:
                 raise HelperError("unavailable", "Source file could not be read in full.")
         finally:
             os.close(fd)
-        if len(content) > MAX_FILE_BYTES:
-            raise HelperError("limit", "Source file exceeds the maximum readable file size of 10 MiB.")
+        if len(content) > max_bytes:
+            raise HelperError("limit", f"Source file exceeds the maximum readable file size of {max_bytes} bytes.")
         return content
 
     @staticmethod
@@ -1005,65 +1185,6 @@ class Helper:
             "total_lines": total_lines, "next_line": end_line + 1 if end_line < total_lines else None,
             **({"partial_line": True} if partial else {}),
         }
-
-    def search(self, request: dict) -> dict:
-        query = _string(request, "query", maximum=MAX_QUERY_CHARS)
-        matches_pattern, pattern = _pattern(request)
-        max_results = _integer(request, "max_results", MAX_SEARCH_RESULTS, 1, MAX_SEARCH_RESULTS)
-        fd, base = self._scoped_fd(request)
-        matches: list[dict] = []
-        searched = skipped_binary = skipped_large = 0
-        budget = [SEARCH_BYTE_BUDGET]
-        walk = _Walk(fd, SEARCH_TIME_LIMIT, matches_pattern, pattern)
-        message = None
-        try:
-            for path, size in walk.files(base):
-                if size > MAX_FILE_BYTES:
-                    skipped_large += 1
-                    continue
-                try:
-                    content = self._read_file(fd, path.split("/"), budget)
-                except HelperError as exc:
-                    if exc.code == "limit":
-                        skipped_large += 1
-                    else:
-                        walk.io_errors += 1
-                    continue
-                except OSError:
-                    walk.io_errors += 1
-                    continue
-                try:
-                    text = self._text(content)
-                except HelperError:
-                    skipped_binary += 1
-                    continue
-                searched += 1
-                if query not in text:
-                    continue
-                for number, line in enumerate(io.StringIO(text), 1):
-                    if number % 256 == 0:
-                        walk.check_time()
-                    if query not in line:
-                        continue
-                    if len(matches) == max_results:
-                        raise _Exhausted("results")
-                    snippet = line.rstrip("\r\n")[:MAX_SNIPPET_CHARS]
-                    matches.append({"path": base + path, "line": number, "text": snippet})
-        except _Exhausted as exc:
-            message = _exhausted_message(str(exc), "search", walk)
-        finally:
-            os.close(fd)
-        message = _walk_message(message, walk)
-        result: dict[str, Any] = {
-            "matches": matches, "truncated": message is not None, "searched_files": searched, "engine": walk.engine,
-            "skipped_binary_files": skipped_binary, "skipped_large_files": skipped_large,
-            "skipped_paths": walk.skipped_paths,
-            "io_errors": walk.io_errors, "bytes_read": SEARCH_BYTE_BUDGET - budget[0],
-            "visited_entries": walk.visited, "elapsed_seconds": round(walk.elapsed, 2),
-        }
-        if message:
-            result["message"] = message
-        return _fit_page(result, "matches")
 
 
 # -- socket server ------------------------------------------------------------------------------
@@ -1385,7 +1506,7 @@ def _serve(args: argparse.Namespace) -> int:
     try:
         os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
         os.chmod(args.state_dir, 0o700)
-        helper = Helper(args.state_dir)
+        helper = Helper(args.state_dir, args.cache_dir, args.engine, args.image)
         server = HelperServer(os.path.abspath(args.socket), helper, args.socket_label)
         # The host launcher reads this before issuing its one-shot permits. An
         # interrupted attach from a previous helper must never mint a new proof.
@@ -1445,6 +1566,9 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--socket", required=True)
     serve.add_argument("--socket-label", help="Container process SELinux label for the listening socket only.")
     serve.add_argument("--state-dir", required=True, help="Host-only directory holding the alias registry.")
+    serve.add_argument("--cache-dir", help="Host cache directory containing provisioned codebases.")
+    serve.add_argument("--engine", help="Host container engine executable for the shell worker.")
+    serve.add_argument("--image", help="Trusted local image ID for the shell worker.")
     serve.add_argument("--daemon", action="store_true")
     serve.add_argument("--pid-file")
     serve.add_argument("--log-file")

@@ -91,6 +91,49 @@ def _source(client, variant, file_id, **params):
     return client.get(f"/api/variants/{variant.id}/context/files/{file_id}/source", query_string=params)
 
 
+def test_shell_rejects_remote_and_invalid_sources(client, variant):
+    url = f"/api/variants/{variant.id}/context/shell"
+    body = {"file_id": "directory", "command": "ls"}
+    assert client.post(url, json=body, environ_overrides={"REMOTE_ADDR": "192.0.2.10"}).status_code == 403
+    assert client.post(url, json={"file_id": "upload", "command": "ls"}).status_code == 400
+    assert client.post(url, json={"file_id": "directory", "command": ""}).status_code == 400
+
+
+def test_shell_action_guard_is_variant_scoped(app, variant):
+    from types import SimpleNamespace
+
+    from src.controllers.ai_actions import AssessGuard, ReviewTurn
+
+    target = SimpleNamespace(variant_id=str(variant.id), package="pkg")
+    assess = AssessGuard("CVE-1", [target])
+    review = ReviewTurn()
+    review.armed = (None, [target])
+    for candidate, allowed in ((str(variant.id), True), (str(uuid.uuid4()), False)):
+        with app.test_request_context(f"/api/variants/{candidate}/context/shell", method="POST"):
+            assert (assess.allow() is None) is allowed
+            assert (review.guard() is None) is allowed
+
+
+@pytest.mark.skipif(not os.getenv("VULNSCOUT_TEST_SHELL_IMAGE"), reason="requires a local Docker image")
+def test_attached_folder_shell_end_to_end(client, variant, host, helper_server):
+    import shutil
+
+    helper_server.engine = shutil.which("docker")
+    helper_server.image = os.environ["VULNSCOUT_TEST_SHELL_IMAGE"]
+    _attach(helper_server, variant, "src", host["app"])
+    url = f"/api/variants/{variant.id}/context/shell"
+    response = client.post(url, json={
+        "file_id": "mount:src", "folder": "src",
+        "command": "grep -n needle main.c; touch main.c",
+    })
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["exit_code"] != 0
+    assert "1:int main" in body["output"]
+    assert "Permission denied" in body["output"] or "Read-only file system" in body["output"]
+    assert "needle" in (host["app"] / "src" / "main.c").read_text()
+
+
 class TestAccessControl:
 
     @pytest.mark.parametrize("peer", ["192.0.2.1", "192.0.2.2"])
@@ -507,12 +550,7 @@ class TestSourceBrowsing:
             assert page["next_offset"] == (len(paths) if len(paths) < len(names) else None)
         assert paths == [f"{folder}/{name}" for name in names]
 
-        response = _source(client, variant, "mount:src", operation="search", folder=folder, query="needle")
-        assert response.status_code == 200 and response.json["matches"]
-        assert response.json["truncated"] and "512 KiB" in response.json["message"]
-        assert "match limit" in response.json["message"]
-
-    def test_listing_and_search_fit_complete_entries_to_wire_budget(self, client, variant, host, helper_server):
+    def test_listing_fits_complete_entries_to_wire_budget(self, client, variant, host, helper_server):
         folder = "s" * 195
         directory = host["app"] / folder
         directory.mkdir()
@@ -532,11 +570,6 @@ class TestSourceBrowsing:
         last = page("list", offset=first["next_offset"])
         assert last["next_offset"] is None
         assert [row["path"] for row in first["files"] + last["files"]] == [f"{folder}/{name}" for name in names]
-
-        search = page("search", query="needle")
-        assert 0 < len(search["matches"]) < 100 and search["truncated"]
-        assert "64 KiB" in search["message"] and "match limit" in search["message"]
-        assert search["matches"][-1]["text"] == "needle" * 82
 
     def test_wire_budget_preserves_lines_and_marks_partial_preview(self, client, variant, host, helper_server):
         long = "\t" * 40000
@@ -560,8 +593,7 @@ class TestSourceBrowsing:
         _attach(helper_server, variant, "build", host["build"])
         listing = _source(client, variant, "mount:src").get_json()
         assert listing["file_id"] == "mount:src" and [f["path"] for f in listing["files"]] == ["src/main.c"]
-        search = _source(client, variant, "mount:src", operation="search", query="needle").get_json()
-        assert [match["path"] for match in search["matches"]] == ["src/main.c"]
+        assert _source(client, variant, "mount:src", operation="search", query="needle").status_code == 400
         read = _source(client, variant, "mount:build", operation="read", path="log.txt").get_json()
         assert read["content"] == "needle in build\n" and read["original_name"] == "Host folder build"
 
@@ -569,8 +601,6 @@ class TestSourceBrowsing:
         _attach(helper_server, variant, "src", host["app"])
         listing = _source(client, variant, "mount:src", folder="src", pattern="*.c").get_json()
         assert [f["path"] for f in listing["files"]] == ["src/main.c"]
-        search = _source(client, variant, "mount:src", operation="search", query="needle", folder="src").get_json()
-        assert [match["path"] for match in search["matches"]] == ["src/main.c"]
         for folder in ("../outside", "/etc", ".git"):
             assert _source(client, variant, "mount:src", folder=folder).status_code in (400, 404)
         assert _source(client, variant, "mount:src", folder="x" * 1025).status_code == 400

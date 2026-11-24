@@ -559,15 +559,13 @@ Host-folder management, browsing and source reads are restricted to local operat
 Browser requests must be same-origin; remote clients and cross-origin browser requests receive
 `403`. This does not change local Agent or MCP access.
 
-The source route accepts the same `operation=list|read|search` parameters as uploads and the
-codebase directory. Host listings and searches return `engine="python"` and mark results
+The source route accepts the same `operation=list|read` parameters as uploads and the
+codebase directory. Host listings return `engine="python"` and mark results
 `truncated` with a `message` when a budget, an I/O error or an unreadable path format
 limits coverage. `skipped_paths` counts files omitted because their paths cannot
-be passed to the read operation. Searches also report
-`bytes_read` (including nonmatches), `io_errors`, `skipped_binary_files` and `skipped_large_files`.
+be passed to the read operation.
 When the 64 KiB JSON limit cuts a listing short, use `next_offset` to resume
-after the last file returned. Searches return the matches that fit; narrow the
-folder, pattern or query if the response is truncated.
+after the last file returned.
 
 Errors: `400` invalid alias, path or parameters (including a `pattern` over 512 characters or
 with more than 16 `*`/`?` wildcards); `403` access denied;
@@ -583,28 +581,40 @@ GET /api/variants/<variant_id>/context/files/<file_id>/source
 
 For an upload, the file UUID must belong to that variant. For the variant's active server directory,
 use the literal `file_id=directory`; unprovisioned directories return `404`.
-`operation` selects `list` (default), `read` or `search`.
+`operation` selects `list` (default) or `read`.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
 | `list` | `pattern` (case-sensitive path glob, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
 | `read` | `path` (exact listed member path), `start_line` (1-based, default 1), `max_lines` (1-200, default 200) | UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`; at most 64 KB of content |
-| `search` | `query` (1-200 characters, literal case-sensitive text), `pattern` (glob, default `*`), `max_results` (1-100, default 100) | `matches` with `path`/`line`/`text` (500-character snippets), `truncated`, `searched_files`, `skipped_binary_files` |
 
 For `mount:<alias>` reads, `partial_line: true` means only a prefix of the
 requested line fits in the serialized response. Its suffix is omitted;
 `next_line` points to the following line, not the omitted suffix.
 
-Every response includes `file_id` and `original_name`. Follow pagination for further evidence and narrow
-truncated searches. Binary/non-UTF-8 files return 400 for reads and are counted as skipped in searches.
+Every response includes `file_id` and `original_name`. Follow pagination for further evidence.
+Binary/non-UTF-8 files return 400 for reads.
 Missing references/members return 404; unavailable stored files return 500 with an explicit error.
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
 Directory operations exclude hidden/sensitive names, symbolic/hard links and special files. They visit
 at most 500,000 entries, read at most 10 MiB/file and return at most 64 KiB of serialized JSON.
-Directory searches have a 100 MiB candidate-file budget; oversized files are skipped and counted alongside
-binary/non-UTF-8 files. Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.
-No shell, extraction or source execution is available.
+Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.
+Uploads are not extracted or executed.
+
+### Run an Isolated Codebase Shell
+
+```
+POST /api/variants/<variant_id>/context/shell
+```
+
+For local operator requests, submit JSON with `file_id` (`directory` or an approved
+`mount:<alias>`), `command`, and an optional relative `folder`. Uploads are not
+supported. The response includes command output, exit code, timeout and truncation
+flags, and snapshot metadata. The host helper and a local container engine must be
+available. Commands run in a separate, network-isolated container against a filtered
+read-only snapshot; see [AI Agent Development](agent-chat.md#architecture-and-access-boundaries)
+for limits and security caveats.
 
 ---
 

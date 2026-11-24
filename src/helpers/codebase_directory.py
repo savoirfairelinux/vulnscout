@@ -10,9 +10,7 @@ import stat
 from contextlib import contextmanager, ExitStack
 from fnmatch import fnmatchcase
 
-from .codebase_reference import (
-    CodebaseReference, MAX_ENTRIES, MAX_EXPANDED_BYTES, MAX_FILE_BYTES, SourceLimitError, _safe_path,
-)
+from .codebase_reference import CodebaseReference, MAX_ENTRIES, MAX_FILE_BYTES, _safe_path
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _SENSITIVE_NAMES = (
@@ -89,7 +87,6 @@ class CodebaseDirectory(CodebaseReference):
         directory_path(cache_dir, name)
         self.cache_dir = cache_dir
         self.root_fd = -1
-        self.search_remaining: int | None = None
         self.directory_count = 0
 
     def _index(self) -> None:
@@ -141,20 +138,7 @@ class CodebaseDirectory(CodebaseReference):
                     raise ValueError("Links and special source files cannot be read.")
                 if info.st_size > MAX_FILE_BYTES:
                     raise ValueError("Source file exceeds the maximum readable file size of 10 MB.")
-                if self.search_remaining is not None and info.st_size > self.search_remaining:
-                    raise SourceLimitError(
-                        "Directory search exceeds the 100 MB search budget; narrow the file pattern."
-                    )
-                read_limit = MAX_FILE_BYTES
-                if self.search_remaining is not None:
-                    read_limit = min(read_limit, self.search_remaining)
-                content = source.read(read_limit + 1)
-                if self.search_remaining is not None:
-                    self.search_remaining -= len(content)
-                    if self.search_remaining < 0:
-                        raise SourceLimitError(
-                            "Directory search exceeds the 100 MB search budget; narrow the file pattern."
-                        )
+                content = source.read(MAX_FILE_BYTES + 1)
                 if len(content) > MAX_FILE_BYTES:
                     raise ValueError("Source file exceeds the maximum readable file size of 10 MB.")
                 return content
@@ -167,13 +151,3 @@ class CodebaseDirectory(CodebaseReference):
             yield from io.StringIO(content.decode("utf-8-sig"))
         except UnicodeDecodeError as exc:
             raise ValueError("Source file is not UTF-8 text.") from exc
-
-    def search(self, query: str, pattern: str = "*", max_results: int = 100) -> dict:
-        total = sum(size for path, (size, _) in self.entries.items() if fnmatchcase(path, pattern))
-        if total > MAX_EXPANDED_BYTES:
-            raise ValueError("Directory search exceeds the 100 MB search budget; narrow the file pattern.")
-        self.search_remaining = MAX_EXPANDED_BYTES
-        try:
-            return super().search(query, pattern, max_results)
-        finally:
-            self.search_remaining = None

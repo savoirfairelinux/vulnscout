@@ -259,6 +259,22 @@ class VulnScoutClient:
             raise VulnScoutError(error_msg)
         return response.json()
 
+    def run_codebase_shell(self, variant_id: str, file_id: str, command: str, folder: str = "") -> dict:
+        """Run a bounded read-only worker for a selected variant source."""
+        url = f"{self.base_url}/api/variants/{quote(variant_id, safe='')}/context/shell"
+        try:
+            with httpx.Client(timeout=70) as http:
+                response = http.post(url, json={"file_id": file_id, "command": command, "folder": folder})
+        except httpx.RequestError as exc:
+            raise VulnScoutError(f"Could not connect to VulnScout at {self.base_url}") from exc
+        if not response.is_success:
+            try:
+                error_msg = response.json().get("error", response.text)
+            except ValueError:
+                error_msg = response.text
+            raise VulnScoutError(error_msg)
+        return response.json()
+
     def _send(self, method: str, url: str, **kwargs) -> httpx.Response:
         try:
             with httpx.Client(timeout=30) as http:
@@ -603,6 +619,10 @@ class ScopedVulnScoutClient(VulnScoutClient):
     def get_codebase_source(self, variant_id: str, file_id: str, params: dict) -> dict:
         self._variant(variant_id)
         return super().get_codebase_source(variant_id, file_id, params)
+
+    def run_codebase_shell(self, variant_id: str, file_id: str, command: str, folder: str = "") -> dict:
+        self._variant(variant_id)
+        return super().run_codebase_shell(variant_id, file_id, command, folder)
 
     def get_context_draft(self, variant_id: str) -> Optional[dict]:
         self._variant(variant_id)
