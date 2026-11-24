@@ -606,6 +606,11 @@ cmd_scan() {
             }
             local exported_cdx="$grype_tmp/sbom_cyclonedx_v1_6.cdx.json"
             if [[ -f "$exported_cdx" ]]; then
+                (cd "$BASE_DIR" && flask --app src.bin.webapp filter-grype-scan \
+                    --project "$PROJECT_NAME" --variant "${VARIANT_NAME:-default}" \
+                    --stage sbom "$exported_cdx") || {
+                    rm -rf "$grype_tmp"; return 1
+                }
                 local grype_out="$grype_tmp/grype_from_db.grype.json"
                 console_out info "Grype scan: $exported_cdx -> $grype_out"
                 local _grype_gomemlimit
@@ -620,6 +625,11 @@ cmd_scan() {
                         rm -rf "$grype_tmp"; return 1
                     }
                 fi
+                (cd "$BASE_DIR" && flask --app src.bin.webapp filter-grype-scan \
+                    --project "$PROJECT_NAME" --variant "${VARIANT_NAME:-default}" \
+                    --stage matches "$grype_out") || {
+                    rm -rf "$grype_tmp"; return 1
+                }
                 console_out info "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
                     --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \

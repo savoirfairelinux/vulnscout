@@ -157,6 +157,14 @@ Native package selections are saved when launching scans in a single `project-sc
 
 Preferences are loaded only for selected projects, and package names are compared case-insensitively. All selected projects' preferences are saved atomically before scans are queued. If saving fails, no partial preferences are written and the wizard stays open with an error so you can retry. Native selections are not capped at 1000 package names; the normal HTTP request-size limit still applies.
 
+`./vulnscout scan` and the corresponding Flask scanner commands use the saved
+preferences for the selected project, falling back to the global defaults when
+that project has no saved selection. This applies to Grype, NVD, OSV and
+sbom-cve-check. Grype also limits results to the variant's SBOM scope, as in
+the wizard. Selecting all native packages in the wizard therefore also includes
+new native packages in subsequent CLI scans. Invalid or unreadable preferences
+stop the scan rather than silently scanning a different scope.
+
 The same JSON file now has two top-level nodes:
 
 ```json

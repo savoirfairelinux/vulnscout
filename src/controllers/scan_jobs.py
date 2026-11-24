@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid as uuid_module
-from typing import Callable, Dict, List, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Protocol, Sequence, Set, Tuple
 
 from ..extensions import db
 from ..helpers.history_source import SOURCE_ENV_VAR
@@ -141,6 +141,13 @@ def _resolve_grype_memlimit() -> str | None:
 # Grype
 # ---------------------------------------------------------------------------
 
+class _GrypeFilterContext(Protocol):
+    options: Dict[str, Any]
+
+    def log(self, line: str) -> None:
+        ...
+
+
 def _variant_sbom_packages(variant_uuid: uuid_module.UUID) -> Set[Tuple[str, str]]:
     """Name/version pairs from the variant's latest SBOM scan."""
     sbom_scan_id = db.session.execute(
@@ -162,7 +169,7 @@ def _variant_sbom_packages(variant_uuid: uuid_module.UUID) -> Set[Tuple[str, str
 
 
 def _deduplicate_cyclonedx(
-    ctx: JobContext,
+    ctx: _GrypeFilterContext,
     export_path: str,
     exclude_kernel: bool,
     exclude_native: bool = False,
@@ -218,7 +225,7 @@ def _deduplicate_cyclonedx(
 
 
 def _filter_grype_matches(
-    ctx: JobContext,
+    ctx: _GrypeFilterContext,
     results_path: str,
     sbom_packages: Set[Tuple[str, str]],
     exclude_native: bool = False,

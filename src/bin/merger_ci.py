@@ -52,7 +52,10 @@ from .cmd_scans import (
     list_scans_command,
     delete_scan_command,
 )
-from .cmd_vuln_scan import nvd_scan_command, osv_scan_command, sbom_cve_check_scan_command, new_scan_run_id_command
+from .cmd_vuln_scan import (
+    filter_grype_scan_command, nvd_scan_command, osv_scan_command,
+    sbom_cve_check_scan_command, new_scan_run_id_command,
+)
 from .cmd_ai_assess import ai_assess_command
 from .cmd_ai_review import ai_review_command
 
@@ -86,6 +89,7 @@ def init_app(app) -> None:
     app.cli.add_command(osv_scan_command)
     app.cli.add_command(sbom_cve_check_scan_command)
     app.cli.add_command(new_scan_run_id_command)
+    app.cli.add_command(filter_grype_scan_command)
     app.cli.add_command(ai_assess_command)
     app.cli.add_command(ai_review_command)
 

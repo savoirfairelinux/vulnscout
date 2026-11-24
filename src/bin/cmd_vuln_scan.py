@@ -20,6 +20,7 @@ from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
 from ..helpers.history_source import history_source
+from ..helpers.scan_configuration import read_scan_configuration
 from ..helpers.scan_filters import filter_scannable_packages
 from ..helpers.scan_runs import tool_scan
 from ..controllers.operation_registry import new_queue_id
@@ -43,7 +44,14 @@ from flask.cli import with_appcontext
 # Shared helpers for vuln scan commands
 # ---------------------------------------------------------------------------
 
-def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
+def _scan_configuration(project_name: str) -> dict:
+    try:
+        return read_scan_configuration(project_name)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(f"Unable to read scan configuration: {exc}") from exc
+
+
+def _resolve_active_packages(variant_uuid: uuid.UUID, project_name: str | None = None) -> list[Package]:
     """Resolve active SBOM-scoped package snapshots for a variant, raising on failure."""
     echo("Resolving active packages…", role="info")
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
@@ -55,7 +63,38 @@ def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
         raise click.ClickException(str(exc)) from exc
     if not packages:
         raise click.ClickException("No packages found for variant")
-    return filter_scannable_packages(packages)
+    options = _scan_configuration(project_name) if project_name is not None else {}
+    return filter_scannable_packages(packages, **options)
+
+
+class _CLIGrypeFilterContext:
+    def __init__(self, options: dict):
+        self.options = options
+
+    def log(self, message: str) -> None:
+        echo(message, role="info")
+
+
+@click.command("filter-grype-scan", cls=Command)
+@click.option("--project", required=True)
+@click.option("--variant", default=None)
+@click.option("--stage", type=click.Choice(["sbom", "matches"]), required=True)
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@with_appcontext
+def filter_grype_scan_command(project: str, variant: str | None, stage: str, path: str) -> None:
+    """Apply wizard scan scope to a Grype input or result."""
+    from ..controllers.scan_jobs import _deduplicate_cyclonedx, _filter_grype_matches, _variant_sbom_packages
+
+    project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
+    options = _scan_configuration(project_obj.name)
+    sbom_packages = _variant_sbom_packages(variant_obj.id)
+    if not sbom_packages and not options["exclude_native"]:
+        return
+    ctx = _CLIGrypeFilterContext(options)
+    if stage == "sbom":
+        _deduplicate_cyclonedx(ctx, path, True, options["exclude_native"])
+    else:
+        _filter_grype_matches(ctx, path, sbom_packages, options["exclude_native"])
 
 
 @click.command("new-scan-run-id", cls=Command)
@@ -128,7 +167,7 @@ def nvd_scan_command(project: str, variant: str | None, mode: str, run_id: str |
     project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
     variant_uuid = variant_obj.id
 
-    packages = _resolve_active_packages(variant_uuid)
+    packages = _resolve_active_packages(variant_uuid, project_obj.name)
 
     engine = None
     if mode == "local":
@@ -254,7 +293,7 @@ def osv_scan_command(project: str, variant: str | None, run_id: str | None = Non
 
     osv = OSVClient()
 
-    packages = _resolve_active_packages(variant_uuid)
+    packages = _resolve_active_packages(variant_uuid, project_obj.name)
 
     purl_to_packages: dict[str, list[Package]] = {}
     for pkg in packages:
@@ -883,7 +922,7 @@ def sbom_cve_check_scan_command(project: str, variant: str | None, run_id: str |
     project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
     variant_uuid = variant_obj.id
 
-    packages = _resolve_active_packages(variant_uuid)
+    packages = _resolve_active_packages(variant_uuid, project_obj.name)
     echo(f"Resolved {len(packages)} active packages", role="info")
 
     echo("Loading local CVE databases (NVD-FKIE + CVEList) and building index…", role="info")
