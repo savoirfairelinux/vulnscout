@@ -13,15 +13,16 @@ ACTION_TIMEOUT = 600
 SKILLS_MISSING_ERROR = "Bundled agent skills not found. Check the installation or VULNSCOUT_SKILLS_PATH override."
 _WEB_OFF = {"0", "false", "no", "off"}
 MOUNT_DISCOVERY_MESSAGE = (
-    "For mount:<alias>, prefer a mount-relative folder or literal prefix from the caller or build metadata. "
-    "If the layout is unknown or a guessed subfolder is missing, inspect one small root page of file paths. "
-    "If it shows no relevant prefix, ask for the relative folder or a narrower attachment instead of paging "
-    "the root or inferring absence. "
+    "Start from target SBOM and build metadata. Read known paths directly with read_codebase_file. "
+    "For directory or mount:<alias>, navigate via list_codebase_children at the nearest known folder. "
+    "Use recursive list_codebase_files only after narrowing, or for uploads. Use run_codebase_shell only "
+    "for scoped artifact inspection, never navigation. An incomplete lookup is not absence; try a narrower "
+    "path or independent build evidence before applying the confidence gate. "
 )
 PROFILE_SYSTEM_MESSAGE = (
     "You are the VulnScout agent running a skill-driven action. The selected skill is the methodology: "
     "follow it exactly. Use VulnScout MCP tools for VulnScout facts and actions. "
-    "Inspect source with list_codebase_files, run_codebase_shell and read_codebase_file "
+    "Inspect source with scoped MCP tools "
     "(read_codebase_files reads up to 8 files per call). Use "
     "codebase_directory.file_id (directory) with those tools, never direct filesystem access. "
     f"{MOUNT_DISCOVERY_MESSAGE}"

@@ -32,7 +32,9 @@ link-local and other non-public addresses are refused, and redirect targets rely
 on the Copilot runtime's own private-address guard. Set
 `VULNSCOUT_AGENT_WEB_ACCESS` to `off` (or `0`, `false`, `no`) to disable web
 fetch; the skills then report missing NVD/advisory evidence. The embedded agent
-can run commands through `run_codebase_shell` on a filtered, read-only snapshot
+uses `list_codebase_children` for navigation, direct reads for known paths, and
+`list_codebase_files` for filename matching in a narrowed folder. For a known
+artifact requiring command-line inspection it can use `run_codebase_shell` on a filtered, read-only snapshot
 of a variant's provisioned directory or attached host folder. The host helper
 starts a separate container for each command with no network, a read-only root,
 no Linux capabilities, an unprivileged user, and bounded time, output, memory,
@@ -56,6 +58,29 @@ may run arbitrary programs inside the container: container isolation is not a
 virtual machine and does not eliminate kernel or runtime vulnerabilities.
 The snapshot is not atomic across the tree; avoid changing source while it is
 being inspected.
+
+To reproduce navigation and evidence selection without a model, run these tests
+from the checkout with `requirements/dev.txt` installed. They use synthetic
+build metadata and temporary directories, not a developer's build or live CVE data:
+
+```sh
+python -m pytest -q \
+  tests/unit_tests/test_host_mount_helper.py::test_shallow_pages_bound_actual_work_and_do_not_open_children \
+  tests/unit_tests/test_host_mount_helper.py::test_excluded_children_progress_and_scope \
+  tests/unit_tests/test_context.py::TestCodebaseDirectory::test_target_build_evidence_via_registered_tools \
+  tests/unit_tests/test_context.py::TestCodebaseDirectory::test_children_preserve_directory_boundaries
+```
+
+On a local Podman host, also test the real isolated worker and launcher with a
+disposable image. The tests do not require an existing VulnScout service:
+
+```sh
+podman build -t localhost/vulnscout:worker-check .
+VULNSCOUT_TEST_SHELL_IMAGE=localhost/vulnscout:worker-check python -m pytest -q \
+  tests/unit_tests/test_read_only_shell.py \
+  tests/unit_tests/test_host_mounts.py::test_attached_folder_shell_end_to_end
+podman rmi localhost/vulnscout:worker-check
+```
 
 ```{warning}
 With web fetch enabled, the model that reads your project data can also request

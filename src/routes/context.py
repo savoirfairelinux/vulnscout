@@ -162,12 +162,22 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
         pattern = request.args.get("pattern", "*")
         if len(pattern) > 512:
             raise ValueError("File pattern must be at most 512 characters.")
-        if request.args.get("folder"):
-            raise ValueError("folder is only supported for attached host folders (file_id=mount:<alias>).")
+        folder = request.args.get("folder", "")
+        if folder and (not directory or operation not in ("children", "list")):
+            raise ValueError("folder is only supported for listings of directories or attached host folders.")
+        if operation == "children" and not directory:
+            raise ValueError("Shallow listings require a directory or mount.")
+        if operation not in ("list", "read", "children") and not (allow_search and operation == "search"):
+            if directory:
+                raise ValueError("Operation must be list, children or read.")
+            raise ValueError("Operation must be list or read." if not allow_search else
+                             "Operation must be list, read, or search.")
         with ExitStack() as stack:
             reference: CodebaseReference
             if directory:
-                reference = stack.enter_context(CodebaseDirectory(file_path, name))
+                source = stack.enter_context(CodebaseDirectory(file_path, name, folder=folder,
+                                                               index=operation == "list"))
+                reference = source
             else:
                 stream = stack.enter_context(open(file_path, "rb"))
                 reference = stack.enter_context(CodebaseReference(stream, name))
@@ -175,26 +185,33 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
                 result = reference.list_files(
                     pattern, _integer("offset", 0, 0, MAX_ENTRIES), _integer("limit", 200, 1, 200),
                 )
+                if folder:
+                    for entry in result["files"]:
+                        entry["path"] = source.folder + "/" + entry["path"]
+            elif operation == "children" and directory:
+                result = source.list_children(request.args.get("cursor", ""), _integer("limit", 50, 1, 200))
             elif operation == "read":
-                result = reference.read_lines(
-                    request.args.get("path", ""),
-                    _integer("start_line", 1, 1, 10 * 1024 * 1024),
-                    _integer("max_lines", 200, 1, 200),
-                )
-            elif operation == "search" and allow_search:
+                try:
+                    result = reference.read_lines(
+                        request.args.get("path", ""),
+                        _integer("start_line", 1, 1, 10 * 1024 * 1024),
+                        _integer("max_lines", 200, 1, 200),
+                    )
+                except FileNotFoundError as exc:
+                    raise LookupError("Source file not found or excluded.") from exc
+            else:  # Validated import-source search.
                 query = request.args.get("query", "")
                 if not query or len(query) > 200:
                     raise ValueError("Search query must contain 1-200 characters.")
                 result = reference.search(query, pattern, _integer("max_results", 100, 1, 100))
-            else:
-                raise ValueError("Operation must be list or read." if not allow_search
-                                 else "Operation must be list, read, or search.")
             if directory:
                 from flask import current_app
                 from ..helpers.codebase_reference import MAX_RESPONSE_BYTES
                 result = {"file_id": "directory", "original_name": "Codebase directory", **result}
                 if len(current_app.json.dumps(result).encode("utf-8")) > MAX_RESPONSE_BYTES:
                     raise ValueError("Source response exceeds 64 KB; reduce limit or max_lines.")
+    except host_helper.protocol.HelperError as exc:
+        return {"error": exc.message}, host_helper.HTTP_STATUS[exc.code]
     except LookupError as exc:
         return {"error": str(exc)}, 404
     except ValueError as exc:
@@ -225,12 +242,15 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
         if operation == "list":
             params = {"pattern": pattern, "folder": folder, "offset": _integer("offset", 0, 0, MAX_ENTRIES),
                       "limit": _integer("limit", 200, 1, 200)}
+        elif operation == "children":
+            params = {"folder": folder, "cursor": request.args.get("cursor", ""),
+                      "limit": _integer("limit", 50, 1, 200)}
         elif operation == "read":
             params = {"path": request.args.get("path", ""),
                       "start_line": _integer("start_line", 1, 1, 10 * 1024 * 1024),
                       "max_lines": _integer("max_lines", 200, 1, 200)}
         else:
-            raise ValueError("Operation must be list or read.")
+            raise ValueError("Operation must be list, children or read.")
         result = host_mounts.browse(variant_uuid, alias, operation, params)
     except LookupError as exc:
         return {"error": str(exc)}, 404
@@ -973,10 +993,11 @@ def init_app(app):
 
         OpenAPI:
         path file_id string required Upload UUID, directory for the active server directory, or mount:<alias>.
-        query operation string optional list (default) or read.
+        query operation string optional Recursive list (default), children (directory or mount), or read.
         query path string optional Exact member path for read.
         query pattern string optional File-path glob for list (default *), relative to folder.
-        query folder string optional Host folders only: sub-folder scoping list.
+        query folder string optional Directory or mount: sub-folder scoping list or children.
+        query cursor string optional Opaque continuation from children in the same folder.
         query offset integer optional List offset (default 0).
         query limit integer optional List page size, 1-200 (default 200).
         query start_line integer optional First line for read (default 1).

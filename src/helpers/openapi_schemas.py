@@ -765,6 +765,12 @@ SCHEMAS: dict[str, Any] = {
         "anyOf": [
             _object({
                 "file_id": _STRING, "original_name": _STRING,
+                "children": _array(_object({"path": _STRING, "type": {"type": "string", "enum": ["file", "directory"]}},
+                                           ("path", "type"))),
+                "complete": _BOOL, "next_cursor": {**_STRING, "nullable": True}, "visited_entries": _COUNT,
+            }, ("file_id", "original_name", "children", "complete", "next_cursor", "visited_entries")),
+            _object({
+                "file_id": _STRING, "original_name": _STRING,
                 "files": _array(_object({"path": _STRING, "size": _COUNT}, ("path", "size"))),
                 "total": _COUNT, "next_offset": {**_COUNT, "nullable": True},
             }, ("file_id", "original_name", "files", "total", "next_offset")),
@@ -1201,6 +1207,7 @@ SCHEMAS.update({
             ("name", "revision", *[key for key in variant["required"] if key not in ("file_id", "original_name")]),
         )
         for variant in SCHEMAS["SourceReferenceResult"]["anyOf"]
+        if "children" not in variant["properties"]
     ]},
     "ContextDraftUpdate": _object({
         "source": {"type": "string", "minLength": 1, "maxLength": 255},

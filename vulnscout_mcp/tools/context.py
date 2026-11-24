@@ -495,7 +495,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         (files: id, original_name, description).
 
         codebase_directory gives the variant's server path and
-        file_id="directory". Pass that ID to list_codebase_files,
+        file_id="directory". Pass that ID to list_codebase_children, list_codebase_files,
         read_codebase_file, and read_codebase_files to inspect source through
         the bounded API, never direct filesystem access.
         Matching cache directories created by CI are discovered automatically.
@@ -557,6 +557,24 @@ def register_tools(server, client: VulnScoutClient) -> None:
         )
 
     @server.tool()
+    def list_codebase_children(
+        variant_id: str, file_id: str, folder: str = "", cursor: str = "", limit: int = 50,
+    ) -> str:
+        """Navigate one level of a provisioned directory or approved mount (not an upload).
+
+        Use file_id="directory" or "mount:<alias>" from this variant's context and the
+        nearest known relative folder (empty for root). Returns immediate eligible
+        children with root-relative path and type (file or directory), in filesystem
+        order. No recursive walk, content read, shell snapshot or total. limit is 1–200.
+        Even an empty page is incomplete until complete=true. To continue, pass its
+        next_cursor unchanged for the same folder. Restart if the cursor is stale.
+        Read known paths directly; use list_codebase_files for narrowed filename matching.
+        """
+        return _codebase_source_impl(client, variant_id, file_id, {
+            "operation": "children", "folder": folder, "cursor": cursor, "limit": limit,
+        })
+
+    @server.tool()
     def list_codebase_files(
         variant_id: str, file_id: str, pattern: str = "*", offset: int = 0, limit: int = 200, folder: str = "",
     ) -> str:
@@ -573,12 +591,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
         and is limited to 500,000 visited entries. It never reads the MCP host filesystem.
         pattern is a case-sensitive file-path glob. Follow next_offset until null
         before claiming the list is complete. limit must be 1-200.
-        Prefer a mount-relative folder or literal prefix from the caller or build
-        metadata. If the layout is unknown or a guessed folder is missing, inspect
-        one small root page of file paths. limit bounds the page, not traversal.
-        If no relevant prefix appears, ask for the relative folder or a narrower
-        attachment instead of paging the unfiltered root. With folder (host folders
-        only; no '..', links or hidden names), pattern is relative to folder but
+        This is recursive; limit bounds the page, not traversal. For navigation
+        use list_codebase_children instead. Narrow folder before matching filenames.
+        With folder (mounts or directories; no '..', links or hidden names), pattern is relative to folder but
         returned paths stay relative to the mount for read_codebase_file.
         If the message says the listing stopped at its time or entry limit, the
         list is incomplete: narrow folder or pattern and repeat; this is not evidence
@@ -596,7 +611,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
     ) -> str:
         """Read UTF-8 source from a reference, active directory or host folder (mount:<alias>).
 
-        Use an exact path returned by list_codebase_files. start_line is 1-based;
+        Read a known exact relative path directly, without listing first. start_line is 1-based;
         max_lines must be 1-200. Reads are capped at 64 KB. Follow next_line until
         null. A host folder's partial_line means only a prefix of that line fit;
         its suffix is omitted. Binary/non-UTF-8 files return an explicit error.
@@ -615,7 +630,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         """Read the same line range of several source files in one call (parallel read_codebase_file).
 
         Use it to verify a recipe, its patches and a source file together instead of
-        one call each. paths holds 1-8 exact paths returned by list_codebase_files
+        one call each. paths holds 1-8 known exact paths
         (for a host folder they are relative to the attached folder).
         Each entry of "files" is a read_codebase_file result (content, next_line) or an
         {"path", "error"} object; one failing file does not fail the others. The
@@ -632,8 +647,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
             """Run a shell in an isolated worker against a read-only snapshot of a variant source.
 
             file_id is "directory" or "mount:<alias>" from merged context; uploads
-            are not supported. folder is an optional relative subdirectory; narrow
-            large trees to fit the snapshot limits. Hidden and sensitive names,
+            are not supported. Scope folder to a known artifact's containing directory.
+            Never use a snapshot for navigation; use list_codebase_children. Hidden and sensitive names,
             links, special files and hardlinks are excluded or rejected.
             Commands run without network access and cannot modify source files.
             Output and time are limited. Report nonzero exit codes, truncated
