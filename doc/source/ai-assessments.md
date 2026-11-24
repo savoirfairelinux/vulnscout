@@ -556,7 +556,7 @@ The embedded Agent has no direct host filesystem access. Its isolated read-only
 shell can inspect a filtered snapshot of a directory or attached folder; see
 [AI Agent Development](agent-chat.md). Merged
 context returns `codebase_directory.file_id="directory"` for a provisioned
-directory, and `list_codebase_files`, `read_codebase_file` and
+directory, and `list_codebase_children`, `list_codebase_files`, `read_codebase_file` and
 `read_codebase_files` accept that ID within the variant's existing scope. Directory
 availability takes precedence over uploads and external paths in merged source
 evidence without deleting their stored data. An empty `files` list means there
@@ -742,13 +742,12 @@ to manage attachments.
   and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
   time limits. At most 8 requests run at once.
 - Large trees (for example a Yocto build directory):
-  - An alias identifies an attachment, not its layout. Prefer a mount-relative
-    folder or literal prefix supplied by the caller or build metadata. If the
-    layout is unknown or a guessed folder is missing, inspect one small root page
-    of **file paths**. `limit` bounds the page, not the walk. If no path gives a
-    relevant prefix, ask for the mount-relative workdir or a narrower attachment
-    rather than paging the unfiltered root or declaring the mount unavailable.
-  - `list_codebase_files` accepts `folder`, a sub-folder of the
+  - Read known paths directly. An alias identifies an attachment, not its layout.
+    From the target SBOM/build metadata, choose the nearest known folder and use
+    `list_codebase_children` to discover immediate directories and files. It
+    neither walks descendants nor creates a shell snapshot. An empty page with
+    `next_cursor` is incomplete. Follow relevant branches, not a recursive root sample.
+  - Attach the narrowest useful folder. `list_codebase_files` accepts `folder`, a sub-folder of the
     attachment. For the CLI example above, `build` is already rooted at the Yocto
     work directory: use `<tuple>/<recipe>` from discovered paths, not
     `build/tmp/work/<tuple>/<recipe>`. On an enclosing mount, retain the observed
@@ -757,7 +756,7 @@ to manage attachments.
     attached folder, so they can be passed to `read_codebase_file` unchanged.
     `folder` must be a plain relative path: `..`, absolute paths, hidden or
     sensitive names and links are rejected, and every component is opened without
-    following links. It is only valid for host folders.
+    following links. Both provisioned directories and host folders support `folder`.
   - Without `folder`, start `pattern` with a literal path
     from metadata or the listing instead of `*curl*`: folders that cannot match the
     literal prefix are never opened and non-matching files are never stat'ed.
