@@ -15,7 +15,10 @@ _WEB_OFF = {"0", "false", "no", "off"}
 MOUNT_DISCOVERY_MESSAGE = (
     "Start from target SBOM and build metadata. Read known paths directly with read_codebase_file. "
     "For directory or mount:<alias>, navigate via list_codebase_children at the nearest known folder. "
-    "Use recursive list_codebase_files only after narrowing, or for uploads. Use run_codebase_shell only "
+    "Use recursive list_codebase_files only after narrowing, or for uploads. For literal evidence in a known "
+    "directory or mount file, use search_codebase_file directly and follow next_cursor until complete. "
+    "The 100 MiB snapshot cap, 10 MiB direct read cap and a timeout are different lookup limits; "
+    "stream known logs rather than automatically lowering global confidence. Use run_codebase_shell only "
     "for scoped artifact inspection, never navigation. An incomplete lookup is not absence; try a narrower "
     "path or independent build evidence before applying the confidence gate. "
 )

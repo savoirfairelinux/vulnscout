@@ -104,7 +104,7 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     ))
     assert response == "Source inspected"
     source_tools = {"list_codebase_children", "list_codebase_files", "read_codebase_file", "read_codebase_files",
-                    "run_codebase_shell"}
+                    "search_codebase_file", "run_codebase_shell"}
     assert source_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
     assert {f"mcp:vulnscout-{name}" for name in source_tools} <= set(captured["available_tools"])
     assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])

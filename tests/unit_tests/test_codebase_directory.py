@@ -155,6 +155,34 @@ def test_directory_limits_binary_and_encoding_errors(tree, monkeypatch):
             pass
 
 
+def test_search_validates_current_file_and_directory_scope(tree, monkeypatch):
+    from src.helpers import host_mount_helper as hh
+
+    cache, name, root = tree
+    path = root / "log"
+    query = "\u20ac.log"
+    path.write_text("x" * (hh.SEARCH_CHUNK - 1) + query + "\n" + query)
+    monkeypatch.setattr(hh, "SEARCH_BYTES", hh.SEARCH_CHUNK)
+    with CodebaseDirectory(str(cache), name, index=False) as ref:
+        first = ref.search_file("v", "log", query, "")
+        assert not first["complete"] and not first["matches"]
+        cursor = first["next_cursor"]
+        with pytest.raises(hh.HelperError, match="cursor"):
+            ref.search_file("other", "log", query, cursor)
+        second = ref.search_file("v", "log", query, cursor)
+        assert second["complete"] and [m["line"] for m in second["matches"]] == [1, 2]
+        original = os.pread
+
+        def mutate(*args):
+            data = original(*args)
+            path.write_text("new log")
+            return data
+
+        monkeypatch.setattr(os, "pread", mutate)
+        with pytest.raises(hh.HelperError, match="changed"):
+            ref.search_file("v", "log", query, cursor)
+
+
 @pytest.mark.parametrize("count", [500_000, 500_001])
 def test_directory_entry_count_boundary(tree, monkeypatch, count):
     from contextlib import contextmanager

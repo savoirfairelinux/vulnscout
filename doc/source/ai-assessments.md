@@ -556,7 +556,7 @@ The embedded Agent has no direct host filesystem access. Its isolated read-only
 shell can inspect a filtered snapshot of a directory or attached folder; see
 [AI Agent Development](agent-chat.md). Merged
 context returns `codebase_directory.file_id="directory"` for a provisioned
-directory, and `list_codebase_children`, `list_codebase_files`, `read_codebase_file` and
+directory, and `list_codebase_children`, `list_codebase_files`, `search_codebase_file`, `read_codebase_file` and
 `read_codebase_files` accept that ID within the variant's existing scope. Directory
 availability takes precedence over uploads and external paths in merged source
 evidence without deleting their stored data. An empty `files` list means there
@@ -730,7 +730,7 @@ to manage attachments.
   verified directory descriptor without following symbolic links, so links
   (including a directory swapped for a link) cannot escape. Hard-linked regular
   files inside the folder are readable with the legacy read operation, but are not
-  returned by shallow navigation or copied into shell snapshots.
+  returned by shallow navigation, searched by single-file search or copied into shell snapshots.
 - The helper is **read-only**: it can check status, stage
   and activate approvals, update its private registry, list or read source
   files, and run commands against a filtered snapshot in an isolated worker.

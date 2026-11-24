@@ -154,10 +154,11 @@ def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
-def _browse_reference(file_path: str, name: str, label: str, *, directory: bool = False,
+def _browse_reference(file_path: str, name: str, label: str, *, directory_variant: uuid.UUID | None = None,
                       allow_search: bool = False) -> tuple[dict, int]:
     """List, read or search a stored file or archive as the request's query asks."""
     try:
+        directory = directory_variant is not None
         operation = request.args.get("operation", "list")
         pattern = request.args.get("pattern", "*")
         if len(pattern) > 512:
@@ -167,9 +168,10 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
             raise ValueError("folder is only supported for listings of directories or attached host folders.")
         if operation == "children" and not directory:
             raise ValueError("Shallow listings require a directory or mount.")
-        if operation not in ("list", "read", "children") and not (allow_search and operation == "search"):
+        if (operation not in ("list", "read", "children") and not (directory and operation == "search_file")
+                and not (allow_search and operation == "search")):
             if directory:
-                raise ValueError("Operation must be list, children or read.")
+                raise ValueError("Operation must be list, children, read or search_file.")
             raise ValueError("Operation must be list or read." if not allow_search else
                              "Operation must be list, read, or search.")
         with ExitStack() as stack:
@@ -190,6 +192,9 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory: bool 
                         entry["path"] = source.folder + "/" + entry["path"]
             elif operation == "children" and directory:
                 result = source.list_children(request.args.get("cursor", ""), _integer("limit", 50, 1, 200))
+            elif operation == "search_file" and directory:
+                result = source.search_file(str(directory_variant), request.args.get("path", ""),
+                                            request.args.get("query", ""), request.args.get("cursor", ""))
             elif operation == "read":
                 try:
                     result = reference.read_lines(
@@ -249,8 +254,12 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
             params = {"path": request.args.get("path", ""),
                       "start_line": _integer("start_line", 1, 1, 10 * 1024 * 1024),
                       "max_lines": _integer("max_lines", 200, 1, 200)}
+        elif operation == "search_file":
+            if folder:
+                raise ValueError("Use an exact path, not folder, for single-file search.")
+            params = {key: request.args.get(key, "") for key in ("path", "query", "cursor")}
         else:
-            raise ValueError("Operation must be list, children or read.")
+            raise ValueError("Operation must be list, children, read or search_file.")
         result = host_mounts.browse(variant_uuid, alias, operation, params)
     except LookupError as exc:
         return {"error": str(exc)}, 404
@@ -993,11 +1002,12 @@ def init_app(app):
 
         OpenAPI:
         path file_id string required Upload UUID, directory for the active server directory, or mount:<alias>.
-        query operation string optional Recursive list (default), children (directory or mount), or read.
-        query path string optional Exact member path for read.
+        query operation string optional Recursive list (default), read, children or search_file (directory or mount).
+        query path string optional Exact member path for read or search_file.
+        query query string optional Single-line literal for search_file. CVE IDs match whole tokens.
         query pattern string optional File-path glob for list (default *), relative to folder.
         query folder string optional Directory or mount: sub-folder scoping list or children.
-        query cursor string optional Opaque continuation from children in the same folder.
+        query cursor string optional Opaque continuation for the same shallow listing or single-file search.
         query offset integer optional List offset (default 0).
         query limit integer optional List page size, 1-200 (default 200).
         query start_line integer optional First line for read (default 1).
@@ -1031,7 +1041,8 @@ def init_app(app):
                     "No codebase directory found. Create its expected cache folder or use AI Context."
                 )), 404
             body, status = _browse_reference(
-                _get_cache_dir(), vc.codebase_directory, "codebase directory", directory=True
+                _get_cache_dir(), vc.codebase_directory, "codebase directory",
+                directory_variant=variant_uuid,
             )
             return jsonify(body), status
         file_uuid, err = parse_uuid_or_400(file_id, 'file_id')
