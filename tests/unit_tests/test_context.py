@@ -650,6 +650,9 @@ class TestCodebaseSource:
         assert listing["next_offset"] == 1
         assert "file_path" not in str(listing)
         assert client.get(base, query_string={"operation": "search", "query": "unsafe_call"}).status_code == 400
+        assert client.get(base, query_string={
+            "operation": "read", "path": "repo/main.c", "position": "unsupported",
+        }).status_code == 400
         read = client.get(base, query_string={
             "operation": "read", "path": "repo/main.c", "start_line": 2, "max_lines": 1,
         }).get_json()
@@ -831,7 +834,9 @@ class TestCodebaseDirectory:
             temp.mkdir(parents=True)
             (temp / "log.do_cve_check.99").write_text(f"other run: {target} patched\n")
         if log_present:
-            (temp / "log.do_cve_check.17").write_text(f"{target}0 patched\n{target} unpatched\n")
+            with (temp / "log.do_cve_check.17").open("w") as log_file:
+                log_file.write("x" * (10 * 1024 * 1024))
+                log_file.write(f"\n{target}0 patched\n{target}\nstatus: unpatched\n")
         (directory / "work" / build["tuple"] / build["recipe"] / "2.0-r0").mkdir()
         (directory / "image-manifest").write_text(f"{build['run']}: {build['package']} installed\n")
 
@@ -875,8 +880,16 @@ class TestCodebaseDirectory:
         path = f"{folder}/{log_name}"
         if path in {row["path"] for row in logs["files"]}:
             log = call("search_codebase_file", path=path, query=target)
-            assert log_present and log["complete"] and log["file_id"] == "directory"
-            assert log["matches"] == [{"path": path, "line": 2, "text": f"{target} unpatched"}]
+            assert log_present and not log["complete"]
+            matches = list(log["matches"])
+            while not log["complete"]:
+                log = call("search_codebase_file", path=path, query=target, cursor=log["next_cursor"])
+                matches.extend(log["matches"])
+            hit, = matches
+            assert log["file_id"] == "directory" and hit["path"] == path and hit["line"] == 3 and hit["text"] == target
+            nearby = call("read_codebase_file", path=path, position=hit["position"], max_lines=3)
+            assert (nearby["start_line"], nearby["match_line"], nearby["end_line"]) == (2, 3, 4)
+            assert nearby["content"] == f"{target}0 patched\n{target}\nstatus: unpatched\n"
         else:
             missing = tools["search_codebase_file"](str(variant.id), "directory", path, target)
             assert missing.startswith("Error:") and "not found" in missing

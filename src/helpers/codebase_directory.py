@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager, ExitStack
 
 from .codebase_reference import CodebaseReference, MAX_ENTRIES, MAX_FILE_BYTES, _safe_path
-from .host_mount_helper import DIRECT_READ_LIMIT_MESSAGE, children_page, search_file_page, _excluded
+from .host_mount_helper import DIRECT_READ_LIMIT_MESSAGE, children_page, read_position, search_file_page, _excluded
 
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
@@ -182,6 +182,15 @@ class CodebaseDirectory(CodebaseReference):
             if len(content) > MAX_FILE_BYTES:
                 raise ValueError(DIRECT_READ_LIMIT_MESSAGE)
             return content
+
+    def read_match(self, variant_id: str, path: str, position: str, max_lines: int) -> dict:
+        @contextmanager
+        def open_current() -> Iterator[int]:
+            with CodebaseDirectory(self.cache_dir, self.name, folder=self.folder, index=False) as current:
+                with current._open_file(path) as (source, _):
+                    yield source.fileno()
+
+        return read_position(open_current, f"{variant_id}/directory/{self.name}", path, position, max_lines)
 
     def _iter_text_lines(self, path: str):
         content = self.read_bytes(path)

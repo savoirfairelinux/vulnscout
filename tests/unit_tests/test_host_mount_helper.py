@@ -88,7 +88,7 @@ def test_search_large_known_file_resumes_without_inventory(helper, tree, monkeyp
     query = "CVE-2026-1234"
     path = root / "task.log"
     path.write_bytes(b"x" * (hh.SEARCH_CHUNK - 2) + "\u20ac".encode() + b"x" * hh.MAX_FILE_BYTES
-                     + f"\n{query}0\nnot{query}\n{query}_tag\n{query} patched\n".encode())
+                     + f"\n{query}0\nnot{query}\n{query}_tag\n{query} patched\nstatus: fixed\n".encode())
     attached(helper, tree)
     params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), source_operation="search_file",
                   path=path.name, query=query)
@@ -116,7 +116,57 @@ def test_search_large_known_file_resumes_without_inventory(helper, tree, monkeyp
         assert cursor != page["next_cursor"]
         cursor = page["next_cursor"]
     assert offsets == sorted(set(offsets))
+    position = rows[0].pop("position")
     assert rows == [{"path": "task.log", "line": 5, "text": f"{query} patched"}]
+    offsets.clear()
+    page = ok(helper, "source", variant_id=VARIANT, alias="src", mount_path=str(root), source_operation="read",
+              path=path.name, position=position, max_lines=3)
+    assert offsets and min(offsets) > hh.MAX_FILE_BYTES - hh.POSITION_RADIUS
+    assert page["content"] == f"{query}_tag\n{query} patched\nstatus: fixed\n"
+    assert (page["start_line"], page["match_line"], page["end_line"]) == (4, 5, 6)
+    assert page["truncated_before"] and not page["truncated_after"]
+    assert not page["partial_first_line"] and not page["partial_last_line"]
+
+
+def test_position_is_bound_to_the_authorization_path_version_and_purpose(helper, tree, monkeypatch):
+    root = tree["app"]
+    path = root / "build.log"
+    path.write_text("needle\n" * 4)
+    attached(helper, tree)
+    attached(helper, tree, alias="other")
+    params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), path=path.name)
+    monkeypatch.setattr(hh, "SEARCH_MATCHES", 1)
+    page = ok(helper, "source", **params, source_operation="search_file", query="needle")
+    token = page["matches"][0]["position"]
+    read = dict(**params, source_operation="read", position=token)
+    forged = token[:-1] + ("a" if token[-1] != "a" else "b")
+    for change in ({"alias": "other"}, {"path": "README"}, {"position": forged},
+                   {"position": page["next_cursor"]}, {"position": ""}, {"start_line": 2}):
+        assert err(helper, "source", **{**read, **change})[0] == "invalid"
+    assert "cursor" in err(helper, "source", **params, source_operation="search_file", query="needle", cursor=token)[1]
+    os.link(path, root / "hard")
+    assert "links" in err(helper, "source", **read)[1]
+    (root / "hard").unlink()
+    path.write_text("NEEDLE\n" * 4)
+    assert "stale" in err(helper, "source", **read)[1]
+
+
+def test_position_clips_long_utf8_line_around_each_match(helper, tree):
+    root = tree["app"]
+    path = root / "long"
+    left = "\u20ac" * 3000
+    path.write_text(f"\n{left}hit-A{left}hit-B{left}\n")
+    attached(helper, tree)
+    params = dict(variant_id=VARIANT, alias="src", mount_path=str(root), path=path.name)
+    rows = ok(helper, "source", **params, source_operation="search_file", query="hit")["matches"]
+    assert len(rows) == 2 and rows[0]["position"] != rows[1]["position"]
+    for row, tag in zip(rows, ["hit-A", "hit-B"]):
+        page = ok(helper, "source", **params, source_operation="read", position=row["position"])
+        assert tag in page["content"] and len(page["content"].encode()) <= 2 * hh.POSITION_RADIUS
+        assert len(json.dumps(page)) < hh.MAX_CONTENT_BYTES
+        assert page["partial_first_line"] and page["partial_last_line"]
+        assert page["truncated_before"] and page["truncated_after"]
+        assert page["start_line"] == page["end_line"] == page["match_line"] == 2
 
 
 def test_search_chunk_boundary_time_and_cursor_binding(helper, tree, monkeypatch):

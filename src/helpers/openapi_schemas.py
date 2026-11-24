@@ -766,8 +766,16 @@ SCHEMAS: dict[str, Any] = {
             _object({
                 "file_id": _STRING, "original_name": _STRING, "complete": _BOOL,
                 "next_cursor": {**_STRING, "nullable": True}, "bytes_scanned": _COUNT,
-                "matches": _array(_object({"path": _STRING, "line": _INT, "text": _STRING}, ("path", "line", "text"))),
+                "matches": _array(_object({"path": _STRING, "line": _INT, "text": _STRING, "position": _STRING},
+                                          ("path", "line", "text", "position"))),
             }, ("file_id", "original_name", "complete", "next_cursor", "bytes_scanned", "matches")),
+            _object({
+                "file_id": _STRING, "original_name": _STRING, "path": _STRING, "content": _STRING,
+                "start_line": _INT, "end_line": _INT, "match_line": _INT,
+                "truncated_before": _BOOL, "truncated_after": _BOOL, "partial_first_line": _BOOL,
+                "partial_last_line": _BOOL,
+            }, ("file_id", "original_name", "path", "content", "start_line", "end_line", "match_line",
+                "truncated_before", "truncated_after", "partial_first_line", "partial_last_line")),
             _object({
                 "file_id": _STRING, "original_name": _STRING,
                 "children": _array(_object({"path": _STRING, "type": {"type": "string", "enum": ["file", "directory"]}},
@@ -1214,7 +1222,7 @@ SCHEMAS.update({
             ("name", "revision", *[key for key in variant["required"] if key not in ("file_id", "original_name")]),
         )
         for variant in SCHEMAS["SourceReferenceResult"]["anyOf"]
-        if "next_cursor" not in variant["properties"]
+        if "next_cursor" not in variant["properties"] and "match_line" not in variant["properties"]
     ]},
     "ContextDraftUpdate": _object({
         "source": {"type": "string", "minLength": 1, "maxLength": 255},
