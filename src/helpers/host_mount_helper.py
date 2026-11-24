@@ -877,14 +877,19 @@ class Helper:
         else:
             raise HelperError("unavailable", "The shell worker requires Docker or Podman.")
         name = f"vulnscout-shell-{uuid.uuid4().hex}"
+        # Podman copies image contents into tmpfs by default: keep both masks empty.
+        mask_options = "ro,nosuid,nodev,noexec,size=4k" + (",notmpcopyup" if engine_name == "podman" else "")
+        snapshot_mount = f"type=bind,src={snapshot},dst=/source,readonly"
+        if engine_name == "podman":
+            snapshot_mount += ",relabel=private"  # Relabel the disposable copy, never the approved source.
         args = engine + [
             "run", "--rm", "--name", name, "--pull=never",
             "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
             "--pids-limit=64", "--memory=256m", "--cpus=1", "--user=65534:65534",
             "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=16m",
-            "--tmpfs=/scan:ro,nosuid,nodev,noexec,size=4k",
-            "--tmpfs=/cache:ro,nosuid,nodev,noexec,size=4k",
-            "--mount", f"type=bind,src={snapshot},dst=/source,readonly",
+            f"--tmpfs=/scan:{mask_options}",
+            f"--tmpfs=/cache:{mask_options}",
+            "--mount", snapshot_mount,
             "--workdir=/source", "--entrypoint=/usr/bin/timeout", self.image,
             "-s", "KILL", str(int(SHELL_TIMEOUT)), "/bin/sh", "-c", command,
         ]

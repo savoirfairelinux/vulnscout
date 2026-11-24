@@ -17,7 +17,8 @@ def worker(tmp_path):
     source = cache / "context-p-v"
     source.mkdir()
     (source / "source.c").write_text("int vulnerable(void) { return 1; }\n")
-    return Helper(str(state), str(cache), shutil.which("docker"), os.getenv("VULNSCOUT_TEST_SHELL_IMAGE")), source
+    engine = shutil.which("podman") or shutil.which("docker")
+    return Helper(str(state), str(cache), engine, os.getenv("VULNSCOUT_TEST_SHELL_IMAGE")), source
 
 
 def test_snapshot_excludes_sensitive_and_linked_files(worker, tmp_path):
