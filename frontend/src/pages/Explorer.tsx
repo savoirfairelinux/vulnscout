@@ -122,6 +122,7 @@ function Explorer() {
     const setupCheckGeneration = useRef(0);
     const loadGeneration = useRef(0);
     const loadController = useRef<AbortController | null>(null);
+    const localDataRevision = useRef(0);
     const scopeReady = useRef(false);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
     const agentChatRequest = useSyncExternalStore(subscribeAgentChatRequest, getAgentChatRequest).nonce;
@@ -177,13 +178,14 @@ function Explorer() {
     };
 
     // Each load supersedes the previous one: its requests are aborted so reloads never pile up.
-    const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string): Promise<void> => {
+    const loadData = useCallback((variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string, background = false): Promise<void> => {
         const generation = ++loadGeneration.current;
+        const localRevision = localDataRevision.current;
         loadController.current?.abort();
         const controller = new AbortController();
         loadController.current = controller;
         const { signal } = controller;
-        setIsLoadingData(true);
+        if (!background) setIsLoadingData(true);
 
         const multiActive = !!(variantIds && variantIds.length >= 2);
         return Promise.allSettled([
@@ -210,6 +212,11 @@ function Explorer() {
             }
 
             if (generation !== loadGeneration.current || signal.aborted) return;
+            // A user edit may have completed after these reads started. Do not overwrite
+            // it with their older snapshot; reread the current scope instead.
+            if (background && localRevision !== localDataRevision.current) {
+                return loadData(variantId, projectId, compareVariantId, operation, variantIds, multiOperation, true);
+            }
             setIsLoadingData(false);
             setLoadingMessage("Loading data...");
             const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessments);
@@ -379,11 +386,11 @@ function Explorer() {
             currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation);
     }, [loadData, currentBaseVariantId, currentVariantId, currentProjectId, currentOperation, currentVariantIds, currentMultiOperation]);
 
-    // Agent writes reload the current scope; a scope change meanwhile aborts and replaces that reload.
+    // Agent writes refresh in the background; a scope change aborts and replaces that reload.
     useAgentWriteRefresh((_, announcedRevision) => Promise.all([
         announcedRevision === loadGeneration.current
             ? loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
-                currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation)
+                currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation, true)
             : undefined,
         loadSetupRequirement(),
     ]), { revision: loadGeneration });
@@ -407,6 +414,7 @@ function Explorer() {
 
 
     function appendAssessment(added: Assessment) {
+        localDataRevision.current++;
         const updatedVulns = Vulnerabilities.append_assessment(vulns, added);
         setVulns(updatedVulns);
 
@@ -417,6 +425,7 @@ function Explorer() {
     function appendCVSS(vulnId: string, vector: string) {
         const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector, defaultConfig.author_name) ?? null;
         if (cvss !== null) {
+            localDataRevision.current++;
             const updatedVulns = Vulnerabilities.append_cvss(vulns, vulnId, cvss);
             setVulns(updatedVulns);
 
@@ -432,6 +441,7 @@ function Explorer() {
     useEffect(() => { vulnsRef.current = vulns; }, [vulns]);
 
     function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
+        localDataRevision.current++;
         // Update the ref immediately so the next synchronous call to patchVuln
         // (for a different CVE in the same multi-edit batch) reads the already-
         // patched list rather than the stale closure value.
@@ -444,6 +454,7 @@ function Explorer() {
 
     // Update vulns state in-place after a Review tab edit or delete
     const handleAssessmentChanged = useCallback((mutation: AssessmentMutation) => {
+        localDataRevision.current++;
         setVulns(prev => prev.map(vuln => {
             if (vuln.id !== mutation.vulnId) return vuln;
             let newAssessments: Assessment[];

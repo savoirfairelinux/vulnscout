@@ -147,13 +147,9 @@ def _response(payload, status=200):
     return response
 
 
-_LOOPBACK_PUBLICATION = Path("/run/vulnscout-loopback-published")
-
-
 def _access_error():
     trusted = {"127.0.0.1", "::1"}
-    # Both direct folder reads and Agent turns can access host evidence.
-    gateway = _container_gateway() if _LOOPBACK_PUBLICATION.is_mount() else None
+    gateway = _container_gateway()
     if gateway:
         trusted.add(gateway)
         host_forward_ip = _container_host_forward_ip(gateway)

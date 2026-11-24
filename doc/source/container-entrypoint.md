@@ -70,7 +70,6 @@ chmod 600 .vulnscout-container/config/config.env
 
 docker run -d --name vulnscout \
   -p 127.0.0.1:7275:7275 \
-  --tmpfs /run/vulnscout-loopback-published:ro,size=4k \
   --env-file "$(pwd)/.vulnscout-container/config/config.env" \
   -v "$(pwd)/.vulnscout-container/cache:/cache/vulnscout:Z" \
   -v "$(pwd)/.vulnscout-container/outputs:/scan/outputs:Z" \
@@ -98,13 +97,9 @@ The host wrapper defaults to `127.0.0.1:7275:7275`. To publish the UI and
 API on a LAN address instead, set the host-only
 [`VULNSCOUT_BIND_ADDRESS`](cli-configuration.md).
 
-The `--tmpfs` line explicitly opts this standalone container into local Agent
-access when Docker or Podman forwards the connection. It does **not** enforce
-the bind address. Use it only when the port is published exclusively on host
-loopback and no reverse proxy exposes it. Remove it for LAN or proxied
-deployments: without it, the Agent and host-folder endpoints reject forwarded
-requests even with a localhost Host header. On upgrade, recreate the container
-with the loopback mapping and marker if local Agent access returns `403`.
+Publish the port only on host loopback and do not expose it through a reverse
+proxy when using the Agent or host folders. Container-forwarded requests are
+trusted, and a remote client can supply a localhost Host header.
 
 For rootless Podman, replace `docker` with `podman` and add
 `--userns=keep-id:uid=0,gid=0 --user=0:0 -e VULNSCOUT_ROOTLESS_PODMAN=true`

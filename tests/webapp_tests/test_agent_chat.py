@@ -150,7 +150,6 @@ def test_agent_accepts_container_gateway(client, monkeypatch):
     gateway = _container_gateway()
     if gateway is None:
         pytest.skip("Container gateway not available")
-    monkeypatch.setattr("src.routes.agent._LOOPBACK_PUBLICATION", Path("/"))
     response = client.get("/api/agent", environ_overrides={"REMOTE_ADDR": gateway})
     assert response.status_code == 200
 
@@ -158,7 +157,6 @@ def test_agent_accepts_container_gateway(client, monkeypatch):
 def test_agent_accepts_pasta_forwarded_host_but_rejects_remote(client, monkeypatch):
     from src.routes import agent
 
-    monkeypatch.setattr(agent, "_LOOPBACK_PUBLICATION", Path("/"))
     monkeypatch.setattr(agent, "_container_gateway", lambda: "192.0.2.1")
     monkeypatch.setattr(agent, "_container_host_forward_ip", lambda gateway: "192.0.2.2")
     local = {"REMOTE_ADDR": "192.0.2.2"}

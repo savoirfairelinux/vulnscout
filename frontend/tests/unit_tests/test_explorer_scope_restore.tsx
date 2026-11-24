@@ -155,12 +155,13 @@ jest.mock('../../src/pages/TableVulnerabilities', () => {
     return {
         __esModule: true,
         mountFilters,
-        default: ({ appendAssessment, appendCVSS, patchVuln, filterLabel, filterValue }: {
+        default: ({ appendAssessment, appendCVSS, patchVuln, filterLabel, filterValue, vulnerabilities }: {
             appendAssessment: (assessment: { id: string }) => void;
             appendCVSS: (id: string, vector: string) => void;
             patchVuln: (id: string, vulnerability: { id: string }) => void;
             filterLabel?: string;
             filterValue?: string;
+            vulnerabilities: Array<{ id: string }>;
         }) => {
             useEffect(() => {
                 mountFilters.push({ label: filterLabel, value: filterValue });
@@ -169,6 +170,7 @@ jest.mock('../../src/pages/TableVulnerabilities', () => {
             return <div>
                 <span data-testid="vuln-filter-label">{filterLabel ?? ''}</span>
                 <span data-testid="vuln-filter-value">{filterValue ?? ''}</span>
+                <span data-testid="vulnerability-ids">{vulnerabilities.map(v => v.id).join(',')}</span>
                 <button onClick={() => appendAssessment({ id: 'assessment-1' })}>append assessment</button>
                 <button onClick={() => appendCVSS('CVE-1', 'CVSS:3.1/test')}>append cvss</button>
                 <button onClick={() => patchVuln('CVE-1', { id: 'CVE-1' })}>patch vulnerability</button>
@@ -967,6 +969,78 @@ describe('Explorer agent write reloads', () => {
         await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(3));
         expect(mockVulnerabilitiesList.mock.calls[1][6]!.aborted).toBe(false);
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    test('agent writes refresh without blocking navigation or vulnerability work and install the new data', async () => {
+        render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        type ListedVulnerabilities = Awaited<ReturnType<typeof Vulnerabilities.list>>;
+        let finish: (value: ListedVulnerabilities) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        (Vulnerabilities.enrich_with_assessments as jest.Mock).mockImplementationOnce(vulnerabilities => vulnerabilities);
+
+        announceWrite();
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'append assessment' }));
+        fireEvent.click(screen.getByRole('link', { name: 'packages' }));
+        expect(screen.getByRole('button', { name: 'show package vulnerabilities' })).toBeInTheDocument();
+
+        // The edit invalidates the first snapshot; the retry supplies fresh data.
+        mockVulnerabilitiesList.mockResolvedValueOnce([{ id: 'CVE-fresh' }] as ListedVulnerabilities);
+        await act(async () => finish([{ id: 'CVE-stale' }] as ListedVulnerabilities));
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3));
+        fireEvent.click(screen.getByRole('link', { name: 'vulnerabilities' }));
+        await waitFor(() => expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-fresh'));
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+    });
+
+    test('scope changes still block until their data is loaded after a background refresh', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const signals: AbortSignal[] = [];
+        mockVulnerabilitiesList.mockImplementationOnce(abortable(signals));
+        let finish: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+
+        announceWrite();
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        expect(signals[0].aborted).toBe(true);
+        expect(screen.getByText('Loading data...')).toBeInTheDocument();
+        await act(async () => finish([]));
+        await waitFor(() => expect(screen.queryByText('Loading data...')).not.toBeInTheDocument());
+    });
+
+    test('an agent write does not unblock an initial foreground load prematurely', async () => {
+        let finishInitial: (value: []) => void = () => undefined;
+        let finishRefresh: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finishInitial = resolve; }));
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(1));
+
+        announceWrite();
+        await act(async () => finishInitial([]));
+        expect(screen.getByText('Loading data...')).toBeInTheDocument();
+        await act(async () => finishRefresh([]));
+        await waitFor(() => expect(screen.queryByText('Loading data...')).not.toBeInTheDocument());
+    });
+
+    test.each([
+        [ROUTES.vulnerabilities, 'append cvss'],
+        [ROUTES.vulnerabilities, 'patch vulnerability'],
+        [ROUTES.review, 'assessment changed'],
+    ])('retries a background snapshot after a local %s / %s mutation', async (route, button) => {
+        render(<MemoryRouter initialEntries={[route]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+
+        announceWrite();
+        fireEvent.click(screen.getByRole('button', { name: button }));
+        await act(async () => finish([]));
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3));
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
     });
 
     test('a scope change aborts the agent reload in flight without reporting a load failure', async () => {
