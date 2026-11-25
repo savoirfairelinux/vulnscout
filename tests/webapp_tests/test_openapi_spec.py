@@ -204,6 +204,11 @@ def test_openapi_spec_documents_context_and_vulnerability_helpers(client):
     assert context_parameters["project_id"]["required"] is True
     assert context_parameters["variant_id"]["required"] is True
 
+    schemas = data["components"]["schemas"]
+    assert "mounts" in schemas["MergedContext"]["properties"]
+    assert "codebase_directory" not in schemas["MergedContext"]["properties"]
+    assert "/api/variants/{variant_id}/context/directory" not in data["paths"]
+
     context_import = data["paths"]["/api/context/import"]["post"]
     assert context_import["requestBody"]["required"] is True
 

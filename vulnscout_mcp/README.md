@@ -9,7 +9,7 @@ An [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server that e
 - **Look up vulnerabilities** with variant-scoped details.
 - **Review user-authored assessments** with a separate AI second opinion per (variant, package) target, without changing the original assessment.
 - **Read and update variant context** (description, environment, notes, the System text and the STRIDE threat model and risks) by variant UUID or by project/variant name.
-- **Inspect codebase directories**: navigate immediate children, match filenames in a narrowed folder and read source through scoped HTTP tools, without host filesystem access.
+- **Inspect approved host folders**: navigate immediate children, match filenames in a narrowed folder and read source through scoped HTTP tools, without direct host filesystem access.
 - **Explore SBOM dependencies**: discover active sources/packages and trace direct or transitive dependencies and reverse dependents within a board variant, retaining per-source version evidence.
 - Thin, dependency-light implementation: a single `httpx`-based API client plus tool modules registered on the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)'s `MCPServer`.
 
@@ -117,15 +117,15 @@ python vulnscout_mcp/server.py
 | `find_project_id`              | Resolve a project name to its UUID                                   |
 | `find_variant_id`              | Resolve a project/variant name pair to a variant UUID                |
 | `list_variants`                | List all variants across every project (id, name, project_id)        |
-| `get_merged_context`           | Get the merged project + variant context: `codebase_directory` (`file_id="directory"` and server path), attached host folders (`mounts`: `alias`, `file_id="mount:<alias>"`), environment, other info, attachment metadata, and the threat model and risks rendered as text from the variant's STRIDE model (`C#` components, `I#` interactions, `T#` threats). Responses are paginated in 12 KiB UTF-8 pages; follow `next_offset` until `null` and concatenate page contents before analysis. With `include_model=true`, also the editable System text and STRIDE rows as JSON with their IDs |
+| `get_merged_context`           | Get the merged project + variant context: approved host folders (`mounts`: `alias`, `file_id="mount:<alias>"`), environment, other info, attachment metadata, and the threat model and risks rendered as text from the variant's STRIDE model (`C#` components, `I#` interactions, `T#` threats). Responses are paginated in 12 KiB UTF-8 pages; follow `next_offset` until `null` and concatenate page contents before analysis. With `include_model=true`, also the editable System text and STRIDE rows as JSON with their IDs |
 | `list_dependency_documents`    | Paginate active SBOM sources and relationship-recording coverage for a variant |
 | `list_dependency_packages`     | Search/paginate the complete SBOM inventory, including isolated packages and per-document version evidence |
 | `get_package_dependencies`     | Traverse direct/transitive dependencies or reverse dependents with paths and source provenance |
 | `get_package_source_files`     | Paginate an exact package's recorded SPDX files and build associations within one variant, retaining coverage and provenance |
-| `list_codebase_children`       | Navigate immediate children of a variant directory or mount; follow `next_cursor` until `complete` |
+| `list_codebase_children`       | Navigate immediate children of an approved mount; follow `next_cursor` until `complete` |
 | `list_codebase_files`          | List paths/sizes in an upload or recursively match filenames inside a narrowed folder; follow `next_offset` |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
-| `search_codebase_file`         | Stream literal matches in a known directory or mount file. Pass a hit's `position` to `read_codebase_file` for bounded surrounding lines; follow `next_cursor` separately until `complete`. |
+| `search_codebase_file`         | Stream literal matches in a known mount file. Pass a hit's `position` to `read_codebase_file` for bounded surrounding lines; follow `next_cursor` separately until `complete`. |
 | `search_codebase`              | Search members of one uploaded reference by literal and optional path glob. The bounded directory and mount forms remain for backwards compatibility; prefer shallow discovery and single-file search. |
 | `read_codebase_files`          | Read up to 8 files in parallel with the same line range (128 KiB combined response) |
 | `get_ai_context_form_guide`    | Return the static AI Context form guide (fields, tables, STRIDE categories, limits) and the copy-ready reply format for helping users fill it |
@@ -239,15 +239,6 @@ is unavailable. Supply dated upstream/vendor evidence through context or
 uploaded references, or use the external skill with a web-capable client for live
 research. Do not interpret an embedded-agent response as a completed lifecycle
 audit without that evidence.
-
-On the **AI Context** page (top nav **AI**), open a variant's **Context** tab
-and create its **Codebase directory**. An administrator populates or mounts it.
-Fetch `get_merged_context` and use `codebase_directory.file_id` (`"directory"`)
-with that variant UUID for the source tools. Source paths are relative to that
-directory, not paths on the MCP host. The same tools work for external clients and the
-embedded container Agent; the latter enforces its current variant scope and
-still cannot access arbitrary files. No source selector or external path field
-is used.
 
 Host folders attached with `./vulnscout ai-context attach`
 appear in `get_merged_context` as `mounts`. Pass one folder's

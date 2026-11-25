@@ -93,10 +93,11 @@ def _source(client, variant, file_id, **params):
 
 def test_shell_rejects_remote_and_invalid_sources(client, variant):
     url = f"/api/variants/{variant.id}/context/shell"
-    body = {"file_id": "directory", "command": "ls"}
+    body = {"file_id": "mount:src", "command": "ls"}
     assert client.post(url, json=body, environ_overrides={"REMOTE_ADDR": "192.0.2.10"}).status_code == 403
     assert client.post(url, json={"file_id": "upload", "command": "ls"}).status_code == 400
-    assert client.post(url, json={"file_id": "directory", "command": ""}).status_code == 400
+    assert client.post(url, json={"file_id": "directory", "command": "ls"}).status_code == 400
+    assert client.post(url, json={"file_id": "mount:src", "command": ""}).status_code == 400
 
 
 def test_shell_rejects_decoder_depth_error(app, client, variant, monkeypatch):
@@ -123,34 +124,6 @@ def test_shell_request_byte_limit(client, variant, streamed):
     for body, status in ((payload, 404), (payload + b" ", 413)):
         response = client.post(url, data=body, content_type="application/json", environ_overrides=overrides)
         assert response.status_code == status
-
-
-@pytest.mark.parametrize("subfolder", ["", "build output"])
-def test_directory_shell_rejects_helper_only_bind(client, variant, tmp_path, monkeypatch, subfolder):
-    from unittest.mock import Mock
-    from src.helpers import codebase_directory
-    from src.routes import context
-
-    directory = tmp_path / "cache" / codebase_directory.directory_name("Demo", "x86")
-    mounted = directory / subfolder
-    mounted.mkdir(parents=True)
-    (mounted / "result").write_text("container build")
-    stale = tmp_path / "host-cache" / directory.name / subfolder / "result"
-    stale.parent.mkdir(parents=True)
-    stale.write_text("stale host build")
-    helper = Mock(return_value={"output": stale.read_text()})
-    monkeypatch.setattr(context.host_helper, "call", helper)
-    relative = str((mounted / "result").relative_to(directory))
-    listing = _source(client, variant, "directory", operation="children", folder=subfolder)
-    assert {"path": relative, "type": "file"} in listing.json["children"]
-    search = _source(client, variant, "directory", operation="search_file", path=relative, query="container")
-    assert search.json["matches"][0]["text"] == "container build"
-    read = _source(client, variant, "directory", operation="read", path=relative)
-    assert read.get_json()["content"] == "container build"
-    response = client.post(f"/api/variants/{variant.id}/context/shell",
-                           json={"file_id": "directory", "command": "cat result", "folder": subfolder})
-    assert response.status_code == 409 and "approved host attachment" in response.get_json()["error"]
-    helper.assert_not_called()
 
 
 def test_shell_action_guard_is_variant_scoped(app, variant):

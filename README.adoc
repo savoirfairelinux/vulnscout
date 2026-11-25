@@ -117,8 +117,8 @@ The embedded Agent uses the *GitHub Copilot SDK* and its agent runtime to
 communicate with the selected AI provider and invoke the bundled MCP server
 over stdio. MCP tools call VulnScout's REST API rather than accessing the
 database directly. The embedded Agent has no shell, arbitrary filesystem,
-or web research tools; source evidence is provided through uploaded references,
-the variant's codebase directory, or host folders attached read-only with
+or web research tools; source evidence is provided through uploaded references
+or host folders attached read-only with
 `./vulnscout ai-context attach -p demo -v x86 src=/work/app` (requires an
 image with host-folder support, not the `v0.25.1` release; see
 link:doc/source/ai-assessments.md#attached-host-folders[Attached host folders]).

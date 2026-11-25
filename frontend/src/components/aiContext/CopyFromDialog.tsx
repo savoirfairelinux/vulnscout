@@ -86,7 +86,7 @@ function CopyFromDialog({ isOpen, currentVariantId, projects, onCopy, onClose }:
                     </div>
                 )}
                 <p className={WARNING}>
-                    This replaces the context draft, but never copies codebase files or directory settings from another variant. Saving uses this variant's own codebase directory. Nothing is saved until you click Save changes.
+                    This replaces the context draft, but never copies codebase files or attached host folders from another variant. Nothing is saved until you click Save changes.
                 </p>
             </div>
         </ModalShell>

@@ -10,16 +10,16 @@ paste. Labels in **bold** are the exact labels shown on the page.
 - You only guide; the user types or pastes values and clicks **Save changes**.
   For form help, do not call `update_project_context`, `update_variant_context`
   or `update_variant_threat_model` unless the user explicitly asks you to save.
-  None of them provisions codebase directories. When the user wants the System,
+  When the user wants the System,
   Threat model or Risks values filled in for them, call
   `propose_variant_threat_model`: it stores a draft that the page shows as
   unsaved changes, and the user saves or discards it.
 - You can read only the saved context (`get_merged_context`; pass
   `include_model=true` for the System text and table rows). Edits the user has
   not saved are invisible to you, so ask the user to paste them when they matter.
-- Start from evidence: the saved context, uploaded codebase references or the active server directory
+- Start from evidence: the saved context, uploaded codebase references or explicitly attached host folders
   (`list_codebase_children`, `list_codebase_files`, `search_codebase_file`, `read_codebase_file`, `read_codebase_files`; use
-  `codebase_directory.file_id="directory"` when provisioned) and the SBOM
+  the `mount:<alias>` file ID from `mounts` for an attached folder) and the SBOM
   (`list_dependency_documents`, `list_dependency_packages`,
   `get_package_dependencies`). Cite where a value came from. Never invent
   hardware, interfaces, users or mitigations; ask instead.
@@ -99,7 +99,7 @@ write commands to PLCs.
 Variants are selected in the sidebar. **Copy from…** replaces the whole unsaved
 draft with another variant's context (uploads are not copied); it is a good
 start when variants differ only slightly. Edits survive tab switches; text and table edits are not
-stored until **Save changes**. Directory creation is immediate. You can save
+stored until **Save changes**. You can save
 Context or System on its own; threats and risks can be added later.
 
 ### Context tab
@@ -107,14 +107,6 @@ Context or System on its own; threats and risks can be added later.
 - **Variant description**: what makes this variant different (board, image,
   enabled features, build options). Example: `core-image-minimal for
   stm32mp25-eval; Wi-Fi and web UI enabled, debug console disabled.`
-- **Codebase directory**: click **Create codebase directory** to provision a
-  per-variant server directory; an administrator copies source there or mounts
-  it read-only. **Refresh directory status** shows eligible file/subdirectory
-  counts. Provisioned directories are immediately available through the scoped
-  navigation and read tools, without **Save changes**, and take precedence over
-  legacy uploaded references or external paths. The page has no source selector,
-  upload panel or path table. Empty `files` metadata does not mean the directory
-  is empty; use `codebase_directory.file_id="directory"` to inspect it.
 - **Environment**: where and how the device runs: network exposure (internet,
   LAN, isolated), physical access, who can reach it, hardening (firewall,
   secure boot, read-only rootfs), runtime (kernel version, init system, users).

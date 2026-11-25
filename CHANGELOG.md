@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Removed
+- AI context: retire automatic source directories. To expose host source, explicitly approve and attach a read-only host folder. Existing source files and uploaded references are not deleted.
+
 ---
 
 ## [0.25.1] - 2026-11-19

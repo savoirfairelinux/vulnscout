@@ -413,7 +413,7 @@ def _directory_records(fd: int, cookie: int) -> Iterator[tuple[int, str]]:
         libc.closedir(stream)
 
 
-def children_page(fd: int, base: str, request: dict, scope: str, *, provisioned: bool = False) -> dict:
+def children_page(fd: int, base: str, request: dict, scope: str) -> dict:
     limit = _integer(request, "limit", 50, 1, MAX_LIST_LIMIT)
     cursor = _string(request, "cursor", required=False, maximum=100)
 
@@ -436,8 +436,7 @@ def children_page(fd: int, base: str, request: dict, scope: str, *, provisioned:
         path = base + name
         real = name not in (".", "..")
         visited += int(real)
-        if (real and not _excluded(name, file_candidate=True) and _member_path_fits(path)
-                and (not provisioned or (":" not in path and len(path.encode()) <= 512))):
+        if real and not _excluded(name, file_candidate=True) and _member_path_fits(path):
             try:
                 item = os.stat(name, dir_fd=fd, follow_symlinks=False)
             except FileNotFoundError as exc:

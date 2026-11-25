@@ -454,16 +454,6 @@ SCHEMAS: dict[str, Any] = {
     "ContextFile": _object({
         "id": _UUID, "original_name": _STRING, "description": _TEXT,
     }, ("id", "original_name", "description")),
-    "CodebaseDirectory": _object({
-        "file_id": {"type": "string", "enum": ["directory"]},
-        "path": _TEXT,
-        "status": {"type": "string", "enum": [
-            "not_created", "ready", "missing", "unreadable", "unavailable",
-        ]},
-        "message": _STRING,
-        "file_count": {**_COUNT, "nullable": True},
-        "directory_count": {**_COUNT, "nullable": True},
-    }, ("file_id", "path", "status", "message", "file_count", "directory_count")),
     "HostMount": _object({
         "attachment_id": _UUID,
         "approval_revision": _UUID,
@@ -516,13 +506,11 @@ SCHEMAS: dict[str, Any] = {
     "VariantContext": _object({
         "variant_id": _UUID, **_CONTEXT_FIELDS, "updated_at": _DATE,
         "files": _array(_ref("ContextFile")), "editor": _ref("VariantContextEditor"),
-        "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
     }, ("variant_id", "files", "editor"),
         description="Top-level fields are what agents see: threat_model and risks are rendered from STRIDE."),
     "MergedContext": _object({
         "project_id": _UUID, "description": _TEXT, "variant_id": _UUID,
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
-        "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
         "mounts": _array(_object({
             "alias": _STRING, "file_id": _STRING,
         }, ("alias", "file_id")),
@@ -1053,7 +1041,7 @@ SCHEMAS.update({
         "Unknown table names are accepted only alongside populated, valid tables. "
         "Unknown top-level or System fields cannot accompany an empty System and STRIDE replacement. "
         "Without stride, a full replacement of the text fields; "
-        "threat_model and risks are read-only. Source code is accessed through the variant's directory."
+        "threat_model and risks are read-only. Host folders are attached separately."
     )),
     "SbomUploadAccepted": _object({
         "op_id": _STRING, "scan_id": _UUID, "message": _STRING,

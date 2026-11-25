@@ -16,6 +16,7 @@ from src.bin.webapp import create_app
 from src.controllers.packages import PackagesController
 from src.extensions import db
 from src.models import Package, Project, SBOMDocument, SBOMPackage, Scan, Variant
+from src.models.variant_context import ContextFile, VariantContext
 
 
 HEAD_REVISION = ScriptDirectory(
@@ -41,6 +42,49 @@ def app(monkeypatch):
 def _upgrade(app, revision="head"):
     result = app.test_cli_runner().invoke(args=["db", "upgrade", revision])
     assert result.exit_code == 0, result.output
+
+
+def test_directory_removal_preserves_context_attachments_and_disk_files(app, tmp_path, monkeypatch):
+    monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+    _upgrade(app, "e42bb263ae51")
+    with db.engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+    project = Project.create("demo")
+    variant = Variant.create("default", project.id)
+    context = VariantContext.upsert(variant.id, environment="Linux")
+    attachment = ContextFile.create(context.id, "notes.txt", str(tmp_path / "notes.txt"))
+    directory = tmp_path / "context-demo-default"
+    directory.mkdir()
+    source = directory / "source.c"
+    source.write_text("existing user file")
+    db.session.execute(
+        text("UPDATE variant_context SET codebase_directory = :name"),
+        {"name": directory.name},
+    )
+    db.session.commit()
+    context_id, attachment_id, updated_at = context.id, attachment.id, context.updated_at
+    db.session.remove()
+
+    _upgrade(app)
+    inspector = inspect(db.engine)
+    assert "codebase_directory" not in {col["name"] for col in inspector.get_columns("variant_context")}
+    assert "uq_variant_context_codebase_directory" not in {
+        index["name"] for index in inspector.get_indexes("variant_context")
+    }
+    assert db.session.get(VariantContext, context_id).environment == "Linux"
+    assert db.session.get(VariantContext, context_id).updated_at == updated_at
+    assert db.session.get(ContextFile, attachment_id).variant_context_id == context_id
+    assert source.read_text() == "existing user file"
+
+    db.session.remove()
+    result = app.test_cli_runner().invoke(args=["db", "downgrade", "e42bb263ae51"])
+    assert result.exit_code == 0, result.output
+    assert db.session.execute(text("SELECT codebase_directory FROM variant_context")).scalar_one() is None
+    assert "uq_variant_context_codebase_directory" in {
+        index["name"] for index in inspect(db.engine).get_indexes("variant_context")
+    }
+    assert db.session.get(ContextFile, attachment_id).variant_context_id == context_id
 
 
 def test_fresh_database_reaches_the_evidence_schema_and_can_use_its_links(app):

@@ -212,8 +212,8 @@ Assess and review actions follow the repository's `cve-assessment` and
 same methodology. The Agent can read VulnScout data, uploaded source references
 and the skill files, and fetch public advisory pages such as NVD and GHSA
 (disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no direct host
-filesystem access**. Provision a **Codebase directory** or attach host folders
-as described below to expose source through the bounded MCP tools. Only explicitly attached
+filesystem access**. Explicitly approve and attach host folders
+as described below to expose host source through the bounded MCP tools. Only attached
 host folders support the isolated read-only shell described in [AI Agent Development](agent-chat.md).
 Missing evidence remains an uncertainty, never proof that the
 product is safe.
@@ -332,10 +332,9 @@ risks later. Edits are kept when you switch tabs. **Copy from...** replaces the
 whole draft with another variant's context (any project); nothing is saved until
 you save. Uploaded references are never copied.
 
-**Context** holds the variant description, the server codebase directory, the
-attached host folders, environment and other information. Directory access is the only codebase method
-shown on this page; legacy uploaded references and external paths remain stored
-for API compatibility. The other tabs edit a STRIDE model:
+**Context** holds the variant description, the attached host folders, environment
+and other information. Existing uploaded references remain available through
+the API. The other tabs edit a STRIDE model:
 system text fields with Components and Interactions tables (System), a Threats
 table (Threat model) and a Risks table where each risk (`R#`) groups one or
 more threats with an optional description, a likelihood, impact, mitigation and
@@ -347,19 +346,18 @@ cell; it opens the tab and explains each missing value next to its cell.
 Agents receive `threat_model` and `risks` as a plain-text rendering of these
 tables, with the `C#`, `I#`, `T#` and `R#` IDs kept; risks that have no rating,
 mitigation or residual decision are left out of `risks`.
-`get_merged_context` exposes `codebase_directory` with its
-server path and `file_id="directory"`, used with the same MCP browsing tools.
+`get_merged_context` lists approved host folders as `mounts` with their scoped
+`file_id="mount:<alias>"`, not filesystem paths.
 Merged context responses are limited to 12 KiB of UTF-8 content per tool call
 to avoid Copilot's large-tool-output file offloading. Continue with the returned
 `next_offset` until it is `null`, concatenating pages in order before analyzing
 or assessing a variant. Offsets count characters, not bytes.
 The MCP `update_variant_context` tool cannot change the
-threat model, risks or directory. `get_merged_context` with
+threat model, risks or host attachments. `get_merged_context` with
 `include_model=true` and `update_variant_threat_model` read and edit the System
 text and STRIDE tables as structured rows; an update given `expected_updated_at`
 is rejected, without changes, when the variant's context was saved after that
-read. A provisioned directory is exposed automatically without deleting legacy
-uploads or paths, even when an older saved context still selected references or paths.
+read.
 
 The assessment skills and the embedded Agent use the STRIDE model per variant.
 They map the affected component to Components and Interactions, check
@@ -438,9 +436,8 @@ extraction or execution. Only UTF-8 text can be read as source; binary files
 may be stored/listed but cannot provide text evidence. Other archive formats
 are not unpacked.
 
-There is no external source-path setting. Administrators populate or mount the
-variant's provisioned directory; the embedded Agent has no direct host
-filesystem access.
+There is no external source-path setting. The embedded Agent has no direct
+host filesystem access.
 Both embedded and external agents can inspect uploaded references through
 `get_merged_context` (which supplies reference IDs), then `list_codebase_files`,
 `read_codebase_file` and `read_codebase_files`. The embedded Agent and external
@@ -460,139 +457,6 @@ content is untrusted evidence, not agent instructions. Partial uploads,
 unreadable files, conflicting versions or truncated searches must be reported
 as evidence gaps, not used to claim a component is absent.
 
-### Administrator-provided codebase directories
-
-CI pipelines can create or mount `context-<sanitized-project>-<sanitized-variant>`
-directly under `VULNSCOUT_CACHE_DIR` and populate it with reviewed source.
-Merged-context, directory-status and directory-source lookups automatically
-register an existing readable directory and expose it to assessments and reviews.
-No web interaction, provisioning request or editor save is required. These reads
-never create filesystem paths. Automatic discovery rejects ambiguous names shared
-by unregistered variants: use distinct names or explicitly provision the intended
-owner instead of allowing an arbitrary reader to claim the source.
-
-Alternatively, open the variant's **Context** tab and click **Create codebase
-directory** to create a missing directory. Initial registration, whether automatic
-or explicit, marks older pending assessments outdated without saving other
-context fields. The page displays the **container path** and whether the directory
-is available, empty, missing or unreadable.
-**Refresh directory status** checks files or mounts added by an administrator;
-it does not change the context draft. **Save changes** is not required for
-directory discovery or source access.
-
-Status includes **Files** and **Directories** counts after a complete scan,
-including on refresh. Files count eligible regular files (even if binary or too
-large to read); directories count eligible subdirectories, including empty ones,
-but exclude the root. Hidden/sensitive names and linked entries are excluded except for regular,
-single-link `.config` files.
-Empty trees report zero files. Missing/unreadable directories and incomplete or
-over-budget scans do not report counts; failed refreshes clear previous totals.
-
-Directories live directly under `VULNSCOUT_CACHE_DIR` (normally
-`/cache/vulnscout`), named
-`context-<sanitized-project>-<sanitized-variant>`, without database IDs. Only ASCII
-letters, digits, underscores and hyphens are used; each name segment is truncated
-to 48 characters, with `unnamed` for an empty segment. If another variant already
-owns the resulting name (including collisions from sanitization, truncation or
-hyphen placement), creation returns HTTP 409 instead of sharing its files.
-Choose distinct project/variant names in that case. The name is saved at first
-provisioning: project/variant renames do **not** move it or break mounts. Existing
-UUID-suffixed directories retain their saved paths; they are not automatically
-renamed.
-Deleting a variant/project revokes access through its IDs but **retains this
-directory and its contents**, unlike uploaded references. An administrator must
-unmount and remove retained directories manually. Recreating the same names
-reuses the portable directory and its contents; remove or replace retained files
-before recreating a variant if that evidence should not be reused.
-
-To transport a source snapshot to another instance, use the same project/variant
-names and place or mount the snapshot under the displayed cache directory.
-For an older UUID-suffixed snapshot, use the destination's displayed directory
-name rather than carrying over its old UUID suffix.
-
-For the standard wrapper's cache volume, the displayed
-`/cache/vulnscout/<directory-name>` maps to
-`$VULNSCOUT_CACHE_DIR/<directory-name>` on the **server host** (by default
-`.vulnscout/cache/<directory-name>`). Copy a reviewed, secret-free source snapshot
-into the provisioned host directory, for example:
-
-```bash
-cp -R /srv/reviewed-source/. /srv/vulnscout-cache/<directory-name>/
-```
-
-Replace both example paths and `<directory-name>` with your deployment's values.
-Do not copy an entire home directory. The server process needs read permission on
-files and read/search permission on every directory. Provisioning uses mode
-`0750`, owned by the API process; copy files as that owner or grant its group
-read access (typically `0640` files, `0750` directories). With the standard
-wrapper, check `USER_UID`/`USER_GID` in `config.env`; rootless Podman uses the
-wrapper's keep-id mapping. Do not solve permission errors with world-writable
-permissions. VulnScout does not recursively change ownership inside these
-administrator-managed directories.
-
-Alternatively, add a read-only bind mount to your existing container deployment.
-For example, add this volume alongside its normal writable cache volume in
-Compose, using the **exact displayed container path** as the target:
-
-```yaml
-services:
-  vulnscout:
-    volumes:
-      - /srv/vulnscout-cache:/cache/vulnscout
-      - /srv/reviewed-source:/cache/vulnscout/<directory-name>:ro
-```
-
-The equivalent Docker/Podman volume argument is
-`--volume /srv/reviewed-source:/cache/vulnscout/<directory-name>:ro`.
-Provision first, then recreate the container with the added mount. The wrapper
-does not add container mounts from the Context form: customize your deployment
-configuration for this option, or use [Attached host folders](#attached-host-folders),
-which need no container change. On SELinux systems provide an appropriate
-container-readable label (for example `:ro,Z` only when private relabeling is
-appropriate), and account for rootless UID mapping. Keep the parent cache
-writable for VulnScout's database and metadata; only the source mount is read-only.
-Browse, read and search this source with the directory tools. For shell inspection,
-attach the source explicitly as an approved host folder: the host helper cannot
-verify that the host and application see the same contents under a provisioned directory.
-**Remote workstation paths are not automatically accessible**: copy the snapshot
-to the server or mount storage available to that server.
-
-The embedded Agent has no direct host filesystem access. Its isolated read-only
-shell can inspect a filtered snapshot of an explicitly approved attached folder; see
-[AI Agent Development](agent-chat.md). Merged
-context returns `codebase_directory.file_id="directory"` for a provisioned
-directory, and `list_codebase_children`, `list_codebase_files`, `search_codebase_file`, `read_codebase_file` and
-`read_codebase_files` accept that ID within the variant's existing scope. Directory
-availability takes precedence over uploads and external paths in merged source
-evidence without deleting their stored data. An empty `files` list means there
-are no active uploaded references, not that the directory is empty. Text context
-exports/imports preserve the effective source, not
-directory names, mounts or contents; provision the destination variant's own
-directory separately. **Copy from...** does not copy server-side source.
-
-Browsing rejects symbolic links (including the root and any replaced path
-component), hard-linked files and special files. A regular file named exactly `.config` is eligible
-inside the approved tree; a directory of that name is never traversed. Browsing excludes other hidden
-names and names matching `*secret*`, `*credential*`, `*password*`,
-`*token*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `id_rsa*`,
-`id_ed25519*`, `id_dsa*`, `id_ecdsa*`, `kubeconfig`, `*.kdbx`, `*.sqlite*`,
-`*.db`, `*~` and `*.bak`
-(case-insensitive). This is a filename safeguard, **not secret detection**;
-administrators must remove sensitive content from otherwise eligible files.
-Only UTF-8 source is readable. There is no aggregate directory/upload-size cap,
-but each operation visits at most **500,000 entries** (excluded directories are not
-traversed), each read is limited to **10 MiB/file**, listings/reads to
-**64 KiB of serialized response**, and pages to **200 files/lines**. Oversized
-listings return fewer rows and a continuation; reduce the line count for oversized reads.
-For shell inspection, an approved attachment is required; see [AI Agent Development](agent-chat.md).
-Excluded/binary/oversized files and partial inventories
-cannot establish absence of vulnerable code.
-
-Directory contents are live, not immutable evidence. Administrator edits and
-mount changes outside VulnScout do **not** automatically mark pending assessments
-outdated. Prefer versioned, read-only snapshots, identify their revision in the
-context, and re-review assessments after source changes.
-
 ### Attached host folders
 
 Attach several named folders from the **container host** to a variant, for
@@ -600,8 +464,9 @@ example the application source as `src` and a Yocto build tree as `build`,
 without copying files, uploading archives or restarting the container. Agents
 browse, read and search each one read-only with `file_id="mount:<alias>"`, so a
 search of `src` never scans `build`. `get_merged_context` lists them under
-`mounts` (`alias`, `file_id`); the provisioned codebase directory
-keeps working unchanged alongside them.
+`mounts` (`alias`, `file_id`). Existing cache folders are not discovered or
+modified by the context feature; approve and attach an appropriate host folder
+explicitly if its contents are still needed as evidence.
 
 **Image prerequisite:** The default `v0.25.1` release does not contain the
 helper or the container-side attach command. Until a release includes them,
@@ -763,7 +628,7 @@ to manage attachments.
     attached folder, so they can be passed to `read_codebase_file` unchanged.
     `folder` must be a plain relative path: `..`, absolute paths, hidden or
     sensitive names and links are rejected, and every component is opened without
-    following links. Both provisioned directories and host folders support `folder`.
+    following links. This option is available for attached host folders.
   - Without `folder`, start `pattern` with a literal path
     from metadata or the listing instead of `*curl*`: folders that cannot match the
     literal prefix are never opened and non-matching files are never stat'ed.
@@ -899,8 +764,8 @@ support and vendor/distribution backports are separate questions.
   access, then select an available model in the toolbar.
 - **A local model cannot be reached** — the container's loopback is not the
   host's loopback. See [Connect an AI Provider](#connect-an-ai-provider).
-- **The agent cannot read a host source directory** — provision a **Codebase directory**
-  and have an administrator copy or mount source there.
+- **The agent cannot read a host source folder** — check that it is explicitly
+  approved and attached to the right variant, and that the host helper is running.
 - **A request failed** — inspect the error and **Activity** before retrying.
   For queued work, use **Retry failed action** in its conversation, or remove the
   failed action; other requests keep running meanwhile. Check for a saved

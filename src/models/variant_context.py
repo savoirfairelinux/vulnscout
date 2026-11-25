@@ -176,7 +176,6 @@ class VariantContext(Base):
     __tablename__ = "variant_context"
     __table_args__ = (
         UniqueConstraint("variant_id", name="uq_variant_context_variant"),
-        sa.Index("uq_variant_context_codebase_directory", "codebase_directory", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -184,7 +183,6 @@ class VariantContext(Base):
         ForeignKey("variants.id", ondelete="CASCADE"), nullable=False
     )
     variant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    codebase_directory: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_info: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Bumped only when a field's value actually changes; AI assessments older
@@ -220,7 +218,6 @@ class VariantContext(Base):
         return {
             "variant_id": str(self.variant_id),
             "variant_description": self.variant_description,
-            "codebase_directory": self.directory_metadata(),
             "environment": self.environment,
             "threat_model": self.agent_threat_model(),
             "risks": self.agent_risks(),
@@ -234,12 +231,6 @@ class VariantContext(Base):
                 "updated_at": updated_at,
             },
         }
-
-    def directory_metadata(self) -> dict | None:
-        if self.codebase_directory is None:
-            return None
-        from ..helpers.codebase_directory import directory_path
-        return {"file_id": "directory", "path": directory_path(_get_cache_dir(), self.codebase_directory)}
 
     # ------------------------------------------------------------------
     # CRUD helpers
