@@ -20,6 +20,8 @@ class GrypeVulns:
     Support only reading and parsing from JSON format.
     """
 
+    SBOM_NAME = "vulnscout:sbom-name"
+
     def __init__(self, controllers: ControllersCache):
         self.packagesCtrl: PackagesController = controllers.packages
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
@@ -95,7 +97,7 @@ class GrypeVulns:
         if "name" in artifact and "version" in artifact:
             raw_name = artifact["name"]
             purl_str = artifact.get("purl")
-            name = self._normalize_artifact_name(raw_name, purl_str)
+            name = artifact.get(self.SBOM_NAME) or self._normalize_artifact_name(raw_name, purl_str)
 
             package = self._build_package(
                 name, artifact["version"],

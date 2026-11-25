@@ -661,14 +661,22 @@ class TestScanJobPackageFilters:
             {"artifact": {"name": "cmake-native", "version": "1"}},
             {"artifact": {"name": "openssl", "version": "3"}},
         ]}))
-        _filter_grype_matches(
-            ctx,
-            str(results_path),
-            {("cmake-native", "1"), ("openssl", "3")},
-            exclude_native=True,
-        )
+        _filter_grype_matches(ctx, str(results_path), str(export_path))
         matches = json.loads(results_path.read_text())["matches"]
         assert [match["artifact"]["name"] for match in matches] == ["openssl"]
+
+    def test_deduplication_retains_distinct_scanner_identifiers(self, tmp_path):
+        path = tmp_path / "sbom.json"
+        components = [
+            {"name": "lib", "version": "1", "purl": purl, "cpe": cpe, "bom-ref": str(i)}
+            for i, (purl, cpe) in enumerate([
+                ("pkg:npm/a/lib@1", "cpe:/a:a:lib:1"), ("pkg:npm/b/lib@1", "cpe:/a:a:lib:1"),
+                ("pkg:npm/a/lib@1", "cpe:/a:b:lib:1"), ("pkg:npm/a/lib@1", "cpe:/a:a:lib:1"),
+            ])
+        ]
+        path.write_text(json.dumps({"components": components}))
+        _deduplicate_cyclonedx(MagicMock(), str(path), exclude_kernel=False)
+        assert json.loads(path.read_text())["components"] == components[:3]
 
 
 class TestIncompleteToolScanCleanup:

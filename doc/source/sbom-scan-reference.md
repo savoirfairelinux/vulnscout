@@ -163,7 +163,9 @@ that project has no saved selection. This applies to Grype, NVD, OSV and
 sbom-cve-check. Grype also limits results to the variant's SBOM scope, as in
 the wizard. Selecting all native packages in the wizard therefore also includes
 new native packages in subsequent CLI scans. Invalid or unreadable preferences
-stop the scan rather than silently scanning a different scope.
+stop the scan rather than silently scanning a different scope. Grype keeps
+components with distinct PURLs or CPEs and attributes matches to the scanned
+SBOM package name, even when it differs from the scanner's artifact name.
 
 The same JSON file now has two top-level nodes:
 
