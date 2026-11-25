@@ -308,7 +308,7 @@ def osv_scan_command(project: str, variant: str | None, run_id: str | None = Non
             if purl_str.startswith("pkg:"):
                 purl_to_packages.setdefault(purl_str, []).append(pkg)
 
-    if not purl_to_packages:
+    if packages and not purl_to_packages:
         raise click.ClickException(
             "No packages with valid PURL identifiers"
         )

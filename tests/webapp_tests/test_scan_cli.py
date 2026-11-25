@@ -697,6 +697,32 @@ class TestOsvScanCLI:
         MockOsvClient.return_value.query_by_purl.assert_not_called()
 
     @patch("src.bin.cmd_vuln_scan.OSVClient")
+    def test_osv_excluded_scope_supersedes_previous_scan(self, client, app, ids, monkeypatch):
+        from src.helpers.active_scans import active_scan_ids_for_variant
+        from src.models.package import Package
+        from src.models.observation import Observation
+
+        variant_id = uuid.UUID(ids["variant_id"])
+        with app.app_context():
+            previous = Scan.create("previous OSV", variant_id, scan_type="tool", scan_source="osv")
+            previous_id = previous.id
+            for pkg in Package.get_all():
+                pkg.name += "-native"
+            _db.session.commit()
+        monkeypatch.setattr("src.bin.cmd_vuln_scan.read_scan_configuration", lambda _: {"exclude_native": True})
+        result = app.test_cli_runner().invoke(args=[
+            "osv-scan", "--project", ids["project_name"], "--variant", ids["variant_name"], "--run-id", "empty",
+        ])
+        assert result.exit_code == 0, result.output
+        client.return_value.query_by_purl.assert_not_called()
+        with app.app_context():
+            scan = _db.session.execute(_db.select(Scan).where(Scan.run_id == "empty")).scalar_one()
+            assert scan.scan_source == "osv" and not scan.in_progress
+            active = active_scan_ids_for_variant(variant_id)
+            assert scan.id in active and previous_id not in active
+            assert not _db.session.scalars(_db.select(Observation).where(Observation.scan_id == scan.id)).first()
+
+    @patch("src.bin.cmd_vuln_scan.OSVClient")
     def test_osv_scan_default_variant(self, MockOsvClient, app, ids):
         """OSV scan uses default variant when --variant is omitted."""
         mock_instance = MockOsvClient.return_value
