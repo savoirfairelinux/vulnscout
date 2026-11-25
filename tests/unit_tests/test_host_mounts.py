@@ -99,6 +99,20 @@ def test_shell_rejects_remote_and_invalid_sources(client, variant):
     assert client.post(url, json={"file_id": "directory", "command": ""}).status_code == 400
 
 
+@pytest.mark.parametrize("streamed", [False, True])
+def test_shell_request_byte_limit(client, variant, streamed):
+    from src.routes.context import SHELL_REQUEST_BYTES
+
+    url = f"/api/variants/{variant.id}/context/shell"
+    # The complete JSON prefix alone is valid. Do not silently discard a streamed suffix.
+    payload = b'{"file_id":"directory","command":"true"}'.ljust(SHELL_REQUEST_BYTES)
+    overrides = {"CONTENT_LENGTH": "", "HTTP_TRANSFER_ENCODING": "chunked", "wsgi.input_terminated": True} \
+        if streamed else {}
+    for body, status in ((payload, 404), (payload + b" ", 413)):
+        response = client.post(url, data=body, content_type="application/json", environ_overrides=overrides)
+        assert response.status_code == status
+
+
 @pytest.mark.parametrize("subfolder", ["", "build output"])
 def test_directory_shell_rejects_container_only_bind(client, variant, tmp_path, monkeypatch, subfolder):
     from io import BytesIO

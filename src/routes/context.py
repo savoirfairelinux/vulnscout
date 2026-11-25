@@ -59,6 +59,7 @@ STRIDE_TEXT_READ_ONLY = "is generated from the STRIDE model; edit it in the AI C
 DIRECTORY_NAME_CONFLICT = (
     "Codebase directory name is already assigned to another variant; use distinct project/variant names."
 )
+SHELL_REQUEST_BYTES = 64 * 1024
 
 
 def _get_cache_dir() -> str:
@@ -971,6 +972,17 @@ def init_app(app):
         assert variant_uuid is not None
         if Variant.get_by_id(variant_uuid) is None:
             return jsonify(error="Variant not found"), 404
+        limit = SHELL_REQUEST_BYTES
+        if request.max_content_length is not None:
+            limit = min(limit, request.max_content_length)
+        # A terminated WSGI stream can lack Content-Length. Read one extra
+        # byte to distinguish a full valid body from a truncated JSON prefix.
+        request.max_content_length = limit + 1 if request.content_length is None else limit
+        try:
+            if len(request.get_data()) > limit:
+                raise RequestEntityTooLarge()
+        except RequestEntityTooLarge:
+            return jsonify(error="Shell request exceeds the request size limit."), 413
         body = request.get_json(silent=True)
         if not isinstance(body, dict) or set(body) - {"file_id", "folder", "command"}:
             return jsonify(error="Invalid shell request."), 400
