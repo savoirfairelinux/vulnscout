@@ -712,6 +712,10 @@ class TestScanJobPackageFilters:
         ("cpe:/a:Vendor:lib%3Acore:1", r"cpe:2.3:a:vendor:lib\:core:1:*:*:*:*:*:*:*", True),
         ("cpe:/a:vendor:lib:1::~~pro~linux~x64~",
          "cpe:2.3:a:vendor:lib:1:*:*:*:pro:linux:x64:*", True),
+        ("cpe:/a:vendor:lib:1::~~~~~foo%3A",
+         r"cpe:2.3:a:vendor:lib:1:*:*:*:*:*:*:foo\:", True),
+        ("cpe:/a:vendor:lib:1::~~~~~foo",
+         r"cpe:2.3:a:vendor:lib:1:*:*:*:*:*:*:foo\:", False),
         ("cpe:/a:vendor:lib%2A:1", "cpe:2.3:a:vendor:lib*:1:*:*:*:*:*:*:*", False),
         ("cpe:/a:vendor:lib:1:-", "cpe:2.3:a:vendor:lib:1:*:*:*:*:*:*:*", False),
     ])
