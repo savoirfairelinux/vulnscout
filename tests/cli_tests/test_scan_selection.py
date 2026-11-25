@@ -373,7 +373,9 @@ def test_grype_finding_keeps_scoped_sbom_name(tmp_path, scanner_environment):
     name, purl = "@scope/widget", "pkg:npm/%40scope/widget@1.0.0"
     sbom = json.loads((ROOT / "tests/end_to_end_tests/input_cdx.json").read_text())
     sbom.pop("vulnerabilities")
-    sbom["components"] = [{"type": "library", "name": name, "version": "1.0.0", "bom-ref": purl, "purl": purl}]
+    cpe = "cpe:2.3:a:example:widget:1.0.0:*:*:*:*:*:*:*"
+    sbom["components"] = [{"type": "library", "name": name, "version": "1.0.0", "bom-ref": purl,
+                           "purl": purl, "cpe": cpe}]
     path = tmp_path / "scoped.cdx.json"
     path.write_text(json.dumps(sbom))
     env.update({
@@ -387,6 +389,9 @@ def test_grype_finding_keeps_scoped_sbom_name(tmp_path, scanner_environment):
         }, {
             "artifact": {"name": name, "purl": "pkg:npm/%40outside/widget@1.0.0", "version": "1.0.0"},
             "vulnerability": {"id": "CVE-2026-1002"},
+        }, {
+            "artifact": {"name": "other", "purl": "pkg:npm/other@1.0.0", "version": "1.0.0", "cpes": [cpe]},
+            "vulnerability": {"id": "CVE-2026-1003"},
         }]),
     })
     result = subprocess.run(

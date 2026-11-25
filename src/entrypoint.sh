@@ -633,7 +633,7 @@ cmd_scan() {
                 console_out info "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
                     --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
-                    --run-id "$scan_run_id" --grype "$grype_out") || {
+                    --run-id "$scan_run_id" --scoped-grype "$grype_out") || {
                     rm -rf "$grype_tmp"; return 1
                 }
                 # A later scanner creates a newer scan; ingest Grype while it is latest.

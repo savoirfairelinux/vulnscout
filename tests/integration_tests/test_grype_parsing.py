@@ -14,6 +14,16 @@ def grype_parser():
     return GrypeVulns(ControllersCache())
 
 
+@pytest.mark.parametrize(("scoped", "override"), [
+    (False, "unrelated"), (False, 123), (True, 123), (True, " "),
+])
+def test_untrusted_or_invalid_sbom_name_uses_artifact_identity(grype_parser, scoped, override):
+    grype_parser.load_from_dict({"matches": [{"artifact": {
+        "name": "vendor/lib", "version": "1", "vulnscout:sbom-name": override,
+    }}]}, scoped=scoped)
+    assert set(grype_parser.packagesCtrl.packages) == {"lib@1"}
+
+
 def test_parse_empty_json(grype_parser):
     grype_parser.load_from_dict(json.loads("""{
         "matches": [

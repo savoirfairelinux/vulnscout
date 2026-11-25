@@ -2940,6 +2940,16 @@ class TestCopyAssessmentsMatchModes:
 
 class TestSBOMUploadEdgeCases:
 
+    def test_upload_cannot_select_internal_grype_format(self, queued_import, client):
+        pid = _get_project_id(client)
+        data = {
+            "project_id": pid, "variant_id": _get_variant_id(client, pid), "format": "scoped_grype",
+            "files": (io.BytesIO(b'{"matches":[]}'), "report.json"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 400
+        assert queued_import["calls"] == []
+
     @pytest.mark.parametrize("suffix", [".tar", ".tar.xz"])
     def test_upload_corrupt_archive_returns_400(self, upload_temp_files, client, suffix):
         """An invalid tar archive triggers a 400."""
