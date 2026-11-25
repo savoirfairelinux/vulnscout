@@ -83,6 +83,10 @@ MAX_REQUEST_BYTES = 128 * 1024
 MAX_CONNECTIONS = 8
 CONNECTION_TIMEOUT = 30.0
 SHELL_TIMEOUT = 15.0
+SHELL_DRAIN_TIMEOUT = 20.0
+_LEASE_NAME = ".lease"
+_PROXY_LOWER = ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "no_proxy")
+_PROXY_VARIABLES = _PROXY_LOWER + tuple(name.upper() for name in _PROXY_LOWER)
 SHELL_OUTPUT_BYTES = 64 * 1024
 DEFAULT_SNAPSHOT_MIB = 512
 SNAPSHOT_CHUNK = 256 * 1024
@@ -1123,12 +1127,18 @@ class Helper:
 
     @contextmanager
     def _locked_state(self) -> Iterator[int]:
-        fd = os.open(self.state_dir, _DIRECTORY_FLAGS)
+        # A writable regular file keeps exclusive flock usable on NFS, unlike a read-only directory descriptor.
+        lock = os.open(os.path.join(self.state_dir, ".snapshots.lock"),
+                       os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | _CLOEXEC, 0o600)
+        state = -1
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            yield fd
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            state = os.open(self.state_dir, _DIRECTORY_FLAGS)
+            yield state
         finally:
-            os.close(fd)
+            if state >= 0:
+                os.close(state)
+            os.close(lock)
 
     def reap_shell_snapshots(self) -> None:
         # Never infer ownership from the old generic shell-* temporary names.
@@ -1147,11 +1157,19 @@ class Helper:
                         if os.fstat(fd).st_uid != os.geteuid():
                             continue
                         try:
-                            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        except BlockingIOError:
-                            continue
-                        if os.fstat(fd).st_nlink:
+                            lease = os.open(_LEASE_NAME, os.O_RDWR | os.O_NOFOLLOW | _CLOEXEC, dir_fd=fd)
+                        except FileNotFoundError:
+                            lease = -1
+                        try:
+                            if lease >= 0:
+                                try:
+                                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                except BlockingIOError:
+                                    continue
                             shutil.rmtree(os.path.join(self.state_dir, entry.name))
+                        finally:
+                            if lease >= 0:
+                                os.close(lease)
                     finally:
                         os.close(fd)
 
@@ -1162,11 +1180,20 @@ class Helper:
         # Publish the directory and its lease atomically with respect to a starting helper.
         with self._locked_state() as state:
             os.mkdir(name, 0o700, dir_fd=state)
-            fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=state)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                directory = os.open(name, _DIRECTORY_FLAGS, dir_fd=state)
+                try:
+                    lease = os.open(_LEASE_NAME, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _CLOEXEC,
+                                    0o600, dir_fd=directory)
+                finally:
+                    os.close(directory)
+                try:
+                    fcntl.flock(lease, fcntl.LOCK_EX)
+                except BaseException:
+                    os.close(lease)
+                    raise
             except BaseException:
-                os.close(fd)
+                shutil.rmtree(path, ignore_errors=True)
                 raise
         try:
             yield path
@@ -1174,12 +1201,15 @@ class Helper:
             try:
                 shutil.rmtree(path)
             finally:
-                os.close(fd)
+                os.close(lease)
 
     def drain_shells(self) -> None:
+        deadline = time.monotonic() + SHELL_DRAIN_TIMEOUT
         with self._shell_condition:
             self._closing_shells = True
-            self._shell_condition.wait_for(lambda: self._active_shells == 0)
+            # Jobs blocked in source I/O cannot be interrupted; their leases die with this process.
+            self._shell_condition.wait_for(lambda: self._active_shells == 0,
+                                           timeout=max(0.0, deadline - time.monotonic()))
 
     def shell(self, request: dict) -> dict:
         with self._shell_condition:
@@ -1208,6 +1238,19 @@ class Helper:
                 return {**self._run_shell(snapshot, command), "snapshot": metadata}
         finally:
             os.close(root)
+
+    def _empty_mounts_file(self) -> str:
+        path = os.path.join(self.state_dir, ".empty-mounts.conf")
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | _CLOEXEC, 0o600)
+            try:
+                if os.fstat(fd).st_size:
+                    os.ftruncate(fd, 0)
+            finally:
+                os.close(fd)
+        except OSError as exc:
+            raise HelperError("unavailable", "Cannot prepare the shell worker mount policy.") from exc
+        return path
 
     def _run_shell(self, snapshot: str, command: str) -> dict:
         if not self.engine or not self.image:
@@ -1244,8 +1287,15 @@ class Helper:
         snapshot_mount = f"type=bind,src={snapshot},dst=/source,readonly"
         if engine_name == "podman":
             snapshot_mount += ",relabel=private"  # Relabel the disposable copy, never the approved source.
+        if engine_name == "podman":
+            # Podman would otherwise forward host proxy variables and mount mounts.conf entries (for example
+            # subscription credentials) into the worker; fail closed if the override cannot be applied.
+            run_options = ["--http-proxy=false", f"--default-mounts-file={self._empty_mounts_file()}"]
+        else:
+            # Docker injects the CLI's configured proxies unless the variables are set explicitly.
+            run_options = [f"--env={variable}=" for variable in _PROXY_VARIABLES]
         args = engine + [
-            "run", "--rm", "--name", name, "--pull=never",
+            "run", "--rm", "--name", name, "--pull=never", *run_options,
             "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
             "--pids-limit=64", "--memory=256m", "--cpus=1", "--user=65534:65534",
             "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=16m",
