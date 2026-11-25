@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect } from "react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faXmark, faPenToSquare, faClock } from '@fortawesome/free-solid-svg-icons';
 import type { Vulnerability } from "../handlers/vulnerabilities";
-import { buildStatusSummary } from "../handlers/vulnerabilities";
 import StatusEditor from "./StatusEditor";
 import type { PostAssessment } from './StatusEditor';
 import TimeEstimateEditor from "./TimeEstimateEditor";
@@ -17,7 +16,7 @@ type Props = {
     selectedVulns: string[];
     resetVulns: () => void;
     appendAssessment: (added: Assessment) => void;
-    patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
+    patchVuln: (vulnId: string, update: (latest: Vulnerability) => Vulnerability) => void;
     triggerBanner: (message: string, type: 'error' | 'success', source?: 'nvd' | 'epss' | 'ghsa' | 'euvd', refreshActivity?: boolean) => void;
     hideBanner: () => void;
     projectId?: string;
@@ -186,32 +185,10 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             const data = await response.json().catch(() => ({}));
 
             if (data?.status === 'success' && Array.isArray(data?.assessments)) {
-                // Group new assessments by vuln_id so we call patchVuln exactly
-                // once per distinct vuln.  Calling it once-per-assessment caused
-                // React to batch the setVulns calls and only keep the last one,
-                // leaving all other CVEs unchanged.
-                const newAssessmentsByVuln = new Map<string, Assessment[]>();
                 for (const assessmentData of data.assessments) {
                     const casted = asAssessment(assessmentData);
                     if (!Array.isArray(casted) && typeof casted === "object") {
                         appendAssessment(casted);
-                        const list = newAssessmentsByVuln.get(casted.vuln_id) ?? [];
-                        list.push(casted);
-                        newAssessmentsByVuln.set(casted.vuln_id, list);
-                    }
-                }
-                for (const [vuln_id, newAssessments] of newAssessmentsByVuln.entries()) {
-                    const vuln = vulnerabilities.find(v => v.id === vuln_id);
-                    if (vuln) {
-                        const updatedAssessments = [...vuln.assessments, ...newAssessments];
-                        const statusSummary = buildStatusSummary(
-                            updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
-                        patchVuln(vuln_id, {
-                            ...vuln,
-                            assessments: updatedAssessments,
-                            simplified_status: statusSummary.dominant_status,
-                            status_summary: statusSummary,
-                        });
                     }
                 }
 
@@ -298,17 +275,16 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             if (data?.status === 'success' && Array.isArray(data?.vulnerabilities)) {
                 // Process successful updates
                 for (const vulnData of data.vulnerabilities) {
-                    const vuln = vulnerabilities.find(v => v.id === vulnData.id);
-                    if (vuln) {
+                    patchVuln(vulnData.id, latest => {
+                        const effort = { ...latest.effort };
                         if (typeof vulnData?.effort?.optimistic === "string")
-                            vuln.effort.optimistic = new Iso8601Duration(vulnData.effort.optimistic);
+                            effort.optimistic = new Iso8601Duration(vulnData.effort.optimistic);
                         if (typeof vulnData?.effort?.likely === "string")
-                            vuln.effort.likely = new Iso8601Duration(vulnData.effort.likely);
+                            effort.likely = new Iso8601Duration(vulnData.effort.likely);
                         if (typeof vulnData?.effort?.pessimistic === "string")
-                            vuln.effort.pessimistic = new Iso8601Duration(vulnData.effort.pessimistic);
-
-                        patchVuln(vuln.id, vuln);
-                    }
+                            effort.pessimistic = new Iso8601Duration(vulnData.effort.pessimistic);
+                        return { ...latest, effort };
+                    });
                 }
 
                 const errorMsg = data.error_count ? ` (${data.error_count} failed)` : '';

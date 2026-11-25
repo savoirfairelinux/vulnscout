@@ -377,6 +377,7 @@ describe('append_assessment', () => {
     ];
 
     const assessment = {
+      id: 'assessment-1',
       vuln_id: 'CVE-2021-1',
       status: 'investigating',
       simplified_status: 'open',
@@ -389,6 +390,7 @@ describe('append_assessment', () => {
     const cve1 = result.find((v: any) => v.id === 'CVE-2021-1');
     expect(cve1?.simplified_status).toBe('open');
     expect(cve1?.assessments).toHaveLength(1);
+    expect(Vulnerabilities.append_assessment(result, assessment)).toEqual(result);
 
     const cve2 = result.find((v: any) => v.id === 'CVE-2021-2');
     expect(cve2?.simplified_status).toBe('unknown');

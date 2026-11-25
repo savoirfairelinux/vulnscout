@@ -66,9 +66,10 @@ type ExplorerNavState = {
 
 function Explorer() {
     const [selectorKey, setSelectorKey] = useState(0);
-    const [pkgs, setPkgs] = useState<Package[]>([]);
+    const [listedPackages, setListedPackages] = useState<Package[]>([]);
     const [dataRevision, setDataRevision] = useState(0);
     const [vulns, setVulns] = useState<Vulnerability[]>([]);
+    const pkgs = useMemo(() => Packages.enrich_with_vulns(listedPackages, vulns), [listedPackages, vulns]);
     const vulnsRef = useRef<Vulnerability[]>([]);
     const location = useLocation();
     const navigate = useNavigate();
@@ -123,6 +124,8 @@ function Explorer() {
     const loadGeneration = useRef(0);
     const loadController = useRef<AbortController | null>(null);
     const localDataRevision = useRef(0);
+    const activeScopeRevision = useRef(0);
+    const installedRevision = useRef(0);
     const scopeReady = useRef(false);
     const operationEntries = useSyncExternalStore(operationSubscribe, getOperations);
     const agentChatRequest = useSyncExternalStore(subscribeAgentChatRequest, getAgentChatRequest).nonce;
@@ -221,9 +224,8 @@ function Explorer() {
             setLoadingMessage("Loading data...");
             const enriched_vulns = Vulnerabilities.enrich_with_assessments(vulnsResult.value, assessments);
             setVulns(enriched_vulns);
-            const enrichedPkgs = Packages.enrich_with_vulns(pkgsResult.value, enriched_vulns);
-            setPkgs(enrichedPkgs);
-            setDataRevision(value => value + 1);
+            setListedPackages(pkgsResult.value);
+            setDataRevision(++installedRevision.current);
         }).catch(error => {
             if (generation !== loadGeneration.current || signal.aborted) return;
             controller.abort();
@@ -317,7 +319,7 @@ function Explorer() {
         // A new scope invalidates any filter the previous page navigated with,
         // but not the URL query (e.g. the exact run identity of /refresh?run=…).
         navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null });
-        setScopeRevision(revision => revision + 1);
+        setScopeRevision(++activeScopeRevision.current);
         setCurrentVariantId(effectiveVariantId);
         setCurrentProjectId(projectId || undefined);
         // Track origin variant and operation separately for MultiEditBar intersection logic
@@ -413,24 +415,20 @@ function Explorer() {
     }, [operationEntries, handleRefreshComplete]);
 
 
-    function appendAssessment(added: Assessment) {
+    const mutateVulns = useCallback((apply: (latest: Vulnerability[]) => Vulnerability[]) => {
+        if (scopeRevision !== activeScopeRevision.current) return;
         localDataRevision.current++;
-        const updatedVulns = Vulnerabilities.append_assessment(vulns, added);
-        setVulns(updatedVulns);
+        setVulns(apply);
+    }, [scopeRevision]);
 
-        // Update packages with the new vulnerability data
-        setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
+    function appendAssessment(added: Assessment) {
+        mutateVulns(latest => Vulnerabilities.append_assessment(latest, added));
     }
 
     function appendCVSS(vulnId: string, vector: string) {
         const cvss: CVSS | null = Vulnerabilities.calculate_cvss_from_vector(vector, defaultConfig.author_name) ?? null;
         if (cvss !== null) {
-            localDataRevision.current++;
-            const updatedVulns = Vulnerabilities.append_cvss(vulns, vulnId, cvss);
-            setVulns(updatedVulns);
-
-            // Update packages with the new vulnerability data
-            setPkgs(Packages.enrich_with_vulns(pkgs, updatedVulns));
+            mutateVulns(latest => Vulnerabilities.append_cvss(latest, vulnId, cvss));
             return cvss;
         }
         return null;
@@ -440,22 +438,20 @@ function Explorer() {
     // (e.g. after loadData or appendAssessment).
     useEffect(() => { vulnsRef.current = vulns; }, [vulns]);
 
-    function patchVuln(vulnId: string, replace_vuln: Vulnerability) {
-        localDataRevision.current++;
-        // Update the ref immediately so the next synchronous call to patchVuln
-        // (for a different CVE in the same multi-edit batch) reads the already-
-        // patched list rather than the stale closure value.
-        vulnsRef.current = vulnsRef.current.map(v => v.id === vulnId ? replace_vuln : v);
-        setVulns(vulnsRef.current);
-
-        // Update packages with the new vulnerability data
-        setPkgs(Packages.enrich_with_vulns(pkgs, vulnsRef.current));
+    function patchVuln(vulnId: string, patch: Vulnerability | ((latest: Vulnerability) => Vulnerability)) {
+        if (scopeRevision !== activeScopeRevision.current) return;
+        if (typeof patch !== 'function' && dataRevision !== installedRevision.current) {
+            // A full modal row from before the reload cannot safely be merged.
+            void loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
+                currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation, true);
+            return;
+        }
+        mutateVulns(latest => latest.map(v => v.id !== vulnId ? v : typeof patch === 'function' ? patch(v) : patch));
     }
 
     // Update vulns state in-place after a Review tab edit or delete
     const handleAssessmentChanged = useCallback((mutation: AssessmentMutation) => {
-        localDataRevision.current++;
-        setVulns(prev => prev.map(vuln => {
+        mutateVulns(prev => prev.map(vuln => {
             if (vuln.id !== mutation.vulnId) return vuln;
             let newAssessments: Assessment[];
             if (mutation.type === 'delete') {
@@ -481,7 +477,7 @@ function Explorer() {
             ], newAssessments);
             return enriched;
         }));
-    }, []);
+    }, [mutateVulns]);
 
     function goToVulnsTabWithFilter(
         filterType: "Source" | "Severity" | "Status" | "Package",
