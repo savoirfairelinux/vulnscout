@@ -173,15 +173,15 @@ def _browse_reference(file_path: str, name: str, label: str, *,
             raise ValueError("folder is only supported for listings of directories or attached host folders.")
         if operation == "children" and not directory:
             raise ValueError("Shallow listings require a directory or mount.")
-        if directory and operation not in ("list", "read", "children", "search_file"):
-            raise ValueError("Operation must be list, children, read or search_file.")
+        if directory and operation not in ("list", "read", "children", "search_file", "search"):
+            raise ValueError("Unsupported source operation.")
         if not directory and operation not in ("list", "read", "search"):
             raise ValueError("Operation must be list, read, or search.")
         with ExitStack() as stack:
             reference: CodebaseReference
             if directory:
                 source = stack.enter_context(CodebaseDirectory(file_path, name, folder=folder,
-                                                               index=operation == "list"))
+                                                               index=operation in ("list", "search")))
                 reference = source
             else:
                 stream = stack.enter_context(open(file_path, "rb"))
@@ -212,7 +212,7 @@ def _browse_reference(file_path: str, name: str, label: str, *,
                         result = reference.read_lines(path, start, lines)
                 except FileNotFoundError as exc:
                     raise LookupError("Source file not found or excluded.") from exc
-            else:  # Bounded uploaded-reference or import-source search.
+            else:
                 query = request.args.get("query", "")
                 if not query or len(query) > 200:
                     raise ValueError("Search query must contain 1-200 characters.")
@@ -246,7 +246,7 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
         pattern = request.args.get("pattern", "*")
         if len(pattern) > 512:
             raise ValueError("File pattern must be at most 512 characters.")
-        if operation == "list":
+        if operation in ("list", "search"):
             validate_mount_pattern(pattern)
         folder = request.args.get("folder", "")
         if len(folder) > 1024:
@@ -272,8 +272,14 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
             if folder:
                 raise ValueError("Use an exact path, not folder, for single-file search.")
             params = {key: request.args.get(key, "") for key in ("path", "query", "cursor")}
+        elif operation == "search":
+            query = request.args.get("query", "")
+            if not query or len(query) > 200:
+                raise ValueError("Search query must contain 1-200 characters.")
+            params = {"query": query, "pattern": pattern, "folder": folder,
+                      "max_results": _integer("max_results", 100, 1, 100)}
         else:
-            raise ValueError("Operation must be list, children, read or search_file.")
+            raise ValueError("Unsupported source operation.")
         result = host_mounts.browse(variant_uuid, alias, operation, params)
     except LookupError as exc:
         return {"error": str(exc)}, 404
@@ -285,8 +291,8 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
         return {"error": exc.message, "code": exc.code}, exc.http_status
     body = {"file_id": file_id, "original_name": f"Host folder {alias}", **result}
     if len(jsonify(body).get_data()) > MAX_RESPONSE_BYTES:
-        if operation == "list":
-            key = "files"
+        if operation in ("list", "search"):
+            key = "files" if operation == "list" else "matches"
             entries = body[key]
             reason = "Source response limited to 64 KiB."
             body.update(truncated=True, message=" ".join(filter(None, (body.get("message"), reason))))
@@ -1037,13 +1043,13 @@ def init_app(app):
 
         OpenAPI:
         path file_id string required Upload UUID, directory for the active server directory, or mount:<alias>.
-        query operation string optional List (default), read, search (upload), children or search_file (tree).
+        query operation string optional List (default), read, search, children or search_file.
         query path string optional Exact member path for read or search_file.
         query position string optional Signed search match position for a bounded directory or mount context read.
         query query string optional Literal for search or search_file. search_file matches CVE IDs as whole tokens.
-        query pattern string optional File-path glob for list or upload search (default *).
-        query max_results integer optional Upload search match limit, 1-100 (default 100).
-        query folder string optional Directory or mount: sub-folder scoping list or children.
+        query pattern string optional File-path glob for list or search (default *).
+        query max_results integer optional Search match limit, 1-100 (default 100).
+        query folder string optional Sub-folder for tree listings or legacy mount searches.
         query cursor string optional Opaque continuation for the same shallow listing or single-file search.
         query offset integer optional List offset (default 0).
         query limit integer optional List page size, 1-200 (default 200).

@@ -193,8 +193,8 @@ def browse(variant_id: uuid.UUID, alias: str, operation: str, params: dict) -> d
     mount = HostMount.get(variant_id, alias)
     if mount is None:
         raise LookupError(f"No folder is attached as '{alias}' for this variant.")
-    if operation not in ("list", "read", "children", "search_file"):
-        raise ValueError("Operation must be list, children, read or search_file.")
+    if operation not in ("list", "read", "children", "search_file", "search"):
+        raise ValueError("Unsupported source operation.")
     # Older protocol-4 helpers ignore extra read fields but reject unknown operations.
     if operation == "read" and "position" in params:
         operation = "read_position"

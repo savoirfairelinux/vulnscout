@@ -150,6 +150,10 @@ def test_registered_tools_forward_parameters():
         source.assert_called_with("v1", "f1", {
             "operation": "search", "query": "needle", "pattern": "*.c", "max_results": 5,
         })
+        server.tools["search_codebase"]("v1", "mount:src", "needle", "*.c", 5, "build/tmp")
+        source.assert_called_with("v1", "mount:src", {
+            "operation": "search", "query": "needle", "pattern": "*.c", "max_results": 5, "folder": "build/tmp",
+        })
         assert json.loads(server.tools["list_codebase_files"]("v1", "f1", "*.c", 10, 20)) == {"ok": True}
         source.assert_called_with("v1", "f1", {"operation": "list", "pattern": "*.c", "offset": 10, "limit": 20})
         server.tools["list_codebase_files"]("v1", "mount:src", "*.c", 0, 5, "build/tmp")

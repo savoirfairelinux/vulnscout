@@ -1146,6 +1146,19 @@ def test_selinux_label_applies_to_socket_creation_only(helper, tree, monkeypatch
     hh.HelperServer(str(tree["tmp"] / "private" / "helper.sock"), helper, label).server_close()
 
 
+def test_legacy_mount_search_counts_nonmatching_files_towards_budget(helper, tree, monkeypatch):
+    attached(helper, tree)
+    folder = tree["app"] / "logs"
+    folder.mkdir()
+    (folder / "a").write_text("xxxx")
+    (folder / "b").write_text("hit")
+    monkeypatch.setattr(hh, "SEARCH_BYTE_BUDGET", 4)
+    result = ok(helper, "source", source_operation="search", variant_id=VARIANT, alias="src",
+                mount_path=str(tree["app"]), folder="logs", query="hit")
+    assert result["matches"] == [] and result["truncated"] and "byte budget" in result["message"]
+    assert result["searched_files"] == 1 and result["bytes_read"] == 4
+
+
 def test_helper_refuses_to_run_as_root(monkeypatch, tree, capsys):
     monkeypatch.setattr(hh.os, "geteuid", lambda: 0)
     assert hh.main(["serve", "--socket", str(tree["tmp"] / "s.sock"), "--state-dir", str(tree["tmp"] / "st")]) == 1
