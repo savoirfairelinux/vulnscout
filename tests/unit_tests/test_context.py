@@ -815,8 +815,12 @@ class TestCodebaseDirectory:
         assert response.status_code == 200
         return response.get_json()
 
-    @pytest.mark.parametrize("log_present", [True, False])
-    def test_target_build_evidence_via_registered_tools(self, app, directory, variant, monkeypatch, log_present):
+    @pytest.mark.parametrize(("log_present", "archive_present"), [
+        (True, True), (False, True), (False, False),
+    ], ids=["attributed-log", "archive-without-log", "manifest-only"])
+    def test_target_build_evidence_via_registered_tools(
+        self, app, directory, variant, monkeypatch, log_present, archive_present,
+    ):
         """Scripted tool sequence via real MCP functions, HTTP routes and a disposable build tree; no LLM."""
         import json
         from functools import partial
@@ -835,14 +839,19 @@ class TestCodebaseDirectory:
             temp = directory / "work" / arch / recipe / build["version"] / "temp"
             temp.mkdir(parents=True)
             (temp / "log.do_cve_check.99").write_text(f"other run: {target} patched\n")
+        (temp / "log.task_order").write_text(
+            "do_cve_check (17): log.do_cve_check.17\n"
+            "do_cve_check (99): log.do_cve_check.99\n"
+        )
         issue = {"id": target, "status": "Unpatched"}
         report = {"package": [{"name": build["recipe"], "issue": [issue]}]}
         live_report = temp / "cve.json"
         live_report.write_text(json.dumps(report))
-        if log_present:
+        if archive_present:
             archive = directory / build["run"]
             archive.mkdir()
             (archive / "cve.json").write_bytes(live_report.read_bytes())
+        if log_present:
             with (temp / "log.do_cve_check.17").open("w") as log_file:
                 log_file.write("x" * (10 * 1024 * 1024))
                 log_file.write(f"\n{target}0 patched\n{target}\nstatus: unpatched\n")
@@ -884,10 +893,15 @@ class TestCodebaseDirectory:
         assert not walked
         logs = call("list_codebase_files", folder=folder, pattern="log.do_cve_check*")
         assert walked == [""]
+        order = call("read_codebase_file", path=f"{folder}/log.task_order")
+        candidates = [line.split()[-1] for line in order["content"].splitlines()]
         task = call("read_codebase_file", path=f"{meta['run']}.tasks")
         recipe, arch, version, log_name = task["content"].split()
         assert (recipe, arch, version) == (meta["recipe"], meta["tuple"], meta["version"])
         assert (task["file_id"], task["path"], task["start_line"]) == ("directory", "image-42.tasks", 1)
+        assert log_name in candidates and candidates[-1] != log_name
+        other = call("read_codebase_file", path=f"{folder}/{candidates[-1]}")
+        assert other["content"] == f"other run: {target} patched\n"
         path = f"{folder}/{log_name}"
 
         def checker_status(report_path):
@@ -898,8 +912,11 @@ class TestCodebaseDirectory:
 
         assert checker_status(f"{folder}/cve.json") == "Patched"  # Later run, same package and CVE.
         archive_path = f"{meta['run']}/cve.json"
-        if path in {row["path"] for row in logs["files"]}:
+        if archive_present:
             assert checker_status(archive_path) == "Unpatched"
+        else:
+            assert tools["read_codebase_file"](str(variant.id), "directory", archive_path).startswith("Error:")
+        if path in {row["path"] for row in logs["files"]}:
             log = call("search_codebase_file", path=path, query=target)
             assert log_present and not log["complete"]
             matches = list(log["matches"])
@@ -912,7 +929,6 @@ class TestCodebaseDirectory:
             assert (nearby["start_line"], nearby["match_line"], nearby["end_line"]) == (2, 3, 4)
             assert nearby["content"] == f"{target}0 patched\n{target}\nstatus: unpatched\n"
         else:
-            assert tools["read_codebase_file"](str(variant.id), "directory", archive_path).startswith("Error:")
             missing = tools["search_codebase_file"](str(variant.id), "directory", path, target)
             assert missing.startswith("Error:") and "not found" in missing
             manifest = call("read_codebase_file", path="image-manifest")
