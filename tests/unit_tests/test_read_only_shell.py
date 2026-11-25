@@ -252,6 +252,89 @@ def test_shell_rejects_remote_docker(worker, monkeypatch, tmp_path):
         helper._run_shell(str(tmp_path), "ls")
 
 
+class _StoppedProcess:
+    stdout = None
+    returncode = 0
+
+    def __init__(self):
+        read, write = os.pipe()
+        os.close(write)
+        self.stdout = os.fdopen(read, "rb")
+
+    def poll(self):
+        return 0
+
+    def wait(self, timeout=None):
+        return 0
+
+
+def _launched_args(helper, monkeypatch, tmp_path):
+    from src.helpers import host_mount_helper as hh
+
+    launched = []
+    monkeypatch.setattr(hh.subprocess, "Popen", lambda args, **kwargs: launched.append(args) or _StoppedProcess())
+    helper._run_shell(str(tmp_path), "true")
+    return launched[0]
+
+
+def test_podman_worker_drops_proxies_and_default_mounts(worker, monkeypatch, tmp_path):
+    helper, _ = worker
+    helper.engine, helper.image = "/usr/bin/podman", "image"
+    args = _launched_args(helper, monkeypatch, tmp_path)
+    empty = Path(helper.state_dir) / ".empty-mounts.conf"
+    assert "--http-proxy=false" in args and f"--default-mounts-file={empty}" in args
+    assert empty.read_bytes() == b""
+
+
+def test_podman_worker_resets_mounts_file_content(worker, monkeypatch, tmp_path):
+    helper, _ = worker
+    helper.engine, helper.image = "/usr/bin/podman", "image"
+    empty = Path(helper.state_dir) / ".empty-mounts.conf"
+    empty.write_text("/etc/pki:/etc/pki\n")
+    _launched_args(helper, monkeypatch, tmp_path)
+    assert empty.read_bytes() == b""
+
+
+def test_docker_worker_overrides_injected_proxies(worker, monkeypatch, tmp_path):
+    helper, _ = worker
+    helper.engine, helper.image = "/usr/bin/docker", "image"
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    args = _launched_args(helper, monkeypatch, tmp_path)
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "no_proxy"):
+        assert f"--env={name}=" in args
+
+
+def test_state_locks_use_writable_files(worker, monkeypatch):
+    from src.helpers import host_mount_helper as hh
+    import fcntl
+
+    helper, _ = worker
+    modes = []
+    flock = fcntl.flock
+
+    def checked(fd, operation):
+        modes.append(fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE)
+        return flock(fd, operation)
+
+    monkeypatch.setattr(hh.fcntl, "flock", checked)
+    with helper._snapshot_workspace():
+        helper.reap_shell_snapshots()
+    assert len(modes) == 4 and set(modes) == {os.O_RDWR}
+
+
+def test_drain_gives_up_on_jobs_blocked_in_io(worker, monkeypatch):
+    from src.helpers import host_mount_helper as hh
+
+    helper, _ = worker
+    monkeypatch.setattr(hh, "SHELL_DRAIN_TIMEOUT", 0.05)
+    helper._active_shells = 1
+    started = time.monotonic()
+    helper.drain_shells()
+    assert time.monotonic() - started < 2
+    with pytest.raises(HelperError, match="stopping"):
+        helper.shell({**binding(Path("/")), "command": "true"})
+
+
 def test_snapshot_accepts_binaries_larger_than_text_read_limit(worker, tmp_path):
     helper, source = worker
     with open(source / "binary", "wb") as target:
@@ -284,6 +367,16 @@ def test_real_worker_is_read_only_and_isolated(worker):
     assert "isolated" in result["output"]
     assert "lo" in result["output"] and "eth0" not in result["output"]
     assert source.joinpath("source.c").read_text() == "int vulnerable(void) { return 1; }\n"
+
+
+@pytest.mark.skipif(not os.getenv("VULNSCOUT_TEST_SHELL_IMAGE"), reason="requires a local Docker image")
+def test_real_worker_does_not_inherit_proxy_credentials(worker, monkeypatch):
+    helper, source = worker
+    for name in ("HTTP_PROXY", "https_proxy", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://user:dummy-secret@proxy.invalid:3128")
+    result = helper.shell({**binding(source), "command": "env"})
+    assert result["exit_code"] == 0
+    assert "dummy-secret" not in result["output"]
 
 
 @pytest.mark.skipif(not os.getenv("VULNSCOUT_TEST_SHELL_IMAGE"), reason="requires a local Docker image")
