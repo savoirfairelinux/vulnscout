@@ -458,9 +458,9 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         return () => { cancelled = true; };
     }, [editVariants, editingRow]);
 
-    const refreshReviews = useCallback(async () => {
+    const refreshReviews = useCallback(async (read = AssessmentReviews.fetchForScope) => {
         const version = reviewScopeVersion.current;
-        const data = await AssessmentReviews.fetchForScope(variantId, projectId);
+        const data = await read(variantId, projectId);
         if (version === reviewScopeVersion.current) setReviews(data);
     }, [variantId, projectId]);
 
@@ -902,7 +902,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     }, [variantId, projectId, beginListRequest]);
 
     useAgentWriteRefresh(async () => {
-        const results = await Promise.allSettled([refreshAssessmentLists(), refreshReviews()]);
+        const results = await Promise.allSettled([refreshAssessmentLists(), refreshReviews(AssessmentReviews.fetchForScopeStrict)]);
         if (activeListScope.current === listScope) {
             setRefreshFailed(results.some(result => result.status === 'rejected'));
         }

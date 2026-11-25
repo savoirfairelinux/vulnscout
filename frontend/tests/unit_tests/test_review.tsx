@@ -380,6 +380,7 @@ type NetworkOpts = {
     vulnOk?: boolean;
     /** Keyed by assessment id — served from the AI-review-verdict endpoint. */
     reviews?: Record<string, unknown>;
+    reviewsOk?: boolean;
     assessmentDetails?: Record<string, unknown>;
 };
 
@@ -430,7 +431,9 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
                     ? JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })
                     : { status: 500, body: JSON.stringify({}) };
             }
-            if (url.includes('/api/assessment-reviews')) return JSON.stringify(reviews);
+            if (url.includes('/api/assessment-reviews')) {
+                return opts.reviewsOk === false ? { status: 503, body: '' } : JSON.stringify(reviews);
+            }
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             const assessmentId = /\/api\/assessments\/([^/]+)$/.exec(url)?.[1];
@@ -3031,6 +3034,24 @@ describe('Review page AI review column', () => {
 
         const flags = await screen.findByTitle('1 differ · 1 not reviewed');
         expect(flags.parentElement).toHaveClass('justify-center');
+    });
+
+    test('keeps verdicts when only their AI refresh fails and installs the recovered verdicts', async () => {
+        const opts: NetworkOpts = { reviews: { 'assess-1': [differsReview] } };
+        mockNetwork([multiTargetAssessment], opts);
+        render(<Review projectId="proj1" />);
+        await screen.findByTitle('1 differ · 1 not reviewed');
+
+        const announce = () => window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT));
+        opts.reviewsOk = false;
+        await act(async () => { announce(); });
+        const warning = await screen.findByText('Failed to refresh review data after an AI write.');
+        expect(screen.getByTitle('1 differ · 1 not reviewed')).toBeInTheDocument();
+
+        mockNetwork([multiTargetAssessment], { reviews: { 'assess-1': [{ ...differsReview, verdict: 'agrees' }] } });
+        await act(async () => { announce(); });
+        expect(await screen.findByTitle('1 agree · 1 not reviewed')).toBeInTheDocument();
+        expect(warning).not.toBeInTheDocument();
     });
 
     test('renders a dash for assessments with no review', async () => {
