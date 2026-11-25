@@ -594,6 +594,9 @@ For new clients prefer `children` and `search_file` on directories and mounts.
 | `read` | Exact `path`, `start_line` (1-based, default 1), `max_lines` (1-200, default 200); optional match `position` on a directory or mount | Plain reads return UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`. For positioned reads see below. |
 | `search_file` | Directory or mount only: exact `path`, literal `query` (1-200 characters), optional `cursor` | `matches` with `path`, 1-based `line`, short `text` and opaque `position`; `bytes_scanned`, `complete`, `next_cursor` |
 
+For directory and mount listings, the 64 KiB wire limit includes the full paths and pagination
+metadata. A page may contain fewer than `limit` rows; resume at the returned `next_offset`.
+
 For nearby lines, use `read` with a match's `position` and the same variant, source and path.
 Leave `start_line` at its default. This window uses at most 4 KiB on either side of the match start
 and at most `min(max_lines, 21)` lines, even for files over 10 MiB. It returns `content` with

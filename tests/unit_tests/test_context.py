@@ -952,6 +952,25 @@ class TestCodebaseDirectory:
         other = Variant.create("Other", variant.project_id)
         assert self._source(client, other, operation="children").status_code == 404
 
+    def test_scoped_list_fits_final_paths_and_resumes(self, client, variant, directory):
+        folder = "/".join(["x" * 180, "y" * 180])
+        scoped = directory / folder
+        scoped.mkdir(parents=True)
+        paths = [f"{folder}/{index:03}" for index in range(200)]
+        for path in paths:
+            (directory / path).touch()
+        seen = []
+        while len(seen) < len(paths):
+            response = self._source(client, variant, operation="list", folder=folder, offset=len(seen))
+            assert response.status_code == 200 and len(response.data) <= 65536
+            rows = response.json["files"]
+            assert rows
+            if not seen:
+                assert response.json["truncated"] and len(rows) < len(paths)
+            seen.extend(row["path"] for row in rows)
+            assert response.json["next_offset"] == (len(seen) if len(seen) < len(paths) else None)
+        assert seen == paths
+
     def test_legacy_directory_search_respects_glob_and_budget(self, client, variant, directory, monkeypatch):
         from src.helpers import codebase_directory
 
