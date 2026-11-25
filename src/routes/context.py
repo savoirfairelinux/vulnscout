@@ -156,6 +156,25 @@ def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
+def _fit_source_page(body: dict, key: str, offset: int = 0) -> dict | None:
+    entries = body[key]
+    reason = "Source response limited to 64 KiB."
+    page = {**body, "truncated": True, "message": " ".join(filter(None, (body.get("message"), reason)))}
+    lo, hi = 1, len(entries)
+    result = None
+    while lo <= hi:
+        n = (lo + hi) // 2
+        candidate = {**page, key: entries[:n]}
+        if key == "files":
+            candidate["next_offset"] = offset + n if offset + n < body["total"] else None
+        if len(jsonify(candidate).get_data()) <= MAX_RESPONSE_BYTES:
+            result = candidate
+            lo = n + 1
+        else:
+            hi = n - 1
+    return result
+
+
 def _browse_reference(file_path: str, name: str, label: str, *,
                       directory_variant: uuid.UUID | None = None) -> tuple[dict, int]:
     """List, read or search a stored file or archive as the request's query asks."""
@@ -187,9 +206,8 @@ def _browse_reference(file_path: str, name: str, label: str, *,
                 stream = stack.enter_context(open(file_path, "rb"))
                 reference = stack.enter_context(CodebaseReference(stream, name))
             if operation == "list":
-                result = reference.list_files(
-                    pattern, _integer("offset", 0, 0, MAX_ENTRIES), _integer("limit", 200, 1, 200),
-                )
+                offset = _integer("offset", 0, 0, MAX_ENTRIES)
+                result = reference.list_files(pattern, offset, _integer("limit", 200, 1, 200))
                 if folder:
                     for entry in result["files"]:
                         entry["path"] = source.folder + "/" + entry["path"]
@@ -218,10 +236,12 @@ def _browse_reference(file_path: str, name: str, label: str, *,
                     raise ValueError("Search query must contain 1-200 characters.")
                 result = reference.search(query, pattern, _integer("max_results", 100, 1, 100))
             if directory:
-                from flask import current_app
-                from ..helpers.codebase_reference import MAX_RESPONSE_BYTES
                 result = {"file_id": "directory", "original_name": "Codebase directory", **result}
-                if len(current_app.json.dumps(result).encode("utf-8")) > MAX_RESPONSE_BYTES:
+                if len(jsonify(result).get_data()) > MAX_RESPONSE_BYTES:
+                    if operation == "list":
+                        page = _fit_source_page(result, "files", offset)
+                        if page is not None:
+                            return page, 200
                     raise ValueError("Source response exceeds 64 KB; reduce limit or max_lines.")
     except host_helper.protocol.HelperError as exc:
         return {"error": exc.message}, host_helper.HTTP_STATUS[exc.code]
@@ -293,23 +313,7 @@ def _browse_mount(variant_uuid: uuid.UUID, file_id: str) -> tuple[dict, int]:
     if len(jsonify(body).get_data()) > MAX_RESPONSE_BYTES:
         if operation in ("list", "search"):
             key = "files" if operation == "list" else "matches"
-            entries = body[key]
-            reason = "Source response limited to 64 KiB."
-            body.update(truncated=True, message=" ".join(filter(None, (body.get("message"), reason))))
-            # Size complete entries with their envelope and pagination metadata.
-            lo, hi = 1, len(entries)
-            page = None
-            while lo <= hi:
-                n = (lo + hi) // 2
-                candidate = {**body, key: entries[:n]}
-                if operation == "list":
-                    offset = params["offset"] + n
-                    candidate["next_offset"] = offset if offset < body["total"] else None
-                if len(jsonify(candidate).get_data()) <= MAX_RESPONSE_BYTES:
-                    page = candidate
-                    lo = n + 1
-                else:
-                    hi = n - 1
+            page = _fit_source_page(body, key, params.get("offset", 0))
             if page is not None:
                 return page, 200
         if operation == "read" and "position" not in params and body["content"]:
