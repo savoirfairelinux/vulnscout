@@ -11,6 +11,8 @@ import pytest
 from src.helpers.host_mount_helper import Helper, HelperError, request
 from tests.unit_tests.host_mount_permits import approve_mount, approve_on_socket
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 VARIANT = "fe447aa1-308e-4ffc-b510-7f8a4cc97138"
 
 
@@ -177,7 +179,7 @@ def test_reaper_only_removes_abandoned_owned_snapshots(worker):
         "with Helper(sys.argv[1])._snapshot_workspace() as path:\n"
         "    print(path, flush=True)\n"
         "    os._exit(0)\n", str(state),
-    ], check=True, text=True, capture_output=True)
+    ], check=True, text=True, capture_output=True, cwd=REPO_ROOT)
     abandoned = Path(process.stdout.strip())
     (abandoned / "source").symlink_to(source, target_is_directory=True)
     with helper._snapshot_workspace() as active:
@@ -213,7 +215,7 @@ def test_restart_drains_a_running_shell_job(worker, tmp_path):
         pytest.fail(f"Timed out waiting for {path.name}")
 
     for first_start in (True, False):
-        process = subprocess.Popen(argv)
+        process = subprocess.Popen(argv, cwd=REPO_ROOT)
         try:
             wait_for(pid_path, process)
             assert request(str(socket_path), {"op": "status"})["ok"]

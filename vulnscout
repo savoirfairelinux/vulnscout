@@ -1096,7 +1096,9 @@ stop_host_helper_locked() {
         kill "$pid" 2>/dev/null || true
         # Let active shell jobs finish their bounded copy, run and cleanup.
         for ((i = 0; i < 600; i++)); do
-            [[ -f "$HOST_HELPER_PID_FILE" ]] && kill -0 "$pid" 2>/dev/null || break
+            if ! [[ -f "$HOST_HELPER_PID_FILE" ]] || ! kill -0 "$pid" 2>/dev/null; then
+                break
+            fi
             sleep 0.1
         done
         if [[ "$(host_helper_pid)" == "$pid" ]]; then
