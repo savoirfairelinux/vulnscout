@@ -119,8 +119,9 @@ later requests keep running, and the failed one stays listed until you retry or
 remove it.
 Agent writes refresh the current data in the background, so you can keep
 working with vulnerabilities and reviews while assessments are queued or
-running. The displayed data may briefly lag behind a write; a failed refresh
-is reported in the page banner. Switching scope still waits for the new scope's
+running. The displayed data may briefly lag behind a write. If a Review
+refresh fails, its warning clears after a successful refresh without dismissing
+messages about your own edits. Switching scope still waits for the new scope's
 data to load.
 The person button in the header switches to **Conversations**: the main
 conversation first, then action conversations grouped into **Needs attention**,

@@ -278,11 +278,13 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [aiEditSaving, setAiEditSaving] = useState(false);
     const [aiEditError, setAiEditError] = useState<string | null>(null);
     const listScope = useMemo(() => ({ projectId, variantId }), [projectId, variantId]);
+    const [refreshFailed, setRefreshFailed] = useState(false);
     const activeListScope = useRef<typeof listScope | null>(null);
     const listGeneration = useRef(0);
     const installedGeneration = useRef(0);
     useLayoutEffect(() => {
         activeListScope.current = listScope;
+        setRefreshFailed(false);
         setLoading(true);
         setAssessments([]);
         setAiAssessments([]);
@@ -901,8 +903,8 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
 
     useAgentWriteRefresh(async () => {
         const results = await Promise.allSettled([refreshAssessmentLists(), refreshReviews()]);
-        if (activeListScope.current === listScope && results.some(result => result.status === 'rejected')) {
-            showMessage('Failed to refresh review data after an AI write.', 'error');
+        if (activeListScope.current === listScope) {
+            setRefreshFailed(results.some(result => result.status === 'rejected'));
         }
     }, {
         scopeKey: JSON.stringify([projectId, variantId]),
@@ -1962,8 +1964,14 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 />
             )}
 
-            {showBanner && (
+            {(showBanner || refreshFailed) && (
                 <div className="sticky top-0 z-10">
+                    <MessageBanner
+                        type="error"
+                        message="Failed to refresh review data after an AI write."
+                        isVisible={refreshFailed}
+                        onClose={() => setRefreshFailed(false)}
+                    />
                     <MessageBanner
                         type={bannerType}
                         message={bannerMessage}
