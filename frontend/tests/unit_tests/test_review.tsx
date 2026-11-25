@@ -710,8 +710,12 @@ describe('Review — bulk AI reviews', () => {
 
     test('waits for all Review reads before replaying a queued write after an assessment list fails', async () => {
         network([makeAssessment('a1', 'v1')]);
+        queueError = 'Queue is unavailable.';
         render(<Review projectId="proj1" />);
-        await screen.findAllByTitle('Select');
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        const mutationMessage = await screen.findByText(/Unable to queue AI reviews: Error: Queue is unavailable/);
 
         let releaseAiList!: () => void;
         let releaseReviews!: () => void;
@@ -738,10 +742,16 @@ describe('Review — bulk AI reviews', () => {
         await act(async () => { releaseAiList(); });
         expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 3);
 
+        let finishRecovery!: () => void;
+        const recovery = new Promise<void>(resolve => { finishRecovery = resolve; });
+        fetchMock.mockResponseOnce(async () => { await recovery; return '[]'; });
         await act(async () => { releaseReviews(); });
-        expect(await screen.findByText('Failed to refresh review data after an AI write.')).toBeInTheDocument();
-        expect(screen.getAllByTitle('Select').length).toBeGreaterThan(0);
+        const warning = await screen.findByText('Failed to refresh review data after an AI write.');
+        expect(screen.getByText('Delete selected (1)')).toBeInTheDocument();
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 6));
+        await act(async () => { finishRecovery(); });
+        expect(warning).not.toBeInTheDocument();
+        expect(mutationMessage).toBeInTheDocument();
     });
 
     test('refreshes a new variant without waiting for or applying old variant reads', async () => {
