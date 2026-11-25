@@ -581,10 +581,12 @@ GET /api/variants/<variant_id>/context/files/<file_id>/source
 
 For an upload, the file UUID must belong to that variant. For the variant's active server directory,
 use the literal `file_id=directory`; unprovisioned directories return `404`.
-`operation` selects `list` (recursive, default), `read`, or, for a directory or mount, `children` or `search_file`.
+All sources accept `list` (recursive, default) and `read`. Uploads also accept `search`;
+directories and mounts instead offer `children` and `search_file`.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
+| `search` | Upload only: case-sensitive literal `query` (1–200 characters), optional path `pattern` (default `*`), `max_results` (1–100, default 100) | `matches` with path, line and text; `truncated`, `searched_files`, `skipped_binary_files` |
 | `children` | `folder` (relative, default root), `cursor` (opaque continuation), `limit` (1–200, default 50) | `children` with root-relative `path` and `type` (`directory` or `file`), `visited_entries`, `complete`, `next_cursor`; no total |
 | `list` | `folder` (directory or mount only), `pattern` (case-sensitive glob relative to folder, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
 | `read` | Exact `path`, `start_line` (1-based, default 1), `max_lines` (1-200, default 200); optional match `position` on a directory or mount | Plain reads return UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`. For positioned reads see below. |

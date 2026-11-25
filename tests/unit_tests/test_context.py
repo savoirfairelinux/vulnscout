@@ -649,7 +649,9 @@ class TestCodebaseSource:
         assert listing["total"] == 2
         assert listing["next_offset"] == 1
         assert "file_path" not in str(listing)
-        assert client.get(base, query_string={"operation": "search", "query": "unsafe_call"}).status_code == 400
+        search = client.get(base, query_string={"operation": "search", "query": "unsafe_call"}).get_json()
+        assert search["matches"] == [{"path": "repo/main.c", "line": 2, "text": "unsafe_call();"}]
+        assert search["skipped_binary_files"] == 1
         assert client.get(base, query_string={
             "operation": "read", "path": "repo/main.c", "position": "unsupported",
         }).status_code == 400

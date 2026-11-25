@@ -31,7 +31,7 @@ READ_TOOLS = (
     "get_vulnerability", "find_project_id", "find_variant_id", "list_variants",
     "get_merged_context", "get_project_context", "get_custom_assessment",
     "list_custom_assessments",
-    "list_codebase_children", "list_codebase_files", "search_codebase_file", "read_codebase_file",
+    "list_codebase_children", "list_codebase_files", "search_codebase", "search_codebase_file", "read_codebase_file",
     "read_codebase_files", "run_codebase_shell",
     "list_dependency_documents", "list_dependency_packages", "get_package_dependencies", "get_package_source_files",
     "get_ai_context_form_guide", "read_import_source",
