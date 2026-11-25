@@ -533,7 +533,7 @@ describe('Vulnerability Modal', () => {
         await pending_deletion;
     })
 
-    test('edit effort estimations', async () => {
+    test('saving effort after a refresh uses the open modal snapshot revision', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
@@ -562,7 +562,10 @@ describe('Vulnerability Modal', () => {
         // ARRANGE
         const updateCb = jest.fn();
         const closeBtn = jest.fn();
-        render(<VulnModal vuln={vulnerability} isEditing={true} onClose={closeBtn} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={updateCb} variantId="variant-1" />);
+        const props = { vuln: vulnerability, isEditing: true, onClose: closeBtn, appendAssessment: () => {}, appendCVSS: () => null, variantId: 'variant-1' };
+        const { rerender } = render(<VulnModal {...props} patchVuln={updateCb} />);
+        const refreshedCallback = jest.fn();
+        rerender(<VulnModal {...props} patchVuln={refreshedCallback} />);
         const user = userEvent.setup();
 
         // ACT
@@ -579,6 +582,7 @@ describe('Vulnerability Modal', () => {
         // ASSERT
         expect(fetchMock).toHaveBeenCalledTimes(6);
         expect(updateCb).toHaveBeenCalledTimes(1);
+        expect(refreshedCallback).not.toHaveBeenCalled();
         alertSpy.mockRestore();
     })
     test('invalid custom CVSS vector triggers alert and no network call', async () => {

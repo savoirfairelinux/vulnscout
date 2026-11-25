@@ -147,7 +147,10 @@ type PendingAiEditTransition =
     | { kind: "exit" };
 
   function VulnModal(props: Readonly<Props>) {
-        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, patchVuln, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
+        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
+    // Full-row saves belong to the snapshot the modal opened with. Its callback
+    // carries that revision so Explorer can reread instead of installing a stale row.
+    const [patchVuln] = useState(() => props.patchVuln);
     const docUrl = useDocUrl("interactive-mode.html#vulnerability-details");
     const [isEditing, setIsEditing] = useState(initialIsEditing);
     const agentMessageQueue = useAgentQueue();
