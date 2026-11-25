@@ -983,7 +983,10 @@ def init_app(app):
                 raise RequestEntityTooLarge()
         except RequestEntityTooLarge:
             return jsonify(error="Shell request exceeds the request size limit."), 413
-        body = request.get_json(silent=True)
+        try:
+            body = request.get_json(silent=True)
+        except RecursionError:
+            return jsonify(error="Invalid shell request."), 400
         if not isinstance(body, dict) or set(body) - {"file_id", "folder", "command"}:
             return jsonify(error="Invalid shell request."), 400
         file_id, folder, command = body.get("file_id"), body.get("folder", ""), body.get("command")
