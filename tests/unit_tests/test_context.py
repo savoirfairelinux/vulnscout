@@ -835,10 +835,19 @@ class TestCodebaseDirectory:
             temp = directory / "work" / arch / recipe / build["version"] / "temp"
             temp.mkdir(parents=True)
             (temp / "log.do_cve_check.99").write_text(f"other run: {target} patched\n")
+        issue = {"id": target, "status": "Unpatched"}
+        report = {"package": [{"name": build["recipe"], "issue": [issue]}]}
+        live_report = temp / "cve.json"
+        live_report.write_text(json.dumps(report))
         if log_present:
+            archive = directory / build["run"]
+            archive.mkdir()
+            (archive / "cve.json").write_bytes(live_report.read_bytes())
             with (temp / "log.do_cve_check.17").open("w") as log_file:
                 log_file.write("x" * (10 * 1024 * 1024))
                 log_file.write(f"\n{target}0 patched\n{target}\nstatus: unpatched\n")
+        issue["status"] = "Patched"
+        live_report.write_text(json.dumps(report))
         (directory / "work" / build["tuple"] / build["recipe"] / "2.0-r0").mkdir()
         (directory / "image-manifest").write_text(f"{build['run']}: {build['package']} installed\n")
 
@@ -880,7 +889,17 @@ class TestCodebaseDirectory:
         assert (recipe, arch, version) == (meta["recipe"], meta["tuple"], meta["version"])
         assert (task["file_id"], task["path"], task["start_line"]) == ("directory", "image-42.tasks", 1)
         path = f"{folder}/{log_name}"
+
+        def checker_status(report_path):
+            result = call("read_codebase_file", path=report_path)
+            packages = json.loads(result["content"])["package"]
+            return next(issue["status"] for pkg in packages if pkg["name"] == recipe
+                        for issue in pkg["issue"] if issue["id"] == target)
+
+        assert checker_status(f"{folder}/cve.json") == "Patched"  # Later run, same package and CVE.
+        archive_path = f"{meta['run']}/cve.json"
         if path in {row["path"] for row in logs["files"]}:
+            assert checker_status(archive_path) == "Unpatched"
             log = call("search_codebase_file", path=path, query=target)
             assert log_present and not log["complete"]
             matches = list(log["matches"])
@@ -893,6 +912,7 @@ class TestCodebaseDirectory:
             assert (nearby["start_line"], nearby["match_line"], nearby["end_line"]) == (2, 3, 4)
             assert nearby["content"] == f"{target}0 patched\n{target}\nstatus: unpatched\n"
         else:
+            assert tools["read_codebase_file"](str(variant.id), "directory", archive_path).startswith("Error:")
             missing = tools["search_codebase_file"](str(variant.id), "directory", path, target)
             assert missing.startswith("Error:") and "not found" in missing
             manifest = call("read_codebase_file", path="image-manifest")
