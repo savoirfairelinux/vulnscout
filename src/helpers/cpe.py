@@ -11,10 +11,10 @@ _URI_ESCAPES = set(punctuation) - {".", "-", "_"}
 
 def split_cpe_fields(identifier: str) -> list[str] | None:
     """Split on unescaped colons, retaining escapes for the caller."""
-    parts = re.findall(r"(?:\\.|[^:\\])*(?::|$)", identifier)
-    if "".join(parts) != identifier:
+    parts = re.findall(r"((?:\\.|[^:\\])*)(:|$)", identifier)
+    if "".join(field + delimiter for field, delimiter in parts) != identifier:
         return None
-    return [part[:-1] if part.endswith(":") else part for part in parts[:-1]]
+    return [field for field, _ in parts[:-1]]
 
 
 def _cpe_literal(value: str) -> str:
