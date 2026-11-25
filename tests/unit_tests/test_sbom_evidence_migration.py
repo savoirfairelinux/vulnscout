@@ -15,7 +15,7 @@ from sqlalchemy import JSON, DateTime, String, Uuid, column, inspect, table, tex
 from src.bin.webapp import create_app
 from src.controllers.packages import PackagesController
 from src.extensions import db
-from src.models import Package, Project, SBOMDocument, SBOMPackage, Scan, Variant
+from src.models import Assessment, Finding, Package, Project, SBOMDocument, SBOMPackage, Scan, Variant, Vulnerability
 from src.models.variant_context import ContextFile, VariantContext
 
 
@@ -44,8 +44,11 @@ def _upgrade(app, revision="head"):
     assert result.exit_code == 0, result.output
 
 
-def test_directory_removal_preserves_context_attachments_and_disk_files(app, tmp_path, monkeypatch):
+def test_directory_removal_outdates_only_affected_context_and_preserves_files(app, tmp_path, monkeypatch):
     monkeypatch.setenv("VULNSCOUT_CACHE_DIR", str(tmp_path))
+    scan_status = tmp_path / "status.txt"
+    scan_status.write_text("__END_OF_SCAN_SCRIPT__")
+    app.config["SCAN_FILE"] = scan_status
     _upgrade(app, "e42bb263ae51")
     with db.engine.connect() as connection:
         connection.exec_driver_sql("PRAGMA foreign_keys=ON")
@@ -53,17 +56,39 @@ def test_directory_removal_preserves_context_attachments_and_disk_files(app, tmp
     project = Project.create("demo")
     variant = Variant.create("default", project.id)
     context = VariantContext.upsert(variant.id, environment="Linux")
-    attachment = ContextFile.create(context.id, "notes.txt", str(tmp_path / "notes.txt"))
+    notes = tmp_path / "notes.txt"
+    notes.write_text("uploaded notes")
+    attachment = ContextFile.create(context.id, notes.name, str(notes))
     directory = tmp_path / "context-demo-default"
     directory.mkdir()
     source = directory / "source.c"
     source.write_text("existing user file")
+    legacy_context = table("variant_context", column("id", Uuid), column("codebase_directory", String))
     db.session.execute(
-        text("UPDATE variant_context SET codebase_directory = :name"),
-        {"name": directory.name},
+        legacy_context.update().where(legacy_context.c.id == context.id).values(codebase_directory=directory.name),
     )
     db.session.commit()
+    unaffected = Variant.create("unaffected", project.id)
+    unaffected_context = VariantContext.upsert(unaffected.id, environment="Linux")
+    package = Package.create("lib", "1.0")
+    vulnerability = Vulnerability(id="CVE-2026-1234")
+    db.session.add(vulnerability)
+    db.session.flush()
+    finding = Finding.create(package.id, vulnerability.id)
+    for target in (variant, unaffected):
+        Assessment.create("affected", targets=[(target.id, finding.id)], origin="ai")
+
+    client = app.test_client()
+
+    def review_flags():
+        response = client.get("/api/assessments/review/ai")
+        assert response.status_code == 200
+        return {row["targets"][0]["variant_id"]: row["context_outdated"] for row in response.json}
+
+    affected_id, unaffected_id = str(variant.id), str(unaffected.id)
     context_id, attachment_id, updated_at = context.id, attachment.id, context.updated_at
+    unaffected_context_id, unaffected_updated_at = unaffected_context.id, unaffected_context.updated_at
+    assert review_flags() == {affected_id: False, unaffected_id: False}
     db.session.remove()
 
     _upgrade(app)
@@ -72,15 +97,22 @@ def test_directory_removal_preserves_context_attachments_and_disk_files(app, tmp
     assert "uq_variant_context_codebase_directory" not in {
         index["name"] for index in inspector.get_indexes("variant_context")
     }
-    assert db.session.get(VariantContext, context_id).environment == "Linux"
-    assert db.session.get(VariantContext, context_id).updated_at == updated_at
+    migrated = db.session.get(VariantContext, context_id)
+    assert migrated.environment == "Linux"
+    assert migrated.updated_at > updated_at
+    assert db.session.get(VariantContext, unaffected_context_id).updated_at == unaffected_updated_at
+    assert review_flags() == {affected_id: True, unaffected_id: False}
     assert db.session.get(ContextFile, attachment_id).variant_context_id == context_id
+    upload = client.get(f"/api/variants/{affected_id}/context/files/{attachment_id}/source",
+                        query_string={"operation": "read", "path": notes.name})
+    assert upload.status_code == 200
+    assert upload.json["content"] == "uploaded notes"
     assert source.read_text() == "existing user file"
 
     db.session.remove()
     result = app.test_cli_runner().invoke(args=["db", "downgrade", "e42bb263ae51"])
     assert result.exit_code == 0, result.output
-    assert db.session.execute(text("SELECT codebase_directory FROM variant_context")).scalar_one() is None
+    assert db.session.execute(text("SELECT codebase_directory FROM variant_context")).scalars().all() == [None, None]
     assert "uq_variant_context_codebase_directory" in {
         index["name"] for index in inspect(db.engine).get_indexes("variant_context")
     }
