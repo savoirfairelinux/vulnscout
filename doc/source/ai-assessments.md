@@ -636,11 +636,16 @@ with the host command before they can be read. Attaching or detaching marks
 older pending AI assessments outdated, like other source changes.
 
 Open the UI on localhost and use its same-origin API. Host-folder endpoints
-require a loopback peer or a container forwarder, a localhost Host header and,
-when present, a matching Origin. Publish the container port only on loopback
-and do not expose it through an external reverse proxy. Container forwarding
-can also make these endpoints accessible to remote clients that supply a
-localhost Host header if the port is exposed.
+require a loopback peer (or the local container forwarder on a wrapper-created,
+loopback-only publication), a localhost Host header and, when present, a matching
+Origin. Do not expose the local service through an external reverse proxy.
+On upgrade, use an updated backend image and run `./vulnscout restart` with the
+updated wrapper to recreate the container: `serve` alone does not replace an
+existing public port mapping or mark it as loopback-only.
+If you set the wrapper's `VULNSCOUT_BIND_ADDRESS` to a LAN address or `0.0.0.0`,
+ordinary UI/API access remains available, but the Agent and host-folder endpoints do not
+trust container-forwarded requests. Use `./vulnscout ai-context` on the host
+to manage attachments.
 
 **How it works and security model.**
 

@@ -19,9 +19,6 @@ forwarding through the gateway or rootless Podman pasta. It is intended for a
 single user, not a shared or remotely accessible deployment. Do not forward it
 to other users: the backend can access the local user's Copilot identity and
 configured provider keys, and the agent can change assessments and context.
-Publish the container port only on loopback: container-forwarded requests are
-trusted, and remote clients can supply a localhost Host header if the port is
-exposed.
 The connection, AI queue and conversations are process-wide and kept in the
 server's memory: every tab and CLI run shares them, and a restart forgets them.
 This is not a durable multi-user session service.

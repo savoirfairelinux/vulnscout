@@ -774,19 +774,22 @@ expect_fail "config key not set: VULNSCOUT_IMAGE" config get VULNSCOUT_IMAGE
 run_ok config set VULNSCOUT_IMAGE operator-image
 run_ok start
 assert_log "operator-image daemon"
-assert_log "-p 127.0.0.1:7275:7275"
+assert_log "-p 127.0.0.1:7275:7275 --tmpfs /run/vulnscout-loopback-published:ro"
 refute_log "-p 7275:7275"
 refute_log "/unapproved"
 refute_log "cache-image"
 refute_log "VULNSCOUT_BIND_ADDRESS="
 run_ok config set VULNSCOUT_BIND_ADDRESS 192.0.2.10
 assert_log "-p 192.0.2.10:7275:7275"
+refute_log "vulnscout-loopback-published"
 run_ok start
 assert_log "-p 192.0.2.10:7275:7275"
+refute_log "vulnscout-loopback-published"
 VULNSCOUT_BIND_ADDRESS=0.0.0.0 run_ok start
 assert_log "-p 0.0.0.0:7275:7275"
+refute_log "vulnscout-loopback-published"
 VULNSCOUT_BIND_ADDRESS=127.0.0.2 run_ok start
-assert_log "-p 127.0.0.2:7275:7275"
+assert_log "-p 127.0.0.2:7275:7275 --tmpfs /run/vulnscout-loopback-published:ro"
 for invalid in localhost ::1 127.0.0.1:8080 127.1 127.0.0.256 0127.0.0.1 127.00.0.1 ''; do
     expect_fail "IPv4 address" config set VULNSCOUT_BIND_ADDRESS "$invalid"
 done
@@ -795,7 +798,7 @@ grep -Fxq '192.0.2.10' "$TEST_DIR/stdout"
 VULNSCOUT_BIND_ADDRESS=invalid expect_fail "IPv4 address" restart
 refute_log "rm -f"
 run_ok config unset VULNSCOUT_BIND_ADDRESS
-assert_log "-p 127.0.0.1:7275:7275"
+assert_log "-p 127.0.0.1:7275:7275 --tmpfs /run/vulnscout-loopback-published:ro"
 VULNSCOUT_IMAGE=exported-image run_ok version
 assert_log exported-image
 run_ok config set VULNSCOUT_HOST_HELPER_STATE_DIR "$TEST_DIR/with spaces"

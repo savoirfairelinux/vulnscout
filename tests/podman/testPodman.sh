@@ -87,6 +87,7 @@ function start_daemon() {
         -e "FLASK_RUN_HOST=0.0.0.0" \
         -e "IGNORE_PARSING_ERRORS=$ignore_errors" \
         -p "127.0.0.1:$flask_port:$flask_port" \
+        --tmpfs /run/vulnscout-loopback-published:ro,size=4k \
         "$podmanimage" daemon)"
 
     echo "$container_id"
