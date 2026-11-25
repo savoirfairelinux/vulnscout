@@ -229,14 +229,18 @@ def _filter_grype_matches(
     with open(export_path) as handle:
         components = json.load(handle).get("components", [])
     by_purl: dict[tuple[str, str], set[str]] = {}
+    by_purl_cpe: dict[tuple[str, str, str], set[str]] = {}
     by_cpe: dict[tuple[str, str], set[str]] = {}
     by_name: dict[tuple[str, str], set[str]] = {}
     for component in components:
         name, version = component["name"], component.get("version", "")
-        if purl := component.get("purl"):
+        purl, cpe = component.get("purl"), component.get("cpe")
+        if purl:
             by_purl.setdefault((purl, version), set()).add(name)
-        if cpe := component.get("cpe"):
+        if cpe:
             by_cpe.setdefault((cpe, version), set()).add(name)
+            if purl:
+                by_purl_cpe.setdefault((purl, version, cpe), set()).add(name)
         by_name.setdefault((name, version), set()).add(name)
         if group := component.get("group"):
             by_name.setdefault((f"{group}/{name}", version), set()).add(name)
@@ -251,14 +255,17 @@ def _filter_grype_matches(
         raw_name, version = artifact.get("name", ""), artifact.get("version", "")
         named = by_name.get((raw_name, version), set())
         purl = artifact.get("purl")
+        cpes = {cpe for cpe in artifact.get("cpes") or [] if isinstance(cpe, str)}
         candidates = by_purl.get((purl, version), set())
         if not candidates and not purl:
-            candidates = {
-                name for cpe in artifact.get("cpes") or [] if isinstance(cpe, str)
-                for name in by_cpe.get((cpe, version), ())
-            }
+            candidates = {name for cpe in cpes for name in by_cpe.get((cpe, version), ())}
         if len(candidates) > 1:
-            candidates = candidates & named
+            name_matches = candidates & named
+            if purl and len(name_matches) != 1:
+                cpe_matches = {name for cpe in cpes for name in by_purl_cpe.get((purl, version, cpe), ())}
+                candidates = (name_matches or candidates) & cpe_matches
+            else:
+                candidates = name_matches
         elif not candidates:
             # Grype can synthesize a generic PURL instead of returning the input PURL.
             candidates = {name for name in named if not purl or purl == f"pkg:generic/{name}@{version}"}

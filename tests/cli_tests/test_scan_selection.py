@@ -368,20 +368,24 @@ def test_cli_scanners_honor_native_preferences(tmp_path, scanner_environment, pr
     assert {match["artifact"]["name"] for match in json.loads(matches_path.read_text())["matches"]} == expected
 
 
-def test_grype_finding_keeps_scoped_sbom_name(tmp_path, scanner_environment):
+def test_grype_findings_keep_scoped_sbom_names_and_kernel_rpms(tmp_path, scanner_environment):
     env, _ = scanner_environment
     name, purl = "@scope/widget", "pkg:npm/%40scope/widget@1.0.0"
+    kernel_purl = "pkg:rpm/fedora/kernel-core@1.0"
     sbom = json.loads((ROOT / "tests/end_to_end_tests/input_cdx.json").read_text())
     sbom.pop("vulnerabilities")
     cpe = "cpe:2.3:a:example:widget:1.0.0:*:*:*:*:*:*:*"
-    sbom["components"] = [{"type": "library", "name": name, "version": "1.0.0", "bom-ref": purl,
-                           "purl": purl, "cpe": cpe}]
+    sbom["components"] = [
+        {"type": "library", "name": name, "version": "1.0.0", "bom-ref": purl, "purl": purl, "cpe": cpe},
+        {"type": "library", "name": "kernel-core", "version": "1.0", "bom-ref": kernel_purl, "purl": kernel_purl},
+    ]
     path = tmp_path / "scoped.cdx.json"
     path.write_text(json.dumps(sbom))
     env.update({
         "VULNSCOUT_CONFIG": str(tmp_path / "absent.env"), "VULNSCOUT_BASE_DIR": str(ROOT),
         "VULNSCOUT_INPUTS_DIR": str(tmp_path / "inputs"), "VULNSCOUT_CACHE_DIR": str(tmp_path / "cache"),
         "FLASK_SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'scan.db'}",
+        "TEST_GRYPE_SBOM": str(tmp_path / "grype-sbom.json"),
         "TEST_GRYPE_MATCHES": json.dumps([{
             "artifact": {"name": "widget", "purl": purl, "version": "1.0.0"},
             "matchDetails": [{"searchedBy": {"Package": {"name": "widget", "version": "1.0.0"}}}],
@@ -392,6 +396,9 @@ def test_grype_finding_keeps_scoped_sbom_name(tmp_path, scanner_environment):
         }, {
             "artifact": {"name": "other", "purl": "pkg:npm/other@1.0.0", "version": "1.0.0", "cpes": [cpe]},
             "vulnerability": {"id": "CVE-2026-1003"},
+        }, {
+            "artifact": {"name": "kernel-core", "purl": kernel_purl, "version": "1.0"},
+            "vulnerability": {"id": "CVE-2026-1004"},
         }]),
     })
     result = subprocess.run(
@@ -399,10 +406,12 @@ def test_grype_finding_keeps_scoped_sbom_name(tmp_path, scanner_environment):
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    exported = json.loads(Path(env["TEST_GRYPE_SBOM"]).read_text())
+    assert {component["purl"] for component in exported["components"]} == {purl, kernel_purl}
     with closing(sqlite3.connect(tmp_path / "scan.db")) as connection:
-        assert connection.execute(
+        assert set(connection.execute(
             "SELECT p.name, f.vulnerability_id FROM packages p JOIN findings f ON p.id = f.package_id"
-        ).fetchall() == [(name, "CVE-2026-1001")]
+        )) == {(name, "CVE-2026-1001"), ("kernel-core", "CVE-2026-1004")}
 
 
 def test_cli_scan_rejects_invalid_native_preferences(tmp_path, scanner_environment):

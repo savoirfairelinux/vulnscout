@@ -160,14 +160,16 @@ Preferences are loaded only for selected projects, and package names are compare
 `./vulnscout scan` and the corresponding Flask scanner commands use the saved
 preferences for the selected project, falling back to the global defaults when
 that project has no saved selection. This applies to Grype, NVD, OSV and
-sbom-cve-check. Grype also limits results to the variant's SBOM scope, as in
-the wizard. Selecting all native packages in the wizard therefore also includes
-new native packages in subsequent CLI scans. Invalid or unreadable preferences
+sbom-cve-check. Grype also limits results to the variant's SBOM scope, but CLI
+Grype scans do not apply the wizard's kernel companion exclusion. Selecting
+all native packages in the wizard also includes new native packages in
+subsequent CLI scans. Invalid or unreadable preferences
 stop the scan rather than silently scanning a different scope. Grype keeps
 components with distinct PURLs or CPEs and attributes matches to the scanned
 SBOM package name, even when it differs from the scanner's artifact name.
-A shared CPE does not override a conflicting artifact PURL. This SBOM name
-mapping applies only to internally scoped scans, not to imported Grype reports.
+A CPE can distinguish components that match the same artifact PURL, but
+cannot override a conflicting PURL. This SBOM name mapping applies only to
+internally scoped scans, not to imported Grype reports.
 If the filters exclude every package, the OSV CLI records an empty scan
 instead of leaving a previous OSV scan active. Selected packages with no
 usable PURLs still produce an error when there is nothing to query.

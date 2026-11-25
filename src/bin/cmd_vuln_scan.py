@@ -100,7 +100,7 @@ def filter_grype_scan_command(project: str, variant: str | None, stage: str, sca
     if not sbom_packages and not options["exclude_native"]:
         return
     ctx = _CLIGrypeFilterContext(options)
-    _deduplicate_cyclonedx(ctx, path, True, options["exclude_native"])
+    _deduplicate_cyclonedx(ctx, path, exclude_kernel=False, exclude_native=options["exclude_native"])
 
 
 @click.command("new-scan-run-id", cls=Command)

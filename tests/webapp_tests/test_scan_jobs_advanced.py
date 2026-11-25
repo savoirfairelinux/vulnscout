@@ -678,6 +678,35 @@ class TestScanJobPackageFilters:
         _deduplicate_cyclonedx(MagicMock(), str(path), exclude_kernel=False)
         assert json.loads(path.read_text())["components"] == components[:3]
 
+    @pytest.mark.parametrize(("purl", "vendors", "expected"), [
+        ("pkg:generic/lib@1", ["other"], "vendor/lib"),
+        ("pkg:generic/lib@1", ["vendor", "other"], None),
+        ("pkg:generic/lib@1", ["unrelated"], None),
+        ("pkg:generic/outside@1", ["other"], None),
+    ])
+    def test_grype_uses_cpe_to_break_exact_purl_tie(self, tmp_path, purl, vendors, expected):
+        def cpe(vendor):
+            return f"cpe:2.3:a:{vendor}:lib:1:*:*:*:*:*:*:*"
+
+        sbom_purl = "pkg:generic/lib@1"
+        export_path = tmp_path / "sbom.json"
+        export_path.write_text(json.dumps({"components": [
+            {"name": "lib", "group": "vendor", "version": "1", "purl": sbom_purl, "cpe": cpe("vendor")},
+            {"name": "vendor/lib", "version": "1", "purl": sbom_purl, "cpe": cpe("other")},
+            {"name": "vendor/lib", "version": "1", "purl": "pkg:npm/lib@1", "cpe": cpe("unrelated")},
+        ]}))
+        results_path = tmp_path / "grype.json"
+        artifact = {"name": "vendor/lib", "version": "1", "purl": purl, "cpes": [cpe(v) for v in vendors]}
+        results_path.write_text(json.dumps({"matches": [{"artifact": artifact}]}))
+
+        _filter_grype_matches(MagicMock(), str(results_path), str(export_path))
+
+        matches = json.loads(results_path.read_text())["matches"]
+        if expected is None:
+            assert matches == []
+        else:
+            assert [match["artifact"]["vulnscout:sbom-name"] for match in matches] == [expected]
+
 
 class TestIncompleteToolScanCleanup:
     @pytest.mark.parametrize("source", ["nvd", "osv", "scc"])
