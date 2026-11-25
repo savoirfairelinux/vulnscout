@@ -34,6 +34,7 @@ from ..helpers.host_mounts import HostHelperError, HostHelperUnavailable
 from ..helpers.host_mounts import validate_pattern as validate_mount_pattern
 from ..models.host_mount import MOUNT_FILE_ID_PREFIX, HostMount
 from ..models.project import Project
+from ..models.project_context import KEEP
 from ..models.variant import Variant
 from ..models.variant_context import (
     ContextFile,
@@ -355,6 +356,7 @@ def init_app(app):
         return jsonify({
             "project_id": str(project_uuid),
             "description": pc.description if pc else None,
+            "assessment_format": pc.assessment_format if pc else None,
             "variant_id": str(variant_uuid),
             **{key: variant_part.get(key) for key in _AGENT_VARIANT_KEYS},
             "files": variant_part["files"],
@@ -452,27 +454,41 @@ def init_app(app):
         return jsonify({
             "project_id": str(project_uuid),
             "description": pc.description if pc else None,
+            "assessment_format": pc.assessment_format if pc else None,
         })
 
     @app.route('/api/projects/<project_id>/context', methods=['PUT'])
     def put_project_context(project_id):
         """Create or update context for a project.
 
+        Omitted fields keep their stored value; ``null`` clears one. Changing
+        only ``assessment_format`` does not outdate AI assessments.
+
         OpenAPI:
         body ProjectContextUpdate required Project context fields.
         response 200 ProjectContext Updated project context.
-        response 400 Error Invalid project identifier.
+        response 400 Error Invalid project identifier or assessment format.
         response 404 Error Project not found.
         """
         project_uuid, err = parse_uuid_or_400(project_id, 'project_id')
         if err:
             return err
         assert project_uuid is not None
-        body = request.get_json(silent=True) or {}
+        body = request.get_json(silent=True)
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            return jsonify({
+                "error": "Request body must be a JSON object.", "fields": {"body": "must be an object"},
+            }), 400
         try:
             pc = ProjectContextController.upsert(
-                project_uuid, description=body.get('description')
+                project_uuid,
+                description=body.get('description', KEEP),
+                assessment_format=body.get('assessment_format', KEEP),
             )
+        except StrideValidationError as exc:
+            return jsonify({"error": str(exc), "fields": exc.fields}), 400
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify(ProjectContextController.serialize(pc))

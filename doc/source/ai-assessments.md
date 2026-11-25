@@ -317,9 +317,9 @@ When `./vulnscout serve` is running, `assess` and `review` submit their agent tu
 ## AI Context page
 
 The **AI Context** page uses a settings-style layout. The sidebar lists
-**Project description** and the variants of the selected project. Variants that
+**Project scope** and the variants of the selected project. Variants that
 are not ticked in the top-bar selector stay listed but locked. The page opens on
-**Project description**, and returns to it when the open variant leaves the
+**Project scope** (description and assessment format), and returns to it when the open variant leaves the
 scope. Selecting an item
 opens its page; there is one **Save changes** button per page and no auto-save.
 Leaving a page with unsaved changes asks to Save, Discard or Cancel.
@@ -366,6 +366,34 @@ to Threats by STRIDE category, and cite the IDs. Mitigations and residual
 decisions in Risks are treated as declarations: they can lower the impact, but
 support `not_affected` only when source or configuration evidence confirms
 them.
+
+### Assessment format
+
+**Assessment format** is a project-level setting for how AI-generated
+assessment notes are presented, without editing the assessment skill:
+
+- **Sections**: Confidence, Verdict, Evidence, Reachability and Remediation.
+  Reorder them with the move up/down buttons, include or leave out each one,
+  and optionally give it a label (40 characters at most).
+- **Layout**: **Inline (one paragraph)**, or **One section per line**
+  (`Label: text` on each line).
+- **Style notes**: optional tone and wording hints, 500 characters at most.
+- **Reset to default** clears the setting; the skill's default presentation
+  then applies. The preview shows sample notes as they are displayed in
+  assessments (plain text with line breaks, not Markdown).
+
+Agents receive the setting as `assessment_format` in `get_merged_context` and
+`get_project_context`; no MCP tool can change it. The `cve-assessment` and
+`assessment-review` skills apply it only to the order, labels, line layout and
+tone of `status_notes`. Neither skill restyles `impact_statement` or
+`workaround`, which are compared verbatim for agreement. It never changes the status, justification, confidence gate,
+required evidence or assessed targets, and the confidence level
+(`confidence level: <level>`) is always written, even when its section is
+left out. Style notes are treated as data, not instructions, and are ignored
+where they conflict with the skill. With **One section per line**, each
+included section is limited to one concise sentence; otherwise notes stay
+within one or two sentences. Saving the format does not mark AI assessments as
+outdated. Context export and import carry it with the project description.
 
 ### Getting help from the agent
 

@@ -170,6 +170,25 @@ class TestGetMergedContextImpl:
         assert "CVSS >= 7" in result
         assert "report.pdf" in result
         assert "codebase_source=" not in result and "codebase_path=" not in result
+        assert "\nassessment_format=None\n" in result
+
+    def test_includes_the_assessment_format_as_compact_json(self, client):
+        assessment_format = {
+            "sections": [{"id": "confidence", "enabled": True, "label": "Confiance"},
+                         {"id": "verdict", "enabled": False}],
+            "layout": "lines",
+            "style_notes": "Ton neutre.\nLegacy surrogate: \udfff",
+        }
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/context").mock(return_value=httpx.Response(200, content=json.dumps({
+                "project_id": "p1", "description": "d", "assessment_format": assessment_format,
+                "variant_id": "v1", "files": [],
+            })))
+            result = _get_merged_context_impl(client, "p1", "v1")
+        line = next(line for line in result.splitlines() if line.startswith("assessment_format="))
+        assert json.loads(line.split("=", 1)[1]) == assessment_format
+        assert line == "assessment_format=" + json.dumps(assessment_format, ensure_ascii=True, separators=(",", ":"))
+        assert "description=d\nassessment_format=" in result
 
     def test_returns_no_files_placeholder_when_empty(self, client):
         with respx.mock:
@@ -240,6 +259,17 @@ class TestGetProjectContextImpl:
             result = _get_project_context_impl(client, "p1")
         assert "project_id=p1" in result
         assert "description=hello" in result
+        assert result.endswith("\nassessment_format=None")
+
+    def test_project_context_includes_the_assessment_format(self, client):
+        assessment_format = {"sections": [{"id": "evidence", "enabled": True}], "layout": "inline"}
+        with respx.mock:
+            respx.get(f"{BASE_URL}/api/projects/p1/context").mock(return_value=httpx.Response(
+                200, json={"project_id": "p1", "description": "hello", "assessment_format": assessment_format},
+            ))
+            result = _get_project_context_impl(client, "p1")
+        assert result.endswith(
+            '\nassessment_format={"sections":[{"id":"evidence","enabled":true}],"layout":"inline"}')
 
     def test_api_error_returns_error_string(self, client):
         with respx.mock:
@@ -259,6 +289,7 @@ class TestUpdateProjectContextImpl:
             )
             result = _update_project_context_impl(client, "p1", "My project")
         body = json.loads(route.calls[0].request.content)
+        # The assessment format is a human setting: the tool never sends it.
         assert body == {"description": "My project"}
         assert "description=My project" in result
 

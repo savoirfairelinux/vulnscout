@@ -10,6 +10,7 @@ Package string IDs and vulnerability identifiers are not database UUIDs.
 from typing import Any
 
 from .assessment_risk_links import MAX_LINKS_PER_TARGET
+from .assessment_format import LAYOUTS, MAX_LABEL, MAX_STYLE_NOTES, SECTION_IDS
 from .stride_model import MAX_ROWS, RATINGS, STRIDE_CATEGORIES, SYSTEM_KEYS
 
 
@@ -480,9 +481,22 @@ SCHEMAS: dict[str, Any] = {
     "HostMountDetached": _object({
         "alias": _STRING, "detached": _BOOL, "warning": _TEXT,
     }, ("alias", "detached", "warning")),
+    "AssessmentFormat": _object({
+        "sections": _array(_object({
+            "id": {"type": "string", "enum": list(SECTION_IDS)},
+            "enabled": {**_BOOL, "default": True},
+            "label": {"type": "string", "maxLength": MAX_LABEL},
+        }, ("id",), additionalProperties=False), maxItems=len(SECTION_IDS),
+            description="Ordered sections; each id at most once."),
+        "layout": {"type": "string", "enum": list(LAYOUTS), "default": "inline"},
+        "style_notes": {"type": "string", "maxLength": MAX_STYLE_NOTES},
+    }, ("sections",), additionalProperties=False, nullable=True, description=(
+        "Presentation of AI assessment text (order, labels, layout, tone). Null uses the skill default. "
+        "It never changes a verdict, and the confidence level is always kept."
+    )),
     "ProjectContext": _object({
-        "project_id": _UUID, "description": _TEXT,
-    }, ("project_id", "description")),
+        "project_id": _UUID, "description": _TEXT, "assessment_format": _ref("AssessmentFormat"),
+    }, ("project_id", "description", "assessment_format")),
     "ContextSystem": _object({key: _TEXT for key in SYSTEM_KEYS}),
     "StrideModel": _object({
         "components": _array(_object({
@@ -520,7 +534,8 @@ SCHEMAS: dict[str, Any] = {
     }, ("variant_id", "files", "editor"),
         description="Top-level fields are what agents see: threat_model and risks are rendered from STRIDE."),
     "MergedContext": _object({
-        "project_id": _UUID, "description": _TEXT, "variant_id": _UUID,
+        "project_id": _UUID, "description": _TEXT, "assessment_format": _ref("AssessmentFormat"),
+        "variant_id": _UUID,
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
         "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
         "mounts": _array(_object({
@@ -783,6 +798,9 @@ SCHEMAS: dict[str, Any] = {
     },
     "ContextExportProject": _object({
         "project_name": _STRING, "project_description": _TEXT,
+        "assessment_format": {**_ref("AssessmentFormat"), "description": (
+            "Optional; when the key is omitted (files before 3.1), import keeps the destination's format."
+        )},
         "variants": _array(_object({
             "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS,
             "context_configured": {**_BOOL, "description": (
@@ -798,7 +816,7 @@ SCHEMAS: dict[str, Any] = {
         }, ("variant_name",))),
     }, ("project_name", "project_description", "variants")),
     "ContextExport": _object({
-        "version": {"type": "string", "example": "3.0"},
+        "version": {"type": "string", "example": "3.1"},
         "exported_at": _DATE, "projects": _array(_ref("ContextExportProject")),
     }, ("version", "exported_at", "projects")),
     "ContextImportEntry": _object({"project_name": _TEXT, "variant_name": _TEXT, "reason": _STRING}),
@@ -1022,7 +1040,9 @@ SCHEMAS.update({
     "OperationDismissal": _object({
         "status": {"type": "string", "enum": ["dismissed"]}, "op_id": _STRING,
     }, ("status", "op_id")),
-    "ProjectContextUpdate": _object({"description": _TEXT}),
+    "ProjectContextUpdate": _object({
+        "description": _TEXT, "assessment_format": _ref("AssessmentFormat"),
+    }, description="Omitted fields keep their stored value; null clears one."),
     "VariantContextUpdate": _object({
         **_CONTEXT_TEXT_FIELDS,
         "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),

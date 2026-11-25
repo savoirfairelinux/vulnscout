@@ -143,7 +143,7 @@ class TestExportContext:
         client, _ = client_and_data
         body = json.loads(client.get("/api/context/export").data)
         assert isinstance(body, dict)
-        assert body["version"] == "3.0"
+        assert body["version"] == "3.1"
         assert isinstance(body["exported_at"], str) and body["exported_at"]
         assert isinstance(body["projects"], list)
 
@@ -518,7 +518,7 @@ class TestExportImportStructuredContext:
         _make_stride(app, data["variant_a2_id"])
         client = app.test_client()
         body = json.loads(client.get("/api/context/export").data)
-        assert body["version"] == "3.0"
+        assert body["version"] == "3.1"
         entries = _export_variants(client)
         stride = next(e for e in entries if e["variant_name"] == "VariantA2")
         assert not {"codebase_source", "codebase_path"} & stride.keys()
@@ -670,6 +670,87 @@ def _stride_editor_payload():
         "system": {"scope": "Firmware", "actors": None, "entry_points": None, "trust_boundaries": None},
         "stride": _STRIDE_MODEL,
     }
+
+
+_FORMAT = {
+    "sections": [{"id": "confidence", "enabled": True, "label": "Confidence"},
+                 {"id": "verdict", "enabled": True}],
+    "layout": "lines",
+    "style_notes": "Plain words.",
+}
+
+
+class TestAssessmentFormatTransfer:
+
+    def _post(self, client, payload):
+        return client.post("/api/context/import", data=json.dumps(payload), content_type="application/json")
+
+    def _project(self, client, name):
+        body = json.loads(client.get("/api/context/export").data)
+        return next(p for p in body["projects"] if p["project_name"] == name)
+
+    def _set_format(self, client, project_id, value):
+        response = client.put(f"/api/projects/{project_id}/context", json={"assessment_format": value})
+        assert response.status_code == 200
+
+    def test_export_includes_the_project_format(self, client_and_data):
+        client, data = client_and_data
+        assert self._project(client, "ProjectA")["assessment_format"] is None
+        self._set_format(client, data["project_a_id"], _FORMAT)
+        assert self._project(client, "ProjectA")["assessment_format"] == _FORMAT
+        single = json.loads(client.get(
+            f"/api/context/export?project_id={data['project_a_id']}&variant_id={data['variant_a1_id']}").data)
+        assert single["projects"][0]["assessment_format"] == _FORMAT
+
+    def test_import_sets_and_resets_the_format(self, client_and_data):
+        client, _ = client_and_data
+        project = {"project_name": "ProjectA", "project_description": "desc",
+                   "variants": [{"variant_name": "VariantA1", **_tm("t")}]}
+        body = json.loads(self._post(client, [{**project, "assessment_format": _FORMAT}]).data)
+        assert body["failed"] == [] and len(body["imported"]) == 1
+        assert self._project(client, "ProjectA")["assessment_format"] == _FORMAT
+
+        self._post(client, [{**project, "assessment_format": None}])
+        assert self._project(client, "ProjectA")["assessment_format"] is None
+
+    @pytest.mark.parametrize("nested", [{}, {"assessment_format": None, "description": "Wrong scope"}])
+    def test_import_without_the_key_keeps_the_destination_format(self, client_and_data, nested):
+        client, data = client_and_data
+        self._set_format(client, data["project_a_id"], _FORMAT)
+        body = json.loads(self._post(client, [{
+            "project_name": "ProjectA", "project_description": "From 3.0",
+            "variants": [{"variant_name": "VariantA1", **_tm("t"), **nested}],
+        }]).data)
+        assert body["failed"] == []
+        exported = self._project(client, "ProjectA")
+        assert exported["project_description"] == "From 3.0"
+        assert exported["assessment_format"] == _FORMAT
+
+    def test_invalid_format_fails_the_entry_without_writing(self, client_and_data):
+        client, data = client_and_data
+        self._set_format(client, data["project_a_id"], _FORMAT)
+        body = json.loads(self._post(client, [{
+            "project_name": "ProjectA", "project_description": "Changed",
+            "assessment_format": {"sections": [{"id": "severity"}]},
+            "variants": [{"variant_name": "VariantA1", "variant_description": "changed", **_tm("t")}],
+        }]).data)
+        assert body["imported"] == []
+        assert "assessment_format.sections[0].id" in body["failed"][0]["reason"]
+        exported = self._project(client, "ProjectA")
+        assert exported["project_description"] == "ProjectA description"
+        assert exported["assessment_format"] == _FORMAT
+        a1 = next(v for v in exported["variants"] if v["variant_name"] == "VariantA1")
+        assert a1["variant_description"] == "A1 variant desc"
+
+    def test_round_trip_to_another_project(self, client_and_data):
+        client, data = client_and_data
+        self._set_format(client, data["project_a_id"], _FORMAT)
+        exported = self._project(client, "ProjectA")
+        exported["project_name"] = "ProjectB"
+        exported["variants"] = [{**exported["variants"][0], "variant_name": "VariantB1"}]
+        body = json.loads(self._post(client, {"version": "3.1", "projects": [exported]}).data)
+        assert body["failed"] == []
+        assert self._project(client, "ProjectB")["assessment_format"] == _FORMAT
 
 
 def _flow_editor(client, project_id, variant_id):

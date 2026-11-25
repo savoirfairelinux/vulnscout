@@ -149,8 +149,9 @@ the authoritative resolver for that named scope.
 The merged context supplies the variant's `codebase_directory`,
 uploaded attachments in `files` (`id`, `original_name`,
 `description`), `environment`, the STRIDE-rendered `threat_model` and `risks`,
-`other_info`, and the
-project and variant descriptions. Apply them exactly as `cve-assessment`
+`other_info`, the
+project and variant descriptions, and the project's `assessment_format`
+(presentation only, see Phase 3). Apply them exactly as `cve-assessment`
 Phases 0, 2 and 3 describe, including **STRIDE Context** and
 **Uploaded Reference Inspection**:
 use `vulnscout-list_codebase_files`, `vulnscout-search_codebase` and
@@ -286,6 +287,11 @@ MEDIUM and LOW, follow it with one sentence naming the uncertainty or data gap.
   explicit empty list when no response applies.
 - `rationale` is always required and always about the review — never a copy of
   `status_notes`.
+- With a non-null `assessment_format` in the target variant's context, present
+  only `status_notes` as `cve-assessment` Phase 5 **Presentation preferences** allows. It never changes the derived
+  fields, the confidence gate or `rationale`, and never drops
+  `confidence level: <level>` or its uncertainty explanation. Do not restyle
+  `impact_statement` or `workaround`: agreement compares them verbatim.
 
 ---
 

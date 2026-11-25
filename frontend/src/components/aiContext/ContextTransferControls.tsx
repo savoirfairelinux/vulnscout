@@ -213,6 +213,7 @@ function ContextTransferControls({ projects, beforeImport, onImported, notify }:
                 A null model or table fails the entry.
                 Unknown projects or variants and entries marked as never configured are ignored.
                 A completely blank variant requires context_configured: true to clear its destination.
+                A project's assessment format is replaced only when the file includes that setting.
                 Accepts an exported file, whose projects each nest
                 their variants. Uploaded codebase references are not included
                 in context JSON transfers.
