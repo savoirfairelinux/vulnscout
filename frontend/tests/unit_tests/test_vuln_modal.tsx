@@ -533,7 +533,7 @@ describe('Vulnerability Modal', () => {
         await pending_deletion;
     })
 
-    test('saving effort after a refresh uses the open modal snapshot revision', async () => {
+    test('repeated effort saves from an open modal only patch effort on the refreshed row', async () => {
         fetchMock.resetMocks();
         fetchMock.mockResponseOnce(JSON.stringify({})); // reviews mount fetch
         fetchMock.mockResponseOnce(JSON.stringify([
@@ -557,7 +557,7 @@ describe('Vulnerability Modal', () => {
             origin: 'custom',
             responses: []
         })); // estimation save response
-        const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+        fetchMock.mockResponseOnce(JSON.stringify({ effort: { optimistic: 'PT6H' } }));
 
         // ARRANGE
         const updateCb = jest.fn();
@@ -574,16 +574,26 @@ describe('Vulnerability Modal', () => {
         const pessimistic = await screen.getByPlaceholderText(/longest estimate/i);
         const btn = await screen.getByText(/save estimation/i);
 
-        await user.type(optimistic, '5h');
-        await user.type(likely, '2.5');
-        await user.type(pessimistic, '2w 3d');
-        await user.click(btn);
+        for (const hours of ['5h', '6h']) {
+            await user.type(optimistic, hours);
+            await user.type(likely, '2.5');
+            await user.type(pessimistic, '2w 3d');
+            await user.click(btn);
+        }
 
         // ASSERT
-        expect(fetchMock).toHaveBeenCalledTimes(6);
-        expect(updateCb).toHaveBeenCalledTimes(1);
-        expect(refreshedCallback).not.toHaveBeenCalled();
-        alertSpy.mockRestore();
+        expect(updateCb).toHaveBeenCalledTimes(2);
+        const refreshed = { ...vulnerability, assessments: [], simplified_status: 'Fixed' };
+        const [[id, first], [, second]] = updateCb.mock.calls;
+        expect(id).toBe(vulnerability.id);
+        const afterFirst = first(refreshed);
+        const afterSecond = second(afterFirst);
+        expect(afterFirst.effort.optimistic.formatAsIso8601()).toBe('PT5H');
+        expect(afterSecond.effort.optimistic.formatAsIso8601()).toBe('PT6H');
+        expect(afterSecond.effort.likely).toBe(afterFirst.effort.likely);
+        expect(afterSecond.assessments).toBe(refreshed.assessments);
+        expect(afterSecond.simplified_status).toBe('Fixed');
+        expect(vulnerability.effort.optimistic.formatAsIso8601()).toBe('PT4H');
     })
     test('invalid custom CVSS vector triggers alert and no network call', async () => {
         fetchMock.resetMocks();

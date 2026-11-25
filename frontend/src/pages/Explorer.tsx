@@ -10,7 +10,7 @@ import { groupQueueItems, isQueueItemActive } from "../helpers/operationRuns";
 import MessageBanner from "../components/MessageBanner";
 import ModalShell from "../components/ModalShell";
 import type { Package } from "../handlers/packages";
-import type { CVSS, Vulnerability } from "../handlers/vulnerabilities";
+import type { CVSS, Vulnerability, VulnerabilityPatch } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import Packages from "../handlers/packages";
 import Vulnerabilities from "../handlers/vulnerabilities";
@@ -438,7 +438,7 @@ function Explorer() {
     // (e.g. after loadData or appendAssessment).
     useEffect(() => { vulnsRef.current = vulns; }, [vulns]);
 
-    function patchVuln(vulnId: string, patch: Vulnerability | ((latest: Vulnerability) => Vulnerability)) {
+    function patchVuln(vulnId: string, patch: VulnerabilityPatch) {
         if (scopeRevision !== activeScopeRevision.current) return;
         if (typeof patch !== 'function' && dataRevision !== installedRevision.current) {
             // A full modal row from before the reload cannot safely be merged.

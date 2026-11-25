@@ -7,7 +7,7 @@ import type { PostAssessment } from './StatusEditor';
 import TimeEstimateEditor from "./TimeEstimateEditor";
 import type { PostTimeEstimate } from "./TimeEstimateEditor";
 import { asAssessment, Assessment } from "../handlers/assessments";
-import Iso8601Duration from '../handlers/iso8601duration';
+import { patchEffort } from "../handlers/vulnerabilities";
 import Variants from '../handlers/variant';
 import BulkAssessmentAction from './BulkAssessmentAction';
 
@@ -275,16 +275,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
             if (data?.status === 'success' && Array.isArray(data?.vulnerabilities)) {
                 // Process successful updates
                 for (const vulnData of data.vulnerabilities) {
-                    patchVuln(vulnData.id, latest => {
-                        const effort = { ...latest.effort };
-                        if (typeof vulnData?.effort?.optimistic === "string")
-                            effort.optimistic = new Iso8601Duration(vulnData.effort.optimistic);
-                        if (typeof vulnData?.effort?.likely === "string")
-                            effort.likely = new Iso8601Duration(vulnData.effort.likely);
-                        if (typeof vulnData?.effort?.pessimistic === "string")
-                            effort.pessimistic = new Iso8601Duration(vulnData.effort.pessimistic);
-                        return { ...latest, effort };
-                    });
+                    patchVuln(vulnData.id, patchEffort(vulnData.effort));
                 }
 
                 const errorMsg = data.error_count ? ` (${data.error_count} failed)` : '';

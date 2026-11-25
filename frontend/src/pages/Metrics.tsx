@@ -2,7 +2,7 @@ import { useMemo, useState, useCallback, useEffect } from "react";
   import type { AgentViewContext } from "../types/agent";
         import type { Package } from "../handlers/packages";
         import type { CVSS } from "../handlers/vulnerabilities";
-        import type { Vulnerability } from "../handlers/vulnerabilities";
+        import type { Vulnerability, VulnerabilityPatch } from "../handlers/vulnerabilities";
         import { SEVERITY_ORDER, getVulnerabilityStatusSummary, isVulnerabilityActive } from "../handlers/vulnerabilities";
         import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
         import { Pie, Line, Bar } from 'react-chartjs-2';
@@ -54,7 +54,7 @@ import { useMemo, useState, useCallback, useEffect } from "react";
             vulnerabilities: Vulnerability[];
             goToVulnsTabWithFilter: (filterType: "Source" | "Severity" | "Status", value: string) => void;
             appendAssessment: (added: Assessment) => void;
-            patchVuln: (vulnId: string, data: any) => void;
+            patchVuln: (vulnId: string, patch: VulnerabilityPatch) => void;
             setTab: (tab: string) => void;
             appendCVSS: (vulnId: string, vector: string) => CVSS | null;
             projectId?: string;
@@ -160,9 +160,9 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
             const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
             const [isEditing, setIsEditing] = useState<boolean>(false);
 
-            const handlePatchVuln = useCallback((vulnId: string, replace_vuln: Vulnerability) => {
-                patchVuln(vulnId, replace_vuln);
-                setModalVuln(prev => prev?.id === vulnId ? replace_vuln : prev);
+            const handlePatchVuln = useCallback((vulnId: string, patch: VulnerabilityPatch) => {
+                patchVuln(vulnId, patch);
+                setModalVuln(prev => prev?.id === vulnId ? (typeof patch === 'function' ? patch(prev) : patch) : prev);
             }, [patchVuln]);
 
 const vulnColumns = useMemo(
