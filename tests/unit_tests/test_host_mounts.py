@@ -117,7 +117,7 @@ def test_shell_request_byte_limit(client, variant, streamed):
 
     url = f"/api/variants/{variant.id}/context/shell"
     # The complete JSON prefix alone is valid. Do not silently discard a streamed suffix.
-    payload = b'{"file_id":"directory","command":"true"}'.ljust(SHELL_REQUEST_BYTES)
+    payload = b'{"file_id":"mount:missing","command":"true"}'.ljust(SHELL_REQUEST_BYTES)
     overrides = {"CONTENT_LENGTH": "", "HTTP_TRANSFER_ENCODING": "chunked", "wsgi.input_terminated": True} \
         if streamed else {}
     for body, status in ((payload, 404), (payload + b" ", 413)):
@@ -126,8 +126,7 @@ def test_shell_request_byte_limit(client, variant, streamed):
 
 
 @pytest.mark.parametrize("subfolder", ["", "build output"])
-def test_directory_shell_rejects_container_only_bind(client, variant, tmp_path, monkeypatch, subfolder):
-    from io import BytesIO
+def test_directory_shell_rejects_helper_only_bind(client, variant, tmp_path, monkeypatch, subfolder):
     from unittest.mock import Mock
     from src.helpers import codebase_directory
     from src.routes import context
@@ -141,10 +140,12 @@ def test_directory_shell_rejects_container_only_bind(client, variant, tmp_path, 
     stale.write_text("stale host build")
     helper = Mock(return_value={"output": stale.read_text()})
     monkeypatch.setattr(context.host_helper, "call", helper)
-    path = os.fsencode(mounted).replace(b" ", br"\040")
-    mountinfo = b"35 20 8:2 /source " + path + b" ro - ext4 /dev/root ro\n"
-    monkeypatch.setattr(codebase_directory, "open", lambda *_: BytesIO(mountinfo), raising=False)
-    read = _source(client, variant, "directory", operation="read", path=(mounted / "result").relative_to(directory))
+    relative = str((mounted / "result").relative_to(directory))
+    listing = _source(client, variant, "directory", operation="children", folder=subfolder)
+    assert {"path": relative, "type": "file"} in listing.json["children"]
+    search = _source(client, variant, "directory", operation="search_file", path=relative, query="container")
+    assert search.json["matches"][0]["text"] == "container build"
+    read = _source(client, variant, "directory", operation="read", path=relative)
     assert read.get_json()["content"] == "container build"
     response = client.post(f"/api/variants/{variant.id}/context/shell",
                            json={"file_id": "directory", "command": "cat result", "folder": subfolder})

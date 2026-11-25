@@ -626,7 +626,7 @@ Missing references/members return 404; unavailable stored files return 500 with 
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
 Within a provisioned directory or approved mount, a regular file named exactly `.config` with one hard link
-is eligible for listing, reading, searching and shell snapshots. Directories named `.config` are never
+is eligible for listing, reading and searching (and, on approved mounts only, shell snapshots). Directories named `.config` are never
 traversed. Other hidden/sensitive names and special files remain excluded. Directory operations visit
 at most 500,000 entries and return at most 64 KiB of serialized JSON. The 10 MiB whole-file
 read limit does not apply to single-file search.
@@ -639,11 +639,11 @@ Uploads are not extracted or executed.
 POST /api/variants/<variant_id>/context/shell
 ```
 
-For local operator requests, submit JSON with `file_id` (`directory` or an approved
-`mount:<alias>`), `command`, and an optional relative `folder`. The JSON body
+For local operator requests, submit JSON with an approved `file_id` (`mount:<alias>`),
+`command`, and an optional relative `folder`. The JSON body
 is limited to 64 KiB (`413` when exceeded), including streamed requests. Uploads are not
-supported. A container mount at or below a variant directory, or unavailable mount
-information, returns `409`; use an explicitly approved host attachment instead.
+supported. `file_id=directory` returns `409` before invoking the host helper. Use directory
+browsing, reading and searching, or attach the source explicitly as an approved host folder.
 The response includes command output, exit code, timeout and truncation
 flags, and snapshot metadata. The host helper and a local container engine must be
 available. Commands run in a separate, network-isolated container against a filtered

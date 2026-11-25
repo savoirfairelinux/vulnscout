@@ -59,7 +59,7 @@ def test_connection_error():
 @pytest.mark.parametrize("operation,file_id,seconds,advice", [
     ("list", "mount:build", 30, "list_codebase_children"),
     ("read", "directory", 30, "search_codebase_file"),
-    ("shell", "directory", 70, "search_codebase_file"),
+    ("shell", "mount:src", 70, "search_codebase_file"),
     ("search_file", "mount:build", 30, "independent artifact"),
     ("read", "uploaded-file-id", 30, "independent reference"),
 ])
@@ -190,11 +190,12 @@ def test_shell_tool_is_embedded_only_and_scope_checked(monkeypatch):
     embedded = Server()
     register_tools(embedded, client)
     with patch.object(VulnScoutClient, "run_codebase_shell", return_value={"output": "found", "exit_code": 0}) as run:
-        assert json.loads(embedded.tools["run_codebase_shell"]("v1", "directory", "grep x a", "src"))["output"] == (
+        assert "approved host attachment" in embedded.tools["run_codebase_shell"]("v1", "directory", "ls")
+        assert json.loads(embedded.tools["run_codebase_shell"]("v1", "mount:src", "grep x a", "src"))["output"] == (
             "found"
         )
-        run.assert_called_once_with("v1", "directory", "grep x a", "src")
-        assert "outside" in embedded.tools["run_codebase_shell"]("v2", "directory", "ls")
+        run.assert_called_once_with("v1", "mount:src", "grep x a", "src")
+        assert "outside" in embedded.tools["run_codebase_shell"]("v2", "mount:src", "ls")
         assert run.call_count == 1
 
 

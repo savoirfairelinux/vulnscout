@@ -1171,7 +1171,7 @@ start_host_helper_locked() {
     stop_host_helper_locked >/dev/null || return 1
     if ! python3 -I "$script" serve --daemon --socket "$HOST_HELPER_SOCKET" "${label_args[@]}" \
         --state-dir "$HOST_HELPER_STATE_DIR" --pid-file "$HOST_HELPER_PID_FILE" \
-        --cache-dir "$VULNSCOUT_CACHE_DIR" --engine "$engine" --image "$image_id" \
+        --engine "$engine" --image "$image_id" \
         --snapshot-mib "$VULNSCOUT_SHELL_SNAPSHOT_MIB" \
         --log-file "$HOST_HELPER_STATE_DIR/helper.log" < /dev/null >&2; then
         console_err error "Error: the host folder helper did not start; see the message above."
