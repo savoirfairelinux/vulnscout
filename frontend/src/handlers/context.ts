@@ -14,18 +14,9 @@ type VariantContextData = {
 type VariantContext = VariantContextData & {
     variant_id: string;
     files?: ContextFile[];
-    codebase_directory?: Pick<CodebaseDirectory, 'file_id' | 'path'> | null;
     editor: VariantEditorData;
 };
 
-type CodebaseDirectory = {
-    file_id: 'directory';
-    path: string | null;
-    status: 'not_created' | 'ready' | 'missing' | 'unreadable' | 'unavailable';
-    message: string;
-    file_count: number | null;
-    directory_count: number | null;
-};
 type Rating = 'low' | 'medium' | 'high' | null;
 
 /** A host folder attached read-only to a variant; agents browse it with `file_id`. */
@@ -193,7 +184,6 @@ export type {
     AiDraftConflict,
     AiContextDraft,
     ImportSource,
-    CodebaseDirectory,
     HostMountList,
 };
 
@@ -292,14 +282,6 @@ class Context {
         const url = `${import.meta.env.VITE_API_URL}/api/context?project_id=${encodeURIComponent(projectId)}&variant_id=${encodeURIComponent(variantId)}`;
         const res = await fetch(url, { mode: 'cors' });
         return jsonOrThrow<MergedContext>(res, 'Failed to load context');
-    }
-
-    static async getDirectory(variantId: string, create = false): Promise<CodebaseDirectory> {
-        const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/directory`,
-            { mode: 'cors', method: create ? 'POST' : 'GET' }
-        );
-        return jsonOrThrow<CodebaseDirectory>(res, 'Failed to load codebase directory');
     }
 
     static async listMounts(variantId: string): Promise<HostMountList> {

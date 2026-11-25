@@ -43,15 +43,13 @@ no Linux capabilities, an unprivileged user, and bounded time, output, memory,
 processes and temporary storage. It never mounts the application cache or
 credentials. Direct host filesystem access and the SDK's built-in shell remain
 disabled. Uploaded source is inspected through scoped codebase-reference tools,
-without extraction or execution. **Codebase
-Path** is an external-client hint, not a container mount. Dependency discovery
+without extraction or execution. A path in a prompt cannot grant host access. Dependency discovery
 does not establish runtime use or exploitability.
 
 The worker requires the host helper and a local Docker or Podman engine; it fails
 closed if unavailable. Build the current image and start VulnScout with the
 matching launcher, then start the helper with `./vulnscout ai-context helper start`.
-Only `mount:<alias>` supports the shell. Provisioned directories remain available for
-browsing, reading and searching; uploads cannot run commands. The default shell snapshot
+Only `mount:<alias>` supports the shell; uploads cannot run commands. The default shell snapshot
 cap is **512 MiB** across all copied files, independent of
 the 10 MiB direct-read limit. On the host, for example, run
 `./vulnscout config set VULNSCOUT_SHELL_SNAPSHOT_MIB 768` followed by
@@ -78,8 +76,7 @@ build metadata and temporary directories, not a developer's build or live CVE da
 python -m pytest -q \
   tests/unit_tests/test_host_mount_helper.py::test_shallow_pages_bound_actual_work_and_do_not_open_children \
   tests/unit_tests/test_host_mount_helper.py::test_excluded_children_progress_and_scope \
-  tests/unit_tests/test_context.py::TestCodebaseDirectory::test_target_build_evidence_via_registered_tools \
-  tests/unit_tests/test_context.py::TestCodebaseDirectory::test_children_preserve_directory_boundaries
+  tests/unit_tests/test_host_mounts.py::TestSourceBrowsing
 ```
 
 On a local Podman host, also test the real isolated worker and launcher with a

@@ -1001,18 +1001,15 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
             agent_client.get_codebase_source(chosen_id, other_file_id, {"operation": "list"})
         directory = tmp_path / "context-Project-A-Chosen"
         directory.mkdir()
-        (directory / "source.c").write_text("first\nvulnerable_call();\n")
+        legacy_file = directory / "source.c"
+        legacy_file.write_text("legacy source\n")
         context = agent_client.get_merged_context(project_id, chosen_id)
         assert context["files"][0]["id"] == file_id
-        assert not {"codebase_source", "codebase_path"} & context["editor"].keys()
-        directory_id = context["codebase_directory"]["file_id"]
-        listing = json.loads(_codebase_source_impl(agent_client, chosen_id, directory_id, {"operation": "list"}))
-        assert listing["files"] == [{"path": "source.c", "size": 25}]
-        source = agent_client.get_codebase_source(
-            chosen_id, directory_id, {"operation": "read", "path": "source.c", "start_line": 2})
-        assert source["content"] == "vulnerable_call();\n"
-        with pytest.raises(VulnScoutError, match="outside"):
-            agent_client.get_codebase_source(other_id, directory_id, {"operation": "list"})
+        assert "codebase_directory" not in context
+        assert context["mounts"] == []
+        with pytest.raises(VulnScoutError, match="file_id"):
+            agent_client.get_codebase_source(chosen_id, "directory", {"operation": "list"})
+        assert legacy_file.read_text() == "legacy source\n"
         assessments = agent_client.list_assessments_by_vuln("CVE-2024-1234")
         assert [assessment["id"] for assessment in assessments] == [shared_id]
         assert assessments[0]["variant_ids"] == [chosen_id]

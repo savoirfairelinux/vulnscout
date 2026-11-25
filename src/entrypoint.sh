@@ -315,7 +315,7 @@ setup_user() {
         # Source trees under /scan may be bind-mounted from the host in dev mode.
         chown -f "$uid:$gid" /scan
         chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs
-        # Administrator source directories may be read-only mounts; never traverse or chown them.
+        # Leave old user-owned context trees untouched; context-files holds managed uploads.
         local cache_dir="${VULNSCOUT_CACHE_DIR:-/cache/vulnscout}"
         cache_dir="${cache_dir%/}"
         find /cache -type d -path "$cache_dir/context-*" ! -path "$cache_dir/context-*/*" \

@@ -339,8 +339,8 @@ Returns the merged project and variant context, including uploaded codebase refe
 and the variant must belong to the selected project.
 
 The agent-facing keys are plain text: `threat_model` and `risks` are rendered from the variant's STRIDE model.
-Source access uses `codebase_directory`: `{"file_id": "directory", "path": "<container-path>"}`
-or `null` if not provisioned. There is no source selector or external path setting.
+Approved host folders are listed under `mounts` as `{"alias": "<alias>", "file_id": "mount:<alias>"}`.
+There is no source selector or external path setting.
 The `editor` object carries system and STRIDE data, uploaded attachment metadata and the revision timestamp.
 
 ### Get or Update Project Context
@@ -392,7 +392,7 @@ GET /api/variants/<variant_id>/context/draft
 
 Returns `200` with the pending AI threat-model draft and its status against the saved context.
 A valid variant without a pending draft returns `204 No Content`, whether or not its context
-has been saved before. This is a normal empty state, unrelated to codebase directory availability.
+has been saved before. This is a normal empty state.
 Invalid IDs return `400`; unknown variants return `404`; storage failures return `500`.
 Frontend and MCP clients treat only `204` as no draft and surface real errors.
 
@@ -408,8 +408,8 @@ export all context. Import accepts an exported context JSON document and applies
 
 Export format `3.0` carries `system` and `stride_model` per variant, alongside the text fields,
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
-contents are not exported, and import ignores `files`. Directory names,
-mounts and contents are not transferred; provision each destination variant's own directory.
+contents are not exported, and import ignores `files`. Host attachments are not transferred;
+approve and attach relevant host folders separately on the destination variant.
 Exports mark variants with no saved editable context as `context_configured: false`;
 import ignores those entries without changing the destination. Editor saves, including
 deliberate clears, are exported with `context_configured: true`. Variants with only
@@ -500,39 +500,6 @@ Context JSON import/export does not include uploaded file contents; export lists
 Upload returns `201` with the file's `id`, `original_name`, and `description`; delete returns an empty `204` response.
 Invalid uploads/UUIDs return `400`, missing variants/references `404`, and upload storage failures `500`.
 
-### Provision a Codebase Directory
-
-```
-GET /api/variants/<variant_id>/context/directory
-POST /api/variants/<variant_id>/context/directory
-```
-
-`GET` reports availability and automatically registers an existing matching cache directory,
-without creating filesystem paths. Merged-context and directory-source reads perform the same
-discovery, so CI can create and populate the directory without a web interaction or provisioning request.
-`POST` can also create a missing directory on demand. Neither operation saves text fields or
-requires a valid threat model. Initial registration updates the context timestamp,
-marking older pending assessments outdated.
-Both return `200` with
-`{"file_id": "directory", "path": "<container-path-or-null>", "status": "...", "message": "...", "file_count": 0, "directory_count": 0}`.
-Status is `not_created`, `ready`, `missing`, `unreadable` or `unavailable` (for example empty or over budget).
-Counts reflect a complete scan of eligible regular files and subdirectories, excluding the root,
-hidden/sensitive names and linked entries. A single-link regular `.config` counts as a file.
-Empty trees return zero files and their eligible directory count.
-Both counts are `null` when unprovisioned, missing, unreadable or incompletely scanned (including over budget);
-partial totals are never returned. Every `GET`, including the page's **Refresh directory status**, rescans.
-Invalid IDs return `400`, unknown variants `404`, and inspection/provisioning failures `500`.
-New directories are named `context-<sanitized-project>-<sanitized-variant>`, without database IDs;
-existing saved paths are preserved. Requests return `409` if another variant already owns the name,
-including after sanitization or truncation. Automatic discovery also returns `409` when several
-unregistered variants have the same normalized name; rename them or explicitly provision the intended owner.
-No custom path is accepted.
-Recreating the same names reuses any retained directory contents.
-A provisioned directory is discoverable and browsable immediately; no source selection
-or separate editor save is required.
-See [administrator directory setup](ai-assessments.md#administrator-provided-codebase-directories)
-for naming, retention, copying, read-only mounts and permissions.
-
 ### Attached Host Folders
 
 ```
@@ -579,22 +546,20 @@ See [Attached host folders](ai-assessments.md#attached-host-folders).
 GET /api/variants/<variant_id>/context/files/<file_id>/source
 ```
 
-For an upload, the file UUID must belong to that variant. For the variant's active server directory,
-use the literal `file_id=directory`; unprovisioned directories return `404`.
-All sources accept `list` (recursive, default), `read` and `search`. Recursive text search on
-physical trees is deprecated, but retained for existing clients: directory searches allow 100 MiB
-of candidates, and mount searches stop at 100 MiB read, 500,000 entries or 20 seconds.
-For new clients prefer `children` and `search_file` on directories and mounts.
+For an upload, the file UUID must belong to that variant. For an approved host folder,
+use its `mount:<alias>` ID. All sources accept `list` (recursive, default), `read` and `search`.
+Recursive text search on host folders is deprecated, but retained for existing clients:
+it stops at 100 MiB read, 500,000 entries or 20 seconds. Prefer `children` and `search_file` on mounts.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
 | `search` | Case-sensitive literal `query` (1–200 characters), optional path `pattern` (default `*`), `max_results` (1–100, default 100); optional `folder` on mounts only | `matches` with path, line and text; `truncated`, `searched_files`, `skipped_binary_files` |
-| `children` | `folder` (relative, default root), `cursor` (opaque continuation), `limit` (1–200, default 50) | `children` with root-relative `path` and `type` (`directory` or `file`), `visited_entries`, `complete`, `next_cursor`; no total |
-| `list` | `folder` (directory or mount only), `pattern` (case-sensitive glob relative to folder, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
-| `read` | Exact `path`, `start_line` (1-based, default 1), `max_lines` (1-200, default 200); optional match `position` on a directory or mount | Plain reads return UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`. For positioned reads see below. |
-| `search_file` | Directory or mount only: exact `path`, literal `query` (1-200 characters), optional `cursor` | `matches` with `path`, 1-based `line`, short `text` and opaque `position`; `bytes_scanned`, `complete`, `next_cursor` |
+| `children` | Mounts only: `folder` (relative, default root), `cursor` (opaque continuation), `limit` (1–200, default 50) | `children` with root-relative `path` and `type` (`directory` or `file`), `visited_entries`, `complete`, `next_cursor`; no total |
+| `list` | `folder` (mounts only), `pattern` (case-sensitive glob relative to folder, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
+| `read` | Exact `path`, `start_line` (1-based, default 1), `max_lines` (1-200, default 200); optional match `position` on a mount | Plain reads return UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`. For positioned reads see below. |
+| `search_file` | Mounts only: exact `path`, literal `query` (1-200 characters), optional `cursor` | `matches` with `path`, 1-based `line`, short `text` and opaque `position`; `bytes_scanned`, `complete`, `next_cursor` |
 
-For directory and mount listings, the 64 KiB wire limit includes the full paths and pagination
+For mount listings, the 64 KiB wire limit includes the full paths and pagination
 metadata. A page may contain fewer than `limit` rows; resume at the returned `next_offset`.
 
 For nearby lines, use `read` with a match's `position` and the same variant, source and path.
@@ -625,12 +590,12 @@ Binary/non-UTF-8 files return 400 for reads.
 Missing references/members return 404; unavailable stored files return 500 with an explicit error.
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
-Within a provisioned directory or approved mount, a regular file named exactly `.config` with one hard link
-is eligible for listing, reading and searching (and, on approved mounts only, shell snapshots). Directories named `.config` are never
+Within an approved mount, a regular file named exactly `.config` with one hard link
+is eligible for listing, reading, searching and shell snapshots. Directories named `.config` are never
 traversed. Other hidden/sensitive names and special files remain excluded. Directory operations visit
 at most 500,000 entries and return at most 64 KiB of serialized JSON. The 10 MiB whole-file
 read limit does not apply to single-file search.
-Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.
+An unavailable host folder or an exceeded budget is reported as incomplete evidence.
 Uploads are not extracted or executed.
 
 ### Run an Isolated Codebase Shell
@@ -642,8 +607,7 @@ POST /api/variants/<variant_id>/context/shell
 For local operator requests, submit JSON with an approved `file_id` (`mount:<alias>`),
 `command`, and an optional relative `folder`. The JSON body
 is limited to 64 KiB (`413` when exceeded), including streamed requests. Uploads are not
-supported. `file_id=directory` returns `409` before invoking the host helper. Use directory
-browsing, reading and searching, or attach the source explicitly as an approved host folder.
+supported; any `file_id` other than an approved mount is rejected.
 The response includes command output, exit code, timeout and truncation
 flags, and snapshot metadata. The host helper and a local container engine must be
 available. Commands run in a separate, network-isolated container against a filtered

@@ -249,7 +249,7 @@ class VulnScoutClient:
         url = (f"{self.base_url}/api/variants/{quote(variant_id, safe='')}/context/files/"
                f"{quote(file_id, safe='')}/source")
         return self._source_request(params.get("operation", "list"), "GET", url, 30, params=params,
-                                    upload=(file_id != "directory" and not file_id.startswith("mount:")))
+                                    upload=not file_id.startswith("mount:"))
 
     def run_codebase_shell(self, variant_id: str, file_id: str, command: str, folder: str = "") -> dict:
         """Run a bounded read-only worker for a selected variant source."""

@@ -23,7 +23,6 @@ def _fmt_merged_context(ctx: dict) -> str:
         f"description={ctx.get('description')}\n"
         f"variant_id={ctx.get('variant_id')}\n"
         f"variant_description={ctx.get('variant_description')}\n"
-        f"codebase_directory={json.dumps(ctx.get('codebase_directory'), ensure_ascii=True)}\n"
         f"mounts={json.dumps(_mount_metadata(ctx), ensure_ascii=True)}\n"
         f"environment={ctx.get('environment')}\n"
         f"threat_model={ctx.get('threat_model')}\n"
@@ -54,7 +53,6 @@ def _fmt_variant_context(ctx: dict) -> str:
     return (
         f"variant_id={ctx.get('variant_id')}\n"
         f"variant_description={ctx.get('variant_description')}\n"
-        f"codebase_directory={json.dumps(ctx.get('codebase_directory'), ensure_ascii=True)}\n"
         f"environment={ctx.get('environment')}\n"
         f"threat_model={ctx.get('threat_model')}\n"
         f"risks={ctx.get('risks')}\n"
@@ -490,25 +488,20 @@ def register_tools(server, client: VulnScoutClient) -> None:
         Offsets count Unicode characters. limit_bytes is 1-12288 UTF-8 bytes.
 
         Returns the project's description together with the variant's
-        variant_description, codebase_directory, mounts, environment,
+        variant_description, mounts, environment,
         threat_model, risks, other_info, and uploaded reference metadata
         (files: id, original_name, description).
 
-        codebase_directory gives the variant's server path and
-        file_id="directory". Pass that ID to list_codebase_children, list_codebase_files,
-        search_codebase_file, read_codebase_file, and read_codebase_files to inspect source through
-        the bounded API, never direct filesystem access.
-        Matching cache directories created by CI are discovered automatically.
-        No UI provisioning, separate context save or source selection is required.
         mounts lists host folders attached to the variant (alias, file_id
-        "mount:<alias>"), e.g. src and build. Pass one mount's file_id
-        to the same tools to inspect only that folder. They are served
+        "mount:<alias>"), e.g. src and build. Pass one mount's file_id to
+        list_codebase_children, list_codebase_files, search_codebase_file,
+        read_codebase_file, and read_codebase_files to inspect only that folder
+        through the bounded API, never direct filesystem access. They are served
         read-only by the host folder helper; a
         "helper is not running" or unavailable error means missing evidence.
         Empty files only means no uploaded attachments;
-        always check codebase_directory and mounts before concluding source is unavailable.
-        A null codebase_directory means no saved or matching directory was found;
-        report the missing evidence instead of falling back to local paths.
+        always check mounts before concluding source is unavailable.
+        With no mounts, report the missing evidence instead of falling back to local paths.
 
         threat_model and risks are read-only plain-text renderings of the
         variant's STRIDE model, edited in the AI Context page (None when
@@ -560,9 +553,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
     def list_codebase_children(
         variant_id: str, file_id: str, folder: str = "", cursor: str = "", limit: int = 50,
     ) -> str:
-        """Navigate one level of a provisioned directory or approved mount (not an upload).
+        """Navigate one level of an approved mount (not an upload).
 
-        Use file_id="directory" or "mount:<alias>" from this variant's context and the
+        Use file_id="mount:<alias>" from this variant's context and the
         nearest known relative folder (empty for root). Returns immediate eligible
         children with root-relative path and type (file or directory), in filesystem
         order. No recursive walk, content read, shell snapshot or total. limit is 1–200.
@@ -580,22 +573,21 @@ def register_tools(server, client: VulnScoutClient) -> None:
     def list_codebase_files(
         variant_id: str, file_id: str, pattern: str = "*", offset: int = 0, limit: int = 200, folder: str = "",
     ) -> str:
-        """List files in an uploaded reference, the active server directory or an attached host folder.
+        """List files in an uploaded reference or an attached host folder.
 
         Get file_id from get_merged_context's files metadata. Supports ZIP, TAR,
         TAR.GZ/TGZ and individual files. Paths belong to the upload, NOT the host.
-        For an active directory use file_id="directory" from codebase_directory.
         For an attached host folder use file_id="mount:<alias>" from mounts; paths
         are relative to that folder; its pattern allows at most 16 '*'/'?' wildcards,
         and truncated=true means a traversal limit or I/O error prevented a
         complete listing (total is then a lower bound).
-        Directory browsing permits single-link regular .config files but excludes other hidden/sensitive names,
-        links and special files. It visits at most 500,000 entries and never reads the MCP host filesystem.
+        Mount browsing permits single-link regular .config files but excludes other hidden/sensitive names,
+        links and special files, and never reads the MCP host filesystem.
         pattern is a case-sensitive file-path glob. Follow next_offset until null
         before claiming the list is complete. limit must be 1-200.
         This is recursive; limit bounds the page, not traversal. For navigation
         use list_codebase_children instead. Narrow folder before matching filenames.
-        With folder (mounts or directories; no '..', links or hidden names), pattern is relative to folder but
+        With folder (mounts only; no '..', links or hidden names), pattern is relative to folder but
         returned paths stay relative to the mount for read_codebase_file.
         If the message says the listing stopped at its time or entry limit, the
         list is incomplete: narrow folder or pattern and repeat; this is not evidence
@@ -614,7 +606,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         """Search a scoped reference for case-sensitive literal text (1–200 characters).
 
         Use the upload's file_id, an optional path glob and up to 100 matches.
-        Legacy directory and mount searches retain their bounded glob search; folder scopes mounts only.
+        Legacy mount searches retain their bounded glob search; folder scopes mounts only.
         For new tree workflows prefer list_codebase_children and search_codebase_file on a known path.
         Truncation and skipped binary members prevent conclusions about absence.
         """
@@ -625,7 +617,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
 
     @server.tool()
     def search_codebase_file(variant_id: str, file_id: str, path: str, query: str, cursor: str = "") -> str:
-        """Search one known UTF-8 file in directory or mount:<alias>, including logs over 10 MiB.
+        """Search one known UTF-8 file in mount:<alias>, including logs over 10 MiB.
 
         Search the root-relative path directly, without a listing or snapshot. For unknown paths
         use list_codebase_children then scoped filename matching. Query is a case-sensitive,
@@ -643,13 +635,13 @@ def register_tools(server, client: VulnScoutClient) -> None:
         variant_id: str, file_id: str, path: str, start_line: int = 1, max_lines: int = 200,
         position: Optional[str] = None,
     ) -> str:
-        """Read UTF-8 source from a reference, active directory or host folder (mount:<alias>).
+        """Read UTF-8 source from a reference or host folder (mount:<alias>).
 
         Read a known exact relative path directly, without listing first. start_line is 1-based;
         max_lines must be 1-200. Reads are capped at 64 KB. Follow next_line until
         null. A host folder's partial_line means only a prefix of that line fit;
         its suffix is omitted. Binary/non-UTF-8 files return an explicit error.
-        Plain directory and mount reads enforce a 10 MiB file limit. For surrounding evidence, pass
+        Plain mount reads enforce a 10 MiB file limit. For surrounding evidence, pass
         a search_codebase_file match's position unchanged with the same variant, file_id and path.
         Leave start_line at 1. This returns at most 21 lines and 8 KiB of text around match_line,
         including on large files. Check truncated_before/after and partial_first_line/partial_last_line.
@@ -685,8 +677,9 @@ def register_tools(server, client: VulnScoutClient) -> None:
         def run_codebase_shell(variant_id: str, file_id: str, command: str, folder: str = "") -> str:
             """Run a shell in an isolated worker against a read-only snapshot of an approved host attachment.
 
-            Use only a "mount:<alias>" from the variant's merged context. For provisioned directories
-            use browsing, reading and searching instead. Scope folder to a known artifact's containing directory.
+            Use only a "mount:<alias>" from the variant's merged context. Use
+            browsing, reading and searching for navigation instead.
+            Scope folder to a known artifact's containing directory.
             Never use a snapshot for navigation; use list_codebase_children. Single-link regular .config files
             are included; other hidden/sensitive names, links and special files are excluded or rejected.
             The configurable snapshot cap (default 512 MiB) is distinct from the 10 MiB direct read cap
@@ -764,8 +757,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
 
         The threat model and risks are generated from the variant's STRIDE
         model, which is edited in the AI Context page or with
-        update_variant_threat_model; this tool cannot change them or the
-        variant's provisioned codebase directory.
+        update_variant_threat_model; this tool cannot change them.
 
         Args:
             variant_id: UUID of the variant to update.

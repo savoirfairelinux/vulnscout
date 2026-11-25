@@ -122,8 +122,8 @@ Use the exact labels below; they are the labels on the page.
 | Threat model | **Threats** | **STRIDE category** (required), **Description**, **Targets** (required, at least one component or interaction) |
 | Risks | **Risks** | **Description**, **Threats** (required, at least one), **Likelihood**, **Impact**, **Mitigation**, **Residual risk / decision** |
 
-The **Codebase directory** is administrator-managed and is never configured from
-a document. Uploaded attachments must also remain unchanged.
+Host attachments are managed separately and are never configured from a document.
+Uploaded attachments must also remain unchanged.
 The project description (sidebar item **Project description**) is
 outside this skill; if the document states the product's purpose, you may
 suggest one at the end, clearly labelled as optional.

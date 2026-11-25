@@ -146,26 +146,23 @@ Both assessment tools return `project_id` and include it on each target beside
 When the caller supplied a project name, `vulnscout-find_project_id` remains
 the authoritative resolver for that named scope.
 
-The merged context supplies the variant's `codebase_directory`,
+The merged context supplies the variant's approved host folders in `mounts`,
 uploaded attachments in `files` (`id`, `original_name`,
 `description`), `environment`, the STRIDE-rendered `threat_model` and `risks`,
 `other_info`, and the
 project and variant descriptions. Apply them exactly as `cve-assessment`
 Phases 0, 2 and 3 describe, including **STRIDE Context** and
 **Uploaded Reference Inspection**:
-read known paths directly with `vulnscout-read_codebase_file`. Navigate directories and mounts with
+read known paths directly with `vulnscout-read_codebase_file`. Navigate mounts with
 `vulnscout-list_codebase_children`; use `vulnscout-list_codebase_files` for uploads or scoped filename matching.
-For literal evidence in a known directory or mount file, call `vulnscout-search_codebase_file` directly
+For literal evidence in a known mount file, call `vulnscout-search_codebase_file` directly
 and pass a hit's `position` to `vulnscout-read_codebase_file` to verify nearby status lines. Check truncation
 and follow `next_cursor` until `complete`. Use shell only for artifact inspection on an approved `mount:<alias>`. The configurable
 snapshot limit (default 512 MiB), the 10 MiB direct read limit, and a timeout are distinct lookup failures: stream the
 known log instead of treating a failed lookup as absence or automatically lowering global confidence.
-For an active directory use `codebase_directory.file_id="directory"` with those
-same tools, following the directory rules in `cve-assessment`; attached host
-folders (`mounts`) use the same tools with their `file_id` (`"mount:<alias>"`). A provisioned
-directory requires no source selection; inspect it even when `files`
-is empty, since that list only describes attachments. Never open the
-server path directly. Null directory metadata, errors, empty results or exclusions
+Use each attached host folder's `file_id` (`"mount:<alias>"`), even when
+`files` is empty, since that list only describes uploads. Never open host
+or server paths directly. Missing mounts, errors, empty results or exclusions
 are evidence gaps, not permission to fall back to the application CWD.
 Follow pagination, verify surrounding source, and cite reference IDs, paths
 and lines in the review rationale. The embedded Agent can read only this
@@ -194,7 +191,7 @@ assessment's stored fields:
 
 - **Phase 1** — CVE intelligence from NVD plus one reference (once per assessment;
   `vuln_id` is fixed for the whole assessment, so this is not repeated per target)
-- **Phase 2** — component presence in the target variant's provisioned directory or uploaded references
+- **Phase 2** — component presence in the target variant's approved host folders or uploaded references
   and any explicitly supplied accessible external source, never another variant's files;
   map the component to that variant's STRIDE `C#`/`I#` rows
 - **Phase 3** — security objectives impact, using that variant's STRIDE entry

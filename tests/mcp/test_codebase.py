@@ -22,7 +22,7 @@ def test_reference_metadata_contains_ids():
 
 
 @pytest.mark.parametrize("operation", ["list", "read"])
-@pytest.mark.parametrize("file_id", ["f1", "directory"])
+@pytest.mark.parametrize("file_id", ["f1", "mount:src"])
 def test_client_source_operation(operation, file_id):
     params = {"operation": operation, "path": "repo/a.c"}
     with respx.mock:
@@ -58,7 +58,7 @@ def test_connection_error():
 
 @pytest.mark.parametrize("operation,file_id,seconds,advice", [
     ("list", "mount:build", 30, "list_codebase_children"),
-    ("read", "directory", 30, "search_codebase_file"),
+    ("read", "mount:src", 30, "search_codebase_file"),
     ("shell", "mount:src", 70, "search_codebase_file"),
     ("search_file", "mount:build", 30, "independent artifact"),
     ("read", "uploaded-file-id", 30, "independent reference"),
@@ -79,7 +79,7 @@ def test_response_timeout_is_incomplete_not_connection_failure(operation, file_i
             assert "search_codebase_file" not in message
 
 
-@pytest.mark.parametrize("file_id", ["f1", "directory"])
+@pytest.mark.parametrize("file_id", ["f1", "mount:src"])
 def test_scope_rejected_before_request(file_id):
     client = ScopedVulnScoutClient(BASE_URL, {"project_ids": ["p1"], "variant_ids": ["v1"]})
     with patch.object(VulnScoutClient, "get_codebase_source") as source:
@@ -122,13 +122,15 @@ def test_read_codebase_files_validates_paths_and_caps_the_response(monkeypatch):
     assert "budget" in _read_codebase_files_impl(client, "v1", "f", ["x" * 210], 1, 10)
 
 
-def test_directory_metadata_exposes_the_bounded_tool_id():
+def test_merged_context_exposes_mount_ids_not_legacy_directory():
     result = _fmt_merged_context({
         "codebase_directory": {"file_id": "directory", "path": "/cache/vulnscout/context-p-v-id"},
+        "mounts": [{"alias": "src", "file_id": "mount:src"}],
     })
-    assert "codebase_source=" not in result and "codebase_path=" not in result
-    metadata = json.loads(result.split("codebase_directory=", 1)[1].splitlines()[0])
-    assert metadata == {"file_id": "directory", "path": "/cache/vulnscout/context-p-v-id"}
+    assert "codebase_directory=" not in result and "/cache/" not in result
+    assert json.loads(result.split("mounts=", 1)[1].splitlines()[0]) == [
+        {"alias": "src", "file_id": "mount:src"},
+    ]
 
 
 def test_registered_tools_forward_parameters():
