@@ -166,6 +166,8 @@ new native packages in subsequent CLI scans. Invalid or unreadable preferences
 stop the scan rather than silently scanning a different scope. Grype keeps
 components with distinct PURLs or CPEs and attributes matches to the scanned
 SBOM package name, even when it differs from the scanner's artifact name.
+A shared CPE does not override a conflicting artifact PURL. This SBOM name
+mapping applies only to internally scoped scans, not to imported Grype reports.
 If the filters exclude every package, the OSV CLI records an empty scan
 instead of leaving a previous OSV scan active. Selected packages with no
 usable PURLs still produce an error when there is nothing to query.

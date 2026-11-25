@@ -252,7 +252,7 @@ def _filter_grype_matches(
         named = by_name.get((raw_name, version), set())
         purl = artifact.get("purl")
         candidates = by_purl.get((purl, version), set())
-        if not candidates:
+        if not candidates and not purl:
             candidates = {
                 name for cpe in artifact.get("cpes") or [] if isinstance(cpe, str)
                 for name in by_cpe.get((cpe, version), ())
@@ -265,6 +265,7 @@ def _filter_grype_matches(
         if len(candidates) != 1:
             continue
         name = next(iter(candidates))
+        artifact.pop(GrypeVulns.SBOM_NAME, None)
         normalized = GrypeVulns._normalize_artifact_name(raw_name, purl)
         if name != normalized:
             artifact[GrypeVulns.SBOM_NAME] = name
@@ -386,7 +387,7 @@ def run_grype_scan(ctx: JobContext) -> None:
         history_env = {**os.environ, SOURCE_ENV_VAR: "grype"}
         merge_command = [
             "flask", "--app", FLASK_APP, "merge", "--project", project_name,
-            "--variant", variant.name, "--grype", grype_out,
+            "--variant", variant.name, "--scoped-grype" if sbom_packages or exclude_native else "--grype", grype_out,
         ]
         if ctx.queue_id:
             merge_command += ["--run-id", ctx.queue_id]
