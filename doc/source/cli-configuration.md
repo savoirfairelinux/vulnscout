@@ -163,9 +163,8 @@ To allow LAN clients, use e.g. `./vulnscout config set VULNSCOUT_BIND_ADDRESS 19
 (substitute the host's LAN IPv4 address). `0.0.0.0` publishes the UI and API on
 **all IPv4 interfaces**. Restrict network access appropriately. Setting or unsetting
 the key recreates a running container unless the host environment overrides it;
-start `serve` again if needed. Container-forwarded requests can access the Agent
-and host-folder API with a localhost Host header, including from remote clients;
-do not expose these services to untrusted networks.
+start `serve` again if needed. A non-loopback
+publication never enables the container-forwarder exception for the Agent or host-folder API.
 Use `./vulnscout config unset VULNSCOUT_BIND_ADDRESS` to restore the default
 when no host environment override is active.
 
