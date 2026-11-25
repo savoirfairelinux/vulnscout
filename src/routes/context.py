@@ -155,8 +155,8 @@ def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
-def _browse_reference(file_path: str, name: str, label: str, *, directory_variant: uuid.UUID | None = None,
-                      allow_search: bool = False) -> tuple[dict, int]:
+def _browse_reference(file_path: str, name: str, label: str, *,
+                      directory_variant: uuid.UUID | None = None) -> tuple[dict, int]:
     """List, read or search a stored file or archive as the request's query asks."""
     try:
         directory = directory_variant is not None
@@ -172,12 +172,10 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory_varian
             raise ValueError("folder is only supported for listings of directories or attached host folders.")
         if operation == "children" and not directory:
             raise ValueError("Shallow listings require a directory or mount.")
-        if (operation not in ("list", "read", "children") and not (directory and operation == "search_file")
-                and not (allow_search and operation == "search")):
-            if directory:
-                raise ValueError("Operation must be list, children, read or search_file.")
-            raise ValueError("Operation must be list or read." if not allow_search else
-                             "Operation must be list, read, or search.")
+        if directory and operation not in ("list", "read", "children", "search_file"):
+            raise ValueError("Operation must be list, children, read or search_file.")
+        if not directory and operation not in ("list", "read", "search"):
+            raise ValueError("Operation must be list, read, or search.")
         with ExitStack() as stack:
             reference: CodebaseReference
             if directory:
@@ -213,7 +211,7 @@ def _browse_reference(file_path: str, name: str, label: str, *, directory_varian
                         result = reference.read_lines(path, start, lines)
                 except FileNotFoundError as exc:
                     raise LookupError("Source file not found or excluded.") from exc
-            else:  # Validated import-source search.
+            else:  # Bounded uploaded-reference or import-source search.
                 query = request.args.get("query", "")
                 if not query or len(query) > 200:
                     raise ValueError("Search query must contain 1-200 characters.")
@@ -799,7 +797,7 @@ def init_app(app):
                 if path is None:
                     return jsonify({"error": "No import source uploaded."}), 404
                 name = os.path.basename(path)
-                body, status = _browse_reference(path, name, "import source", allow_search=True)
+                body, status = _browse_reference(path, name, "import source")
         except OSError:
             logger.exception("Failed to read the import source")
             return jsonify({"error": "Stored import source is unavailable."}), 500
@@ -1024,11 +1022,12 @@ def init_app(app):
 
         OpenAPI:
         path file_id string required Upload UUID, directory for the active server directory, or mount:<alias>.
-        query operation string optional Recursive list (default), read, children or search_file (directory or mount).
+        query operation string optional List (default), read, search (upload), children or search_file (tree).
         query path string optional Exact member path for read or search_file.
         query position string optional Signed search match position for a bounded directory or mount context read.
-        query query string optional Single-line literal for search_file. CVE IDs match whole tokens.
-        query pattern string optional File-path glob for list (default *), relative to folder.
+        query query string optional Literal for search or search_file. search_file matches CVE IDs as whole tokens.
+        query pattern string optional File-path glob for list or upload search (default *).
+        query max_results integer optional Upload search match limit, 1-100 (default 100).
         query folder string optional Directory or mount: sub-folder scoping list or children.
         query cursor string optional Opaque continuation for the same shallow listing or single-file search.
         query offset integer optional List offset (default 0).

@@ -145,8 +145,11 @@ def test_registered_tools_forward_parameters():
     server = Server()
     client = VulnScoutClient(BASE_URL)
     register_tools(server, client)
-    assert "search_codebase" not in server.tools
     with patch.object(client, "get_codebase_source", return_value={"ok": True}) as source:
+        assert json.loads(server.tools["search_codebase"]("v1", "f1", "needle", "*.c", 5)) == {"ok": True}
+        source.assert_called_with("v1", "f1", {
+            "operation": "search", "query": "needle", "pattern": "*.c", "max_results": 5,
+        })
         assert json.loads(server.tools["list_codebase_files"]("v1", "f1", "*.c", 10, 20)) == {"ok": True}
         source.assert_called_with("v1", "f1", {"operation": "list", "pattern": "*.c", "offset": 10, "limit": 20})
         server.tools["list_codebase_files"]("v1", "mount:src", "*.c", 0, 5, "build/tmp")

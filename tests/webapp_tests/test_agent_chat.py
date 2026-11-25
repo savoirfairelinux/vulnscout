@@ -104,7 +104,7 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
     ))
     assert response == "Source inspected"
     source_tools = {"list_codebase_children", "list_codebase_files", "read_codebase_file", "read_codebase_files",
-                    "search_codebase_file", "run_codebase_shell"}
+                    "search_codebase", "search_codebase_file", "run_codebase_shell"}
     assert source_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
     assert {f"mcp:vulnscout-{name}" for name in source_tools} <= set(captured["available_tools"])
     assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])
@@ -993,8 +993,8 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
             chosen_id, file_id, {"operation": "read", "path": "main.c", "start_line": 2},
         )
         assert source["content"] == "unsafe_call();\n"
-        with pytest.raises(VulnScoutError, match="list or read"):
-            agent_client.get_codebase_source(chosen_id, file_id, {"operation": "search", "query": "unsafe_call"})
+        matches = agent_client.get_codebase_source(chosen_id, file_id, {"operation": "search", "query": "unsafe_call"})
+        assert matches["matches"] == [{"path": "main.c", "line": 2, "text": "unsafe_call();"}]
         with pytest.raises(VulnScoutError, match="outside"):
             agent_client.get_codebase_source(other_id, other_file_id, {"operation": "list"})
         with pytest.raises(VulnScoutError, match="File not found"):

@@ -608,6 +608,21 @@ def register_tools(server, client: VulnScoutClient) -> None:
         return _codebase_source_impl(client, variant_id, file_id, params)
 
     @server.tool()
+    def search_codebase(
+        variant_id: str, file_id: str, query: str, pattern: str = "*", max_results: int = 100, folder: str = "",
+    ) -> str:
+        """Search an uploaded reference for case-sensitive literal text (1–200 characters).
+
+        Use the upload's file_id, an optional path glob and up to 100 matches.
+        Leave folder empty. For directories or mounts use search_codebase_file on a known path.
+        Truncation and skipped binary members prevent conclusions about absence.
+        """
+        params = {"operation": "search", "query": query, "pattern": pattern, "max_results": max_results}
+        if folder:
+            params["folder"] = folder
+        return _codebase_source_impl(client, variant_id, file_id, params)
+
+    @server.tool()
     def search_codebase_file(variant_id: str, file_id: str, path: str, query: str, cursor: str = "") -> str:
         """Search one known UTF-8 file in directory or mount:<alias>, including logs over 10 MiB.
 
