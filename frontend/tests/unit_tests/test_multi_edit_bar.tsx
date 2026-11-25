@@ -346,7 +346,7 @@ describe('MultiEditBar', () => {
             );
         });
         expect(mockAppendAssessment).toHaveBeenCalled();
-        expect(mockPatchVuln).toHaveBeenCalled();
+        expect(mockPatchVuln).not.toHaveBeenCalled();
         expect(mockResetVulns).toHaveBeenCalledTimes(1);
     });
 
@@ -399,6 +399,12 @@ describe('MultiEditBar', () => {
             );
         });
         expect(mockPatchVuln).toHaveBeenCalled();
+        const [id, applyEffort] = mockPatchVuln.mock.calls[0];
+        const refreshed = { ...mockVulnerabilities[0], assessments: [{ id: 'from-refresh' }] };
+        const patched = applyEffort(refreshed);
+        expect(id).toBe(refreshed.id);
+        expect(patched.assessments).toEqual(refreshed.assessments);
+        expect(patched.effort.optimistic.formatAsIso8601()).toBe('PT1H');
         expect(mockResetVulns).toHaveBeenCalledTimes(1);
     });
 

@@ -515,6 +515,7 @@ class Vulnerabilities {
     static append_assessment(vulns: Vulnerability[], assessment: Assessment): Vulnerability[] {
         return vulns.map((vuln) => {
             if (vuln.id === assessment.vuln_id) {
+                if (vuln.assessments.some(existing => existing.id === assessment.id)) return vuln;
                 const assessments = [...vuln.assessments, assessment].sort((a, b) => {
                     return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
                 });

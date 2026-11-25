@@ -35,7 +35,7 @@ type Props = {
     vulnerabilities: Vulnerability[];
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
-    patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
+    patchVuln: (vulnId: string, patch: Vulnerability | ((latest: Vulnerability) => Vulnerability)) => void;
     filterLabel?: "Source" | "Severity" | "Status" | "Package" | "Vulnerability";
     filterValue?: string;
     filterVulnerabilityIds?: string[];
@@ -694,10 +694,11 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         setModalVulnSnapshot([...searchFilteredData]); // Capture snapshot at modal open time
     }, [searchFilteredData]);
 
-    const handlePatchVuln = useCallback((vulnId: string, replace_vuln: Vulnerability) => {
-        patchVuln(vulnId, replace_vuln);
-        setModalVuln(prev => prev?.id === vulnId ? replace_vuln : prev);
-        setModalVulnSnapshot(prev => prev.map(v => v.id === vulnId ? replace_vuln : v));
+    const handlePatchVuln = useCallback((vulnId: string, patch: Vulnerability | ((latest: Vulnerability) => Vulnerability)) => {
+        patchVuln(vulnId, patch);
+        const update = (v: Vulnerability) => v.id !== vulnId ? v : typeof patch === 'function' ? patch(v) : patch;
+        setModalVuln(prev => prev && update(prev));
+        setModalVulnSnapshot(prev => prev.map(update));
     }, [patchVuln]);
 
     const columnDisplayNames = useMemo(() => ({

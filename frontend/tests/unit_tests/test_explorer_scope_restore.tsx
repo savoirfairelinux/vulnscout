@@ -149,6 +149,7 @@ jest.mock('../../src/pages/TablePackages', () => ({
 // (localStorage-backed) selections, so what matters is the filter present on
 // the *first* render of each mount, not only the latest props. `mountFilters`
 // records that, letting tests assert a stale filter is never applied.
+const mockSaveAssessment = jest.fn<Promise<{ id: string }>, []>();
 jest.mock('../../src/pages/TableVulnerabilities', () => {
     const { useEffect } = jest.requireActual<typeof import('react')>('react');
     const mountFilters: Array<{ label?: string; value?: string }> = [];
@@ -172,6 +173,8 @@ jest.mock('../../src/pages/TableVulnerabilities', () => {
                 <span data-testid="vuln-filter-value">{filterValue ?? ''}</span>
                 <span data-testid="vulnerability-ids">{vulnerabilities.map(v => v.id).join(',')}</span>
                 <button onClick={() => appendAssessment({ id: 'assessment-1' })}>append assessment</button>
+                <button onClick={() => void mockSaveAssessment().then(appendAssessment)}>save assessment</button>
+                <button onClick={() => void mockSaveAssessment().then(row => patchVuln(row.id, row))}>save full row</button>
                 <button onClick={() => appendCVSS('CVE-1', 'CVSS:3.1/test')}>append cvss</button>
                 <button onClick={() => patchVuln('CVE-1', { id: 'CVE-1' })}>patch vulnerability</button>
             </div>;
@@ -991,6 +994,39 @@ describe('Explorer agent write reloads', () => {
         await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3));
         fireEvent.click(screen.getByRole('link', { name: 'vulnerabilities' }));
         await waitFor(() => expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-fresh'));
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+    });
+
+    test.each([false, true])('a pending save uses refreshed data only in its original scope (switch: %s)', async switchScope => {
+        render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish!: (value: { id: string }) => void;
+        mockSaveAssessment.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        fireEvent.click(screen.getByRole('button', { name: 'save assessment' }));
+        expect(mockSaveAssessment).toHaveBeenCalledTimes(1);
+        type ListedVulnerabilities = Awaited<ReturnType<typeof Vulnerabilities.list>>;
+        mockVulnerabilitiesList.mockResolvedValueOnce([{ id: 'CVE-fresh' }] as ListedVulnerabilities);
+        (Vulnerabilities.enrich_with_assessments as jest.Mock).mockImplementationOnce(rows => rows);
+        if (switchScope) fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        else announceWrite();
+        await waitFor(() => expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-fresh'));
+
+        await act(async () => finish({ id: 'local-assessment' }));
+        if (switchScope) expect(Vulnerabilities.append_assessment).not.toHaveBeenCalled();
+        else expect(Vulnerabilities.append_assessment).toHaveBeenCalledWith([{ id: 'CVE-fresh' }], { id: 'local-assessment' });
+        expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-fresh');
+    });
+
+    test('a full row saved across a refresh reloads the scope instead of replacing the fresh row', async () => {
+        render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish!: (row: { id: string }) => void;
+        mockSaveAssessment.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        fireEvent.click(screen.getByRole('button', { name: 'save full row' }));
+        announceWrite();
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(2));
+        await act(async () => finish({ id: 'CVE-1' }));
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(3));
         expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
     });
 
