@@ -1,6 +1,9 @@
 import os
 import shutil
 import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -138,6 +141,81 @@ def test_shell_rejects_unconfigured_worker(worker):
     helper.engine = None
     with pytest.raises(HelperError, match="not configured"):
         helper.shell({"source": "directory", "directory": "context-p-v", "command": "ls"})
+
+
+def test_reaper_only_removes_abandoned_owned_snapshots(worker):
+    helper, source = worker
+    state = Path(helper.state_dir)
+    unrelated = state / "shell-manual-backup"
+    unrelated.mkdir()
+    # Simulate a worker process exiting without running its finally blocks.
+    process = subprocess.run([
+        sys.executable, "-c",
+        "import os, sys\n"
+        "from src.helpers.host_mount_helper import Helper\n"
+        "with Helper(sys.argv[1])._snapshot_workspace() as path:\n"
+        "    print(path, flush=True)\n"
+        "    os._exit(0)\n", str(state),
+    ], check=True, text=True, capture_output=True)
+    abandoned = Path(process.stdout.strip())
+    (abandoned / "source").symlink_to(source, target_is_directory=True)
+    with helper._snapshot_workspace() as active:
+        Helper(str(state)).reap_shell_snapshots()
+        assert Path(active).is_dir()
+        assert not abandoned.exists() and unrelated.is_dir() and (source / "source.c").is_file()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="the host helper refuses to run as root")
+def test_restart_drains_a_running_shell_job(worker, tmp_path):
+    helper, source = worker
+    engine = tmp_path / "podman"
+    running = tmp_path / "running"
+    release = tmp_path / "release"
+    engine.write_text(
+        f"#!{sys.executable}\nimport time\nfrom pathlib import Path\n"
+        f"Path({str(running)!r}).touch()\nwhile not Path({str(release)!r}).exists(): time.sleep(.02)\n"
+    )
+    engine.chmod(0o700)
+    socket_path = tmp_path / "socket" / "helper.sock"
+    pid_path = tmp_path / "helper.pid"
+    argv = [sys.executable, "-m", "src.helpers.host_mount_helper", "serve", "--socket", str(socket_path),
+            "--pid-file", str(pid_path), "--state-dir", helper.state_dir, "--cache-dir", str(source.parent),
+            "--engine", str(engine), "--image", "fixture"]
+
+    def wait_for(path, process):
+        for _ in range(250):
+            if path.exists():
+                return
+            assert process.poll() is None
+            time.sleep(.02)
+        pytest.fail(f"Timed out waiting for {path.name}")
+
+    for first_start in (True, False):
+        process = subprocess.Popen(argv)
+        try:
+            wait_for(pid_path, process)
+            assert request(str(socket_path), {"op": "status"})["ok"]
+            if first_start:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    result = pool.submit(request, str(socket_path), {
+                        "op": "shell", "source": "directory", "directory": source.name, "command": "true",
+                    })
+                    try:
+                        wait_for(running, process)
+                        process.terminate()
+                        with pytest.raises(subprocess.TimeoutExpired):
+                            process.wait(timeout=.2)
+                    finally:
+                        release.touch()
+                    assert result.result(timeout=5)["ok"]
+            else:
+                process.terminate()
+            assert process.wait(timeout=5) == 0
+            assert not list(Path(helper.state_dir).glob("shell-*"))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
 
 
 def test_shell_rejects_remote_docker(worker, monkeypatch, tmp_path):

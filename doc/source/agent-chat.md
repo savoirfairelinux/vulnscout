@@ -59,6 +59,9 @@ Narrow `folder` if copying reaches its byte, 500,000-entry or 10-second snapshot
 The snapshot includes single-link regular `.config` files, never directories of that name.
 Other hidden and sensitive names, symlinks and special files are excluded; unreadable files,
 hardlinks encountered during copying and incomplete walks fail the snapshot.
+Stopping or restarting the helper drains active shell jobs before removing its socket.
+After an unclean exit, startup removes abandoned helper-owned snapshots; active leases and
+unrelated directories in the state folder are left alone.
 Commands time out after 15 seconds and output is limited to 64 KiB. Snapshot
 exclusions and truncation prevent conclusions from a missing match. The worker
 may run arbitrary programs inside the container: container isolation is not a

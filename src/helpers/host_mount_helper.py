@@ -31,6 +31,7 @@ import json
 import os
 import re
 import selectors
+import shutil
 import signal
 import socket
 import socketserver
@@ -39,7 +40,6 @@ import stat
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -907,6 +907,10 @@ class Helper:
         self.image = image
         self.registry = Registry(state_dir)
         self._key, self._anchor = _proof_key(state_dir)
+        self._snapshot_prefix = "shell-" + hmac.digest(self._key, b"snapshot-directory", "sha256")[:16].hex() + "-"
+        self._shell_condition = threading.Condition()
+        self._active_shells = 0
+        self._closing_shells = False
         self._boot = _boot_id()
         self._boot_tag = hmac.digest(self._key, self._boot, "sha256")[:16].hex() if self._boot else None
         self.permit_epoch = uuid.uuid4().hex
@@ -1138,13 +1142,85 @@ class Helper:
                 "excluded": "Hidden names except single-link regular .config files are excluded, "
                             "as are sensitive names, links and special files."}
 
+    @contextmanager
+    def _locked_state(self) -> Iterator[int]:
+        fd = os.open(self.state_dir, _DIRECTORY_FLAGS)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield fd
+        finally:
+            os.close(fd)
+
+    def reap_shell_snapshots(self) -> None:
+        # Never infer ownership from the old generic shell-* temporary names.
+        with self._locked_state() as state:
+            with os.scandir(state) as entries:
+                for entry in entries:
+                    if not re.fullmatch(self._snapshot_prefix + "[0-9a-f]{32}", entry.name):
+                        continue
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    try:
+                        fd = os.open(entry.name, _DIRECTORY_FLAGS, dir_fd=state)
+                    except FileNotFoundError:
+                        continue
+                    try:
+                        if os.fstat(fd).st_uid != os.geteuid():
+                            continue
+                        try:
+                            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except BlockingIOError:
+                            continue
+                        if os.fstat(fd).st_nlink:
+                            shutil.rmtree(os.path.join(self.state_dir, entry.name))
+                    finally:
+                        os.close(fd)
+
+    @contextmanager
+    def _snapshot_workspace(self) -> Iterator[str]:
+        name = self._snapshot_prefix + uuid.uuid4().hex
+        path = os.path.join(self.state_dir, name)
+        # Publish the directory and its lease atomically with respect to a starting helper.
+        with self._locked_state() as state:
+            os.mkdir(name, 0o700, dir_fd=state)
+            fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=state)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except BaseException:
+                os.close(fd)
+                raise
+        try:
+            yield path
+        finally:
+            try:
+                shutil.rmtree(path)
+            finally:
+                os.close(fd)
+
+    def drain_shells(self) -> None:
+        with self._shell_condition:
+            self._closing_shells = True
+            self._shell_condition.wait_for(lambda: self._active_shells == 0)
+
     def shell(self, request: dict) -> dict:
+        with self._shell_condition:
+            if self._closing_shells:
+                raise HelperError("unavailable", "The host helper is stopping.")
+            self._active_shells += 1
+        try:
+            return self._shell_job(request)
+        finally:
+            with self._shell_condition:
+                self._active_shells -= 1
+                self._shell_condition.notify_all()
+
+    def _shell_job(self, request: dict) -> dict:
         if not self.engine or not self.image:
             raise HelperError("unavailable", "Read-only shell worker is not configured; restart the host helper.")
         command = _string(request, "command", maximum=4096)
         root = self._shell_root(request)
         try:
-            with tempfile.TemporaryDirectory(prefix="shell-", dir=self.state_dir) as temporary:
+            with self._snapshot_workspace() as temporary:
                 snapshot = os.path.join(temporary, "source")
                 os.mkdir(snapshot, 0o755)
                 os.chmod(temporary, 0o755)
@@ -1241,7 +1317,8 @@ class Helper:
                 process.wait()
                 process.stdout.close()
                 try:
-                    cleanup = subprocess.run(engine + ["rm", "-f", name], stdin=subprocess.DEVNULL,
+                    remove = ["rm", "-f"] + (["--time", "0"] if engine_name == "podman" else []) + [name]
+                    cleanup = subprocess.run(engine + remove, stdin=subprocess.DEVNULL,
                                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
                                              check=False, env=env)
                     if (cleanup.returncode and b"No such container" not in cleanup.stderr
@@ -1920,6 +1997,7 @@ def _serve(args: argparse.Namespace) -> int:
         os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
         os.chmod(args.state_dir, 0o700)
         helper = Helper(args.state_dir, args.cache_dir, args.engine, args.image, args.snapshot_mib)
+        helper.reap_shell_snapshots()
         server = HelperServer(os.path.abspath(args.socket), helper, args.socket_label)
         # The host launcher reads this before issuing its one-shot permits. An
         # interrupted attach from a previous helper must never mint a new proof.
@@ -1944,6 +2022,7 @@ def _serve(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        helper.drain_shells()
         server.server_close()
         if args.pid_file:
             try:
