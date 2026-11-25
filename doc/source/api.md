@@ -635,7 +635,8 @@ POST /api/variants/<variant_id>/context/shell
 ```
 
 For local operator requests, submit JSON with `file_id` (`directory` or an approved
-`mount:<alias>`), `command`, and an optional relative `folder`. Uploads are not
+`mount:<alias>`), `command`, and an optional relative `folder`. The JSON body
+is limited to 64 KiB (`413` when exceeded), including streamed requests. Uploads are not
 supported. A container mount at or below a variant directory, or unavailable mount
 information, returns `409`; use an explicitly approved host attachment instead.
 The response includes command output, exit code, timeout and truncation
