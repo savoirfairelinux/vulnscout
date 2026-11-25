@@ -99,6 +99,33 @@ def test_shell_rejects_remote_and_invalid_sources(client, variant):
     assert client.post(url, json={"file_id": "directory", "command": ""}).status_code == 400
 
 
+@pytest.mark.parametrize("subfolder", ["", "build output"])
+def test_directory_shell_rejects_container_only_bind(client, variant, tmp_path, monkeypatch, subfolder):
+    from io import BytesIO
+    from unittest.mock import Mock
+    from src.helpers import codebase_directory
+    from src.routes import context
+
+    directory = tmp_path / "cache" / codebase_directory.directory_name("Demo", "x86")
+    mounted = directory / subfolder
+    mounted.mkdir(parents=True)
+    (mounted / "result").write_text("container build")
+    stale = tmp_path / "host-cache" / directory.name / subfolder / "result"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale host build")
+    helper = Mock(return_value={"output": stale.read_text()})
+    monkeypatch.setattr(context.host_helper, "call", helper)
+    path = os.fsencode(mounted).replace(b" ", br"\040")
+    mountinfo = b"35 20 8:2 /source " + path + b" ro - ext4 /dev/root ro\n"
+    monkeypatch.setattr(codebase_directory, "open", lambda *_: BytesIO(mountinfo), raising=False)
+    read = _source(client, variant, "directory", operation="read", path=(mounted / "result").relative_to(directory))
+    assert read.get_json()["content"] == "container build"
+    response = client.post(f"/api/variants/{variant.id}/context/shell",
+                           json={"file_id": "directory", "command": "cat result", "folder": subfolder})
+    assert response.status_code == 409 and "approved host attachment" in response.get_json()["error"]
+    helper.assert_not_called()
+
+
 def test_shell_action_guard_is_variant_scoped(app, variant):
     from types import SimpleNamespace
 

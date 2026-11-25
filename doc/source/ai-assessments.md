@@ -550,6 +550,9 @@ which need no container change. On SELinux systems provide an appropriate
 container-readable label (for example `:ro,Z` only when private relabeling is
 appropriate), and account for rootless UID mapping. Keep the parent cache
 writable for VulnScout's database and metadata; only the source mount is read-only.
+Browse and read this source with the directory tools. For shell inspection,
+attach the source explicitly as an approved host folder: the host helper cannot
+verify a container mount at or below the variant directory.
 **Remote workstation paths are not automatically accessible**: copy the snapshot
 to the server or mount storage available to that server.
 

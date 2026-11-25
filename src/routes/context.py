@@ -20,7 +20,8 @@ from ..helpers.codebase_reference import (
     ARCHIVE_SUFFIXES, MAX_ENTRIES, MAX_FILE_BYTES, MAX_RESPONSE_BYTES, CodebaseReference, validate_reference,
 )
 from ..helpers.codebase_directory import (
-    CodebaseDirectory, EmptyCodebaseDirectory, directory_exists, directory_name, directory_path, provision_directory,
+    CodebaseDirectory, EmptyCodebaseDirectory, directory_exists, directory_name, directory_path, has_container_mount,
+    provision_directory,
 )
 from ..helpers.context_io import (
     build_export_document,
@@ -986,6 +987,13 @@ def init_app(app):
                     return err
                 if vc is None or vc.codebase_directory is None:
                     return jsonify(error="No codebase directory found."), 404
+                try:
+                    nested_mount = has_container_mount(_get_cache_dir(), vc.codebase_directory)
+                except OSError:
+                    return jsonify(error="Cannot verify the directory's mounts; use an approved host attachment."), 409
+                if nested_mount:
+                    return jsonify(error="This directory has a container mount the shell helper cannot verify. "
+                                         "Use an approved host attachment for shell inspection."), 409
                 result = host_helper.call("shell", timeout=60, source="directory",
                                           directory=vc.codebase_directory, folder=folder, command=command)
             elif file_id.startswith(MOUNT_FILE_ID_PREFIX):

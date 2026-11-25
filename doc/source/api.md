@@ -634,7 +634,9 @@ POST /api/variants/<variant_id>/context/shell
 
 For local operator requests, submit JSON with `file_id` (`directory` or an approved
 `mount:<alias>`), `command`, and an optional relative `folder`. Uploads are not
-supported. The response includes command output, exit code, timeout and truncation
+supported. A container mount at or below a variant directory, or unavailable mount
+information, returns `409`; use an explicitly approved host attachment instead.
+The response includes command output, exit code, timeout and truncation
 flags, and snapshot metadata. The host helper and a local container engine must be
 available. Commands run in a separate, network-isolated container against a filtered
 read-only snapshot; see [AI Agent Development](agent-chat.md#architecture-and-access-boundaries)
