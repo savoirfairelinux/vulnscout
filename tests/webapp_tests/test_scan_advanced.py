@@ -51,10 +51,7 @@ def test_grype_excludes_native_components_and_matches(tmp_path, exceptions):
         {"artifact": {"name": "cmake-native", "version": "1"}},
         {"artifact": {"name": "openssl", "version": "3"}},
     ]}))
-    _filter_grype_matches(
-        ctx, str(results_path), {("cmake-native", "1"), ("openssl", "3")},
-        exclude_native=True,
-    )
+    _filter_grype_matches(ctx, str(results_path), str(export_path))
     matches = json.loads(results_path.read_text())["matches"]
     assert [match["artifact"]["name"] for match in matches] == expected
 
@@ -62,8 +59,9 @@ def test_grype_excludes_native_components_and_matches(tmp_path, exceptions):
         {"artifact": {"name": "cmake-native", "version": "1"}},
         {"artifact": {"name": "openssl", "version": "3"}},
     ]}))
-    _filter_grype_matches(ctx, str(results_path), set(), exclude_native=True)
-    assert [match["artifact"]["name"] for match in json.loads(results_path.read_text())["matches"]] == expected
+    export_path.write_text(json.dumps({"components": []}))
+    _filter_grype_matches(ctx, str(results_path), str(export_path))
+    assert json.loads(results_path.read_text())["matches"] == []
 
 
 def test_grype_missing_binary_is_reported_before_export(app, ids, monkeypatch):

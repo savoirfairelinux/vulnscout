@@ -627,7 +627,7 @@ cmd_scan() {
                 fi
                 (cd "$BASE_DIR" && flask --app src.bin.webapp filter-grype-scan \
                     --project "$PROJECT_NAME" --variant "${VARIANT_NAME:-default}" \
-                    --stage matches "$grype_out") || {
+                    --stage matches --scanned-sbom "$exported_cdx" "$grype_out") || {
                     rm -rf "$grype_tmp"; return 1
                 }
                 console_out info "Merging Grype results..."

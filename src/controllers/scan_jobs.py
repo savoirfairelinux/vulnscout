@@ -174,12 +174,7 @@ def _deduplicate_cyclonedx(
     exclude_kernel: bool,
     exclude_native: bool = False,
 ) -> None:
-    """Collapse supplier-duplicated components before handing the SBOM to Grype.
-
-    The export emits one row per package, so a package appears several times
-    when it differs only by supplier. Keying on the raw name@version is
-    deliberate: normalising would over-collapse genuinely distinct packages.
-    """
+    """Collapse components with equivalent scanner identities before scanning."""
     with open(export_path, "r") as handle:
         data = json.load(handle)
 
@@ -187,7 +182,7 @@ def _deduplicate_cyclonedx(
     original_count = len(components)
     kept: List[dict] = []
     kept_refs: Set[str] = set()
-    seen: Set[Tuple[str, str]] = set()
+    seen: set[tuple[str, str, str, str, str]] = set()
     kernel_dropped = 0
     native_exceptions = {
         name.strip().lower() for name in ctx.options.get("native_package_exceptions", [])
@@ -204,9 +199,10 @@ def _deduplicate_cyclonedx(
             and name.strip().lower() not in native_exceptions
         ):
             continue
-        if (name, version) in seen:
+        key = (name, version, component.get("group", ""), component.get("purl", ""), component.get("cpe", ""))
+        if key in seen:
             continue
-        seen.add((name, version))
+        seen.add(key)
         kept.append(component)
         ref = component.get("bom-ref")
         if ref:
@@ -227,30 +223,56 @@ def _deduplicate_cyclonedx(
 def _filter_grype_matches(
     ctx: _GrypeFilterContext,
     results_path: str,
-    sbom_packages: Set[Tuple[str, str]],
-    exclude_native: bool = False,
+    export_path: str,
 ) -> None:
-    """Drop matches for artifacts Grype synthesised outside the variant SBOM."""
+    """Resolve Grype artifacts against the exact components sent to the scanner."""
+    with open(export_path) as handle:
+        components = json.load(handle).get("components", [])
+    by_purl: dict[tuple[str, str], set[str]] = {}
+    by_cpe: dict[tuple[str, str], set[str]] = {}
+    by_name: dict[tuple[str, str], set[str]] = {}
+    for component in components:
+        name, version = component["name"], component.get("version", "")
+        if purl := component.get("purl"):
+            by_purl.setdefault((purl, version), set()).add(name)
+        if cpe := component.get("cpe"):
+            by_cpe.setdefault((cpe, version), set()).add(name)
+        by_name.setdefault((name, version), set()).add(name)
+        if group := component.get("group"):
+            by_name.setdefault((f"{group}/{name}", version), set()).add(name)
+
     with open(results_path, "r") as handle:
         data = json.load(handle)
 
     matches = data.get("matches", [])
     kept = []
-    native_exceptions = {
-        name.strip().lower() for name in ctx.options.get("native_package_exceptions", [])
-    }
     for match in matches:
         artifact = match.get("artifact", {})
-        name = GrypeVulns._normalize_artifact_name(
-            artifact.get("name", ""), artifact.get("purl")
-        )
-        if (
-            exclude_native and is_native_package_name(name)
-            and name.strip().lower() not in native_exceptions
-        ):
+        raw_name, version = artifact.get("name", ""), artifact.get("version", "")
+        named = by_name.get((raw_name, version), set())
+        purl = artifact.get("purl")
+        candidates = by_purl.get((purl, version), set())
+        if not candidates:
+            candidates = {
+                name for cpe in artifact.get("cpes") or [] if isinstance(cpe, str)
+                for name in by_cpe.get((cpe, version), ())
+            }
+        if len(candidates) > 1:
+            candidates = candidates & named
+        elif not candidates:
+            # Grype can synthesize a generic PURL instead of returning the input PURL.
+            candidates = {name for name in named if not purl or purl == f"pkg:generic/{name}@{version}"}
+        if len(candidates) != 1:
             continue
-        if not sbom_packages or (name, artifact.get("version", "")) in sbom_packages:
-            kept.append(match)
+        name = next(iter(candidates))
+        normalized = GrypeVulns._normalize_artifact_name(raw_name, purl)
+        if name != normalized:
+            artifact[GrypeVulns.SBOM_NAME] = name
+            for detail in match.get("matchDetails", []):
+                package = detail.get("searchedBy", {}).get("Package", {})
+                if package.get("version") == version and package.get("name") in (raw_name, normalized):
+                    package["name"] = name
+        kept.append(match)
     data["matches"] = kept
     with open(results_path, "w") as handle:
         json.dump(data, handle)
@@ -355,7 +377,7 @@ def run_grype_scan(ctx: JobContext) -> None:
 
         if sbom_packages or exclude_native:
             _filter_grype_matches(
-                ctx, grype_out, sbom_packages, exclude_native
+                ctx, grype_out, exported_cdx
             )
 
         ctx.check_cancelled()

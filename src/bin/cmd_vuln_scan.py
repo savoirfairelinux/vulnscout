@@ -79,11 +79,20 @@ class _CLIGrypeFilterContext:
 @click.option("--project", required=True)
 @click.option("--variant", default=None)
 @click.option("--stage", type=click.Choice(["sbom", "matches"]), required=True)
+@click.option("--scanned-sbom", type=click.Path(exists=True, dir_okay=False),
+              help="Filtered CycloneDX file supplied to Grype (matches stage).")
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 @with_appcontext
-def filter_grype_scan_command(project: str, variant: str | None, stage: str, path: str) -> None:
+def filter_grype_scan_command(project: str, variant: str | None, stage: str, scanned_sbom: str | None,
+                              path: str) -> None:
     """Apply wizard scan scope to a Grype input or result."""
     from ..controllers.scan_jobs import _deduplicate_cyclonedx, _filter_grype_matches, _variant_sbom_packages
+
+    if stage == "matches":
+        if scanned_sbom is None:
+            raise click.UsageError("--scanned-sbom is required for the matches stage")
+        _filter_grype_matches(_CLIGrypeFilterContext({}), path, scanned_sbom)
+        return
 
     project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
     options = _scan_configuration(project_obj.name)
@@ -91,10 +100,7 @@ def filter_grype_scan_command(project: str, variant: str | None, stage: str, pat
     if not sbom_packages and not options["exclude_native"]:
         return
     ctx = _CLIGrypeFilterContext(options)
-    if stage == "sbom":
-        _deduplicate_cyclonedx(ctx, path, True, options["exclude_native"])
-    else:
-        _filter_grype_matches(ctx, path, sbom_packages, options["exclude_native"])
+    _deduplicate_cyclonedx(ctx, path, True, options["exclude_native"])
 
 
 @click.command("new-scan-run-id", cls=Command)
