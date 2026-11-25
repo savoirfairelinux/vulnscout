@@ -390,12 +390,12 @@ function Explorer() {
 
     // Agent writes refresh in the background; a scope change aborts and replaces that reload.
     useAgentWriteRefresh((_, announcedRevision) => Promise.all([
-        announcedRevision === loadGeneration.current
+        scopeReady.current && announcedRevision === activeScopeRevision.current
             ? loadData(currentBaseVariantId ?? currentVariantId, currentVariantId ? undefined : currentProjectId,
                 currentBaseVariantId ? currentVariantId : undefined, currentOperation, currentVariantIds, currentMultiOperation, true)
             : undefined,
         loadSetupRequirement(),
-    ]), { revision: loadGeneration });
+    ]), { revision: activeScopeRevision });
 
     useEffect(() => {
         const previous = observedOperationActivity.current;

@@ -974,6 +974,27 @@ describe('Explorer agent write reloads', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    test('a queued write still refreshes its scope after a local edit retry fails', async () => {
+        render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish!: (value: []) => void;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        mockVulnerabilitiesList.mockRejectedValueOnce(new Error('retry failed'));
+        mockVulnerabilitiesList.mockResolvedValueOnce([{ id: 'CVE-recovered' }] as Awaited<ReturnType<typeof Vulnerabilities.list>>);
+        (Vulnerabilities.enrich_with_assessments as jest.Mock).mockImplementationOnce(rows => rows);
+        const reportError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            announceWrite();
+            announceWrite();
+            fireEvent.click(screen.getByRole('button', { name: 'append assessment' }));
+            await act(async () => finish([]));
+            await waitFor(() => expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-recovered'));
+            expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(4);
+        } finally {
+            reportError.mockRestore();
+        }
+    });
+
     test('agent writes refresh without blocking navigation or vulnerability work and install the new data', async () => {
         render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
         await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
