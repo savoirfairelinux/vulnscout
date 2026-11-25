@@ -1,5 +1,7 @@
 """Drop the per-variant auto-provisioned codebase directory column."""
 
+from datetime import datetime, timezone
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -16,6 +18,9 @@ def upgrade():
     if INDEX_NAME in {index["name"] for index in inspector.get_indexes("variant_context")}:
         op.drop_index(INDEX_NAME, table_name="variant_context")
     if "codebase_directory" in {column["name"] for column in inspector.get_columns("variant_context")}:
+        op.execute(sa.text(
+            "UPDATE variant_context SET updated_at = :now WHERE codebase_directory IS NOT NULL"
+        ).bindparams(now=datetime.now(timezone.utc)))
         # Plain DROP COLUMN: rebuilding this parent table can cascade-delete context files on SQLite.
         op.drop_column("variant_context", "codebase_directory")
 

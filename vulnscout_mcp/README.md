@@ -126,7 +126,7 @@ python vulnscout_mcp/server.py
 | `list_codebase_files`          | List paths/sizes in an upload or recursively match filenames inside a narrowed folder; follow `next_offset` |
 | `read_codebase_file`           | Read UTF-8 source with 1-based lines; follow `next_line` (200 lines/64 KB maximum per read) |
 | `search_codebase_file`         | Stream literal matches in a known mount file. Pass a hit's `position` to `read_codebase_file` for bounded surrounding lines; follow `next_cursor` separately until `complete`. |
-| `search_codebase`              | Search members of one uploaded reference by literal and optional path glob. The bounded directory and mount forms remain for backwards compatibility; prefer shallow discovery and single-file search. |
+| `search_codebase`              | Search members of one uploaded reference by literal and optional path glob. Bounded recursive search still works for approved host folders (`file_id="mount:<alias>"`); prefer shallow discovery and single-file search for those folders. The old `file_id="directory"` is retired and rejected. |
 | `read_codebase_files`          | Read up to 8 files in parallel with the same line range (128 KiB combined response) |
 | `get_ai_context_form_guide`    | Return the static AI Context form guide (fields, tables, STRIDE categories, limits) and the copy-ready reply format for helping users fill it |
 | `get_project_context`          | Get context fields for a project by UUID                             |
