@@ -707,6 +707,66 @@ class TestScanJobPackageFilters:
         else:
             assert [match["artifact"]["vulnscout:sbom-name"] for match in matches] == [expected]
 
+    @pytest.mark.parametrize(("uri", "formatted", "expected"), [
+        ("cpe:/a:vendor:lib:1", "cpe:2.3:a:vendor:lib:1:*:*:*:*:*:*:*", True),
+        ("cpe:/a:Vendor:lib%3Acore:1", r"cpe:2.3:a:vendor:lib\:core:1:*:*:*:*:*:*:*", True),
+        ("cpe:/a:vendor:lib:1::~~pro~linux~x64~",
+         "cpe:2.3:a:vendor:lib:1:*:*:*:pro:linux:x64:*", True),
+        ("cpe:/a:vendor:lib%2A:1", "cpe:2.3:a:vendor:lib*:1:*:*:*:*:*:*:*", False),
+        ("cpe:/a:vendor:lib:1:-", "cpe:2.3:a:vendor:lib:1:*:*:*:*:*:*:*", False),
+    ])
+    def test_grype_cpe_binding_equivalence(self, tmp_path, uri, formatted, expected):
+        purl = "pkg:generic/lib@1"
+        components = [
+            {"name": "lib", "group": "vendor", "version": "1", "purl": purl},
+            {"name": "vendor/lib", "version": "1", "purl": purl, "cpe": uri},
+        ]
+        artifact = {"name": "vendor/lib", "version": "1", "purl": purl, "cpes": [formatted]}
+        matches = self._filter_test_artifact(tmp_path, components, artifact)
+        assert [match["artifact"]["vulnscout:sbom-name"] for match in matches] == (
+            ["vendor/lib"] if expected else []
+        )
+
+    @pytest.mark.parametrize(("purl", "ref", "cpes", "expected"), [
+        ("pkg:generic/lib@1", "first", [], "lib"),
+        ("pkg:generic/lib@1", "first", ["shared"], "lib"),
+        ("pkg:generic/lib@1", "second", [], "vendor/lib"),
+        ("pkg:generic/lib@1", "outside", [], None),
+        ("pkg:generic/conflict@1", "first", ["shared"], None),
+        ("pkg:generic/lib@1", "first", ["other"], "vendor/lib"),
+        ("pkg:generic/lib@1", "first", ["unrelated"], None),
+        ("pkg:generic/lib@1", "duplicate", [], None),
+    ])
+    def test_grype_uses_unique_component_id_only_with_compatible_evidence(self, tmp_path, purl, ref, cpes, expected):
+        def cpe(vendor):
+            return f"cpe:2.3:a:{vendor}:lib:1:*:*:*:*:*:*:*"
+
+        shared = "pkg:generic/lib@1"
+        components = [
+            {"name": "lib", "group": "vendor", "version": "1", "purl": shared,
+             "bom-ref": "first", "cpe": cpe("shared")},
+            {"name": "vendor/lib", "version": "1", "purl": shared,
+             "bom-ref": "duplicate", "cpe": cpe("shared")},
+            {"name": "vendor/lib", "version": "1", "purl": shared,
+             "bom-ref": "second", "cpe": cpe("other")},
+            {"name": "lib", "version": "1", "purl": shared, "bom-ref": "duplicate"},
+            {"name": "lib", "version": "1", "purl": "pkg:generic/outside@1", "bom-ref": "outside"},
+        ]
+        artifact = {"id": ref, "name": "vendor/lib", "version": "1", "purl": purl, "cpes": list(map(cpe, cpes))}
+        matches = self._filter_test_artifact(tmp_path, components, artifact)
+        assert len(matches) == int(expected is not None)
+        if expected is not None:
+            assert matches[0]["artifact"].get("vulnscout:sbom-name", "lib") == expected
+
+    @staticmethod
+    def _filter_test_artifact(tmp_path, components, artifact):
+        export_path = tmp_path / "sbom.json"
+        export_path.write_text(json.dumps({"components": components}))
+        results_path = tmp_path / "grype.json"
+        results_path.write_text(json.dumps({"matches": [{"artifact": artifact}]}))
+        _filter_grype_matches(MagicMock(), str(results_path), str(export_path))
+        return json.loads(results_path.read_text())["matches"]
+
 
 class TestIncompleteToolScanCleanup:
     @pytest.mark.parametrize("source", ["nvd", "osv", "scc"])
