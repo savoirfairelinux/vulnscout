@@ -22,7 +22,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from src.helpers import host_mount_helper as hh
-from tests.unit_tests.host_mount_permits import host_permit
+from tests.unit_tests.host_mount_permits import approve_on_socket, host_permit
 
 VARIANT = str(uuid.uuid4())
 
@@ -1184,7 +1184,7 @@ def test_daemon_writes_pid_answers_ping_and_cleans_up_on_sigterm(tree):
     started = subprocess.run([
         sys.executable, script, "serve", "--daemon", "--socket", str(socket_path), "--state-dir", str(state),
         "--pid-file", str(pid_file), "--log-file", str(state / "helper.log"),
-        "--cache-dir", str(cache), "--snapshot-mib", "1", "--engine", "/bin/false", "--image", "fixture",
+        "--snapshot-mib", "1", "--engine", "/bin/false", "--image", "fixture",
     ], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
     assert started.returncode == 0, started.stderr
     for _ in range(100):
@@ -1199,6 +1199,12 @@ def test_daemon_writes_pid_answers_ping_and_cleans_up_on_sigterm(tree):
         assert stat.S_IMODE(state.stat().st_mode) == 0o700
         reply = hh.request(str(socket_path), {
             "op": "shell", "source": "directory", "directory": folder.name, "command": "true",
+        })
+        assert reply["code"] == "forbidden" and "approved host attachment" in reply["error"]
+        approve_on_socket(state, socket_path, folder, VARIANT)
+        reply = hh.request(str(socket_path), {
+            "op": "shell", "source": "mount", "variant_id": VARIANT,
+            "alias": "src", "mount_path": str(folder), "command": "true",
         })
         assert reply["code"] == "limit" and "1048576 bytes" in reply["error"]
     finally:

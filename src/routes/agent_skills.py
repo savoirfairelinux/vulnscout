@@ -19,7 +19,8 @@ MOUNT_DISCOVERY_MESSAGE = (
     "directory or mount file, use search_codebase_file directly and follow next_cursor until complete. "
     "The configurable snapshot cap (default 512 MiB), 10 MiB direct read cap and timeout are different limits; "
     "stream known logs rather than automatically lowering global confidence. Use run_codebase_shell only "
-    "for scoped artifact inspection, never navigation. An incomplete lookup is not absence; try a narrower "
+    "on an approved mount:<alias> for artifact inspection, never navigation. An incomplete lookup is not absence; "
+    "try a narrower "
     "path or independent build evidence before applying the confidence gate. "
 )
 PROFILE_SYSTEM_MESSAGE = (

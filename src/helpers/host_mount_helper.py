@@ -896,13 +896,12 @@ def _walk_message(message: str | None, walk: _Walk) -> str | None:
 class Helper:
     """Request dispatcher for exact host-approved attachments."""
 
-    def __init__(self, state_dir: str, cache_dir: str | None = None,
-                 engine: str | None = None, image: str | None = None, snapshot_mib: int = DEFAULT_SNAPSHOT_MIB):
+    def __init__(self, state_dir: str, *, engine: str | None = None, image: str | None = None,
+                 snapshot_mib: int = DEFAULT_SNAPSHOT_MIB):
         if snapshot_mib < 1:
             raise ValueError("Shell snapshot limit must be a positive number of MiB.")
         self.snapshot_bytes = snapshot_mib * 1024 * 1024
         self.state_dir = state_dir
-        self.cache_dir = cache_dir
         self.engine = engine
         self.image = image
         self.registry = Registry(state_dir)
@@ -1065,30 +1064,10 @@ class Helper:
         return {"protocol": PROTOCOL_VERSION, "read_only": True}
 
     def _shell_root(self, request: dict) -> int:
-        if request.get("source") == "mount":
-            return self._scoped_fd(request)[0]
-        if request.get("source") != "directory" or not self.cache_dir:
-            raise HelperError("invalid", "A configured codebase directory or approved mount is required.")
-        name = _string(request, "directory", maximum=128)
-        if not re.fullmatch(r"context-[a-zA-Z0-9_-]+", name):
-            raise HelperError("invalid", "Invalid codebase directory name.")
-        try:
-            cache_fd = _open_absolute(self.cache_dir)
-            try:
-                root = os.open(name, _DIRECTORY_FLAGS, dir_fd=cache_fd)
-            finally:
-                os.close(cache_fd)
-            try:
-                for part in _folder_parts(request):
-                    child = os.open(part, _DIRECTORY_FLAGS, dir_fd=root)
-                    os.close(root)
-                    root = child
-                return root
-            except BaseException:
-                os.close(root)
-                raise
-        except OSError as exc:
-            raise HelperError("unavailable", "Codebase directory is missing or unreadable.") from exc
+        if request.get("source") != "mount" or "directory" in request:
+            raise HelperError("forbidden", "Shell inspection requires an approved host attachment.")
+        _string(request, "mount_path")
+        return self._scoped_fd(request)[0]
 
     def _shell_snapshot(self, root: int, destination: str) -> dict:
         walk = _Walk(root, LIST_TIME_LIMIT)
@@ -1996,7 +1975,7 @@ def _serve(args: argparse.Namespace) -> int:
     try:
         os.makedirs(args.state_dir, mode=0o700, exist_ok=True)
         os.chmod(args.state_dir, 0o700)
-        helper = Helper(args.state_dir, args.cache_dir, args.engine, args.image, args.snapshot_mib)
+        helper = Helper(args.state_dir, engine=args.engine, image=args.image, snapshot_mib=args.snapshot_mib)
         helper.reap_shell_snapshots()
         server = HelperServer(os.path.abspath(args.socket), helper, args.socket_label)
         # The host launcher reads this before issuing its one-shot permits. An
@@ -2058,7 +2037,6 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--socket", required=True)
     serve.add_argument("--socket-label", help="Container process SELinux label for the listening socket only.")
     serve.add_argument("--state-dir", required=True, help="Host-only directory holding the alias registry.")
-    serve.add_argument("--cache-dir", help="Host cache directory containing provisioned codebases.")
     serve.add_argument("--engine", help="Host container engine executable for the shell worker.")
     serve.add_argument("--image", help="Trusted local image ID for the shell worker.")
     serve.add_argument("--snapshot-mib", type=int, default=DEFAULT_SNAPSHOT_MIB, help="Shell snapshot byte cap in MiB.")

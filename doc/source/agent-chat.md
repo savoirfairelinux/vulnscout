@@ -37,7 +37,7 @@ uses `list_codebase_children` for navigation, direct reads for known paths, and
 for a literal in a known log, even over the 10 MiB direct-read limit. Follow `next_cursor` until
 `complete`; neither snapshot exhaustion nor a timeout establishes absence. For a known
 artifact requiring command-line inspection it can use `run_codebase_shell` on a filtered, read-only snapshot
-of a variant's provisioned directory or attached host folder. The host helper
+of an explicitly approved host folder attached to the variant. The host helper
 starts a separate container for each command with no network, a read-only root,
 no Linux capabilities, an unprivileged user, and bounded time, output, memory,
 processes and temporary storage. It never mounts the application cache or
@@ -50,8 +50,9 @@ does not establish runtime use or exploitability.
 The worker requires the host helper and a local Docker or Podman engine; it fails
 closed if unavailable. Build the current image and start VulnScout with the
 matching launcher, then start the helper with `./vulnscout ai-context helper start`.
-Only `directory` and `mount:<alias>` are supported, not
-uploads. The default shell snapshot cap is **512 MiB** across all copied files, independent of
+Only `mount:<alias>` supports the shell. Provisioned directories remain available for
+browsing, reading and searching; uploads cannot run commands. The default shell snapshot
+cap is **512 MiB** across all copied files, independent of
 the 10 MiB direct-read limit. On the host, for example, run
 `./vulnscout config set VULNSCOUT_SHELL_SNAPSHOT_MIB 768` followed by
 `./vulnscout ai-context helper restart`. The setting takes a positive integer in MiB.

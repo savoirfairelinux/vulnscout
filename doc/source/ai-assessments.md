@@ -213,8 +213,9 @@ same methodology. The Agent can read VulnScout data, uploaded source references
 and the skill files, and fetch public advisory pages such as NVD and GHSA
 (disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no direct host
 filesystem access**. Provision a **Codebase directory** or attach host folders
-as described below to expose source through the bounded MCP tools or the isolated
-read-only shell described in [AI Agent Development](agent-chat.md). Missing evidence remains an uncertainty, never proof that the
+as described below to expose source through the bounded MCP tools. Only explicitly attached
+host folders support the isolated read-only shell described in [AI Agent Development](agent-chat.md).
+Missing evidence remains an uncertainty, never proof that the
 product is safe.
 
 Submitted AI assessments remain pending until a human approves them.
@@ -550,14 +551,14 @@ which need no container change. On SELinux systems provide an appropriate
 container-readable label (for example `:ro,Z` only when private relabeling is
 appropriate), and account for rootless UID mapping. Keep the parent cache
 writable for VulnScout's database and metadata; only the source mount is read-only.
-Browse and read this source with the directory tools. For shell inspection,
+Browse, read and search this source with the directory tools. For shell inspection,
 attach the source explicitly as an approved host folder: the host helper cannot
-verify a container mount at or below the variant directory.
+verify that the host and application see the same contents under a provisioned directory.
 **Remote workstation paths are not automatically accessible**: copy the snapshot
 to the server or mount storage available to that server.
 
 The embedded Agent has no direct host filesystem access. Its isolated read-only
-shell can inspect a filtered snapshot of a directory or attached folder; see
+shell can inspect a filtered snapshot of an explicitly approved attached folder; see
 [AI Agent Development](agent-chat.md). Merged
 context returns `codebase_directory.file_id="directory"` for a provisioned
 directory, and `list_codebase_children`, `list_codebase_files`, `search_codebase_file`, `read_codebase_file` and
@@ -582,9 +583,9 @@ Only UTF-8 source is readable. There is no aggregate directory/upload-size cap,
 but each operation visits at most **500,000 entries** (excluded directories are not
 traversed), each read is limited to **10 MiB/file**, listings/reads to
 **64 KiB of serialized response**, and pages to **200 files/lines**. Oversized
-responses fail explicitly; reduce the page size or line count. The embedded
-agent's isolated shell has separate snapshot and output limits; see
-[AI Agent Development](agent-chat.md). Excluded/binary/oversized files and partial inventories
+listings return fewer rows and a continuation; reduce the line count for oversized reads.
+For shell inspection, an approved attachment is required; see [AI Agent Development](agent-chat.md).
+Excluded/binary/oversized files and partial inventories
 cannot establish absence of vulnerable code.
 
 Directory contents are live, not immutable evidence. Administrator edits and

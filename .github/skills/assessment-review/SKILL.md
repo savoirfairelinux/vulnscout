@@ -157,7 +157,7 @@ read known paths directly with `vulnscout-read_codebase_file`. Navigate director
 `vulnscout-list_codebase_children`; use `vulnscout-list_codebase_files` for uploads or scoped filename matching.
 For literal evidence in a known directory or mount file, call `vulnscout-search_codebase_file` directly
 and pass a hit's `position` to `vulnscout-read_codebase_file` to verify nearby status lines. Check truncation
-and follow `next_cursor` until `complete`. Use shell only for scoped artifact inspection. The configurable
+and follow `next_cursor` until `complete`. Use shell only for artifact inspection on an approved `mount:<alias>`. The configurable
 snapshot limit (default 512 MiB), the 10 MiB direct read limit, and a timeout are distinct lookup failures: stream the
 known log instead of treating a failed lookup as absence or automatically lowering global confidence.
 For an active directory use `codebase_directory.file_id="directory"` with those

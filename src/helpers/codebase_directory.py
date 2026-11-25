@@ -59,18 +59,6 @@ def directory_exists(cache_dir: str, name: str) -> bool:
         return False
 
 
-def has_container_mount(cache_dir: str, name: str) -> bool:
-    """A mount at or below the variant directory is not shared by its cache name."""
-    root = os.fsencode(os.path.realpath(directory_path(cache_dir, name)))
-    with open("/proc/self/mountinfo", "rb") as mounts:
-        for entry in mounts:
-            # Linux escapes whitespace and backslashes in mountinfo path fields.
-            mountpoint = re.sub(rb"\\([0-7]{3})", lambda m: bytes([int(m[1], 8)]), entry.split()[4])
-            if mountpoint == root or mountpoint.startswith(root + b"/"):
-                return True
-    return False
-
-
 def provision_directory(cache_dir: str, name: str) -> None:
     directory_path(cache_dir, name)
     os.makedirs(cache_dir, mode=0o750, exist_ok=True)

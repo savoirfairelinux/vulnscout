@@ -9,6 +9,13 @@ from pathlib import Path
 import pytest
 
 from src.helpers.host_mount_helper import Helper, HelperError, request
+from tests.unit_tests.host_mount_permits import approve_mount, approve_on_socket
+
+VARIANT = "fe447aa1-308e-4ffc-b510-7f8a4cc97138"
+
+
+def binding(source):
+    return {"source": "mount", "variant_id": VARIANT, "alias": "src", "mount_path": str(source)}
 
 
 @pytest.fixture
@@ -21,7 +28,9 @@ def worker(tmp_path):
     source.mkdir()
     (source / "source.c").write_text("int vulnerable(void) { return 1; }\n")
     engine = shutil.which("podman") or shutil.which("docker")
-    return Helper(str(state), str(cache), engine, os.getenv("VULNSCOUT_TEST_SHELL_IMAGE")), source
+    helper = Helper(str(state), engine=engine, image=os.getenv("VULNSCOUT_TEST_SHELL_IMAGE"))
+    approve_mount(helper, source, helper.dispatch, VARIANT)
+    return helper, source
 
 
 def test_snapshot_excludes_sensitive_and_linked_files(worker, tmp_path):
@@ -33,10 +42,10 @@ def test_snapshot_excludes_sensitive_and_linked_files(worker, tmp_path):
     (source / "build" / ".config").mkdir(parents=True)
     (source / "build" / ".config" / "private").touch()
     with pytest.raises(HelperError, match="excluded"):
-        helper._shell_root({"source": "directory", "directory": "context-p-v", "folder": "build/.config"})
+        helper._shell_root({**binding(source), "folder": "build/.config"})
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
-    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    root = helper._shell_root(binding(source))
     try:
         result = helper._shell_snapshot(root, str(snapshot))
     finally:
@@ -51,7 +60,7 @@ def test_snapshot_excludes_sensitive_and_linked_files(worker, tmp_path):
 def test_snapshot_rejects_hardlinks(worker, tmp_path):
     helper, source = worker
     os.link(source / "source.c", source / "linked.c")
-    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    root = helper._shell_root(binding(source))
     try:
         with pytest.raises(HelperError, match="links and special"):
             helper._shell_snapshot(root, str(tmp_path / "snapshot"))
@@ -65,7 +74,7 @@ def test_snapshot_rejects_concurrent_changes(worker, tmp_path, monkeypatch):
     helper, source = worker
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
-    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    root = helper._shell_root(binding(source))
     read = os.read
 
     def mutate_then_read(fd, size):
@@ -81,11 +90,11 @@ def test_snapshot_rejects_concurrent_changes(worker, tmp_path, monkeypatch):
 
 
 def test_snapshot_rejects_budget_overflow(worker, tmp_path, monkeypatch):
-    helper, _ = worker
+    helper, source = worker
     monkeypatch.setattr(helper, "snapshot_bytes", 4)
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
-    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    root = helper._shell_root(binding(source))
     try:
         with pytest.raises(HelperError, match=r"snapshot limit \(4 bytes\)"):
             helper._shell_snapshot(root, str(snapshot))
@@ -123,7 +132,7 @@ def test_snapshot_enforces_runtime_copy_and_walk_limits(worker, tmp_path, monkey
         return read(fd, size)
 
     monkeypatch.setattr(os, "read", bounded)
-    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    root = helper._shell_root(binding(source))
     try:
         limit = {"time": "10s copy/traversal time", "entries": "1 entries", "bytes": "64 bytes"}[reason]
         with pytest.raises(HelperError, match=rf"Shell snapshot limit \({limit}\)"):
@@ -137,10 +146,22 @@ def test_snapshot_enforces_runtime_copy_and_walk_limits(worker, tmp_path, monkey
 
 
 def test_shell_rejects_unconfigured_worker(worker):
-    helper, _ = worker
+    helper, source = worker
     helper.engine = None
     with pytest.raises(HelperError, match="not configured"):
-        helper.shell({"source": "directory", "directory": "context-p-v", "command": "ls"})
+        helper.shell({**binding(source), "command": "ls"})
+
+
+def test_worker_rejects_unapproved_shell_sources_before_copy(worker, monkeypatch):
+    helper, source = worker
+    helper.engine = "podman"
+    helper.image = "fixture"
+    monkeypatch.setattr(helper, "_snapshot_workspace", lambda: pytest.fail("Unexpected snapshot"))
+    for fields, code in (({"source": "directory", "directory": source.name}, "forbidden"),
+                         ({**binding(source), "mount_path": str(source.parent)}, "forbidden"),
+                         ({**binding(source), "alias": "unknown"}, "not_found")):
+        result = helper.dispatch({"op": "shell", "command": "true", **fields})
+        assert not result["ok"] and result["code"] == code
 
 
 def test_reaper_only_removes_abandoned_owned_snapshots(worker):
@@ -167,7 +188,8 @@ def test_reaper_only_removes_abandoned_owned_snapshots(worker):
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="the host helper refuses to run as root")
 def test_restart_drains_a_running_shell_job(worker, tmp_path):
-    helper, source = worker
+    _, source = worker
+    state = tmp_path / "daemon-state"
     engine = tmp_path / "podman"
     running = tmp_path / "running"
     release = tmp_path / "release"
@@ -179,7 +201,7 @@ def test_restart_drains_a_running_shell_job(worker, tmp_path):
     socket_path = tmp_path / "socket" / "helper.sock"
     pid_path = tmp_path / "helper.pid"
     argv = [sys.executable, "-m", "src.helpers.host_mount_helper", "serve", "--socket", str(socket_path),
-            "--pid-file", str(pid_path), "--state-dir", helper.state_dir, "--cache-dir", str(source.parent),
+            "--pid-file", str(pid_path), "--state-dir", str(state),
             "--engine", str(engine), "--image", "fixture"]
 
     def wait_for(path, process):
@@ -196,9 +218,10 @@ def test_restart_drains_a_running_shell_job(worker, tmp_path):
             wait_for(pid_path, process)
             assert request(str(socket_path), {"op": "status"})["ok"]
             if first_start:
+                approve_on_socket(state, socket_path, source, VARIANT)
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     result = pool.submit(request, str(socket_path), {
-                        "op": "shell", "source": "directory", "directory": source.name, "command": "true",
+                        "op": "shell", **binding(source), "command": "true",
                     })
                     try:
                         wait_for(running, process)
@@ -211,7 +234,7 @@ def test_restart_drains_a_running_shell_job(worker, tmp_path):
             else:
                 process.terminate()
             assert process.wait(timeout=5) == 0
-            assert not list(Path(helper.state_dir).glob("shell-*"))
+            assert not list(state.glob("shell-*"))
         finally:
             if process.poll() is None:
                 process.kill()
@@ -233,7 +256,7 @@ def test_snapshot_accepts_binaries_larger_than_text_read_limit(worker, tmp_path)
         target.truncate(11 * 1024 * 1024)
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
-    root = helper._shell_root({"source": "directory", "directory": "context-p-v"})
+    root = helper._shell_root(binding(source))
     try:
         result = helper._shell_snapshot(root, str(snapshot))
     finally:
@@ -246,7 +269,7 @@ def test_snapshot_accepts_binaries_larger_than_text_read_limit(worker, tmp_path)
 def test_real_worker_is_read_only_and_isolated(worker):
     helper, source = worker
     result = helper.shell({
-        "source": "directory", "directory": "context-p-v",
+        **binding(source),
         "command": (
             "grep -n vulnerable source.c; touch source.c; "
             "test ! -e /scan/src && test ! -S /var/run/docker.sock && echo isolated; "
@@ -266,12 +289,12 @@ def test_real_worker_supports_binary_tools_and_caps_output(worker):
     helper, source = worker
     shutil.copyfile("/bin/true", source / "program")
     result = helper.shell({
-        "source": "directory", "directory": "context-p-v",
+        **binding(source),
         "command": "find . -name '*.c' | grep source | sed 's/source/matched/'; readelf -h program",
     })
     assert result["exit_code"] == 0
     assert "./matched.c" in result["output"] and "ELF Header:" in result["output"]
-    result = helper.shell({"source": "directory", "directory": "context-p-v", "command": "yes X"})
+    result = helper.shell({**binding(source), "command": "yes X"})
     assert result["truncated"] is True
     assert len(result["output"].encode()) == 64 * 1024
 
@@ -280,25 +303,28 @@ def test_real_worker_supports_binary_tools_and_caps_output(worker):
 def test_real_worker_timeout(worker, monkeypatch):
     from src.helpers import host_mount_helper
 
-    helper, _ = worker
+    helper, source = worker
     monkeypatch.setattr(host_mount_helper, "SHELL_TIMEOUT", 2.0)
-    result = helper.shell({"source": "directory", "directory": "context-p-v", "command": "sleep 30"})
+    result = helper.shell({**binding(source), "command": "sleep 30"})
     assert result["timed_out"] is True
 
 
 @pytest.mark.skipif(not os.getenv("VULNSCOUT_TEST_SHELL_IMAGE"), reason="requires a local Docker image")
 def test_launcher_worker_end_to_end(tmp_path):
     launcher = Path(__file__).resolve().parents[2] / "vulnscout"
-    env = {**os.environ, "VULNSCOUT_BUILD_DIR": str(tmp_path / "build"),
+    state = tmp_path / "state"
+    env = {**os.environ, "VULNSCOUT_BUILD_DIR": str(tmp_path / "build"), "VULNSCOUT_HOST_HELPER_STATE_DIR": str(state),
            "VULNSCOUT_IMAGE": os.environ["VULNSCOUT_TEST_SHELL_IMAGE"]}
     cache = tmp_path / "build" / "cache"
-    source = cache / "context-p-v"
+    source = tmp_path / "approved"
     source.mkdir(parents=True)
     (source / "source.c").write_text("int vulnerable;\n")
     try:
         subprocess.run([str(launcher), "ai-context", "helper", "start"], env=env, check=True, timeout=30)
-        reply = request(str(cache / "host-helper" / "helper.sock"), {
-            "op": "shell", "source": "directory", "directory": "context-p-v",
+        socket = cache / "host-helper" / "helper.sock"
+        approve_on_socket(state, socket, source, VARIANT)
+        reply = request(str(socket), {
+            "op": "shell", **binding(source),
             "command": "grep -n vulnerable source.c",
         }, timeout=60)
         assert reply["ok"] is True

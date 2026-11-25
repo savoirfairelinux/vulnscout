@@ -20,8 +20,7 @@ from ..helpers.codebase_reference import (
     ARCHIVE_SUFFIXES, MAX_ENTRIES, MAX_FILE_BYTES, MAX_RESPONSE_BYTES, CodebaseReference, validate_reference,
 )
 from ..helpers.codebase_directory import (
-    CodebaseDirectory, EmptyCodebaseDirectory, directory_exists, directory_name, directory_path, has_container_mount,
-    provision_directory,
+    CodebaseDirectory, EmptyCodebaseDirectory, directory_exists, directory_name, directory_path, provision_directory,
 )
 from ..helpers.context_io import (
     build_export_document,
@@ -973,7 +972,7 @@ def init_app(app):
 
     @app.route('/api/variants/<variant_id>/context/shell', methods=['POST'])
     def run_codebase_shell(variant_id):
-        """Run an isolated shell against a filtered snapshot of one variant source."""
+        """Run an isolated shell against a filtered snapshot of one approved host attachment."""
         if error := _access_error():
             return error
         variant_uuid, err = parse_uuid_or_400(variant_id, 'variant_id')
@@ -1003,33 +1002,20 @@ def init_app(app):
         if (not isinstance(file_id, str) or not isinstance(folder, str) or not isinstance(command, str)
                 or not command or len(command) > 4096 or "\x00" in command or len(folder) > 1024):
             return jsonify(error="Invalid shell source, folder or command."), 400
+        if file_id == "directory":
+            return jsonify(error="Use directory browsing, read or search, or an approved host attachment "
+                                 "(mount:<alias>) for shell inspection."), 409
+        if not file_id.startswith(MOUNT_FILE_ID_PREFIX):
+            return jsonify(error="Shell inspection requires an approved host attachment (mount:<alias>)."), 400
         try:
-            if file_id == "directory":
-                vc, err = _directory_context(variant_uuid)
-                if err:
-                    return err
-                if vc is None or vc.codebase_directory is None:
-                    return jsonify(error="No codebase directory found."), 404
-                try:
-                    nested_mount = has_container_mount(_get_cache_dir(), vc.codebase_directory)
-                except OSError:
-                    return jsonify(error="Cannot verify the directory's mounts; use an approved host attachment."), 409
-                if nested_mount:
-                    return jsonify(error="This directory has a container mount the shell helper cannot verify. "
-                                         "Use an approved host attachment for shell inspection."), 409
-                result = host_helper.call("shell", timeout=60, source="directory",
-                                          directory=vc.codebase_directory, folder=folder, command=command)
-            elif file_id.startswith(MOUNT_FILE_ID_PREFIX):
-                alias = host_mounts.mount_alias(file_id)
-                assert alias is not None
-                mount = HostMount.get(variant_uuid, alias)
-                if mount is None:
-                    return jsonify(error="Attached host folder not found."), 404
-                host_mounts._activate(host_mounts._binding(mount))
-                result = host_helper.call("shell", timeout=60, source="mount", variant_id=str(variant_uuid),
-                                          alias=alias, mount_path=mount.host_path, folder=folder, command=command)
-            else:
-                return jsonify(error="Shell supports only the variant directory or an attached host folder."), 400
+            alias = host_mounts.mount_alias(file_id)
+            assert alias is not None
+            mount = HostMount.get(variant_uuid, alias)
+            if mount is None:
+                return jsonify(error="Attached host folder not found."), 404
+            host_mounts._activate(host_mounts._binding(mount))
+            result = host_helper.call("shell", timeout=60, source="mount", variant_id=str(variant_uuid),
+                                      alias=alias, mount_path=mount.host_path, folder=folder, command=command)
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         except HostHelperUnavailable as exc:
