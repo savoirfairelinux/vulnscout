@@ -952,6 +952,19 @@ class TestCodebaseDirectory:
         other = Variant.create("Other", variant.project_id)
         assert self._source(client, other, operation="children").status_code == 404
 
+    def test_legacy_directory_search_respects_glob_and_budget(self, client, variant, directory, monkeypatch):
+        from src.helpers import codebase_directory
+
+        (directory / "src").mkdir()
+        (directory / "src" / "main.c").write_text("needle\n")
+        (directory / "unrelated.txt").write_text("needle\n")
+        (directory / "src" / "private.key").write_text("needle")
+        monkeypatch.setattr(codebase_directory, "MAX_EXPANDED_BYTES", 7)
+        result = self._source(client, variant, operation="search", query="needle", pattern="src/*")
+        assert result.json["matches"] == [{"path": "src/main.c", "line": 1, "text": "needle"}]
+        over = self._source(client, variant, operation="search", query="needle")
+        assert over.status_code == 400 and "budget" in over.json["error"]
+
     @pytest.mark.parametrize("first_read", ["merged", "status", "source"])
     @pytest.mark.parametrize("saved_context", [False, True])
     def test_ci_directory_is_discovered_without_provisioning(

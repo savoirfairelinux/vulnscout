@@ -560,7 +560,7 @@ Host-folder management, browsing and source reads are restricted to local operat
 Browser requests must be same-origin; remote clients and cross-origin browser requests receive
 `403`. This does not change local Agent or MCP access.
 
-The source route supports `operation=children|list|read`. Recursive host listings return `engine="python"` and mark results
+The source route supports `operation=children|list|read|search_file|search`. Recursive host listings return `engine="python"` and mark results
 `truncated` with a `message` when a budget, an I/O error or an unreadable path format
 limits coverage. `skipped_paths` counts files omitted because their paths cannot
 be passed to the read operation.
@@ -581,12 +581,14 @@ GET /api/variants/<variant_id>/context/files/<file_id>/source
 
 For an upload, the file UUID must belong to that variant. For the variant's active server directory,
 use the literal `file_id=directory`; unprovisioned directories return `404`.
-All sources accept `list` (recursive, default) and `read`. Uploads also accept `search`;
-directories and mounts instead offer `children` and `search_file`.
+All sources accept `list` (recursive, default), `read` and `search`. Recursive text search on
+physical trees is deprecated, but retained for existing clients: directory searches allow 100 MiB
+of candidates, and mount searches stop at 100 MiB read, 500,000 entries or 20 seconds.
+For new clients prefer `children` and `search_file` on directories and mounts.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
-| `search` | Upload only: case-sensitive literal `query` (1–200 characters), optional path `pattern` (default `*`), `max_results` (1–100, default 100) | `matches` with path, line and text; `truncated`, `searched_files`, `skipped_binary_files` |
+| `search` | Case-sensitive literal `query` (1–200 characters), optional path `pattern` (default `*`), `max_results` (1–100, default 100); optional `folder` on mounts only | `matches` with path, line and text; `truncated`, `searched_files`, `skipped_binary_files` |
 | `children` | `folder` (relative, default root), `cursor` (opaque continuation), `limit` (1–200, default 50) | `children` with root-relative `path` and `type` (`directory` or `file`), `visited_entries`, `complete`, `next_cursor`; no total |
 | `list` | `folder` (directory or mount only), `pattern` (case-sensitive glob relative to folder, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
 | `read` | Exact `path`, `start_line` (1-based, default 1), `max_lines` (1-200, default 200); optional match `position` on a directory or mount | Plain reads return UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`. For positioned reads see below. |

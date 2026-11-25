@@ -10,8 +10,11 @@ import re
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager, ExitStack
+from fnmatch import fnmatchcase
 
-from .codebase_reference import CodebaseReference, MAX_ENTRIES, MAX_FILE_BYTES, _safe_path
+from .codebase_reference import (
+    CodebaseReference, MAX_ENTRIES, MAX_EXPANDED_BYTES, MAX_FILE_BYTES, SourceLimitError, _safe_path,
+)
 from .host_mount_helper import (
     DIRECT_READ_LIMIT_MESSAGE, children_page, read_position, search_file_page, _excluded, _excluded_config,
 )
@@ -100,6 +103,7 @@ class CodebaseDirectory(CodebaseReference):
         self.index = index
         self.root_fd = -1
         self.directory_count = 0
+        self.search_remaining: int | None = None
 
     def _index(self) -> None:
         cache_fd = self.stack.enter_context(_open_directory(self.cache_dir))
@@ -195,7 +199,16 @@ class CodebaseDirectory(CodebaseReference):
         with self._open_file(path) as (source, info):
             if info.st_size > MAX_FILE_BYTES:
                 raise ValueError(DIRECT_READ_LIMIT_MESSAGE)
-            content = source.read(MAX_FILE_BYTES + 1)
+            limit = MAX_FILE_BYTES + 1
+            if self.search_remaining is not None:
+                if info.st_size > self.search_remaining:
+                    raise SourceLimitError("Directory search exceeds the 100 MB search budget; narrow the pattern.")
+                limit = min(limit, self.search_remaining)
+            content = source.read(limit)
+            if self.search_remaining is not None:
+                self.search_remaining -= len(content)
+                if len(content) == limit and os.fstat(source.fileno()).st_size > len(content):
+                    raise SourceLimitError("Directory search exceeds the 100 MB search budget; narrow the pattern.")
             if len(content) > MAX_FILE_BYTES:
                 raise ValueError(DIRECT_READ_LIMIT_MESSAGE)
             if path.rsplit("/", 1)[-1] == ".config":
@@ -221,3 +234,13 @@ class CodebaseDirectory(CodebaseReference):
             yield from io.StringIO(content.decode("utf-8-sig"))
         except UnicodeDecodeError as exc:
             raise ValueError("Source file is not UTF-8 text.") from exc
+
+    def search(self, query: str, pattern: str = "*", max_results: int = 100) -> dict:
+        total = sum(size for path, (size, _) in self.entries.items() if fnmatchcase(path, pattern))
+        if total > MAX_EXPANDED_BYTES:
+            raise SourceLimitError("Directory search exceeds the 100 MB search budget; narrow the pattern.")
+        self.search_remaining = MAX_EXPANDED_BYTES
+        try:
+            return super().search(query, pattern, max_results)
+        finally:
+            self.search_remaining = None

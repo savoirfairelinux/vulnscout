@@ -696,7 +696,10 @@ class TestSourceBrowsing:
         _attach(helper_server, variant, "build", host["build"])
         listing = _source(client, variant, "mount:src").get_json()
         assert listing["file_id"] == "mount:src" and [f["path"] for f in listing["files"]] == ["src/main.c"]
-        assert _source(client, variant, "mount:src", operation="search", query="needle").status_code == 400
+        legacy = _source(client, variant, "mount:src", operation="search", folder="src", pattern="*.c", query="needle")
+        assert legacy.json["matches"][0]["path"] == "src/main.c" and not legacy.json["truncated"]
+        other = Variant.create("Other", variant.project_id)
+        assert _source(client, other, "mount:src", operation="search", query="needle").status_code == 404
         read = _source(client, variant, "mount:build", operation="read", path="log.txt").get_json()
         assert read["content"] == "needle in build\n" and read["original_name"] == "Host folder build"
         search = _source(client, variant, "mount:build", operation="search_file", path="log.txt", query="needle")
