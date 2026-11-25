@@ -1,4 +1,4 @@
-import Vulnerabilities, { type Vulnerability } from "../handlers/vulnerabilities";
+import Vulnerabilities, { type Vulnerability, type VulnerabilityPatch } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
 import type { Assessment } from "../handlers/assessments";
 import Assessments from "../handlers/assessments";
@@ -35,7 +35,7 @@ type Props = {
     vulnerabilities: Vulnerability[];
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
-    patchVuln: (vulnId: string, patch: Vulnerability | ((latest: Vulnerability) => Vulnerability)) => void;
+    patchVuln: (vulnId: string, patch: VulnerabilityPatch) => void;
     filterLabel?: "Source" | "Severity" | "Status" | "Package" | "Vulnerability";
     filterValue?: string;
     filterVulnerabilityIds?: string[];
@@ -694,7 +694,7 @@ function TableVulnerabilities ({ vulnerabilities, filterLabel, filterValue, filt
         setModalVulnSnapshot([...searchFilteredData]); // Capture snapshot at modal open time
     }, [searchFilteredData]);
 
-    const handlePatchVuln = useCallback((vulnId: string, patch: Vulnerability | ((latest: Vulnerability) => Vulnerability)) => {
+    const handlePatchVuln = useCallback((vulnId: string, patch: VulnerabilityPatch) => {
         patchVuln(vulnId, patch);
         const update = (v: Vulnerability) => v.id !== vulnId ? v : typeof patch === 'function' ? patch(v) : patch;
         setModalVuln(prev => prev && update(prev));

@@ -85,6 +85,17 @@ type Vulnerability = {
 
 export type { Vulnerability, CVSS };
 
+export type VulnerabilityPatch = Vulnerability | ((latest: Vulnerability) => Vulnerability);
+
+export function patchEffort(saved?: Partial<Record<keyof Vulnerability['effort'], unknown>>) {
+    const delta: Partial<Vulnerability['effort']> = {};
+    for (const field of ['optimistic', 'likely', 'pessimistic'] as const) {
+        const value = saved?.[field];
+        if (typeof value === 'string') delta[field] = new Iso8601Duration(value);
+    }
+    return (latest: Vulnerability): Vulnerability => ({ ...latest, effort: { ...latest.effort, ...delta } });
+}
+
 const SEVERITY_ORDER = ['NONE', 'UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const STATUS_SORT_ORDER = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'];
 const STATUS_DOMINANT_PRIORITY = ['Exploitable', 'Pending Assessment', 'Not affected', 'Fixed', 'unknown'];

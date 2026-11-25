@@ -1,6 +1,6 @@
-import type { Vulnerability } from "../handlers/vulnerabilities";
+import type { Vulnerability, VulnerabilityPatch } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
-import Vulnerabilities, { asCVSS, buildStatusSummary } from "../handlers/vulnerabilities";
+import Vulnerabilities, { asCVSS, buildStatusSummary, patchEffort } from "../handlers/vulnerabilities";
 import type { AiAssessmentEdits, Assessment, AssessmentTargetPair } from "../handlers/assessments";
 import Assessments, { asAssessment, isMultiTarget, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs } from "../handlers/assessments";
 import { escape } from "lodash-es";
@@ -48,7 +48,7 @@ type Props = {
     onClose: () => void;
     appendAssessment: (added: Assessment) => void;
     appendCVSS: (vulnId: string, vector: string) => CVSS | null;
-    patchVuln: (vulnId: string, replace_vuln: Vulnerability) => void;
+    patchVuln: (vulnId: string, patch: VulnerabilityPatch) => void;
     vulnerabilities?: Vulnerability[];
     currentIndex?: number;
     onNavigate?: (index: number) => void;
@@ -1694,18 +1694,8 @@ type PendingAiEditTransition =
                 : data?.effort;
 
             if (variantId) {
-                // Only update the local vuln object when viewing a specific variant.
-                // In all-variants mode the snapshot refresh below handles the display,
-                // so we must not overwrite the global vuln with variant-scoped values.
-                if (typeof updatedEffort?.optimistic === "string")
-                    vuln.effort.optimistic = new Iso8601Duration(updatedEffort.optimistic);
-                if (typeof updatedEffort?.likely === "string")
-                    vuln.effort.likely = new Iso8601Duration(updatedEffort.likely);
-                if (typeof updatedEffort?.pessimistic === "string")
-                    vuln.effort.pessimistic = new Iso8601Duration(updatedEffort.pessimistic);
-
-                // Also patch the vulnerability for real-time refresh in other views
-                patchVuln(vuln.id, vuln);
+                // A variant-scoped estimate must not replace the all-variants row.
+                patchVuln(vuln.id, patchEffort(updatedEffort));
             }
 
             // Refresh per-variant snapshots immediately so the panel reflects the
