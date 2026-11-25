@@ -99,6 +99,18 @@ def test_shell_rejects_remote_and_invalid_sources(client, variant):
     assert client.post(url, json={"file_id": "directory", "command": ""}).status_code == 400
 
 
+def test_shell_rejects_decoder_depth_error(app, client, variant, monkeypatch):
+    from unittest.mock import Mock
+
+    with monkeypatch.context() as m:
+        decoder = Mock(side_effect=RecursionError)
+        m.setattr(app.json, "loads", decoder)
+        response = client.post(f"/api/variants/{variant.id}/context/shell", json={"command": "true"})
+    decoder.assert_called_once()
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Invalid shell request."}
+
+
 @pytest.mark.parametrize("streamed", [False, True])
 def test_shell_request_byte_limit(client, variant, streamed):
     from src.routes.context import SHELL_REQUEST_BYTES
