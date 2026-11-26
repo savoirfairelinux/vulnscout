@@ -434,6 +434,52 @@ def test_risk_links_are_scoped_to_exact_targets_and_reviewed_atomically(client, 
     assert next(t for t in listed["targets"] if t["variant_id"] == second)["risk_links"][0]["risk_id"] == "R1"
 
 
+def test_approve_historical_target_by_projecting_retained_links(client, app):
+    from src.controllers.ai_actions import resolve_assess_targets
+    from src.models.scan import Scan
+
+    variant = str(VARIANT_UUID)
+    historical = {"variant_id": variant, "package": PKG}
+    omitted = {"variant_id": variant, "package": PKG2}
+    retained = {"risk_id": "R1", "threat_id": "T1"}
+    _risk_model(app, variant, "Still applies", [{"id": "R2", "description": "Obsolete", "threat_ids": []}])
+    row = _legacy_suggestion(client, app, [
+        {**historical, "risk_links": [retained, {"risk_id": "R2"}]},
+        {**omitted, "risk_links": [{"risk_id": "R1"}]},
+    ])
+    with app.app_context():
+        assert resolve_assess_targets(VULN_ID, [historical], {VARIANT_UUID})
+        Scan.create("Replacement SBOM without the old package", VARIANT_UUID)
+        with pytest.raises(ValueError, match="not an active target"):
+            resolve_assess_targets(VULN_ID, [historical], {VARIANT_UUID})
+    _risk_model(app, variant, "Still applies")
+
+    url = f"/api/assessments/{row['id']}"
+    pending = client.get(url).json
+    targets = {t["package"]: t for t in pending["targets"]}
+    saved, stale = targets[PKG]["risk_links"]
+    assert stale["risk_id"] == "R2" and stale["stale"]
+    assert client.post(url + "/approve").status_code == 400
+    payload = {"expected_fingerprint": pending["approval_fingerprint"], "target_risk_links": [
+        {**historical, "risk_links": [saved]},
+    ]}
+    response = client.post(url + "/approve", json=payload)
+    assert response.status_code == 400
+    assert "Expected risk_id and optional threat_id" in response.json["error"]
+    assert client.get(url).json["approval_fingerprint"] == pending["approval_fingerprint"]
+
+    payload["target_risk_links"][0]["risk_links"] = [retained]
+    response = client.post(url + "/approve", json=payload)
+    assert response.status_code == 200
+    approved = client.get(url).json
+    assert approved["origin"] == "custom"
+    assert approved["status"] == pending["status"]
+    assert {t["package"]: t for t in approved["targets"]} == {
+        PKG: {**targets[PKG], "risk_links": [saved]},
+        PKG2: targets[PKG2],
+    }
+
+
 def test_reconfirm_requires_the_description_current_at_approval(client, app):
     variant = str(VARIANT_UUID)
     _risk_model(app, variant, "Saved")

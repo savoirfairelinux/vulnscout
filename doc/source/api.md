@@ -1012,8 +1012,8 @@ Converts a pending AI assessment to `custom` origin.
 POST /api/assessments/<assessment_id>/approve
 ```
 
-The body is optional. Without one (or with `{}`), the suggestion is approved
-unchanged. You may amend `status_notes`, `justification`, `impact_statement`
+The body is optional. Without one (or with `{}`), approval does not edit the
+suggestion's content. You may amend `status_notes`, `justification`, `impact_statement`
 and `workaround` in the same transaction as approval. Omitted fields keep
 their suggested values. To clear an optional text field, send an empty
 string. A rationale field containing a NUL character returns `400` and leaves the
@@ -1031,16 +1031,39 @@ since the user opened the editor, approval returns `409` and leaves the newer
 suggestion pending. The precondition is optional for existing clients.
 
 If a legacy structured link becomes stale, approval is blocked until it is
-reviewed. For historical targets that cannot be reassessed, inspect the
-saved target on `GET /api/assessments/<assessment_id>` and compare it to the
-current model using `GET /api/assessments/<assessment_id>/risk-link-preview`
-with `variant_id`, `package`, `risk_id`, and optional `threat_id`. To confirm
-a current reference, send the preview's `revision` as `confirmed_revision`
-on that link in `target_risk_links`. To remove a link that no longer
-applies, send the target's remaining `risk_links`, or `[]` to clear them
-all. Each edit must identify the exact `variant_id` and `package`.
-Omitted targets keep their saved links; neither action changes the
-assessment's target set.
+reviewed. For historical targets that cannot be reassessed in the web UI,
+inspect the saved target and `approval_fingerprint` from
+`GET /api/assessments/<assessment_id>`. To reconfirm a saved link, compare
+it to the current model with
+`GET /api/assessments/<assessment_id>/risk-link-preview`, passing the exact
+`variant_id`, `package`, `risk_id`, and (if present) `threat_id`. If you accept
+the current reference, use the preview's `revision` as `confirmed_revision`.
+
+In the body for `POST /api/assessments/<assessment_id>/approve` with
+`Content-Type: application/json`, copy the fingerprint and exact target
+identifiers from GET. Each `risk_links`
+array replaces the **entire** link list for that target: omit links you want
+to remove and project each retained link to `risk_id` and, if present,
+`threat_id`. Do not copy GET-only fields such as descriptions or `stale`.
+Add `confirmed_revision` only to links you reviewed against the preview.
+Use `[]` to clear the target's list. Omitted targets retain their links,
+which must still pass stale validation. Approval does not change the target set.
+
+```json
+{
+  "expected_fingerprint": "<approval_fingerprint from GET>",
+  "target_risk_links": [
+    {
+      "variant_id": "11111111-1111-1111-1111-111111111111",
+      "package": "example@1.0.0",
+      "risk_links": [
+        {"risk_id": "R1"},
+        {"risk_id": "R2", "threat_id": "T3", "confirmed_revision": "<revision from preview>"}
+      ]
+    }
+  ]
+}
+```
 
 **Request body (optional):**
 ```json
@@ -1108,9 +1131,13 @@ POST /api/vulnerabilities/<vuln_id>/assessments
 `variant_ids` (a list) may be given instead of `variant_id` to scope one
 assessment to several variants. Set `"ai_generated": true` to create a pending
 AI assessment (`origin` `"ai"`) instead of a `custom` one.
-New AI assessments must cite modeled risks and threats in `status_notes`;
-non-empty `targets[].risk_links` are rejected with `400`. Structured links
-on custom assessments and existing AI suggestions are unaffected.
+New AI assessments should cite evidence-backed modeled risks and threats
+only in `status_notes`, and only when the citation and its supporting details
+apply independently to every exact target. Notes are shared free text:
+variant filtering and partial replacement do not rewrite them. The API
+rejects non-empty `targets[].risk_links` with `400` but does not enforce
+citation scope in free text. Structured links on custom assessments and
+existing AI suggestions are unaffected.
 
 One variant scope is required. Alternatively, supply a non-empty `targets` array of exact
 `{"variant_id":"uuid","package":"name@version::supplier"}` pairs; it overrides flattened scope fields.

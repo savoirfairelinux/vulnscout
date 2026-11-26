@@ -18,7 +18,7 @@ The columns include:
 - **Status**: the triage status (e.g. Not affected, Exploitable, Fixed).
 - **Justification**: the VEX justification reason, if one was provided (e.g. "component not present", "vulnerable code not reachable").
 - **Impact**: the impact statement describing how the vulnerability affects (or doesn't affect) the product.
-- **Notes**: free-text status notes attached to the assessment. AI suggestions may cite relevant STRIDE threat or risk IDs here, scoped to the applicable variant and package.
+- **Notes**: free-text status notes shared across the assessment's targets. AI suggestions should cite STRIDE threat or risk IDs and supporting details only when the evidence applies independently to every exact package/variant target. Variant filters do not hide parts of a note, and rerunning only some targets does not rewrite the original note.
 - **Workaround**: any documented workaround.
 - **Assessment Date**: the assessment record's timestamp.
 - **AI review**: a second opinion on each target of a user-authored assessment. A single target shows ✓ when the review agrees, ⚠ when it differs, ⚠ stale when the assessment was edited since the review, or — when it has not been reviewed. Multi-target rows show counts for each state; hover for a breakdown. Open the vulnerability detail modal to read each target's review and rationale.

@@ -144,8 +144,13 @@ python vulnscout_mcp/server.py
 
 See [AI Assessments](../doc/source/ai-assessments.md) for the agent assessment and custom-assessment review workflows.
 
-AI assessments cite evidence-backed threat and risk IDs in `status_notes`, scoped
-to the applicable variant and package. Do not submit structured `risk_links`.
+AI assessments cite evidence-backed threat and risk IDs only in `status_notes`.
+Notes are shared: include citations and their supporting details only when
+independently applicable to every exact package/variant target. Matching IDs
+alone are not enough. If the scope is ambiguous, omit the citation and its
+target-local details, not the target. This is authoring guidance: variant
+filters and partial replacements do not rewrite shared notes. Do not submit
+structured `risk_links` on new AI assessments.
 For non-AI assessments, `write_assessment` still accepts `risk_links` inside individual `targets`, for example
 `{"package":"example@1","variant_id":"<uuid>","risk_links":[{"risk_id":"R1","threat_id":"T2"}]}`.
 Use the target variant's saved STRIDE records (`get_merged_context` with `include_model=true`).
