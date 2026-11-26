@@ -12,6 +12,7 @@ from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
 
 from ..extensions import db, Base
 from ..helpers.assessment_io import parse_imported_timestamp
+from ..helpers.assessment_risk_links import RiskModelIndex, RiskSnapshot, describe_links
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
@@ -225,6 +226,10 @@ class Assessment(Base):
 
     @property
     def target_pairs(self) -> "list[dict[str, Any]]":
+        return self._target_pairs(None, {})
+
+    def _target_pairs(self, link_scope: set[uuid.UUID] | None,
+                      indexes: dict[uuid.UUID, RiskModelIndex]) -> "list[dict[str, Any]]":
         """Every target as a serialisable ``(variant_id, package)`` pair.
 
         ``packages`` and ``variant_ids`` are two independent flattened sets, so
@@ -244,6 +249,13 @@ class Assessment(Base):
                     "variant_id": str(target.variant_id),
                     "package": target.finding.package.string_id,
                 })
+                if link_scope is not None and target.variant_id not in link_scope:
+                    pairs[-1]["risk_links_out_of_scope"] = True
+                elif target.risk_links:
+                    if target.variant_id not in indexes:
+                        context = target.variant.context
+                        indexes[target.variant_id] = RiskModelIndex(context.stride_model if context else None)
+                    pairs[-1]["risk_links"] = describe_links(target.risk_links, indexes[target.variant_id])
         except Exception as e:
             verbose(f"[Assessment.target_pairs {self.id!r}] {e}")
         return pairs
@@ -459,10 +471,14 @@ class Assessment(Base):
         values = [getattr(self, field) or "" for field in APPROVAL_CONTENT_FIELDS]
         pairs = sorted((str(t.variant_id), str(t.finding_id)) for t in self.target_rows)
         fields: list[Any] = [values, self.responses or [], pairs]
+        links = sorted((str(t.variant_id), str(t.finding_id), t.risk_links) for t in self.target_rows if t.risk_links)
+        if links:
+            fields.append(links)
         content = json.dumps(fields, separators=(",", ":"), sort_keys=True)
         return hashlib.sha256(content.encode()).hexdigest()
 
-    def to_dict(self) -> dict:
+    def to_dict(self, *, link_scope: set[uuid.UUID] | None = None,
+                link_indexes: dict[uuid.UUID, RiskModelIndex] | None = None) -> dict:
         ts = ensure_utc_iso(self.timestamp)
         variant_ids = sorted({str(t.variant_id) for t in self.target_rows})
         return {
@@ -476,7 +492,7 @@ class Assessment(Base):
             "variant_ids": variant_ids,
             # packages x variant_ids is the cross-product, which a sparse
             # target set is not; consumers pairing the two must read this.
-            "targets": self.target_pairs,
+            "targets": self._target_pairs(link_scope, link_indexes if link_indexes is not None else {}),
             "timestamp": ts,
             "last_update": ts or "",
             "status": self.status or "",
@@ -645,6 +661,7 @@ class Assessment(Base):
         responses: Optional[list] = None,
         timestamp: Optional[datetime] = None,
         commit: bool = True,
+        risk_snapshots: dict[tuple[uuid.UUID, uuid.UUID], list[RiskSnapshot]] | None = None,
     ) -> "Assessment":
         """Create a new assessment, persist it and return it.
 
@@ -690,7 +707,8 @@ class Assessment(Base):
         db.session.add(assessment)
         for target_variant_id, target_finding_id in resolved_targets:
             assessment.target_rows.append(AssessmentTarget(
-                variant_id=target_variant_id, finding_id=target_finding_id))
+                variant_id=target_variant_id, finding_id=target_finding_id,
+                risk_links=(risk_snapshots or {}).get((target_variant_id, target_finding_id)) or None))
         if commit:
             db.session.commit()
         else:

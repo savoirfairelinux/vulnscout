@@ -374,6 +374,7 @@ type NetworkOpts = {
     allVariantsGate?: Promise<void>;
     variantsOk?: boolean;
     mutationOk?: boolean;
+    approvalError?: string;
     exportOk?: boolean;
     importResult?: Record<string, unknown>;
     vulnDetail?: unknown;
@@ -472,6 +473,9 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         if (url.includes('/api/assessments/review/import-custom-data')) return JSON.stringify(importResult);
         if (url.includes('/api/assessments/review/import')) return JSON.stringify({ status: 'success' });
         if (url.includes('/api/assessments/review/export-update')) return JSON.stringify({ version: 1, assessments: [] });
+        if (url.endsWith('/approve') && opts.approvalError) {
+            return { status: 400, body: JSON.stringify({ error: opts.approvalError }) };
+        }
         if (!mutationOk) return { status: 500, body: JSON.stringify({ status: 'error' }) };
         return JSON.stringify({ status: 'success' });
     });
@@ -1286,12 +1290,16 @@ describe('Review — AI Assessments tab', () => {
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
     });
 
-    test('editing a pending AI row approves it with the edited content in one request', async () => {
+    test('editing a pending AI row shows Notes but leaves stored risk links untouched', async () => {
         const comment = 'For v1 / pkgA@1.0.0, the update path relates to risk R1 and threat T2.';
         mockNetwork([makeAssessment('a1', 'v1')], {
             aiReviewList: [{
                 ...makeAssessment('ai1', 'v1'), origin: 'ai', approval_fingerprint: 'original',
                 status_notes: comment,
+                targets: [{
+                    variant_id: 'v1', package: 'pkgA@1.0.0',
+                    risk_links: [{ risk_id: 'R1', threat_id: 'T2', risk_description: 'Saved risk description' }],
+                }],
             }],
         });
         render(<Review projectId="proj1" />);
@@ -1301,6 +1309,7 @@ describe('Review — AI Assessments tab', () => {
         await user.click(screen.getByText('AI Assessments'));
         expect(await screen.findByText(comment)).toBeVisible();
         expect(screen.queryByRole('columnheader', { name: /Modeled risk links/i })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Saved risk description/)).not.toBeInTheDocument();
         await user.click(await screen.findByTitle('Edit AI suggestion'));
 
         const notes = await screen.findByPlaceholderText(/Free text notes/);
@@ -1320,6 +1329,23 @@ describe('Review — AI Assessments tab', () => {
             expected_fingerprint: 'original',
         });
         expect(screen.queryByRole('button', { name: 'Confirm and approve' })).not.toBeInTheDocument();
+    });
+
+    test('explains how to recover when a hidden stale risk link blocks approval', async () => {
+        mockNetwork([], {
+            aiReviewList: [makeAssessment('ai1', 'v1')],
+            approvalError: 'Stale modeled risk link for pkgA@1.0.0 (v1): correct or remove it before approval',
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+
+        const editor = within(screen.getByRole('dialog'));
+        expect(await editor.findByText(/rerun the AI assessment with the current threat model/i)).toBeVisible();
+        expect(editor.getByPlaceholderText(/Free text notes/)).toHaveValue('shared note');
     });
 
     test('shows missing rationale inside the AI editor until the reviewer corrects it', async () => {
