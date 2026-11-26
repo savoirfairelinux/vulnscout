@@ -49,6 +49,7 @@ export default function HelpPopover({
                 aria-label={ariaLabel}
                 aria-expanded={open}
                 aria-controls={open ? panelId : undefined}
+                aria-describedby={open && role === "tooltip" ? panelId : undefined}
                 title={title ?? ariaLabel}
                 className={`text-neutral-300 transition-colors hover:text-white ${buttonClassName}`.trim()}
                 onClick={() => setOpen(!open)}
