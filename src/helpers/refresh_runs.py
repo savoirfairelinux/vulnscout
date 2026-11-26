@@ -20,7 +20,7 @@ import socket
 import time
 from pathlib import Path
 
-from sqlalchemy import and_, case, event, exists, insert, select, update
+from sqlalchemy import ColumnElement, and_, case, event, exists, insert, select, update
 from sqlalchemy.orm import Session
 
 from ..extensions import db, hold_write_lock
@@ -35,8 +35,23 @@ _single_run: ContextVar[str | None] = ContextVar("single_refresh_run", default=N
 # Identifiers that collide with fixed /api/refresh-runs/<name> routes.
 RESERVED_RUN_IDS = frozenset({"latest"})
 HEARTBEAT_INTERVAL_SECONDS = 60.0
+UNSUPPORTED_CVE_IDENTIFIER = "Provider requires a CVE identifier"
+# Unlike target gaps, an interrupted execution is incomplete even if every target was settled.
+_SOURCE_INTERRUPTED = "interrupted"
 _CHUNK = 500
 _last_heartbeat: dict[str, float] = {}
+
+
+def _inapplicable_target() -> ColumnElement[bool]:
+    return and_(
+        RefreshTarget.source.in_(("nvd", "epss")),
+        RefreshTarget.status == "skipped",
+        RefreshTarget.error.is_not_distinct_from(UNSUPPORTED_CVE_IDENTIFIER),
+    )
+
+
+def target_has_coverage_gap() -> ColumnElement[bool]:
+    return and_(RefreshTarget.status != "complete", ~_inapplicable_target())
 
 
 def _process_start(pid: int) -> str | None:
@@ -116,7 +131,7 @@ def reconcile_interrupted_runs() -> None:
         _write(
             update(RefreshRunSource)
             .where(RefreshRunSource.run_id == run_id, RefreshRunSource.status == "pending")
-            .values(status="incomplete")
+            .values(status=_SOURCE_INTERRUPTED)
         )
         _write(
             update(RefreshRun)
@@ -264,14 +279,15 @@ def finish_source(run_id: str, source: str, status: str = "failed", error: str |
     # Lock the parent before changing sources or deciding whether all have settled.
     _heartbeat(run_id, force=True)
     _ensure_source(run_id, source)
-    unchecked = exists().where(RefreshTarget.run_id == run_id, RefreshTarget.source == source,
-                               RefreshTarget.status != "complete")
+    gap = exists().where(RefreshTarget.run_id == run_id, RefreshTarget.source == source,
+                         target_has_coverage_gap())
     _write(
         update(RefreshRunSource)
         .where(RefreshRunSource.run_id == run_id, RefreshRunSource.source == source)
         .values(status=case(
-            (and_(RefreshRunSource.status != "incomplete", ~unchecked), "complete"), else_="incomplete",
-        ) if status == "failed" and error is None else "incomplete")
+            (RefreshRunSource.status == _SOURCE_INTERRUPTED, _SOURCE_INTERRUPTED),
+            (and_(RefreshRunSource.status != "incomplete", ~gap), "complete"), else_="incomplete",
+        ) if status == "failed" and error is None else _SOURCE_INTERRUPTED)
     )
     now = datetime.now(timezone.utc)
     pending = exists().where(RefreshRunSource.run_id == run_id, RefreshRunSource.status == "pending")
@@ -287,8 +303,18 @@ def finish_source(run_id: str, source: str, status: str = "failed", error: str |
 
 def source_statuses(run_id: str) -> dict[str, str]:
     """Source outcomes in the order the run declared its sources."""
+    targets = (RefreshTarget.run_id == RefreshRunSource.run_id, RefreshTarget.source == RefreshRunSource.source)
+    # Old summaries counted every skip as a gap. Require positive evidence of
+    # inapplicability and leave source-level interruptions incomplete.
+    status = case(
+        (RefreshRunSource.status == _SOURCE_INTERRUPTED, "incomplete"),
+        (and_(RefreshRunSource.status == "incomplete",
+              exists().where(*targets, _inapplicable_target()),
+              ~exists().where(*targets, target_has_coverage_gap())), "complete"),
+        else_=RefreshRunSource.status,
+    )
     return {source: status for source, status in db.session.execute(
-        select(RefreshRunSource.source, RefreshRunSource.status)
+        select(RefreshRunSource.source, status)
         .where(RefreshRunSource.run_id == run_id).order_by(RefreshRunSource.position)
     )}
 

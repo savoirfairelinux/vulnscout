@@ -17,14 +17,14 @@ from sqlalchemy import event, text
 
 from src.bin.webapp import create_app
 from src.controllers.job_context import CancelledError, JobContext
-from src.controllers.refresh_jobs import run_epss_refresh
+from src.controllers.refresh_jobs import run_epss_refresh, run_nvd_refresh
 from src.extensions import db
 from src.helpers.refresh_runs import capture_source, create_run, finish_source, source_statuses, target_result
 from src.models import (
     Finding, Observation, Package, Project, Scan, SBOMDocument, SBOMObservation, SBOMPackage, Variant, Vulnerability,
 )
 from src.models.metrics import Metrics
-from src.models.refresh_run import RefreshChange, RefreshRun
+from src.models.refresh_run import RefreshChange, RefreshRun, RefreshRunSource
 from src.models.time_estimate import TimeEstimate
 from src.models.vulnerability_history import VulnerabilityHistory
 from sqlalchemy.orm import Session
@@ -415,6 +415,63 @@ def test_first_enrichment_cvss_identity_and_pagination_filters(app, client):
     params = {"source": "nvd", "kind": "first_enrichment", "change_type": "addition"}
     assert client.get(f"/api/refresh-runs/{run}", query_string=params).get_json()["total"] == 1
     assert len(data["coverage"]) == 2
+
+
+@pytest.mark.parametrize("has_missing_record", [False, True])
+def test_mixed_provider_applicability_keeps_skips_and_real_gaps(app, client, has_missing_record):
+    unsupported = "GHSA-ABCD-1234-5678"
+    missing = "CVE-2099-1111"
+    applicable = [CVE, missing] if has_missing_record else [CVE]
+    ids = [CVE, unsupported, *applicable[1:]]
+    with app.app_context():
+        run = create_run({"nvd": ids, "epss": ids, "euvd": applicable})
+        with patch("src.controllers.refresh_jobs._get_scc_engine"), \
+                patch("src.controllers.refresh_jobs._refresh_nvd_record", side_effect=lambda cve, *_: cve == CVE) as nvd:
+            run_nvd_refresh(JobContext("nvd", {"ids": ids}, run))
+        assert [call.args[0] for call in nvd.call_args_list] == applicable
+        with patch("src.controllers.refresh_jobs.EPSS_DB") as epss:
+            epss.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}}
+            run_epss_refresh(JobContext("epss", {"ids": ids}, run))
+            epss.return_value.api_get_epss_batch.assert_called_once_with(applicable)
+        with capture_source(run, "euvd"):
+            for identifier in applicable:
+                target_result("euvd", identifier)
+        finish_source(run, "euvd")
+
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
+    status = "incomplete" if has_missing_record else "complete"
+    assert data["status"] == status
+    assert data["source_status"] == {"nvd": status, "epss": status, "euvd": "complete"}
+    assert data["summary"]["refreshed_vulnerabilities"] == len(applicable)
+    for source in ("nvd", "epss"):
+        outcomes = [(row["vuln_id"], row["status"], row["error"])
+                    for row in data["coverage"] if row["source"] == source]
+        expected = [(CVE, "complete", None), (unsupported, "skipped", "Provider requires a CVE identifier")]
+        if has_missing_record:
+            expected.append((missing, "skipped", "Provider record unavailable"))
+        assert outcomes == expected
+
+
+@pytest.mark.parametrize("other_outcome", ["legacy-summary", "unknown-skip", "source-interruption"])
+def test_only_explicit_inapplicability_can_correct_coverage(app, client, other_outcome):
+    unsupported = "GHSA-ABCD-1234-5678"
+    with app.app_context():
+        run = create_run({"nvd": [CVE, unsupported]})
+        with capture_source(run, "nvd"):
+            target_result("nvd", unsupported, "skipped", "Provider requires a CVE identifier")
+            target_result("nvd", CVE, "skipped" if other_outcome == "unknown-skip" else "complete")
+        finish_source(run, "nvd", error="Source refresh failed" if other_outcome == "source-interruption" else None)
+        if other_outcome == "legacy-summary":
+            db.session.get(RefreshRunSource, (run, "nvd")).status = "incomplete"
+            db.session.commit()
+
+    status = "complete" if other_outcome == "legacy-summary" else "incomplete"
+    listing = client.get("/api/refresh-runs").get_json()["runs"][0]
+    assert listing["status"] == status
+    assert listing["source_status"] == {"nvd": status}
+    export = client.get(f"/api/refresh-runs/{run}/export?format=json").get_json()
+    assert export["status"] == status
+    assert export["coverage"][1]["status"] == "skipped"
 
 
 def test_partial_provider_response_is_incomplete_not_removal(app, client):

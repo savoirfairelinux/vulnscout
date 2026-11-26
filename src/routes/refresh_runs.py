@@ -12,7 +12,7 @@ from sqlalchemy import ColumnElement, case, exists, func, or_, select, true
 
 from ..extensions import db
 from ..helpers.datetime_utils import ensure_utc_iso
-from ..helpers.refresh_runs import source_statuses
+from ..helpers.refresh_runs import source_statuses, target_has_coverage_gap
 from ..models.refresh_run import (
     RefreshChange, RefreshRun, RefreshRunScope, RefreshTarget, RefreshTargetLink,
 )
@@ -158,10 +158,10 @@ def metadata(run: RefreshRun, params: dict, scope_rows: list[RefreshRunScope] | 
     if run.finished_at is None:
         status = "running"
     else:
-        unchecked = db.session.scalar(select(exists().where(
-            *_target_filter(run.run_id, params), RefreshTarget.status != "complete",
+        gap = db.session.scalar(select(exists().where(
+            *_target_filter(run.run_id, params), target_has_coverage_gap(),
         )))
-        status = "complete" if not unchecked and all(
+        status = "complete" if not gap and all(
             value == "complete" for value in source_status.values()
         ) else "incomplete"
     return {

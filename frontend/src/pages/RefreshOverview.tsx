@@ -317,6 +317,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
             </>}
             {section === 'coverage' && <>
                 <h3 className="font-bold text-base">Per-source coverage and gaps</h3>
+                <p className="text-sm">Unsupported identifiers count as skipped, not checked, but do not leave a coverage gap. Missing provider records and other unverified skips still leave gaps.</p>
                 <div className="overflow-auto max-h-80 rounded border border-gray-600">
                     <table aria-label="Provider coverage" className="w-full text-xs text-left">
                         <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
@@ -334,7 +335,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                 {!run.coverage.length ? <p>No targeted vulnerabilities recorded.</p> : <div className="overflow-auto max-h-80 rounded border border-gray-600">
                     <table aria-label="Vulnerability coverage" className="w-full text-xs text-left">
                         <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
-                            {['Vulnerability', 'Source', 'Outcome', 'Error'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
+                            {['Vulnerability', 'Source', 'Outcome', 'Reason'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
                         </tr></thead>
                         <tbody>{run.coverage.map((row, index) => <tr key={`${row.source}-${row.vuln_id}-${index}`} className="border-t border-gray-600 hover:bg-gray-600/40">
                             <td className="px-3 py-2 font-mono">{row.vuln_id}</td>
@@ -366,6 +367,8 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                     ? 'No changes match these filters.'
                     : run.status === 'complete' && run.coverage.length === 0
                         ? 'No vulnerabilities were targeted in this scope. No comparison baseline is available.'
+                    : run.status === 'complete' && summary?.Checked === 0
+                        ? 'No provider checks were performed in this scope. No comparison baseline is available.'
                     : run.status === 'complete'
                         ? 'Refresh complete: zero changes. Checked data is unchanged.'
                         : 'No committed changes recorded yet. Coverage is incomplete. Unchanged data cannot be concluded.'}</p>}

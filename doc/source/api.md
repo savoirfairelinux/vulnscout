@@ -2050,14 +2050,19 @@ and `summary` but no `coverage`, `changes`, `total`, `limit` or `offset`, so a
 page only costs work for the runs it contains. Summary counts cover
 the complete filtered change set, not just the current page; changed CVEs include
 first enrichments. A zero-change run with complete coverage is successful.
-`running` means sources remain pending; `incomplete` means some source/target was
-not successfully checked. Coverage statuses are `pending`, `complete`, `failed`,
+`running` means sources remain pending; `incomplete` means a source did not
+finish successfully or an applicable target was not successfully checked.
+Explicitly unsupported identifiers remain in coverage as `skipped` with a reason,
+but are neither checked nor gaps. A missing provider record is still a gap.
+Coverage statuses are `pending`, `complete`, `failed`,
 `skipped` or `cancelled`; source statuses are `pending`, `complete` or `incomplete`.
 Provider absence is not evidence of a removal.
 
 Snapshots share the originating data-write transaction and store both sides,
 including CVSS vectors under `cvss:<version>:<author>:<metric_id>`. Later refreshes,
-live-data deletion, or field-history pruning cannot change an artifact.
+live-data deletion, or field-history pruning cannot change the recorded outcomes.
+Run and source summaries can correct an older incomplete label if its only gaps
+were explicitly recorded as unsupported.
 Unavailable, expired or out-of-scope exact runs return `404`, never another run.
 The default retention window is 90 days; see
 [CLI archival and cleanup](cli-refresh-runs.md).
