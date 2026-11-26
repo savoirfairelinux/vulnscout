@@ -32,8 +32,9 @@ For historical targets, use the [approval API](api.md#approve-an-ai-assessment)
 to review and correct the saved link without changing targets.
 
 When you add a package and variant pair to an assessment with Notes, Review
-asks you to confirm that the shared Notes apply to the new targets. Go back
-to revise any citations or supporting evidence that do not apply.
+and the vulnerability detail editor ask you to confirm that the shared Notes
+apply to the new targets. Go back to revise any citations or supporting
+evidence that do not apply.
 
 The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state.
 

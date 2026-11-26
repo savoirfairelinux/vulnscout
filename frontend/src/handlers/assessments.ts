@@ -197,6 +197,15 @@ type BatchResult = {
 export type { BatchAssessmentItem, BatchResult };
 export { reconcileTargetPairs };
 
+export function sharesNotesWithNewTargets(
+    notes: string | undefined, existing: AssessmentTargetPair[], desired: AssessmentTargetPair[],
+): boolean {
+    if (!notes?.trim()) return false;
+    const pairKey = ({ variant_id, package: pkg }: AssessmentTargetPair) => JSON.stringify([variant_id, pkg]);
+    const existingPairs = new Set(existing.map(pairKey));
+    return desired.some(target => !existingPairs.has(pairKey(target)));
+}
+
 /** Some imports store notes in the impact field for non-impact statuses. */
 export function initialStatusNotes(assessment: Assessment) {
     const hasImpactField = ['not_affected', 'false_positive'].includes(assessment.status);

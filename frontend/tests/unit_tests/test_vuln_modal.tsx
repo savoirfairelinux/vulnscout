@@ -1889,6 +1889,109 @@ describe('Vulnerability Modal', () => {
         reconcileSpy.mockRestore();
     });
 
+    describe('editing shared Notes on assessment targets', () => {
+        const pkg = 'aaabbbccc@1.0.0';
+        const first = { variant_id: 'variant-1', package: pkg };
+        const second = { variant_id: 'variant-2', package: pkg };
+        const originalNotes = 'On Variant A, the update path relates to R1 and T2.';
+        const confirmationTitle = 'Do these Notes apply to the new targets?';
+
+        const reconcileCalls = () => fetchMock.mock.calls.filter(([url, init]) =>
+            String(url).endsWith('/assessments/assessment-notes/reconcile') && init?.method === 'POST');
+
+        async function openEditor(statusNotes: string, targets = [first]) {
+            const assessment = {
+                id: 'assessment-notes', vuln_id: vulnerability.id, status: 'affected',
+                simplified_status: 'Exploitable', origin: 'custom',
+                timestamp: '2025-06-01T00:00:00Z', status_notes: statusNotes,
+                targets, packages: [pkg], variant_ids: targets.map(t => t.variant_id),
+            };
+            fetchMock.resetMocks();
+            fetchMock.mockResponse(async ({ url }) => {
+                const { pathname } = new URL(url);
+                if (pathname.endsWith('/reconcile')) {
+                    return JSON.stringify({ status: 'success', updated: [], created: [], deleted: [] });
+                }
+                if (pathname.endsWith(`/vulnerabilities/${vulnerability.id}/assessments`)) {
+                    return JSON.stringify([assessment]);
+                }
+                if (pathname.endsWith('/variant-active-packages')) {
+                    return JSON.stringify([first, second].map(({ variant_id }) => ({
+                        variant_id, active_packages: [pkg],
+                        findings: [{ finding_id: `finding-${variant_id}`, package: pkg, outdated: false }],
+                    })));
+                }
+                if (pathname.endsWith('/variants')) {
+                    return JSON.stringify([
+                        { id: first.variant_id, name: 'Variant A', project_id: 'proj-1' },
+                        { id: second.variant_id, name: 'Variant B', project_id: 'proj-1' },
+                    ]);
+                }
+                return JSON.stringify([]);
+            });
+
+            render(<VulnModal vuln={{ ...vulnerability, assessments: [] }}
+                projectId="proj-1" isEditing={true} onClose={jest.fn()}
+                appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+            const user = userEvent.setup();
+            await user.click(await screen.findByTitle('Edit assessment'));
+            const saveButton = screen.getByRole('button', { name: 'Save Changes' });
+            const editor = within(saveButton.closest('fieldset')!);
+            const newTarget = await editor.findByRole('checkbox', { name: `Variant B / ${pkg}` });
+            await waitFor(() => expect(newTarget).toBeEnabled());
+            return { user, saveButton, editor, newTarget };
+        }
+
+        test('waits for confirmation and saves the revised exact-target draft once', async () => {
+            const { user, saveButton, editor, newTarget } = await openEditor(originalNotes);
+            await user.click(newTarget);
+            await user.click(saveButton);
+            const confirmation = screen.getByRole('dialog', { name: confirmationTitle });
+            expect(reconcileCalls()).toHaveLength(0);
+
+            await user.click(within(confirmation).getByRole('button', { name: 'Back to edit' }));
+            expect(screen.queryByRole('dialog', { name: confirmationTitle })).not.toBeInTheDocument();
+            expect(reconcileCalls()).toHaveLength(0);
+            expect(newTarget).toBeChecked();
+            const notes = editor.getByPlaceholderText(/Free text notes/);
+            expect(notes).toHaveValue(originalNotes);
+            const revisedNotes = 'The update path was verified on both targets.';
+            await user.clear(notes);
+            await user.type(notes, revisedNotes);
+            await user.click(saveButton);
+
+            const reviewed = screen.getByRole('dialog', { name: confirmationTitle });
+            expect(reconcileCalls()).toHaveLength(0);
+            await user.dblClick(within(reviewed).getByRole('button', { name: 'Confirm and save' }));
+            await screen.findByText('Assessment updated successfully!');
+            const calls = reconcileCalls();
+            expect(calls).toHaveLength(1);
+            expect(JSON.parse(String(calls[0][1]?.body))).toMatchObject({
+                status_notes: revisedNotes, targets: [first, second],
+            });
+        });
+
+        test.each([
+            { scenario: 'adding a pair with blank Notes', notes: ' \n ', before: [first], toggle: true, after: [first, second] },
+            { scenario: 'editing Notes without adding a pair', notes: originalNotes, before: [first], toggle: false, after: [first] },
+            { scenario: 'removing a pair with Notes', notes: originalNotes, before: [first, second], toggle: true, after: [first] },
+        ])('saves without confirmation when $scenario', async ({ notes, before, toggle, after }) => {
+            const { user, saveButton, editor, newTarget } = await openEditor(notes, before);
+            if (toggle) {
+                await user.click(newTarget);
+            } else {
+                await user.type(editor.getByPlaceholderText(/Free text notes/), ' Reviewed.');
+            }
+            await user.click(saveButton);
+
+            expect(screen.queryByRole('dialog', { name: confirmationTitle })).not.toBeInTheDocument();
+            await screen.findByText('Assessment updated successfully!');
+            const calls = reconcileCalls();
+            expect(calls).toHaveLength(1);
+            expect(JSON.parse(String(calls[0][1]?.body))).toMatchObject({ targets: after });
+        });
+    });
+
     test('status-only edit preserves a variantless assessment', async () => {
         fetchMock.resetMocks();
         const variantlessAssessment = {

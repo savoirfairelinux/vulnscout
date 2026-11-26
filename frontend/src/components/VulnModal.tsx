@@ -2,7 +2,7 @@ import type { Vulnerability, VulnerabilityPatch } from "../handlers/vulnerabilit
 import type { CVSS } from "../handlers/vulnerabilities";
 import Vulnerabilities, { asCVSS, buildStatusSummary, patchEffort } from "../handlers/vulnerabilities";
 import type { AiAssessmentEdits, Assessment, AssessmentTargetPair } from "../handlers/assessments";
-import Assessments, { asAssessment, isMultiTarget, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs } from "../handlers/assessments";
+import Assessments, { asAssessment, isMultiTarget, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs, sharesNotesWithNewTargets } from "../handlers/assessments";
 import { escape } from "lodash-es";
 import CvssGauge from "./CvssGauge";
 import CustomCvss from "./CustomCvss";
@@ -16,6 +16,7 @@ import Iso8601Duration from '../handlers/iso8601duration';
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBox, faChevronDown, faChevronLeft, faChevronRight, faPenToSquare, faTrash, faPlus, faCircleQuestion, faBook, faRotate, faCheck, faRobot, faCopy, faWandMagicSparkles } from "@fortawesome/free-solid-svg-icons";
 import ConfirmationModal from "./ConfirmationModal";
+import ConfirmSharedAssessmentNotes from "./ConfirmSharedAssessmentNotes";
 import AssessmentReviews, { verdictOf } from "../handlers/assessmentReviews";
 import type { AssessmentReview } from "../handlers/assessmentReviews";
 import EditAssessment from "./EditAssessment";
@@ -183,7 +184,12 @@ type PendingAiEditTransition =
     const snapshotController = useRef<AbortController | null>(null);
     const [submittingMessage, setSubmittingMessage] = useState<string | null>(null);
     const [editingAssessment, setEditingAssessment] = useState<Assessment | null>(null);
-    const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
+    const editInFlight = useRef(false);
+    const [pendingTargetEdit, setPendingTargetEdit] = useState<{
+        kind: 'delete' | 'share-notes';
+        data: EditAssessmentData;
+        targets?: AssessmentTargetPair[];
+    } | null>(null);
     // Whether editingAssessment came from the server's assessment listing (whose
     // targets are real AssessmentTarget rows, always variant-scoped) rather
     // than the client-side fallback used before that response lands (whose
@@ -610,6 +616,7 @@ type PendingAiEditTransition =
         setAiEditError(null);
         setHasAiEditChanges(false);
         setPendingAiEditTransition(null);
+        setPendingTargetEdit(null);
     }, [assessmentScope, isEditing]);
 
     const showMessage = (message: string, type: "error" | "success") => {
@@ -814,12 +821,14 @@ type PendingAiEditTransition =
     }, []);
 
     const handleEditAssessment = (assessmentId: string, row: Assessment, isServerConfirmed: boolean) => {
+        setPendingTargetEdit(null);
         setEditingAssessmentId(assessmentId);
         setEditingAssessment(row);
         setEditingAssessmentIsServerConfirmed(isServerConfirmed);
     };
 
     const handleCancelEdit = () => {
+        setPendingTargetEdit(null);
         setEditingAssessmentId(null);
         setEditingAssessment(null);
         setEditingAssessmentIsServerConfirmed(false);
@@ -991,7 +1000,7 @@ type PendingAiEditTransition =
         setAssessmentToDelete(null);
     };
 
-    const persistEditedAssessment = async (data: EditAssessmentData) => {
+    const persistEditedAssessment = async (data: EditAssessmentData, targets?: AssessmentTargetPair[]) => {
         if (!editingAssessment) return;
         setSubmittingMessage('Editing assessment...');
 
@@ -1005,25 +1014,13 @@ type PendingAiEditTransition =
         const targetPackages: string[] =
             data.packages ?? [...new Set((editingAssessment.targets ?? []).map(t => t.package))];
 
-        // A reconcile call needs at least one variant target — the backend
-        // rejects an empty ``variant_ids`` list. When the user has a variant
-        // to target, reconcile the assessment in a single request. Otherwise
-        // fall back to the legacy per-row PUT/POST/DELETE flow below, which is
-        // the only way to edit an assessment that isn't scoped to any variant.
-        const targetVariantIds: string[] =
-            data.variant_ids ?? [];
-
-        const hasVariantTargets = (editingAssessment.targets ?? []).some(
-            target => target.variant_id !== null
-        );
-        if (editingAssessmentIsServerConfirmed && hasVariantTargets && data.variant_ids !== undefined) {
+        if (targets !== undefined) {
             try {
                 const body: Record<string, unknown> = {
                     vuln_id: vuln.id,
                     packages: targetPackages,
-                    variant_ids: targetVariantIds,
-                    targets: data.targets ?? reconcileTargetPairs(
-                        editingAssessment.targets ?? [], targetPackages, targetVariantIds),
+                    variant_ids: data.variant_ids,
+                    targets,
                     status: data.status,
                     justification: data.justification,
                     impact_statement: data.impact_statement,
@@ -1230,19 +1227,46 @@ type PendingAiEditTransition =
         setEditingAssessment(null);
     };
 
+    const submitEditedAssessment = async (data: EditAssessmentData, targets?: AssessmentTargetPair[]) => {
+        if (editInFlight.current) return;
+        editInFlight.current = true;
+        try {
+            await persistEditedAssessment(data, targets);
+        } finally {
+            editInFlight.current = false;
+        }
+    };
+
     const saveEditedAssessment = (data: EditAssessmentData) => {
+        if (!editingAssessment || pendingTargetEdit || editInFlight.current) return;
+        const existing = editingAssessment.targets ?? [];
+        const targets = editingAssessmentIsServerConfirmed && data.variant_ids !== undefined
+            && existing.some(target => target.variant_id !== null)
+            ? data.targets ?? reconcileTargetPairs(
+                existing, data.packages ?? [...new Set(existing.map(target => target.package))], data.variant_ids)
+            : undefined;
         if (data.targets !== undefined && data.targets.length === 0) {
-            setPendingEmptyTargetEdit(data);
+            setPendingTargetEdit({ kind: 'delete', data, targets });
             return;
         }
-        void persistEditedAssessment(data);
+        if (targets !== undefined && sharesNotesWithNewTargets(data.status_notes, existing, targets)) {
+            setPendingTargetEdit({ kind: 'share-notes', data, targets });
+            return;
+        }
+        void submitEditedAssessment(data, targets);
+    };
+
+    const confirmTargetEdit = () => {
+        if (!pendingTargetEdit) return;
+        setPendingTargetEdit(null);
+        void submitEditedAssessment(pendingTargetEdit.data, pendingTargetEdit.targets);
     };
 
     // Handle keyboard navigation (ESC to close, arrow keys to navigate)
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             const target = event.target as HTMLElement;
-            if (target.closest?.('#agent-panel')) return;
+            if (pendingTargetEdit || target.closest?.('#agent-panel')) return;
             const isInTextField =
                 target.tagName === 'INPUT' ||
                 target.tagName === 'TEXTAREA' ||
@@ -1265,7 +1289,7 @@ type PendingAiEditTransition =
         return () => {
             document.removeEventListener('keydown', handleKeyDown);
         };
-    }, [handleClose, canNavigatePrevious, canNavigateNext, navigateTo, currentIndex]);
+    }, [handleClose, canNavigatePrevious, canNavigateNext, navigateTo, currentIndex, pendingTargetEdit]);
 
     // Decorate raw assessments with per-target ``outdated``, mirroring what
     // the server's annotated listing returns (src/controllers/assessment_targets.py).
@@ -2521,19 +2545,20 @@ type PendingAiEditTransition =
             />
 
             <ConfirmationModal
-                isOpen={pendingEmptyTargetEdit !== null}
+                isOpen={pendingTargetEdit?.kind === 'delete'}
                 title="Delete Assessment"
                 message="No targets remain. Saving this edit will delete the assessment. This action cannot be undone."
                 confirmText="Yes, delete"
                 cancelText="Keep editing"
                 showTitleIcon={true}
-                onConfirm={() => {
-                    if (!pendingEmptyTargetEdit) return;
-                    const data = pendingEmptyTargetEdit;
-                    setPendingEmptyTargetEdit(null);
-                    void persistEditedAssessment(data);
-                }}
-                onCancel={() => setPendingEmptyTargetEdit(null)}
+                onConfirm={confirmTargetEdit}
+                onCancel={() => setPendingTargetEdit(null)}
+            />
+
+            <ConfirmSharedAssessmentNotes
+                isOpen={pendingTargetEdit?.kind === 'share-notes'}
+                onConfirm={confirmTargetEdit}
+                onCancel={() => setPendingTargetEdit(null)}
             />
 
             <ConfirmationModal
