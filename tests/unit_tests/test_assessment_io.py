@@ -675,34 +675,23 @@ class TestImportStatementsMultiTarget:
     multi-target assessment instead of one assessment per product."""
 
     @pytest.mark.parametrize("original_timestamps", [False, True])
-    def test_openvex_roundtrip_preserves_linked_assessment(self, variant_and_project, original_timestamps):
-        from sqlalchemy import event
+    def test_openvex_roundtrip_preserves_notes(self, variant_and_project, original_timestamps):
         from src.extensions import db
         from src.models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 
         _, variant = variant_and_project
-        vuln = "CVE-2099-LINKED"
-        pair = (variant.id, _make_finding(vuln, "linked", "1").id)
-        snapshot = {"risk_id": "R1", "risk_description": "Original evidence"}
+        vuln = "CVE-2099-NOTES"
+        pair = (variant.id, _make_finding(vuln, "example", "1").id)
+        notes = "On default / example@1, the affected update path relates to risk R1 and threat T1."
         original = Assessment.create(status="affected", simplified_status=STATUS_TO_SIMPLIFIED["affected"],
-                                     origin="custom", targets=[pair], risk_snapshots={pair: [snapshot]})
+                                     origin="custom", targets=[pair], status_notes=notes)
         doc = build_openvex_doc([original], "author")
+        assert doc["statements"][0]["status_notes"] == notes
         variant_id, original_id = variant.id, original.id
         db.session.expunge_all()
-        queries = []
-
-        def record_query(conn, cursor, statement, parameters, context, executemany):
-            queries.append(statement.lower())
-
-        event.listen(db.engine, "before_cursor_execute", record_query)
-        try:
-            assert import_statements(doc["statements"], variant_id, original_timestamps) == ([], [], 1)
-        finally:
-            event.remove(db.engine, "before_cursor_execute", record_query)
-        assert any("assessment_targets" in q for q in queries)
-        assert not any("risk_links" in q for q in queries)
+        assert import_statements(doc["statements"], variant_id, original_timestamps) == ([], [], 1)
         restored, = Assessment.get_by_vulnerability(vuln)
-        assert restored.id == original_id and restored.target_rows[0].risk_links == [snapshot]
+        assert restored.id == original_id and restored.status_notes == notes
 
     def test_openvex_import_creates_one_assessment_for_three_products(self, app, variant_and_project):
         """GIVEN one statement covering 3 products WHEN imported THEN one
@@ -1193,22 +1182,12 @@ class TestCustomDataVersion2:
         assert "variant_id" not in payload["assessments"][0]
         assert "variant" not in payload["assessments"][0]
 
-    @pytest.mark.parametrize("origin,evidence", [
-        ("ai", {}),
-        ("ai", {"threat_target_ids": ["I1"]}),
-        ("custom", {"threat_target_ids": ["I1"], "interaction_endpoints": {
-            "I1": {"source_id": "C2", "destination_id": "C1"},
-        }}),
-        ("custom", {"threat_target_ids": ["I1"], "interaction_endpoints": {
-            "I1": {"source_id": "C1\n", "destination_id": "C1"},
-        }}),
-    ])
-    def test_version_2_export_round_trips_a_cross_variant_assessment(self, app, origin, evidence):
+    @pytest.mark.parametrize("origin", ["ai", "custom"])
+    def test_version_2_export_round_trips_cross_variant_assessment_without_legacy_links(self, app, origin):
         """A genuine multi-target (cross-variant) assessment created via
         Assessment.create(targets=...) round-trips through export/import."""
         from src.models.project import Project
         from src.models.assessment import Assessment
-        from src.models.variant_context import VariantContext
 
         with app.app_context():
             project = Project.create("io-v2-roundtrip-proj")
@@ -1219,25 +1198,23 @@ class TestCustomDataVersion2:
             _observe_finding(openssl, variant_a.id)
             _observe_finding(zlib, variant_b.id)
 
-            snapshot = {"risk_id": "R1", "risk_description": "When assessed", "threat_id": "T1",
-                        "threat_description": "Unchanged threat", **evidence}
+            notes = f"Authored vulnerability comment for {variant_b.name} / zlib@1.0: risk R1 and threat T1."
             original = Assessment.create(
                 status="not_affected", origin=origin,
                 justification="component_not_present",
+                status_notes=notes,
                 targets=[(variant_a.id, openssl.id), (variant_b.id, zlib.id)],
-                risk_snapshots={(variant_b.id, zlib.id): [snapshot]},
                 commit=True,
             )
 
             payload = build_custom_data_export()
             assert payload["version"] == 2
+            section = "ai_assessments" if origin == "ai" else "assessments"
+            exported = next(t for t in payload[section][0]["targets"] if t["variant"] == variant_b.name)
+            assert exported == {"variant": variant_b.name, "package": "zlib@1.0"}
+            exported["risk_links"] = [{"risk_id": "R2", "risk_description": "Legacy metadata only"}]
 
             original.delete()
-            VariantContext.get_or_create(variant_b.id).stride_model = {
-                "risks": [{"id": "R1", "description": "When assessed", "threat_ids": ["T1"]}],
-                "threats": [{"id": "T1", "description": "Unchanged threat", "target_ids": ["I1"]}],
-                "interactions": [{"id": "I1", "source_id": "C1", "destination_id": "C2"}],
-            }
 
             # Scalar-column queries can't see a genuine multi-target row (its
             # scalar finding_id/variant_id are None), so match via the
@@ -1256,17 +1233,10 @@ class TestCustomDataVersion2:
             assert set(restored[0].targets) == {
                 (variant_a.id, openssl.id), (variant_b.id, zlib.id),
             }
-            pairs = {t["variant_id"]: t for t in restored[0].target_pairs}
-            assert "risk_links" not in pairs[str(variant_a.id)]
-            link = pairs[str(variant_b.id)]["risk_links"][0]
-            assert link == {**snapshot, "stale": True}
-            section = "ai_assessments" if origin == "ai" else "assessments"
-            exported = next(t for t in payload[section][0]["targets"] if t["variant"] == variant_b.name)
-            if "threat_target_ids" in evidence:
-                exported["risk_links"][0]["interaction_endpoints"] = {"I1": {"source_id": "C1", "destination_id": "C2"}}
-            else:
-                exported["risk_links"][0]["risk_description"] = "Different saved evidence"
-            assert import_custom_data(payload, variant_by_name)[section + "_imported"] == 1
+            assert (restored[0].origin, restored[0].status_notes) == (origin, notes)
+            assert restored[0].justification == "component_not_present"
+            assert all("risk_links" not in t for t in build_custom_data_export()[section][0]["targets"])
+            exported["risk_links"] = {"malformed": "Ignored rather than rejecting an otherwise valid backup"}
             assert import_custom_data(payload, variant_by_name)[section + "_skipped"] == 1
 
     def test_v2_import_resolves_the_portable_variant_name(self, app, variant_and_project):

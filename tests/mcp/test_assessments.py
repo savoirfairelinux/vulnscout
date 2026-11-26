@@ -223,13 +223,14 @@ class TestWriteAssessmentImpl:
         # (that would cross-join and assess pairs never observed) — only the
         # exact (package, variant_id) pairs via `targets`.
         targets = [
-            {"package": "openssl@1.0.0", "variant_id": "variant-uuid-111",
-             "risk_links": [{"risk_id": "R1", "threat_id": "T1"}]},
-            {"package": "openssl@1.0.1", "variant_id": "variant-uuid-222",
-             "risk_links": [{"risk_id": "R1"}]},
+            {"package": "openssl@1.0.0", "variant_id": "variant-uuid-111"},
+            {"package": "openssl@1.0.1", "variant_id": "variant-uuid-222"},
         ]
+        notes = "For gateway / openssl@1.0.0, the affected path relates to risk R1 and threat T1."
         monkeypatch.delenv("VULNSCOUT_AGENT_SCOPE", raising=False)
         server = create_server(BASE_URL)
+        tool = next(t for t in asyncio.run(server.list_tools()) if t.name == "write_assessment")
+        assert set(tool.input_schema["$defs"]["WriteTarget"]["properties"]) == {"package", "variant_id"}
         with respx.mock:
             route = respx.post(f"{BASE_URL}/api/vulnerabilities/CVE-2024-1234/assessments").mock(
                 return_value=httpx.Response(
@@ -247,11 +248,12 @@ class TestWriteAssessmentImpl:
                 )
             )
             response = asyncio.run(server.call_tool("write_assessment", {
-                "vuln_id": "CVE-2024-1234", "status": "affected", "targets": targets,
+                "vuln_id": "CVE-2024-1234", "status": "affected", "targets": targets, "status_notes": notes,
             }))
             result = response.content[0].text
         body = json.loads(route.calls[0].request.content)
         assert body["targets"] == targets
+        assert body["status_notes"] == notes
         assert "packages" not in body
         assert "variant_id" not in body
         assert "variant_ids" not in body

@@ -24,32 +24,6 @@ type AssessmentTargetPair = {
     variant_id: string | null;
     package: string;
     outdated?: boolean;
-    risk_links?: ModeledRiskLink[];
-    risk_links_out_of_scope?: boolean;
-};
-
-export type RiskReference = { risk_id: string; threat_id?: string };
-type ThreatTargets = {
-    threat_target_ids?: string[];
-    interaction_endpoints?: Record<string, { source_id: string; destination_id: string }>;
-};
-export function displayModelId(id: string): string {
-    return JSON.stringify(id).slice(1, -1);
-}
-export function describeThreatTargets({ threat_target_ids, interaction_endpoints }: ThreatTargets): string {
-    return threat_target_ids?.map(id => {
-        if (!id.startsWith('I')) return displayModelId(id);
-        const ends = interaction_endpoints?.[id];
-        const path = ends ? `${displayModelId(ends.source_id)} → ${displayModelId(ends.destination_id)}` : 'endpoints not recorded';
-        return `${displayModelId(id)} (${path})`;
-    }).join(', ') ?? 'not recorded';
-}
-export type ModeledRiskLink = RiskReference & ThreatTargets & {
-    risk_description?: string; threat_description?: string; stale?: boolean;
-};
-export type RiskLinkPreview = ThreatTargets & {risk_description: string; threat_description?: string; revision: string};
-export type TargetRiskEdit = {
-    variant_id: string; package: string; risk_links: (RiskReference & {confirmed_revision?: string})[];
 };
 
 type Assessment = {
@@ -205,7 +179,6 @@ export function initialStatusNotes(assessment: Assessment) {
 
 /** Content edits applied to a pending AI assessment as it is approved. */
 type AiAssessmentEdits = {
-    target_risk_links?: TargetRiskEdit[];
     expected_fingerprint?: string;
     justification?: string;
     impact_statement?: string;
@@ -255,18 +228,6 @@ const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
         .map((item: any) => ({
             variant_id: item.variant_id,
             package: item.package,
-            ...(item.risk_links_out_of_scope === true && { risk_links_out_of_scope: true }),
-            ...(Array.isArray(item.risk_links) ? { risk_links: item.risk_links
-                .filter((link: any) => typeof link?.risk_id === 'string')
-                .map((link: any) => ({
-                    risk_id: link.risk_id,
-                    ...(typeof link.threat_id === 'string' && { threat_id: link.threat_id }),
-                    ...(typeof link.risk_description === 'string' && { risk_description: link.risk_description }),
-                    ...(typeof link.threat_description === 'string' && { threat_description: link.threat_description }),
-                    ...(Array.isArray(link.threat_target_ids) && { threat_target_ids: link.threat_target_ids }),
-                    ...(link.interaction_endpoints && { interaction_endpoints: link.interaction_endpoints }),
-                    stale: link.stale === true,
-                })) } : {}),
             ...(typeof item.outdated === "boolean" ? { outdated: item.outdated } : {}),
         }));
 
@@ -369,15 +330,6 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
 const isMultiTarget = (targets: AssessmentTargetPair[]): boolean => targets.length > 1;
 
 class Assessments {
-    static async previewRiskLink(id: string, variant: string, pkg: string, link: RiskReference): Promise<RiskLinkPreview> {
-        const params = new URLSearchParams({ variant_id: variant, package: pkg, risk_id: link.risk_id });
-        if (link.threat_id) params.set('threat_id', link.threat_id);
-        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/assessments/${encodeURIComponent(id)}/risk-link-preview?${params}`);
-        if (!response.ok) throw new Error(response.status === 404
-            ? 'This link is no longer available; correct or remove it.' : 'Could not load current description.');
-        return response.json();
-    }
-
     /**
      * Fetch server API to list all packages
      * @returns {Promise<Assessment[]>} A promise that resolves to a list of packages
@@ -527,9 +479,9 @@ class Assessments {
         const init: RequestInit = { method: 'POST', mode: 'cors' };
         if (edits) {
             init.headers = { 'Content-Type': 'application/json' };
-            const { expected_fingerprint, justification, impact_statement, status_notes, workaround, target_risk_links } = edits;
+            const { expected_fingerprint, justification, impact_statement, status_notes, workaround } = edits;
             init.body = JSON.stringify({
-                expected_fingerprint, justification, impact_statement, status_notes, workaround, target_risk_links,
+                expected_fingerprint, justification, impact_statement, status_notes, workaround,
             });
         }
         const response = await fetch(url.toString(), init);

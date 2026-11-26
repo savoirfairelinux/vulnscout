@@ -342,14 +342,11 @@ def test_approval_body_accepts_rationale_but_not_status(client):
         "requestBody"
     ]["content"]["application/json"]["schema"]
     _assert_payload_matches(spec, schema, {"status_notes": "Reviewed", "expected_fingerprint": "abc"})
-    target = {"package": "example@1", "variant_id": str(uuid4())}
-    _assert_payload_matches(spec, schema, {"target_risk_links": [
-        {**target, "risk_links": [{"risk_id": "R1", "threat_id": "T1"}]},
-    ]})
-    with pytest.raises(ValidationError, match="risk_id"):
-        _assert_payload_matches(spec, schema, {"target_risk_links": [{**target, "risk_links": [{"threat_id": "T1"}]}]})
+    with pytest.raises(ValidationError, match="target_risk_links"):
+        _assert_payload_matches(spec, schema, {"target_risk_links": []})
     with pytest.raises(ValidationError, match="status"):
         _assert_payload_matches(spec, schema, {"status": "affected"})
+    assert "/api/assessments/{assessment_id}/risk-link-preview" not in spec["paths"]
 
 
 def test_review_body_requires_verdict_rationale_target_and_fingerprint(client):
