@@ -188,14 +188,18 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
 
     monkeypatch.setattr(aq, "agent_queue", env.q)
     client = env.app.test_client()
-    action = {"kind": "context-import", "key": "import:x86", "text": "Read the uploaded document.",
+    prompt = (f' Fill the threat model of variant "x86" (variant_id {env.ids["x86"]}) in project '
+              f'"demo" (project_id {env.ids["demo"]}) from the document "report.pdf".\n'
+              "\tFollow the ai-context-import skill in embedded mode and read the import source.\n"
+              "Store a draft for the user to review. ")
+    action = {"kind": "context-import", "key": "import:x86", "text": prompt,
               "title": "x86 from report.pdf", "detail": "report.pdf", "import_revision": "uploaded-revision"}
     context = {"page": "ai", "view": {"selectedProjectId": env.ids["demo"],
                                      "selectedVariantId": env.ids["x86"]}}
     body = {"conversation": "per-action", "source": "AI Context x86", "actions": [action], "context": context,
             "model": "m"}
     response = client.post("/api/agent/queue", json=body)
-    assert response.status_code == 202
+    assert response.status_code == 202, response.get_json()
     [created] = response.get_json()["requests"]
     request = env.q.get_request(created["id"])
     assert request["lane"] == "action" and request["timeout"] == agent_skills.ACTION_TIMEOUT
@@ -208,7 +212,7 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
     assert call.profile is agent_skills.CONTEXT_IMPORT and call.turn is None
     assert json.loads(call.scope)["variant_ids"] == [env.ids["x86"]]
     assert json.loads(call.scope)["import_revisions"] == {env.ids["x86"]: "uploaded-revision"}
-    assert call.prompt.startswith(action["text"])
+    assert call.prompt.startswith(prompt)
     [follow], _ = env.q.enqueue(created["conversation_id"], "web", [_message("Why?")], model="m",
                                 context={"page": "vulnerabilities", "projectId": env.ids["demo"],
                                          "variantId": env.ids["arm"]})
@@ -220,9 +224,16 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
 @pytest.mark.parametrize("change, error", [
     ({"context": {"page": "ai"}}, "Select one variant"),
     ({"text": ""}, "import prompt"),
+    ({"text": " " + "x" * (aq.MESSAGE_LIMIT - 1) + "\n"}, "import prompt"),
+    ({"text": "Fill\x00from document"}, "import prompt"),
+    ({"text": "Fill\r\nfrom document"}, "import prompt"),
+    ({"text": "Fill\x85from document"}, "import prompt"),
+    ({"key": "import:\tx86"}, "Invalid action key"),
     ({"title": ""}, "import title"),
+    ({"title": "Fill\nx86"}, "import title"),
     ({"detail": ""}, "import filename"),
     ({"import_revision": ""}, "import revision"),
+    ({"import_revision": "upload\nrevision"}, "import revision"),
     ({"import_revision": None}, "import revision"),
     ({"import_revision": 5}, "import revision"),
     ({"import_revision": "x" * 129}, "import revision"),

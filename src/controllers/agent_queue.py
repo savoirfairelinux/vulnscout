@@ -290,10 +290,12 @@ class ConnectionChange:
 
 # ---------------------------------------------------------------- validation
 
-def _bounded_text(value: Any, limit: int, error: str) -> str:
+def _bounded_text(value: Any, limit: int, error: str, *, allow_multiline: bool = False) -> str:
     from ..routes.config import _has_control_characters
 
-    if not isinstance(value, str) or not value or len(value) > limit or _has_control_characters(value):
+    if not isinstance(value, str) or not value or len(value) > limit:
+        raise ValueError(error)
+    if _has_control_characters(value.replace("\n", "").replace("\t", "") if allow_multiline else value):
         raise ValueError(error)
     return value
 
@@ -535,7 +537,8 @@ class AgentQueue:
             scope = json.loads(agent._scope_for_context(context))
             if len(scope["variant_ids"]) != 1:
                 raise ValueError("Select one variant to fill its threat model.")
-            text = _bounded_text(action.get("text"), MESSAGE_LIMIT, "Enter a document import prompt.")
+            text = _bounded_text(action.get("text"), MESSAGE_LIMIT, "Enter a document import prompt.",
+                                 allow_multiline=True)
             title = _bounded_text(action.get("title"), TITLE_LIMIT, "Invalid document import title.")
             detail = _bounded_text(action.get("detail"), 512, "Invalid document import filename.")
             revision = _bounded_text(action.get("import_revision"), 128, "Invalid document import revision.")

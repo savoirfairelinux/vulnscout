@@ -2326,8 +2326,10 @@ POST queues actions:
 }
 ```
 
-Assess and review actions go to `per-action` (one new conversation per action key); a message
+Assess, review and context-import actions go to `per-action` (one new conversation per action key); a message
 (`{"kind":"message","text":"..."}`, at most 8000 characters) goes to `main` or to an existing conversation ID.
+A `context-import` action's `text` prompt is at most 8000 characters and may contain line feeds (LF) and
+horizontal tabs. Other control characters are rejected.
 `source` (at most 100 characters) names the client. `actions` lists 1 to 500 actions; each may set a `key`
 (at most 500 characters, derived from the action otherwise) and its own `context`. Assess actions take an optional
 `targets` list of `{variant_id, package}` pairs (the active targets in scope otherwise); `vuln_id` is uppercased.
