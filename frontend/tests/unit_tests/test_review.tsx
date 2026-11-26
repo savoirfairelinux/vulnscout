@@ -839,10 +839,13 @@ describe('Review — editing "Apply to variants"', () => {
         expect(screen.getByText('Apply to exact targets:')).toBeInTheDocument();
     });
 
-    test('checking a new variant reconciles the complete target set once', async () => {
-        mockNetwork([makeAssessment('a1', 'v1')]);
+    test('adding a variant waits for confirmation of the shared Notes and saves the reviewed draft once', async () => {
+        const originalNotes = 'Only Variant Alpha: the update path relates to R1 and T2.';
+        const revisedNotes = '  The update path was verified on both targets.  ';
+        mockNetwork([{ ...makeAssessment('a1', 'v1'), status_notes: originalNotes }]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
+        const confirmationName = 'Do these Notes apply to the new targets?';
 
         await openEditor(user);
 
@@ -852,12 +855,27 @@ describe('Review — editing "Apply to variants"', () => {
 
         await user.click(variantCheckbox('Variant Beta'));
         await user.click(screen.getByText('Save Changes'));
+        const dialog = screen.getByRole('dialog', { name: confirmationName });
+        expect(reconcileCalls()).toHaveLength(0);
 
-        await waitFor(() => {
-            expect(reconcileCalls()).toHaveLength(1);
-        });
+        await user.click(within(dialog).getByRole('button', { name: 'Back to edit' }));
+        expect(screen.queryByRole('dialog', { name: confirmationName })).not.toBeInTheDocument();
+        expect(reconcileCalls()).toHaveLength(0);
+        expect(variantCheckbox('Variant Beta')).toBeChecked();
+        const notes = screen.getByPlaceholderText(/Free text notes/);
+        expect(notes).toHaveValue(originalNotes);
+        await user.clear(notes);
+        await user.type(notes, revisedNotes);
+
+        await user.click(screen.getByText('Save Changes'));
+        const confirmation = screen.getByRole('dialog', { name: confirmationName });
+        expect(reconcileCalls()).toHaveLength(0);
+        await user.dblClick(within(confirmation).getByRole('button', { name: 'Confirm and save' }));
+        await screen.findByText('Assessment updated successfully!');
+        expect(reconcileCalls()).toHaveLength(1);
 
         const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.status_notes).toBe(revisedNotes);
         expect(body.variant_ids).toEqual(['v1', 'v2']);
         expect(body.packages).toEqual(['pkgA@1.0.0']);
         expect(body.targets).toEqual([
@@ -868,6 +886,52 @@ describe('Review — editing "Apply to variants"', () => {
         expect(body.timestamp).toBe('2024-01-01T00:00:00Z');
         expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
+    });
+
+    test('adding a package to an existing variant also requires confirmation without filling other pairs', async () => {
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                { variantId: 'v1', pkg: 'pkgA@1.0.0' },
+                { variantId: 'v2', pkg: 'pkgB@2.0.0' },
+            ]),
+        ], {
+            packagesByVariant: {
+                v1: [{ name: 'pkgA', version: '1.0.0' }, { name: 'pkgB', version: '2.0.0' }],
+                v2: [{ name: 'pkgA', version: '1.0.0' }, { name: 'pkgB', version: '2.0.0' }],
+            },
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        await user.click(screen.getByRole('checkbox', { name: 'Variant Alpha / pkgB@2.0.0' }));
+        await user.click(screen.getByText('Save Changes'));
+        const confirmation = screen.getByRole('dialog', { name: 'Do these Notes apply to the new targets?' });
+        expect(reconcileCalls()).toHaveLength(0);
+        await user.click(within(confirmation).getByRole('button', { name: 'Confirm and save' }));
+        await screen.findByText('Assessment updated successfully!');
+
+        expect(reconcileCalls()).toHaveLength(1);
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.targets).toEqual([
+            { variant_id: 'v1', package: 'pkgA@1.0.0' },
+            { variant_id: 'v1', package: 'pkgB@2.0.0' },
+            { variant_id: 'v2', package: 'pkgB@2.0.0' },
+        ]);
+    });
+
+    test('adding a target with whitespace-only Notes saves without confirmation', async () => {
+        mockNetwork([{ ...makeAssessment('a1', 'v1'), status_notes: '  \n  ' }]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        await user.click(variantCheckbox('Variant Beta'));
+        await user.click(screen.getByText('Save Changes'));
+        await screen.findByText('Assessment updated successfully!');
+
+        expect(reconcileCalls()).toHaveLength(1);
+        expect(screen.queryByRole('dialog', { name: 'Do these Notes apply to the new targets?' })).not.toBeInTheDocument();
     });
 
     test('unchecking one target of a multi-target assessment reconciles without deleting its row', async () => {
@@ -900,18 +964,21 @@ describe('Review — editing "Apply to variants"', () => {
         expect(deleteCalls()).toHaveLength(0);
     });
 
-    test('editing without changing variants reconciles exactly once', async () => {
+    test('editing only the Notes reconciles exactly once without confirmation', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
         await openEditor(user);
+        await user.type(screen.getByPlaceholderText(/Free text notes/), ' revised');
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
             expect(reconcileCalls()).toHaveLength(1);
         });
 
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.status_notes).toBe('shared note revised');
         expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
     });

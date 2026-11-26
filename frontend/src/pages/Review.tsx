@@ -86,6 +86,11 @@ type ReviewRow = {
     extractedSuppliers: string[];
 };
 
+type ReviewEditSubmission = {
+    data: EditAssessmentData;
+    targets: NonNullable<EditAssessmentData['targets']>;
+};
+
 /** Adapt a server-returned Assessment into the flattened shape the table
  *  columns and edit/delete/approve flows consume. */
 function toReviewRow(assessment: Assessment): ReviewRow {
@@ -269,9 +274,12 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [editCompatibilityLoading, setEditCompatibilityLoading] = useState(false);
     const [editCompatibilityError, setEditCompatibilityError] = useState<string | undefined>();
     const [editSubmitting, setEditSubmitting] = useState(false);
+    const editInFlight = useRef(false);
     const [editHasUnsavedChanges, setEditHasUnsavedChanges] = useState(false);
     const [discardEditor, setDiscardEditor] = useState<'assessment' | 'ai' | null>(null);
-    const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
+    const [pendingTargetEdit, setPendingTargetEdit] = useState<
+        (ReviewEditSubmission & { kind: 'delete' | 'share-notes' }) | null
+    >(null);
     const [aiEditingRow, setAiEditingRow] = useState<ReviewRow | null>(null);
     const [aiEditHasChanges, setAiEditHasChanges] = useState(false);
     const [aiEditSaving, setAiEditSaving] = useState(false);
@@ -523,7 +531,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
 
     const openAssessmentEditor = (row: ReviewRow) => {
         setEditHasUnsavedChanges(false);
-        setPendingEmptyTargetEdit(null);
+        setPendingTargetEdit(null);
         setShowBanner(false);
         setEditingRow(row);
     };
@@ -1134,8 +1142,9 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         variantId,
     ]);
 
-    const persistEditedAssessment = useCallback(async (data: EditAssessmentData) => {
-        if (!editingRow) return;
+    const persistEditedAssessment = useCallback(async ({ data, targets }: ReviewEditSubmission) => {
+        if (!editingRow || editInFlight.current) return;
+        editInFlight.current = true;
         setEditSubmitting(true);
 
         const targetVariantIds: string[] =
@@ -1151,8 +1160,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 vuln_id: editingRow.vuln_id,
                 packages: targetPackages,
                 variant_ids: targetVariantIds,
-                targets: data.targets ?? reconcileTargetPairs(
-                    editingRow.targets, targetPackages, targetVariantIds),
+                targets,
                 status: data.status,
                 justification: data.justification,
                 impact_statement: data.impact_statement,
@@ -1168,24 +1176,35 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         } catch {
             showMessage('Failed to update assessment.', 'error');
         } finally {
+            editInFlight.current = false;
             setEditSubmitting(false);
         }
     }, [editingRow, refreshAssessments, refreshReviews, onAssessmentChanged, showMessage]);
 
     const handleSaveEdit = useCallback((data: EditAssessmentData) => {
+        if (!editingRow || pendingTargetEdit || editInFlight.current) return;
+        const targets = data.targets ?? reconcileTargetPairs(
+            editingRow.targets, data.packages ?? editingRow.packages, data.variant_ids ?? editingRow.variant_ids);
         if (data.targets !== undefined && data.targets.length === 0) {
-            setPendingEmptyTargetEdit(data);
+            setPendingTargetEdit({ kind: 'delete', data, targets });
             return;
         }
-        void persistEditedAssessment(data);
-    }, [persistEditedAssessment]);
+        if (data.status_notes?.trim()) {
+            const existingPairs = new Set(editingRow.targets.map(({ variant_id, package: pkg }) =>
+                JSON.stringify([variant_id, pkg])));
+            if (targets.some(({ variant_id, package: pkg }) => !existingPairs.has(JSON.stringify([variant_id, pkg])))) {
+                setPendingTargetEdit({ kind: 'share-notes', data, targets });
+                return;
+            }
+        }
+        void persistEditedAssessment({ data, targets });
+    }, [editingRow, pendingTargetEdit, persistEditedAssessment]);
 
-    const confirmEmptyTargetEdit = useCallback(() => {
-        if (!pendingEmptyTargetEdit) return;
-        const data = pendingEmptyTargetEdit;
-        setPendingEmptyTargetEdit(null);
-        void persistEditedAssessment(data);
-    }, [pendingEmptyTargetEdit, persistEditedAssessment]);
+    const confirmTargetEdit = useCallback(() => {
+        if (!pendingTargetEdit) return;
+        setPendingTargetEdit(null);
+        void persistEditedAssessment(pendingTargetEdit);
+    }, [pendingTargetEdit, persistEditedAssessment]);
 
     const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {
         try {
@@ -2211,14 +2230,24 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             )}
 
             <ConfirmationModal
-                isOpen={pendingEmptyTargetEdit !== null}
+                isOpen={pendingTargetEdit?.kind === 'delete'}
                 title="Delete Assessment"
                 message="No targets remain. Saving this edit will delete the assessment. This action cannot be undone."
                 confirmText="Yes, delete"
                 cancelText="Keep editing"
                 showTitleIcon={true}
-                onConfirm={confirmEmptyTargetEdit}
-                onCancel={() => setPendingEmptyTargetEdit(null)}
+                onConfirm={confirmTargetEdit}
+                onCancel={() => setPendingTargetEdit(null)}
+            />
+
+            <ConfirmationModal
+                isOpen={pendingTargetEdit?.kind === 'share-notes'}
+                title="Do these Notes apply to the new targets?"
+                message="Confirm that the shared Notes, including any citations and supporting evidence, apply to every newly added package and variant pair. Go back to revise the Notes if needed."
+                confirmText="Confirm and save"
+                cancelText="Back to edit"
+                onConfirm={confirmTargetEdit}
+                onCancel={() => setPendingTargetEdit(null)}
             />
 
             <ConfirmationModal
