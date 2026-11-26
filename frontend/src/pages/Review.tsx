@@ -3,7 +3,7 @@ import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
 import type { AiAssessmentEdits, Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
-import { asAssessment, isMultiTarget, reconcileTargetPairs } from "../handlers/assessments";
+import { asAssessment, isMultiTarget, reconcileTargetPairs, sharesNotesWithNewTargets } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
@@ -18,6 +18,7 @@ import EditAiAssessment from '../components/EditAiAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
+import ConfirmSharedAssessmentNotes from '../components/ConfirmSharedAssessmentNotes';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
 import Packages from '../handlers/packages';
@@ -1189,13 +1190,9 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             setPendingTargetEdit({ kind: 'delete', data, targets });
             return;
         }
-        if (data.status_notes?.trim()) {
-            const existingPairs = new Set(editingRow.targets.map(({ variant_id, package: pkg }) =>
-                JSON.stringify([variant_id, pkg])));
-            if (targets.some(({ variant_id, package: pkg }) => !existingPairs.has(JSON.stringify([variant_id, pkg])))) {
-                setPendingTargetEdit({ kind: 'share-notes', data, targets });
-                return;
-            }
+        if (sharesNotesWithNewTargets(data.status_notes, editingRow.targets, targets)) {
+            setPendingTargetEdit({ kind: 'share-notes', data, targets });
+            return;
         }
         void persistEditedAssessment({ data, targets });
     }, [editingRow, pendingTargetEdit, persistEditedAssessment]);
@@ -2240,12 +2237,8 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 onCancel={() => setPendingTargetEdit(null)}
             />
 
-            <ConfirmationModal
+            <ConfirmSharedAssessmentNotes
                 isOpen={pendingTargetEdit?.kind === 'share-notes'}
-                title="Do these Notes apply to the new targets?"
-                message="Confirm that the shared Notes, including any citations and supporting evidence, apply to every newly added package and variant pair. Go back to revise the Notes if needed."
-                confirmText="Confirm and save"
-                cancelText="Back to edit"
                 onConfirm={confirmTargetEdit}
                 onCancel={() => setPendingTargetEdit(null)}
             />
