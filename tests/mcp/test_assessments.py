@@ -248,10 +248,12 @@ class TestWriteAssessmentImpl:
             )
             response = asyncio.run(server.call_tool("write_assessment", {
                 "vuln_id": "CVE-2024-1234", "status": "affected", "targets": targets,
+                "ai_generated": False,
             }))
             result = response.content[0].text
         body = json.loads(route.calls[0].request.content)
         assert body["targets"] == targets
+        assert body["ai_generated"] is False
         assert "packages" not in body
         assert "variant_id" not in body
         assert "variant_ids" not in body

@@ -1345,6 +1345,7 @@ describe('Review — AI Assessments tab', () => {
 
         const editor = within(screen.getByRole('dialog'));
         expect(await editor.findByText(/rerun the AI assessment with the current threat model/i)).toBeVisible();
+        expect(editor.getByText(/otherwise, review and correct the saved link through the assessment API/i)).toBeVisible();
         expect(editor.getByPlaceholderText(/Free text notes/)).toHaveValue('shared note');
     });
 

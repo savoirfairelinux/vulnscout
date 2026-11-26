@@ -25,8 +25,11 @@ The columns include:
 
 ## Search and Filters
 
-Structured modeled risk links are not shown or editable in Review. If a stale
-link blocks approval, rerun the AI assessment with the current threat model.
+Structured modeled risk links are not shown or editable in Review. New AI
+assessments put threat and risk references in Notes instead. If a saved stale
+link blocks approval, rerun the AI assessment if the target is still active.
+For historical targets, use the [approval API](api.md#approve-an-ai-assessment)
+to review and correct the saved link without changing targets.
 
 The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state.
 

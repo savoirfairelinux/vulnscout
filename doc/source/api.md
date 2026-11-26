@@ -1030,6 +1030,18 @@ field (including CycloneDX `responses`) or variant/finding target pair changed
 since the user opened the editor, approval returns `409` and leaves the newer
 suggestion pending. The precondition is optional for existing clients.
 
+If a legacy structured link becomes stale, approval is blocked until it is
+reviewed. For historical targets that cannot be reassessed, inspect the
+saved target on `GET /api/assessments/<assessment_id>` and compare it to the
+current model using `GET /api/assessments/<assessment_id>/risk-link-preview`
+with `variant_id`, `package`, `risk_id`, and optional `threat_id`. To confirm
+a current reference, send the preview's `revision` as `confirmed_revision`
+on that link in `target_risk_links`. To remove a link that no longer
+applies, send the target's remaining `risk_links`, or `[]` to clear them
+all. Each edit must identify the exact `variant_id` and `package`.
+Omitted targets keep their saved links; neither action changes the
+assessment's target set.
+
 **Request body (optional):**
 ```json
 {
@@ -1096,6 +1108,9 @@ POST /api/vulnerabilities/<vuln_id>/assessments
 `variant_ids` (a list) may be given instead of `variant_id` to scope one
 assessment to several variants. Set `"ai_generated": true` to create a pending
 AI assessment (`origin` `"ai"`) instead of a `custom` one.
+New AI assessments must cite modeled risks and threats in `status_notes`;
+non-empty `targets[].risk_links` are rejected with `400`. Structured links
+on custom assessments and existing AI suggestions are unaffected.
 
 One variant scope is required. Alternatively, supply a non-empty `targets` array of exact
 `{"variant_id":"uuid","package":"name@version::supplier"}` pairs; it overrides flattened scope fields.

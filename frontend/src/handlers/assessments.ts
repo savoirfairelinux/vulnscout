@@ -536,7 +536,7 @@ class Assessments {
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
             if (response.status === 400 && typeof err.error === 'string' && err.error.startsWith('Stale modeled risk link for ')) {
-                throw new Error('A threat or risk reference has changed. Rerun the AI assessment with the current threat model before approving.');
+                throw new Error('A threat or risk reference has changed. Rerun the AI assessment with the current threat model if the target is still active. Otherwise, review and correct the saved link through the assessment API before approving.');
             }
             throw new Error(err.error || `HTTP ${response.status}`);
         }

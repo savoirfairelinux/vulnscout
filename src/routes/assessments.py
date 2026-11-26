@@ -1555,6 +1555,7 @@ def init_app(app: Flask) -> None:
 
         explicit_targets: list[tuple[str, UUID]] | None = None
         link_edits = []
+        ai_generated = bool(payload_data.get("ai_generated"))
         if "risk_links" in payload_data or "target_risk_links" in payload_data:
             return {"error": "Specify risk_links inside each exact target"}, 400
         raw_targets = payload_data.get("targets")
@@ -1579,8 +1580,15 @@ def init_app(app: Flask) -> None:
                     return {"error": "Invalid variant_id"}, 400
                 pair = (package_id, target_variant_id)
                 if "risk_links" in target:
-                    link_edits.append({"variant_id": str(target_variant_id), "package": package_id,
-                                       "risk_links": target["risk_links"]})
+                    links = target["risk_links"]
+                    if ai_generated:
+                        if links != []:
+                            return {
+                                "error": "AI assessments must cite modeled risks in status_notes, not risk_links",
+                            }, 400
+                    else:
+                        link_edits.append({"variant_id": str(target_variant_id), "package": package_id,
+                                           "risk_links": links})
                 if pair not in explicit_targets:
                     explicit_targets.append(pair)
             payload_data["packages"] = list(dict.fromkeys(
@@ -1615,7 +1623,6 @@ def init_app(app: Flask) -> None:
                 return {"error": "Invalid variant_id"}, 400
             variant_ids.append(parsed)
 
-        ai_generated = bool(payload_data.get("ai_generated"))
         target_origin = "ai" if ai_generated else "custom"
 
         # Use a single timestamp so the created row's own targets (and any
