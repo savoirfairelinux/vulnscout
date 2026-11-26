@@ -254,8 +254,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     code_not_reachable, requires_configuration, requires_dependency,
                     requires_environment, protected_by_compiler, protected_at_runtime,
                     protected_at_perimeter, protected_by_mitigating_control.
-            status_notes: Free-text notes about the assessment. For AI assessments, cite relevant
-                    saved risk and threat IDs here, scoped to the applicable variant and package.
+            status_notes: Free-text notes shared across all targets. For AI assessments, cite
+                    evidence-backed saved risk and threat IDs only here. Include citations and
+                    supporting details only if independently applicable to every exact package/variant
+                    target. Matching IDs alone are not enough. Omit them if scope is ambiguous.
             impact_statement: Free-text description of impact.
             workaround: Workaround description.
             responses: CycloneDX response tags. Valid values: can_not_fix, will_not_fix,
@@ -365,7 +367,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     not_affected, affected, fixed. CycloneDX VEX values: in_triage,
                     false_positive, not_affected, exploitable, resolved,
                     resolved_with_pedigree.
-            status_notes: Free-text notes about the assessment.
+            status_notes: Free-text notes shared across all targets. Cite evidence-backed saved
+                    risk and threat IDs only here. Include citations and supporting details only
+                    if independently applicable to every exact package/variant target. Omit them
+                    if scope is ambiguous.
             justification: Required by the server when status is 'not_affected'.
                     OpenVEX values: component_not_present, vulnerable_code_not_present,
                     vulnerable_code_not_in_execute_path,
