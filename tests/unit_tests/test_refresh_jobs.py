@@ -70,7 +70,7 @@ def test_known_ids_and_refresh_helper_edge_cases(monkeypatch):
 
     monkeypatch.setattr(jobs, "DB_LOOKUP_CHUNK", 1)
     monkeypatch.setattr(jobs.db, "session", SimpleNamespace(query=lambda _column: Query()))
-    assert jobs.known_cve_ids(["CVE-2024-0001", "CVE-2024-0002"]) == ["CVE-2024-0001"]
+    assert jobs.known_vulnerability_ids(["CVE-2024-0001", "GHSA-1234-5678-9012"]) == {"CVE-2024-0001"}
 
     record = object()
     monkeypatch.setattr(jobs.db, "session", SimpleNamespace(get=MagicMock(return_value=record)))
@@ -128,7 +128,6 @@ def test_deferred_refresh_resolves_new_ids_when_it_starts(monkeypatch):
         jobs, "_scoped_vulnerability_ids",
         lambda _variant_ids: {"CVE-2024-0001", "CVE-2024-0002"},
     )
-    monkeypatch.setattr(jobs, "known_cve_ids", lambda ids: ids)
     runner = MagicMock()
     monkeypatch.setitem(jobs.REFRESH_JOBS, "epss", runner)
 

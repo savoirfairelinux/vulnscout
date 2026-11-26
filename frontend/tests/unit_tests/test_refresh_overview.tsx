@@ -417,7 +417,7 @@ describe('Refresh overview', () => {
             'variantIds' in scope ? scope.variantIds : undefined,
             'multiOperation' in scope ? scope.multiOperation : undefined);
         expect(enqueue).toHaveBeenCalledWith(['nvd', 'epss', 'euvd'].map(source => ({
-            kind: 'refresh', source, ids: ['CVE-new'],
+            kind: 'refresh', source, ids: source === 'euvd' ? ['CVE-new'] : ['CVE-new', 'GHSA-new'],
             options: { mode: 'local', project_id: 'project-a', ...(refreshVariant ? { variant_id: refreshVariant } : {}) },
         })));
         await waitFor(() => expect(complete).toHaveBeenCalled());

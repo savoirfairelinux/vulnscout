@@ -66,11 +66,15 @@ def _safe_commit(label: str) -> None:
         db.session.expunge_all()
 
 
-def normalise_cve_ids(raw_ids: object) -> List[str]:
+def normalise_vulnerability_ids(raw_ids: object) -> List[str]:
     if not isinstance(raw_ids, list):
         return []
-    candidates = [c.strip().upper() for c in raw_ids if isinstance(c, str) and c.strip()]
-    return [c for c in dict.fromkeys(candidates) if CVE_RE.match(c)]
+    candidates = (c.strip().upper() for c in raw_ids if isinstance(c, str))
+    return list(dict.fromkeys(c for c in candidates if c and "\x00" not in c))
+
+
+def normalise_cve_ids(raw_ids: object) -> List[str]:
+    return [c for c in normalise_vulnerability_ids(raw_ids) if CVE_RE.fullmatch(c)]
 
 
 def normalise_ghsa_ids(raw_ids: object) -> List[str]:
@@ -80,14 +84,14 @@ def normalise_ghsa_ids(raw_ids: object) -> List[str]:
     return [c for c in dict.fromkeys(candidates) if GHSA_RE.match(c)]
 
 
-def known_cve_ids(cve_ids: List[str]) -> List[str]:
-    """Intersect *cve_ids* with the database in request-bounded chunks."""
+def known_vulnerability_ids(ids: List[str]) -> Set[str]:
+    """Intersect the supplied IDs with the database in bounded chunks."""
     known: Set[str] = set()
-    for start in range(0, len(cve_ids), DB_LOOKUP_CHUNK):
-        chunk = cve_ids[start:start + DB_LOOKUP_CHUNK]
+    for start in range(0, len(ids), DB_LOOKUP_CHUNK):
+        chunk = ids[start:start + DB_LOOKUP_CHUNK]
         rows = db.session.query(Vulnerability.id).filter(Vulnerability.id.in_(chunk)).all()
         known.update(row[0] for row in rows)
-    return [cve_id for cve_id in cve_ids if cve_id in known]
+    return known
 
 
 def _applicable_cve_targets(ctx: JobContext, source: str) -> tuple[list[str], int]:
@@ -150,13 +154,13 @@ def run_deferred_refresh(ctx: JobContext) -> None:
 
     source = str(ctx.options["source"])
     existing_ids = set(ctx.options.get("exclude_ids", []))
-    scoped_ids = _scoped_vulnerability_ids(list(ctx.options["variant_ids"]))
+    discovered = sorted(_scoped_vulnerability_ids(list(ctx.options["variant_ids"])) - existing_ids)
     if source == "ghsa":
-        ids = normalise_ghsa_ids(sorted(scoped_ids - existing_ids))
+        ids = normalise_ghsa_ids(discovered)
+    elif source == "euvd":
+        ids = normalise_cve_ids(discovered)
     else:
-        ids = normalise_cve_ids(sorted(scoped_ids - existing_ids))
-        if source == "epss":
-            ids = known_cve_ids(ids)
+        ids = discovered
         if source == "nvd" and ctx.options.get("mode") == "api" and len(ids) > MAX_CVE_IDS:
             raise OperationError(
                 f"nvd refresh accepts at most {MAX_CVE_IDS} identifiers in api mode"

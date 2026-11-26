@@ -1964,7 +1964,17 @@ Submit scans and vulnerability-data refreshes as one ordered batch. Scans run in
 }
 ```
 
-For a standalone refresh, supply `ids` (CVE IDs for NVD/EPSS/EUVD, GHSA IDs for GHSA) instead of `variant_ids`. Deferred refresh jobs resolve the variant's newly discovered IDs after preceding scans; `exclude_ids` omits the pre-scan baseline. Scan options `exclude_kernel` and `exclude_native` default to `true` and `false`, respectively. `options.mode` accepts `"local"` (default) or `"api"` where supported. Duplicate or invalid operations are rejected before any job is queued; active conflicts return `409` with the conflicting operation IDs.
+For a standalone refresh, supply `ids` instead of `variant_ids`. EUVD takes
+CVE IDs and GHSA takes GHSA IDs. NVD and EPSS record known non-CVE targets as
+unsupported without querying the provider. Scoped requests must contain only
+targets in the selected scope. NVD API mode accepts at most 1000 targets.
+Deferred refresh jobs resolve the variant's newly discovered IDs after
+preceding scans; `exclude_ids` omits the pre-scan baseline, including non-CVE
+IDs for NVD and EPSS. Scan options `exclude_kernel` and `exclude_native`
+default to `true` and `false`, respectively. `options.mode` accepts `"local"`
+(default) or `"api"` where supported. Duplicate or invalid operations are
+rejected before any job is queued; active conflicts return `409` with the
+conflicting operation IDs.
 
 **Response:** `202 Accepted` with `{ "queue_id": "q-...", "operations": [ ... ] }`. Each operation contains `op_id`, `kind`, `source`, `queue_id`, `position`, `status`, `progress` (`current`, `total`, `message`), `logs`, `error`, `result`, `scope`, and `cancellable`. `GET /api/operations` returns `{ "operations": [ ... ] }` with the current snapshot. Status values are `queued`, `running`, `done`, `error`, and `cancelled`; do not infer completion from the HTTP 202 response.
 

@@ -29,9 +29,10 @@ from ..controllers.refresh_jobs import (
     MAX_CVE_IDS,
     MAX_GHSA_IDS,
     REFRESH_JOBS,
-    known_cve_ids,
+    known_vulnerability_ids,
     normalise_cve_ids,
     normalise_ghsa_ids,
+    normalise_vulnerability_ids,
     run_deferred_refresh,
 )
 from ..controllers.scan_jobs import SCAN_JOBS
@@ -220,11 +221,11 @@ def _deferred_refresh_options(source: str, job: dict, mode: str) -> dict:
             raise _PlanError(f"Variant not found: {raw_id}", status=404)
         variant_ids.append(str(variant_uuid))
 
-    exclude_ids = (
-        normalise_ghsa_ids(job.get("exclude_ids", []))
-        if source == "ghsa"
-        else normalise_cve_ids(job.get("exclude_ids", []))
-    )
+    normalise = {
+        "ghsa": normalise_ghsa_ids,
+        "euvd": normalise_cve_ids,
+    }.get(source, normalise_vulnerability_ids)
+    exclude_ids = normalise(job.get("exclude_ids"))
     return {
         "ids": [],
         "mode": mode,
@@ -243,17 +244,26 @@ def _explicit_refresh_options(source: str, job: dict, mode: str) -> dict:
             raise _PlanError(f"ghsa refresh accepts at most {MAX_GHSA_IDS} identifiers")
         return {"ids": ids, "mode": mode}
 
-    ids = normalise_cve_ids(job.get("ids"))
-    if not ids:
-        raise _PlanError(f"{source} refresh requires valid CVE identifiers")
-    if source == "nvd" and mode == "api" and len(ids) > MAX_CVE_IDS:
-        raise _PlanError(
-            f"nvd refresh accepts at most {MAX_CVE_IDS} identifiers in api mode"
-        )
-    if source == "epss":
-        ids = known_cve_ids(ids)
+    if source == "euvd":
+        ids = normalise_cve_ids(job.get("ids"))
         if not ids:
-            raise _PlanError("epss refresh requires at least one known CVE identifier")
+            raise _PlanError("euvd refresh requires valid CVE identifiers")
+        return {"ids": ids, "mode": mode}
+
+    candidates = normalise_vulnerability_ids(job.get("ids"))
+    if source == "nvd":
+        if mode == "api" and len(candidates) > MAX_CVE_IDS:
+            raise _PlanError(f"nvd refresh accepts at most {MAX_CVE_IDS} identifiers in api mode")
+        cve_ids = set(normalise_cve_ids(candidates))
+        # NVD accepts previously unknown CVEs, but only existing vulnerabilities
+        # can be recorded as unsupported targets.
+        unsupported = [identifier for identifier in candidates if identifier not in cve_ids]
+        allowed = cve_ids | known_vulnerability_ids(unsupported)
+    else:
+        allowed = known_vulnerability_ids(candidates)
+    ids = [identifier for identifier in candidates if identifier in allowed]
+    if not ids:
+        raise _PlanError(f"{source} refresh requires at least one valid target identifier")
     return {"ids": ids, "mode": mode}
 
 
