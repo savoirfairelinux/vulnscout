@@ -70,6 +70,8 @@ const RefreshRuns = {
     latest: (filters: RefreshFilters, signal?: AbortSignal) => get<RefreshRun>('/latest', filters, signal),
     detail: (runId: string, filters: RefreshFilters, signal?: AbortSignal) =>
         get<RefreshRun>(`/${encodeURIComponent(runId)}`, filters, signal),
+    metadata: (runId: string, filters: RefreshFilters, signal?: AbortSignal) =>
+        get<RefreshRunMetadata>(`/${encodeURIComponent(runId)}/metadata`, filters, signal),
     list: (filters: RefreshFilters, signal?: AbortSignal) => get<RefreshRunList>('', filters, signal),
 };
 

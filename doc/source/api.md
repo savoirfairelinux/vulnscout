@@ -1967,7 +1967,8 @@ Submit scans and vulnerability-data refreshes as one ordered batch. Scans run in
 For a standalone refresh, supply `ids` instead of `variant_ids`. EUVD takes
 CVE IDs and GHSA takes GHSA IDs. NVD and EPSS record known non-CVE targets as
 unsupported without querying the provider. Scoped requests must contain only
-targets in the selected scope. NVD API mode accepts at most 1000 targets.
+targets in active findings in the selected scope; unknown and out-of-scope IDs
+are both rejected. NVD API mode accepts at most 1000 targets.
 Deferred refresh jobs resolve the variant's newly discovered IDs after
 preceding scans; `exclude_ids` omits the pre-scan baseline, including non-CVE
 IDs for NVD and EPSS. Scan options `exclude_kernel` and `exclude_native`
@@ -2010,6 +2011,7 @@ reserved for the route below and is rejected as a run ID.
 GET /api/refresh-runs
 GET /api/refresh-runs/latest
 GET /api/refresh-runs/<run_id>
+GET /api/refresh-runs/<run_id>/metadata
 GET /api/refresh-runs/<run_id>/export?format=json|csv
 ```
 
@@ -2025,8 +2027,10 @@ filtered changes without pagination. Coverage is never truncated or affected
 by source/field/kind/change-type filters.
 
 When no retained run matches, `GET /api/refresh-runs/latest` returns HTTP `200`
-with JSON `null`. Exact-run detail and export requests still return HTTP `404`
-for unavailable, expired or out-of-scope runs; they never substitute another run.
+with JSON `null`. Exact-run detail, metadata, and export requests return HTTP
+`404` for unavailable, expired or out-of-scope runs; they never substitute
+another run. The metadata endpoint uses the list entry shape without loading
+coverage, package links, or change bodies.
 
 Detail/latest responses have this shape:
 

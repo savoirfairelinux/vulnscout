@@ -324,6 +324,8 @@ def test_shared_cve_visibility_is_captured_and_package_links_are_scope_filtered(
     listed = client.get("/api/refresh-runs", query_string={"project_id": other_id}).get_json()["runs"]
     assert [item["run_id"] for item in listed] == [run]
     assert client.get(f"/api/refresh-runs/{scoped}", query_string={"project_id": other_id}).status_code == 404
+    assert client.get(f"/api/refresh-runs/{scoped}/metadata",
+                      query_string={"project_id": other_id}).status_code == 404
     listed = client.get("/api/refresh-runs", query_string={"project_id": PROJECT}).get_json()["runs"]
     assert {item["run_id"] for item in listed} == {run, scoped}
 
@@ -490,6 +492,12 @@ def test_queued_provider_applicability_keeps_skips_and_real_gaps(app, client, mo
         assert data["summary"]["total_changes"] == 0
     assert data["source_status"] == expected_sources
     assert data["summary"]["refreshed_vulnerabilities"] == len(applicable)
+    with patch("src.routes.refresh_runs.artifact", side_effect=AssertionError("Artifact must not be loaded")):
+        metadata = client.get(f"{url}/metadata", query_string=scope)
+    assert metadata.status_code == 200
+    assert metadata.get_json() == {
+        key: value for key, value in data.items() if key not in {"coverage", "changes", "total", "limit", "offset"}
+    }
     for source in ("nvd", "epss"):
         outcomes = {(row["vuln_id"], row["status"], row["error"])
                     for row in data["coverage"] if row["source"] == source}
@@ -643,6 +651,7 @@ def test_expired_exact_run_never_substitutes_latest_and_can_be_pruned(app, clien
         create_run({"epss": [CVE]}, run_id="newest")
     assert client.get("/api/refresh-runs/expired").status_code == 404
     assert client.get("/api/refresh-runs/expired/export").status_code == 404
+    assert client.get("/api/refresh-runs/expired/metadata").status_code == 404
     result = app.test_cli_runner().invoke(args=["export-refresh-changes", "--run-id", expired])
     assert result.exit_code != 0 and "expired" in result.output
     result = app.test_cli_runner().invoke(args=["prune-refresh-runs"])
@@ -998,21 +1007,44 @@ def test_grouped_queue_keeps_exact_run_and_initiating_scope(app, client, monkeyp
     registry.clear()
 
 
-@pytest.mark.parametrize("source, identifier", [
-    ("nvd", "CVE-2099-9999"),
-    ("nvd", "GHSA-ABCD-1234-5678"),
-    ("epss", "GHSA-ABCD-1234-5678"),
+@pytest.mark.parametrize("source", ["nvd", "epss"])
+@pytest.mark.parametrize("scope, location", [
+    ({"project_id": PROJECT}, "absent"),
+    ({"project_id": PROJECT}, "other-project"),
+    ({"variant_id": VARIANT}, "absent"),
+    ({"variant_id": VARIANT}, "other-variant"),
+    ({"variant_id": VARIANT}, "older-scan"),
 ])
-def test_queued_refresh_rejects_targets_outside_initiating_scope(app, client, source, identifier):
-    if identifier.startswith("GHSA"):
+def test_queued_refresh_requires_active_findings_in_scope(app, client, source, scope, location):
+    identifier = "GHSA-ABCD-1234-5678"
+    if location != "absent":
         with app.app_context():
+            variant_id = uuid.UUID(VARIANT)
+            if location != "older-scan":
+                variant_id = uuid.uuid4()
+                project_id = uuid.UUID(PROJECT)
+                if location == "other-project":
+                    project_id = uuid.uuid4()
+                    db.session.add(Project(id=project_id, name="other"))
+                db.session.add(Variant(id=variant_id, name="other", project_id=project_id))
+            scan = Scan(id=uuid.uuid4(), variant_id=variant_id, scan_type="sbom",
+                        timestamp=datetime(2000, 1, 1, tzinfo=timezone.utc))
+            db.session.add(scan)
+            db.session.flush()
             Vulnerability.create_record(id=identifier)
-    response = client.post("/api/operations", json={"jobs": [
-        {"kind": "refresh", "source": source, "ids": [CVE, identifier],
-         "options": {"project_id": PROJECT}},
-    ]})
+            package_id = db.session.scalar(db.select(Finding.package_id).where(Finding.vulnerability_id == CVE))
+            finding = Finding.get_or_create(package_id, identifier)
+            db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+            db.session.commit()
+    with patch("src.routes.operations.known_vulnerability_ids") as global_lookup, \
+            patch("src.routes.operations._enqueue") as enqueue:
+        response = client.post("/api/operations", json={"jobs": [
+            {"kind": "refresh", "source": source, "ids": [CVE, identifier], "options": scope},
+        ]})
+    global_lookup.assert_not_called()
+    enqueue.assert_not_called()
     assert response.status_code == 400
-    assert "outside" in response.get_json()["error"]
+    assert response.get_json() == {"error": "Refresh identifiers are outside the selected scope"}
 
 
 def test_nvd_api_target_limit_includes_known_unsupported_ids(app, client, monkeypatch):
