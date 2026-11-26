@@ -106,7 +106,7 @@ describe('Refresh controls batch lifecycle', () => {
         if (status === 'done') {
             expect(summary).toHaveBeenCalledWith(accepted[0].started_at, ['nvd', 'epss', 'euvd'],
                 'current-batch', accepted.map(item => item.op_id));
-            expect(await screen.findByRole('alert')).toHaveTextContent('Refresh complete: 1 value changed');
+            expect(await screen.findByRole('alert')).toHaveTextContent('Refresh complete: 1 CVE updated.');
         } else {
             expect(summary).not.toHaveBeenCalled();
             expect(await screen.findByRole('alert')).toHaveTextContent(`partially completed: nvd ${status}`);

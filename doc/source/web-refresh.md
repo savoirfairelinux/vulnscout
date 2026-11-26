@@ -7,7 +7,10 @@ of the **Refresh History** bar. Choose
 providers, then **Start**. The action uses vulnerabilities in the selected scope,
 not table filters. Detailed progress is shown in the operation queue.
 Per-provider cancellation remains available in the refresh menu, and success
-or error banners appear above **Refresh History**.
+or error banners appear above **Refresh History**. The success banner reports
+how many distinct CVEs had data changes, not how many were checked. If the run
+includes GitHub Advisory Database, it counts changed CVEs and advisories together
+as vulnerabilities. Open the refresh result to inspect individual field changes.
 Queued work continues after navigating away. Each launch records one refresh run
 containing all selected providers. Loaded data and run results update once after
 every step finishes, fails or is cancelled, not after individual providers.
