@@ -25,6 +25,9 @@ The columns include:
 
 ## Search and Filters
 
+Structured modeled risk links are not shown or editable in Review. If a stale
+link blocks approval, rerun the AI assessment with the current threat model.
+
 The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state.
 
 On the **Assessments** and **AI Assessments** tabs, the **Outdated** selector defaults to **All**. Choose **Outdated** to show only rows with at least one target marked outdated or, for AI assessments, an outdated AI context. Choose **Not outdated** to exclude those rows. **Reset Filters** restores **All** and the other filter defaults.
@@ -49,6 +52,8 @@ selector is above the chat. Leaving the Review page or changing project/variant
 does not cancel queued reviews; reviews already saved remain.
 
 ## Import and Export
+
+VulnScout JSON still preserves saved modeled risk links per assessment target.
 
 Two buttons in the toolbar handle review portability:
 

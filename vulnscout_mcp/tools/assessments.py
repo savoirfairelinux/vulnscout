@@ -1,11 +1,17 @@
 from typing import Optional
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+
+
+class RiskReference(TypedDict):
+    risk_id: str
+    threat_id: NotRequired[str]
 
 
 class WriteTarget(TypedDict):
     package: str
     variant_id: str
+    risk_links: NotRequired[list[RiskReference]]
 
 
 def _write_assessment_impl(
@@ -236,7 +242,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     pairs. Use this instead of `packages`/`variant_id`/`variant_ids`
                     for a multi-variant group whose members do not all share the
                     same affected package set. Takes precedence over
-                    `packages`/`variant_id`/`variant_ids` when given.
+                    `packages`/`variant_id`/`variant_ids` when given. Each target may include
+                    risk_links: [{"risk_id": "R1", "threat_id": "T2"}]. Use only IDs from that
+                    variant's saved STRIDE records; the optional threat must belong to the risk.
+                    Omitted or [] means no modeled risk linked, not absence of risk.
             justification: Required when status is 'not_affected'. OpenVEX values:
                     component_not_present, vulnerable_code_not_present,
                     vulnerable_code_not_in_execute_path,
@@ -245,9 +254,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     code_not_reachable, requires_configuration, requires_dependency,
                     requires_environment, protected_by_compiler, protected_at_runtime,
                     protected_at_perimeter, protected_by_mitigating_control.
-            status_notes: Free-text vulnerability comment. For AI analysis, mention relevant saved STRIDE
-                    risk and threat IDs only when supported by evidence. Name the applicable variant
-                    and package so a grouped comment cannot imply the IDs apply to other targets.
+            status_notes: Free-text notes about the assessment.
             impact_statement: Free-text description of impact.
             workaround: Workaround description.
             responses: CycloneDX response tags. Valid values: can_not_fix, will_not_fix,
@@ -357,8 +364,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     not_affected, affected, fixed. CycloneDX VEX values: in_triage,
                     false_positive, not_affected, exploitable, resolved,
                     resolved_with_pedigree.
-            status_notes: Free-text vulnerability comment. Keep any supported saved STRIDE risk
-                    and threat citations here, scoped to their variant and package.
+            status_notes: Free-text notes about the assessment.
             justification: Required by the server when status is 'not_affected'.
                     OpenVEX values: component_not_present, vulnerable_code_not_present,
                     vulnerable_code_not_in_execute_path,
