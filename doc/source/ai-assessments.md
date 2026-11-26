@@ -506,9 +506,11 @@ one line cannot fit, `partial_line: true` marks its content as a prefix only;
 each attached folder's availability, and actions to refresh status or detach.
 Open the help beside **Attached host folders** for attach instructions, or the
 help beside an **Unavailable** status for that folder's diagnostic. Above
-**Refresh folder status**, the page shows how to restore an unavailable helper
-or, when it is reachable, how to reapprove the unavailable folders together.
-Verify the paths on the container host before reapproving them.
+**Refresh folder status**, the page offers a helper command only when the
+diagnostic recommends starting or restarting it. When the helper is reachable,
+restore missing folders at their listed paths and refresh. Other unavailable
+folders have individual reapproval commands, so one folder cannot block the
+others. Verify each path on the container host before reapproving it.
 Neither the browser nor the REST API can authorize a new host path. Folders
 attached by a previous version without a host CLI approval must be approved
 with the host command before they can be read. Attaching or detaching marks

@@ -8,22 +8,37 @@ const message = (failure: unknown, fallback: string) => failure instanceof Error
 const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 const HELPER_START = './vulnscout ai-context helper start';
 const HELPER_RESTART = './vulnscout ai-context helper restart';
+const MISSING_FOLDER = 'Host folder not found.';
 const HELP_BUTTON = 'text-sky-300 hover:text-sky-100 focus-visible:ring-2 focus-visible:ring-cyan-400';
 
 type Props = { variantId: string; projectName: string; variantName: string; disabled: boolean };
+type HostMount = HostMountList['mounts'][number];
+
+function helperRecovery(diagnostic: string | null) {
+    if (diagnostic?.startsWith(`Host folder helper is not running. On the container host, run '${HELPER_START}'.`)) {
+        return HELPER_START;
+    }
+    if (diagnostic === `Incompatible host folder helper. On the host, run '${HELPER_RESTART}'.`) {
+        return HELPER_RESTART;
+    }
+    return null;
+}
 
 function HostFolders({ variantId, projectName, variantName, disabled }: Readonly<Props>) {
     const headingId = useId();
     const [list, setList] = useState<HostMountList | null>(null);
     const [error, setError] = useState('');
     const [notice, setNotice] = useState('');
-    const [busy, setBusy] = useState(true);
+    const [loading, setLoading] = useState(true);
+    const [detaching, setDetaching] = useState(false);
+    const busy = loading || detaching;
 
+    const activeScope = useRef<symbol | null>(null);
     const latestRequest = useRef<symbol | null>(null);
     const load = useCallback(async () => {
         const request = Symbol();
         latestRequest.current = request;
-        setBusy(true);
+        setLoading(true);
         setError('');
         try {
             const value = await Context.listMounts(variantId);
@@ -33,28 +48,41 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
         } catch (failure) {
             if (latestRequest.current === request) setError(message(failure, 'Could not load attached folders.'));
         } finally {
-            if (latestRequest.current === request) setBusy(false);
+            if (latestRequest.current === request) setLoading(false);
         }
     }, [variantId]);
 
     useEffect(() => {
+        activeScope.current = Symbol();
         setList(null);
         setNotice('');
+        setDetaching(false);
         void load();
-        return () => { latestRequest.current = null; };
+        return () => {
+            activeScope.current = null;
+            latestRequest.current = null;
+        };
     }, [load]);
 
-    const detach = async (alias: string, revision: string) => {
-        setBusy(true);
+    const detach = async ({ alias, approval_revision: revision, attachment_id: id }: HostMount) => {
+        const scope = activeScope.current;
+        setDetaching(true);
         setError('');
         setNotice('');
         try {
             const warning = await Context.detachMount(variantId, alias, revision);
+            if (activeScope.current !== scope) return;
+            setList(current => current && {
+                ...current,
+                mounts: current.mounts.filter(mount => mount.attachment_id !== id || mount.approval_revision !== revision),
+            });
             setNotice(warning ? `Detached ${alias}. ${warning}` : `Detached ${alias}.`);
+            // Starting this refresh invalidates any GET issued before the detach completed.
             await load();
         } catch (failure) {
-            setError(message(failure, 'Could not detach this folder.'));
-            setBusy(false);
+            if (activeScope.current === scope) setError(message(failure, 'Could not detach this folder.'));
+        } finally {
+            if (activeScope.current === scope) setDetaching(false);
         }
     };
 
@@ -63,9 +91,9 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
     const attach = projectName && variantName
         ? `./vulnscout ai-context attach -p ${quote(projectName)} -v ${quote(variantName)}` : null;
     const helperDown = list?.helper.available === false;
-    const recoveryCommand = unavailable.length === 0 ? null : helperDown
-        ? (list.helper.message?.includes(HELPER_RESTART) ? HELPER_RESTART : HELPER_START)
-        : attach && `${attach} ${unavailable.map(mount => quote(`${mount.alias}=${mount.host_path}`)).join(' ')}`;
+    const helperCommand = helperDown && unavailable.length > 0 ? helperRecovery(list.helper.message) : null;
+    const missingFolders = helperDown ? [] : unavailable.filter(mount => mount.message === MISSING_FOLDER);
+    const reapprovable = helperDown || !attach ? [] : unavailable.filter(mount => mount.message !== MISSING_FOLDER);
     const copyError = () => setError('Could not copy the command. Select and copy it manually.');
 
     return (
@@ -126,7 +154,7 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
                                 </td>
                                 <td className="py-1">
                                     <button type="button" className={BUTTON_SECONDARY} disabled={disabled || busy}
-                                        aria-label={`Detach ${mount.alias}`} onClick={() => void detach(mount.alias, mount.approval_revision)}>
+                                        aria-label={`Detach ${mount.alias}`} onClick={() => void detach(mount)}>
                                         Detach
                                     </button>
                                 </td>
@@ -138,17 +166,43 @@ function HostFolders({ variantId, projectName, variantName, disabled }: Readonly
             {busy && <p role="status" className={HELP}>Checking attached folders...</p>}
             {notice && <p role="status" className={HELP}>{notice}</p>}
             {error && <p role="alert" className={ERROR}>{error}</p>}
-            {recoveryCommand && (
+            {(helperCommand || missingFolders.length > 0 || reapprovable.length > 0) && (
                 <div role="group" aria-label="Reconnect host folders">
-                    <p className={HELP}>
-                        {helperDown
-                            ? 'Try restoring the shared helper. If folders remain unavailable after refreshing, check their status details.'
-                            : 'Verify that each path still points to the intended folder before reapproving it.'}
-                        {' Run this from the launcher directory on the container host, then refresh.'}
-                    </p>
-                    <AgentCodeBlock key={recoveryCommand} buttonClassName={BUTTON_SECONDARY} onCopyError={copyError}>
-                        <code>{recoveryCommand}</code>
-                    </AgentCodeBlock>
+                    {helperCommand && (
+                        <>
+                            <p className={HELP}>
+                                Try restoring the shared helper. Run this from the launcher directory on the
+                                container host, then refresh. If folders remain unavailable, check their status details.
+                            </p>
+                            <AgentCodeBlock key={helperCommand} buttonClassName={BUTTON_SECONDARY} onCopyError={copyError}>
+                                <code>{helperCommand}</code>
+                            </AgentCodeBlock>
+                        </>
+                    )}
+                    {missingFolders.length > 0 && (
+                        <p className={HELP}>
+                            Missing folders: {missingFolders.map(mount => mount.alias).join(', ')}.
+                            {' Restore them at their listed host paths, then refresh.'}
+                        </p>
+                    )}
+                    {reapprovable.length > 0 && (
+                        <>
+                            <p className={HELP}>
+                                Verify each path still points to the intended folder before reapproving it.
+                                Run the individual command from the launcher directory on the container host, then refresh.
+                            </p>
+                            {reapprovable.map(mount => {
+                                const command = `${attach} ${quote(`${mount.alias}=${mount.host_path}`)}`;
+                                return (
+                                    <div key={command} role="group" aria-label={`Reapprove ${mount.alias}`}>
+                                        <AgentCodeBlock buttonClassName={BUTTON_SECONDARY} onCopyError={copyError}>
+                                            <code>{command}</code>
+                                        </AgentCodeBlock>
+                                    </div>
+                                );
+                            })}
+                        </>
+                    )}
                 </div>
             )}
             <button type="button" className={BUTTON_SECONDARY} disabled={busy} onClick={() => void load()}>
