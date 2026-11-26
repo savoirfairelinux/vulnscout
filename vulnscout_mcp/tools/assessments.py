@@ -208,7 +208,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
           and rejects any that was never observed, rather than filling in
           extra pairs from a cross-product.
 
-        The call is rejected (and nothing written) only if a package or
+        The call is rejected (and nothing written) if a package or
         variant does not exist, the variants belong to different projects, or
         a target pair was never observed. Compare the "N target(s)" count in
         the result with the expected pair count to detect skipped pairs.
@@ -242,8 +242,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     pairs. Use this instead of `packages`/`variant_id`/`variant_ids`
                     for a multi-variant group whose members do not all share the
                     same affected package set. Takes precedence over
-                    `packages`/`variant_id`/`variant_ids` when given. Each target may include
-                    risk_links: [{"risk_id": "R1", "threat_id": "T2"}]. Use only IDs from that
+                    `packages`/`variant_id`/`variant_ids` when given. For non-AI assessments,
+                    a target may include risk_links: [{"risk_id": "R1", "threat_id": "T2"}]. Use only IDs from that
                     variant's saved STRIDE records; the optional threat must belong to the risk.
                     Omitted or [] means no modeled risk linked, not absence of risk.
             justification: Required when status is 'not_affected'. OpenVEX values:
@@ -254,7 +254,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     code_not_reachable, requires_configuration, requires_dependency,
                     requires_environment, protected_by_compiler, protected_at_runtime,
                     protected_at_perimeter, protected_by_mitigating_control.
-            status_notes: Free-text notes about the assessment.
+            status_notes: Free-text notes about the assessment. For AI assessments, cite relevant
+                    saved risk and threat IDs here, scoped to the applicable variant and package.
             impact_statement: Free-text description of impact.
             workaround: Workaround description.
             responses: CycloneDX response tags. Valid values: can_not_fix, will_not_fix,

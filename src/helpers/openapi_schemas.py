@@ -270,7 +270,8 @@ SCHEMAS: dict[str, Any] = {
         {"required": ["packages", "variant_id"]},
     ], description=(
         "Explicit targets preserve sparse pairs. Otherwise packages are crossed with the selected variants. "
-        "vuln_id defaults to the path identifier. not_affected requires justification."
+        "vuln_id defaults to the path identifier. not_affected requires justification. "
+        "New AI assessments cite modeled risks and threats in status_notes, not targets[].risk_links."
     )),
     "AssessmentUpdate": _object({
         **_VEX_FIELDS, "timestamp": _STRING, "update_timestamp": _BOOL,
