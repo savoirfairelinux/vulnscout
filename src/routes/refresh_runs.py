@@ -264,6 +264,7 @@ def init_app(app):
 
     @app.get("/api/refresh-runs/latest", endpoint="get_latest_refresh_run")
     @app.get("/api/refresh-runs/<run_id>", endpoint="get_refresh_run")
+    @app.get("/api/refresh-runs/<run_id>/metadata", endpoint="get_refresh_run_metadata")
     @app.get("/api/refresh-runs/<run_id>/export", endpoint="export_refresh_run")
     def get_refresh_run(run_id=None):
         params = request.args.to_dict()
@@ -280,6 +281,8 @@ def init_app(app):
             if run_id is None:
                 return jsonify(None)
             abort(404, description="Refresh run unavailable, expired, or outside the selected scope")
+        if request.endpoint == "get_refresh_run_metadata":
+            return jsonify(metadata(run, params))
         data = artifact(run, params, paginate=not export)
         if export:
             return Response(export_artifact(data, format_),
