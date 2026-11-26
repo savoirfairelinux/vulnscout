@@ -16,7 +16,9 @@ containing all selected providers. Loaded data and run results update once after
 every step finishes, fails or is cancelled, not after individual providers.
 Accepted refreshes appear immediately as one operation-queue task with provider
 steps, without waiting for the first streamed progress update.
-Skipped provider responses remain incomplete coverage even when execution succeeds.
+Missing provider records or deferred checks leave coverage incomplete even
+when execution succeeds. Targets explicitly skipped because their identifier
+is unsupported by a provider do not leave a gap for that provider.
 This view does not run scanners or duplicate the
 vulnerability's
 [Data history](web-vulnerability-details.md#data-history).
@@ -85,11 +87,13 @@ Older runs retain their recorded coverage and have an unknown origin; historical
 field-history exports continue to group changes by the shared refresh run ID.
 
 **Targeted**, **Checked**, **Changed**, **Skipped**, **Failed**, **Cancelled**
-and **Pending** count distinct CVEs, not source/CVE pairs. One CVE checked by
+and **Pending** count distinct vulnerability IDs, not source/ID pairs. One ID checked by
 several providers is counted once in each applicable category. Categories can
 overlap: for example, NVD can succeed while EPSS fails for the same CVE.
+An unsupported identifier still counts as **Targeted** and **Skipped** for its
+provider, never as **Checked**.
 Open **Overview** for the distinct counts or **Coverage** for per-source totals
-and each CVE's outcome and error. Counts describe the whole selected run in the viewing scope,
+and each vulnerability's outcome and reason. Counts describe the whole selected run in the viewing scope,
 not just the current page or change filter.
 
 - **No refresh / no baseline** means no matching recorded run exists. Earlier

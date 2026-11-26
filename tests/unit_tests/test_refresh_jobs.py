@@ -184,7 +184,7 @@ def test_refresh_nvd_record_api_and_local_paths(monkeypatch):
 
 
 def test_run_nvd_refresh_api_and_local_setup_failure(monkeypatch):
-    ctx = job_context(["CVE-2024-1", "CVE-2024-2"], mode="api")
+    ctx = job_context(["CVE-2024-0001", "CVE-2024-0002"], mode="api")
     client = MagicMock()
     monkeypatch.setattr(jobs, "NVD_DB", lambda **_kwargs: client)
     monkeypatch.setattr(jobs, "_nvd_sleep_interval", lambda: 0.0)
@@ -203,7 +203,7 @@ def test_run_nvd_refresh_api_and_local_setup_failure(monkeypatch):
 
     monkeypatch.setattr(jobs, "_get_scc_engine", MagicMock(side_effect=ValueError("missing")))
     with pytest.raises(RuntimeError, match="Failed to load local NVD database"):
-        jobs.run_nvd_refresh(job_context(["CVE-2024-1"]))
+        jobs.run_nvd_refresh(job_context(["CVE-2024-0001"]))
 
 
 def test_nvd_refresh_handles_item_errors_periodic_commits_and_cancellation(monkeypatch):
@@ -237,14 +237,14 @@ def test_apply_and_run_epss_refresh(monkeypatch):
     assert "epss_data_updated_at" not in record.update_record.call_args.kwargs
 
     client = MagicMock()
-    client.api_get_epss_batch.side_effect = [{"CVE-2024-1": {"score": "0.5"}}, RuntimeError("offline")]
+    client.api_get_epss_batch.side_effect = [{"CVE-2024-0001": {"score": "0.5"}}, RuntimeError("offline")]
     monkeypatch.setattr(jobs, "EPSS_DB", lambda: client)
     applied = MagicMock()
     monkeypatch.setattr(jobs, "_apply_epss_score", applied)
     committed = MagicMock()
     monkeypatch.setattr(jobs, "_safe_commit", committed)
     monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 1)
-    ctx = job_context(["CVE-2024-1", "CVE-2024-2"])
+    ctx = job_context(["CVE-2024-0001", "CVE-2024-0002"])
     jobs.run_epss_refresh(ctx)
     applied.assert_called_once()
     assert committed.call_count == 2

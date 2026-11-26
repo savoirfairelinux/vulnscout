@@ -33,7 +33,7 @@ const run: RefreshRun = {
     coverage: [
         { vuln_id: 'CVE-1', source: 'nvd', status: 'complete', error: null },
         { vuln_id: 'CVE-1', source: 'epss', status: 'complete', error: null },
-        { vuln_id: 'CVE-2', source: 'nvd', status: 'skipped', error: 'Not supported' },
+        { vuln_id: 'GHSA-ABCD-1234-5678', source: 'nvd', status: 'skipped', error: 'Provider requires a CVE identifier' },
     ],
     summary: { refreshed_vulnerabilities: 2, total_changes: 2, changed_vulnerabilities: 1, first_enrichments: 0 },
     changes: [{
@@ -120,7 +120,7 @@ describe('Refresh overview', () => {
         expect(screen.getByRole('table', { name: 'Refresh metadata' })).toHaveTextContent('Finished');
         await selectSection('Coverage');
         const coverage = screen.getByRole('table', { name: 'Vulnerability coverage' });
-        expect(within(coverage).getByRole('row', { name: 'CVE-2 NVD skipped Not supported' })).toBeInTheDocument();
+        expect(within(coverage).getByRole('row', { name: /GHSA-ABCD-1234-5678 NVD skipped Provider requires a CVE identifier/ })).toBeInTheDocument();
         expect(screen.getByRole('table', { name: 'Provider coverage' })).toHaveTextContent('NVD');
     });
 
@@ -262,6 +262,19 @@ describe('Refresh overview', () => {
         show();
         await openResult();
         expect(await screen.findByText('Refresh complete: zero changes. Checked data is unchanged.')).toBeInTheDocument();
+    });
+
+    test('does not imply data was checked when all targets were unsupported', async () => {
+        detail.mockResolvedValue({ ...run, coverage: run.coverage.filter(row => row.status === 'skipped'),
+            changes: [], total: 0 });
+        show();
+        await openResult();
+        expect(await screen.findByText('No provider checks were performed in this scope. No comparison baseline is available.')).toBeInTheDocument();
+        await selectSection('Overview');
+        const counts = within(screen.getByRole('table', { name: 'Distinct vulnerability counts' }));
+        for (const row of ['Targeted 1', 'Checked 0', 'Skipped 1']) {
+            expect(counts.getByRole('row', { name: row })).toBeInTheDocument();
+        }
     });
 
     test('shows first enrichment separately from modifications and renders long values', async () => {

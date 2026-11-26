@@ -19,7 +19,7 @@ import uuid
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..extensions import db
-from ..helpers.refresh_runs import add_targets, target_result, tracked_refresh
+from ..helpers.refresh_runs import UNSUPPORTED_CVE_IDENTIFIER, add_targets, target_result, tracked_refresh
 from ..helpers.active_scans import active_package_ids_for_scans, active_scan_ids_for_variant
 from ..models import Finding, Observation, Scan, Vulnerability
 from .epss_db import EPSS_DB
@@ -88,6 +88,21 @@ def known_cve_ids(cve_ids: List[str]) -> List[str]:
         rows = db.session.query(Vulnerability.id).filter(Vulnerability.id.in_(chunk)).all()
         known.update(row[0] for row in rows)
     return [cve_id for cve_id in cve_ids if cve_id in known]
+
+
+def _applicable_cve_targets(ctx: JobContext, source: str) -> tuple[list[str], int]:
+    ctx.check_cancelled()
+    applicable = []
+    skipped = 0
+    for identifier in ctx.options["ids"]:
+        if CVE_RE.fullmatch(identifier.strip().upper()):
+            applicable.append(identifier)
+        else:
+            target_result(source, identifier, "skipped", UNSUPPORTED_CVE_IDENTIFIER)
+            skipped += 1
+    if skipped:
+        _safe_commit(f"bulk {source} refresh unsupported targets")
+    return applicable, skipped
 
 
 def _scoped_vulnerability_ids(variant_ids: List[str]) -> Set[str]:
@@ -190,11 +205,11 @@ def _refresh_nvd_record(cve_id: str, mode: str, nvd: Optional[NVD_DB]) -> bool:
 @tracked_refresh("nvd")
 def run_nvd_refresh(ctx: JobContext) -> None:
     """Refresh NVD/CVSS metadata from the local FKIE database or the REST API."""
-    cve_ids: List[str] = list(ctx.options["ids"])
+    cve_ids, skipped = _applicable_cve_targets(ctx, "nvd")
     mode = ctx.options.get("mode", "local")
-    total = len(cve_ids)
-    ctx.report(0, total, f"Starting bulk NVD refresh: 0/{total}")
-    if not total:
+    total = len(cve_ids) + skipped
+    ctx.report(skipped, total, f"Starting bulk NVD refresh: {skipped}/{total}")
+    if not cve_ids:
         return
 
     nvd: Optional[NVD_DB] = None
@@ -205,12 +220,11 @@ def run_nvd_refresh(ctx: JobContext) -> None:
     else:
         # Pre-warm the shared engine once so per-CVE lookups reuse the cache.
         try:
-            _get_scc_engine(progress=lambda message: ctx.report(0, total, message))
+            _get_scc_engine(progress=lambda message: ctx.report(skipped, total, message))
         except Exception as exc:
             raise OperationError("Failed to load local NVD database") from exc
 
-    done = 0
-    for cve_id in cve_ids:
+    for done, cve_id in enumerate(cve_ids, start=1):
         if ctx.is_cancelled():
             _safe_commit("bulk NVD refresh cancel")
             ctx.check_cancelled()
@@ -222,11 +236,10 @@ def run_nvd_refresh(ctx: JobContext) -> None:
             target_result("nvd", cve_id, "failed", str(exc)[:500])
             print(f"[bulk NVD refresh] error for {cve_id}: {exc}", flush=True)
 
-        done += 1
-        ctx.report(done, total, f"NVD refresh: {done}/{total} ({cve_id})")
+        ctx.report(done + skipped, total, f"NVD refresh: {done + skipped}/{total} ({cve_id})")
         if done % NVD_COMMIT_EVERY == 0:
             _safe_commit("bulk NVD refresh")
-        if mode == "api" and done < total:
+        if mode == "api" and done < len(cve_ids):
             time.sleep(sleep_between)
 
     _safe_commit("bulk NVD refresh final")
@@ -255,17 +268,17 @@ def _apply_epss_score(cve_id: str, score: object, now: datetime.datetime) -> Non
 @tracked_refresh("epss")
 def run_epss_refresh(ctx: JobContext) -> None:
     """Refresh EPSS scores in batches of :data:`EPSS_BATCH_SIZE`."""
-    cve_ids: List[str] = list(ctx.options["ids"])
-    total = len(cve_ids)
-    ctx.report(0, total, f"Starting bulk EPSS refresh: 0/{total}")
-    if not total:
+    cve_ids, skipped = _applicable_cve_targets(ctx, "epss")
+    total = len(cve_ids) + skipped
+    ctx.report(skipped, total, f"Starting bulk EPSS refresh: {skipped}/{total}")
+    if not cve_ids:
         return
 
     epss = EPSS_DB()
     now = datetime.datetime.now(datetime.timezone.utc)
-    processed = 0
+    processed = skipped
 
-    for start in range(0, total, EPSS_BATCH_SIZE):
+    for start in range(0, len(cve_ids), EPSS_BATCH_SIZE):
         chunk = cve_ids[start:start + EPSS_BATCH_SIZE]
         if ctx.is_cancelled():
             _safe_commit("bulk EPSS refresh cancel")
