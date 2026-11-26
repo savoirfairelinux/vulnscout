@@ -362,7 +362,10 @@ read.
 The assessment skills and the embedded Agent use the STRIDE model per variant.
 They map the affected component to Components and Interactions, check
 reachability against entry points and trust boundaries, match the CVE's impact
-to Threats by STRIDE category, and cite the IDs. Mitigations and residual
+to Threats by STRIDE category. An AI assessment can cite relevant saved
+threat and risk IDs in its vulnerability comment (Notes), with the variant and
+package clearly identified. Citations need evidence; the same ID can mean
+something different in another variant. Mitigations and residual
 decisions in Risks are treated as declarations: they can lower the impact, but
 support `not_affected` only when source or configuration evidence confirms
 them.

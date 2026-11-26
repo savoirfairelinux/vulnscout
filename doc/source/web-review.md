@@ -15,20 +15,15 @@ The columns include:
 - **Vulnerability**: the CVE identifier. Clicking it opens the vulnerability detail modal in read-only mode, letting you inspect the full context without leaving the review page.
 - **SBOM Affected**: the list of packages this assessment covers.
 - **Variants**: the variant tags associated with the assessment.
-- **Modeled risk links**: references and descriptions from the saved STRIDE model for each exact variant/package target. An empty list means *no modeled risk linked*, not *no risk*. The same ID can mean something different in another variant.
 - **Status**: the triage status (e.g. Not affected, Exploitable, Fixed).
 - **Justification**: the VEX justification reason, if one was provided (e.g. "component not present", "vulnerable code not reachable").
 - **Impact**: the impact statement describing how the vulnerability affects (or doesn't affect) the product.
-- **Notes**: free-text status notes attached to the assessment.
+- **Notes**: free-text status notes attached to the assessment. AI suggestions may cite relevant STRIDE threat or risk IDs here, scoped to the applicable variant and package.
 - **Workaround**: any documented workaround.
 - **Assessment Date**: the assessment record's timestamp.
 - **AI review**: a second opinion on each target of a user-authored assessment. A single target shows ✓ when the review agrees, ⚠ when it differs, ⚠ stale when the assessment was edited since the review, or — when it has not been reviewed. Multi-target rows show counts for each state; hover for a breakdown. Open the vulnerability detail modal to read each target's review and rationale.
 
 ## Search and Filters
-
-In **AI Assessments → Edit AI suggestion**, uncheck a saved link to remove it. To add or replace a link, enter the new IDs on that target: `R1/T2` links a risk and one of its associated threats; `R1` links just the risk. A trailing `\n` denotes a newline in an ID, so `R1` and `R1\n` are distinct. **Confirm and approve** saves these changes without changing the verdict or target set. If a linked record or association disappears, or its description changes, Review retains the original description and labels the link stale. Correct or remove stale links before approval.
-
-If the same IDs still apply, compare the saved and current descriptions and the threat’s component or interaction target IDs. For each linked interaction, Compare shows the source → destination. Changing either endpoint requires review even when the interaction ID and description stay the same. Older snapshots show **not recorded** for unknown targets or endpoints; reconfirmation records the current values without guessing what they used to be. If the model changes again before approval, reload and review it again. Variant-filtered Review hides other variants' links; open the full project to review those targets. VulnScout JSON backups preserve the saved evidence, even when the destination model uses the same ID differently.
 
 The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state.
 

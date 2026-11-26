@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Removed
 - AI context: retire automatic source directories. To expose host source, explicitly approve and attach a read-only host folder. Existing source files and uploaded references are not deleted.
+- Assessments: remove structured modeled-risk links. AI suggestions can cite relevant saved threats and risks in Notes. Upgrades and legacy JSON imports discard structured links but preserve authored comments, assessment targets, and STRIDE models.
 
 ---
 

@@ -144,11 +144,11 @@ python vulnscout_mcp/server.py
 
 See [AI Assessments](../doc/source/ai-assessments.md) for the agent assessment and custom-assessment review workflows.
 
-`write_assessment` accepts `risk_links` inside individual `targets`, for example
-`{"package":"example@1","variant_id":"<uuid>","risk_links":[{"risk_id":"R1","threat_id":"T2"}]}`.
-Use the target variant's saved STRIDE records (`get_merged_context` with `include_model=true`).
-The optional threat must be associated with the risk. No links does not mean no risk.
-An assessment accepts up to 16 references per target and 256 KiB of serialized snapshots in total.
+For AI assessments, cite relevant risk and threat IDs only in the free-text
+`status_notes` comment alongside the rationale. Use the target variant's saved
+STRIDE records (`get_merged_context` with `include_model=true`) and identify the
+applicable variant and package. Omit citations when the evidence does not support
+them. Each `targets` entry contains only `package` and `variant_id`.
 
 ### SBOM discovery and lifecycle analysis
 

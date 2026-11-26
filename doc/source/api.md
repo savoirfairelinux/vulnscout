@@ -1371,6 +1371,16 @@ Accepts either:
 The JSON body must include the destination `project_id` UUID. Version 2 variant
 names are resolved only within that project. Version 1 retains its legacy
 variant ID/name resolution for existing backups.
+
+Version 2 files containing legacy per-target `risk_links` still import.
+Import ignores that metadata and preserves the assessment's ordinary fields
+and target pairs. New exports omit it. Upgrading an existing database likewise
+removes the former structured references without rewriting authored notes or
+changing the saved STRIDE models. Downgrading does not restore the discarded
+metadata. A target-specific snapshot may be stale or
+have been edited by a reviewer, so automatically inserting it into shared
+notes could misstate its scope or authorship.
+
 The payload's optional `timestamp_policy` is `"current"` (default) or `"original"`; for multipart, it belongs inside the uploaded JSON, not a separate form field.
 Do not supply `variant_id` query parameters: variants are selected from the file. Missing destination projects return `404`.
 
