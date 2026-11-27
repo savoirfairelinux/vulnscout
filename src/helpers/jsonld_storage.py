@@ -23,6 +23,7 @@ from ..models.observation import Observation
 from ..models.package_dependency import PackageDependency
 from ..models.sbom_observation import SBOMObservation
 from ..models.time_estimate import TimeEstimate
+from ..models.variant import lock_scan_membership
 from .package_versions import is_source_revision, package_version_info
 
 logger = logging.getLogger(__name__)
@@ -204,8 +205,10 @@ def _merge_finding_references(session: Session, mappings: dict, documents: dict,
                             execution_options={"synchronize_session": False})
 
 
-def consolidate_jsonld_packages(session: Session) -> bool:
+def consolidate_jsonld_packages(session: Session, *, membership_locked: bool = False) -> bool:
     """Consolidate recorded, unprocessed groups in the caller's transaction."""
+    if not membership_locked:
+        lock_scan_membership(session=session)
     # Historical migrations also call this helper before compiler metadata exists.
     has_build_targets = 'build_targets' in {
         column['name'] for column in inspect(session.connection()).get_columns('sbom_documents')

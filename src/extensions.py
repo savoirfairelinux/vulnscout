@@ -293,9 +293,8 @@ def batch_session() -> Generator[object, None, None]:
         # a single COMMIT happens here
     """
     try:
-        # Force the scoped-session proxy to resolve — this will raise
-        # RuntimeError when there is no Flask app context.
-        session = db.session
+        # Override only this context's session, not the shared session proxy.
+        session = db.session()
         session.get_bind()
         original_commit = session.commit
     except (RuntimeError, Exception):

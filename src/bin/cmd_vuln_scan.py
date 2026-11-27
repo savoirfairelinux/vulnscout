@@ -16,6 +16,7 @@ from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 from ..models.assessment_target import AssessmentTarget
 from ..models.package import Package
 from ..models.sbom_package import SBOMReimportRequiredError
+from ..models.variant import lock_scan_membership
 from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
@@ -806,6 +807,7 @@ class _SccBulkWriter:
         ):
             for chunk in spool.chunks(self._SELECT_CHUNK):
                 with _write_lock():
+                    lock_scan_membership([self._variant_uuid])
                     # Remove our observations and reconcile their assessments
                     # atomically, so failing scans cannot preserve each other.
                     finding_ids = _db.select(AssessmentTarget.finding_id).where(
@@ -867,6 +869,7 @@ class _SccBulkWriter:
 
         for chunk in self._created_finding_ids.chunks(self._SELECT_CHUNK):
             with _write_lock():
+                lock_scan_membership([self._variant_uuid])
                 _db.session.execute(
                     _db.delete(Observation).where(
                         Observation.scan_id == self._scan_id,
