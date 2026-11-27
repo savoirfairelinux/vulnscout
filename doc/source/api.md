@@ -934,6 +934,9 @@ GET /api/reviews/assessments
 
 **Response:** array of assessment objects, each enriched with a `vuln_texts`
 array holding the vulnerability texts of its CVE for front-end tooltips.
+Custom targets have `outdated: true` when the exact previously observed
+finding is absent from that variant's current published evidence. AI context
+staleness is reported separately as `context_outdated` for `origin=ai`.
 
 ### List Variants for a Vulnerability
 

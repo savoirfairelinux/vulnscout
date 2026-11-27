@@ -33,6 +33,7 @@ optionally restrict tool-scan results to those packages.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 
 from ..extensions import db
 from ..models.scan import Scan
@@ -56,15 +57,22 @@ def active_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list[uuid.UUID]:
 
     ``[latest_sbom, latest_tool:nvd, latest_tool:osv, …]``
     """
+    return active_scan_ids_for_variants([variant_uuid])
+
+
+def active_scan_ids_for_variants(variant_ids: Collection[uuid.UUID]) -> list[uuid.UUID]:
+    """Return all active scan IDs for the given variants in one query."""
+    if not variant_ids:
+        return []
     rows = db.session.execute(
-        db.select(Scan.id, Scan.scan_type, Scan.scan_source)
-        .where(Scan.variant_id == variant_uuid, Scan.in_progress.is_(False))
-        .order_by(Scan.timestamp.desc(), Scan.id.desc())
-    ).all()
+        db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.scan_source)
+        .where(Scan.variant_id.in_(variant_ids), Scan.in_progress.is_(False))
+        .order_by(Scan.variant_id, Scan.timestamp.desc(), Scan.id.desc())
+    )
     ids: list[uuid.UUID] = []
-    seen_keys: set[tuple[bool, str | None]] = set()
-    for scan_id, scan_type, scan_source in rows:
-        key = scan_strategy_key(scan_type, scan_source)
+    seen_keys: set[tuple[uuid.UUID, bool, str | None]] = set()
+    for scan_id, variant_id, scan_type, scan_source in rows:
+        key = (variant_id, *scan_strategy_key(scan_type, scan_source))
         if key not in seen_keys:
             seen_keys.add(key)
             ids.append(scan_id)

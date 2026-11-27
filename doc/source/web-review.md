@@ -40,6 +40,13 @@ The toolbar mirrors the vulnerability table's search bar. Filters include **Stat
 
 On the **Assessments** and **AI Assessments** tabs, the **Outdated** selector defaults to **All**. Choose **Outdated** to show only rows with at least one target marked outdated or, for AI assessments, an outdated AI context. Choose **Not outdated** to exclude those rows. **Reset Filters** restores **All** and the other filter defaults.
 
+A custom assessment target is outdated when its exact finding was observed before
+but is absent from the variant's current published evidence. This includes a CVE
+that disappears while its package remains in the SBOM. A variant is marked
+**Partly outdated** when only some of its assessed findings are missing.
+These labels do not change the assessment or its history and do not depend on
+the selected Evidence mode.
+
 See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
 
 Select rows in **Assessments**, then click **Review selected with AI** to queue

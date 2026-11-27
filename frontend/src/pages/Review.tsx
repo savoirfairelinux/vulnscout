@@ -1320,15 +1320,18 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         {vids.map(vid => {
                             const name = variantNames[vid] ?? vid.slice(0, 8);
                             const variantTargets = row.targets.filter(t => t.variant_id === vid);
-                            const isOutdated = variantTargets.length > 0 && variantTargets.every(t => t.outdated);
+                            const isOutdated = variantTargets.some(t => t.outdated);
+                            const allOutdated = variantTargets.every(t => t.outdated);
                             return (
                                 <span
                                     key={vid}
                                     className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${isOutdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'}`}
-                                    title={isOutdated ? 'Package version is not present in this variant’s current SBOM' : undefined}
+                                    title={isOutdated ? 'Assessed findings are missing from this variant’s current evidence' : undefined}
                                 >
                                     {name}
-                                    {isOutdated && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide">Outdated</span>}
+                                    {isOutdated && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide">
+                                        {allOutdated ? 'Outdated' : 'Partly outdated'}
+                                    </span>}
                                 </span>
                             );
                         })}

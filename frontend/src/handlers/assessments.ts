@@ -18,7 +18,7 @@ type VulnText = {
 /** One (variant, package) pair an assessment actually applies to.
  *
  *  ``outdated`` is only populated by endpoints that annotate staleness
- *  per-target (the single-assessment and vulnerability-scoped listings);
+ *  per-target (Review, single-assessment and vulnerability-scoped listings);
  *  it is absent right after a create/update response. */
 type AssessmentTargetPair = {
     variant_id: string | null;

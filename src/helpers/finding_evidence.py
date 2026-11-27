@@ -18,11 +18,12 @@ class FindingPackages:
     display: dict[str, dict[str, set[str]]] = field(default_factory=dict)
     writable: dict[str, dict[str, set[str]]] = field(default_factory=dict)
     scan_ids: dict[str, set[uuid.UUID]] = field(default_factory=dict)
+    writable_targets: set[tuple[uuid.UUID, uuid.UUID]] = field(default_factory=set)
 
 
 def finding_packages_for_scans(
     scan_ids: list[uuid.UUID], vulnerability_ids: Collection[str] | None = None,
-    *, historical: bool = False,
+    *, historical: bool = False, collect_writable_targets: bool = False,
 ) -> FindingPackages:
     """Collect display packages and exact writable targets from scoped scans."""
     targets = FindingPackages()
@@ -68,7 +69,7 @@ def finding_packages_for_scans(
     query = (
         db.select(
             Finding.vulnerability_id, Scan.id, Scan.variant_id, Scan.scan_type,
-            Package.id, Package.name, Package.version, Package.supplier,
+            Package.id, Package.name, Package.version, Package.supplier, Finding.id,
         )
         .select_from(Finding)
         .join(Observation, Observation.finding_id == Finding.id)
@@ -79,7 +80,7 @@ def finding_packages_for_scans(
     if vulnerability_ids is not None:
         query = query.where(Finding.vulnerability_id.in_(vulnerability_ids))
     for row in db.session.execute(query):
-        vid, scan_id, variant_id, scan_type, package_id, name, version, supplier = row
+        vid, scan_id, variant_id, scan_type, package_id, name, version, supplier, finding_id = row
         target = f"{name}@{version}::{supplier}" if supplier else f"{name}@{version}"
         package_targets = {package_id: target}
         if scan_type == "tool":
@@ -100,6 +101,8 @@ def finding_packages_for_scans(
             targets.scan_ids.setdefault(vid, set()).add(scan_id)
             if not historical and package_id in package_targets:
                 targets.writable.setdefault(vid, {}).setdefault(variant_key, set()).add(target)
+                if collect_writable_targets:
+                    targets.writable_targets.add((variant_id, finding_id))
     return targets
 
 
