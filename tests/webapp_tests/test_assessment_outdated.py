@@ -240,6 +240,58 @@ def test_review_marks_missing_exact_finding_with_retained_package(app_factory):
     assert review()["outdated"] is False
 
 
+def test_historical_assessment_trend_selects_published_exact_targets(app_factory):
+    app = app_factory()
+    initial_id = _build_outdated_db(app, include_v2_finding=False)
+    with app.app_context():
+        sibling = Variant.create("sibling", PROJECT_ID)
+        empty_base = Variant.create("empty-base", PROJECT_ID)
+        sibling_scan = Scan(variant_id=sibling.id, scan_type="tool", scan_source="nvd")
+        pending = Scan(variant_id=VARIANT_ID, scan_type="tool", scan_source="nvd", in_progress=True)
+        _db.session.add_all([sibling_scan, pending])
+        _db.session.flush()
+        old_finding = Finding.get_or_create(Package.get_by_string_id("firefox@1.0").id, CVE_ID)
+        other_finding = Finding.get_or_create(Package.get_by_string_id("firefox@2.0").id, CVE_ID)
+        _db.session.add_all([
+            Observation(scan_id=sibling_scan.id, finding_id=other_finding.id),
+            Observation(scan_id=pending.id, finding_id=other_finding.id),
+        ])
+        followup = Assessment.create(
+            status="affected", source="analyst", origin="custom",
+            targets=[(VARIANT_ID, old_finding.id), (sibling.id, other_finding.id)],
+        )
+        excluded = Assessment.create(
+            status="not_affected", source="analyst", origin="custom", targets=[(VARIANT_ID, other_finding.id)],
+        )
+        pending_ai = Assessment.create(
+            status="fixed", source="agent", origin="ai", targets=[(VARIANT_ID, old_finding.id)],
+        )
+        _db.session.commit()
+        sibling_id, empty_base_id = sibling.id, empty_base.id
+        followup_id, excluded_id, ai_id = str(followup.id), str(excluded.id), str(pending_ai.id)
+
+    client = app.test_client()
+    url = "/api/vulnerabilities/assessment-trend"
+
+    def trend(params):
+        response = client.get(url, query_string=params)
+        assert response.status_code == 200
+        assert all(row[0] not in {excluded_id, ai_id} for row in response.json)
+        return [(aid, vuln_id, package, variant) for aid, vuln_id, package, variant, *_ in response.json]
+
+    left = [
+        (str(initial_id), CVE_ID, "firefox@1.0", str(VARIANT_ID)),
+        (followup_id, CVE_ID, "firefox@1.0", str(VARIANT_ID)),
+    ]
+    right = (followup_id, CVE_ID, "firefox@2.0", str(sibling_id))
+    assert client.get("/api/vulnerabilities", query_string={"variant_id": VARIANT_ID}).json == []
+    assert trend({"variant_id": VARIANT_ID, "project_id": PROJECT_ID}) == left
+    assert set(trend({"project_id": PROJECT_ID})) == {*left, right}
+    assert trend({"variant_id": sibling_id, "compare_variant_id": VARIANT_ID, "operation": "difference"}) == []
+    assert trend({"variant_id": empty_base_id, "compare_variant_id": VARIANT_ID, "operation": "difference"}) == left
+    assert set(trend({"variant_ids": f"{VARIANT_ID},{sibling_id}", "operation": "intersection"})) == {*left, right}
+
+
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------

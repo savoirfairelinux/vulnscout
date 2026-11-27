@@ -154,9 +154,53 @@ import { useMemo, useState, useCallback, useEffect } from "react";
             return date;
         }
 
+        function activeTrendBuckets(assessments: Assessment[], dates: Date[], count: number): boolean[] {
+            const active = new Array<boolean>(count).fill(false);
+            let isActive = false;
+            let index = 0;
+            for (const assessment of assessments) {
+                const timestamp = new Date(assessment.timestamp).getTime();
+                while (timestamp > dates[index + 1]?.getTime() && index < count - 1) {
+                    if (isActive) active[index] = true;
+                    index++;
+                }
+                const nextActive = assessment.simplified_status !== 'Not affected' && assessment.simplified_status !== 'Fixed';
+                if (!isActive && nextActive && timestamp >= dates[index]?.getTime()) active[index] = true;
+                isActive = nextActive;
+            }
+            if (isActive) active.fill(true, index);
+            return active;
+        }
 
-
-
+        function historicalTrendBuckets(
+            vulnerabilities: Vulnerability[], assessments: Assessment[], dates: Date[], count: number,
+        ): number[] {
+            const visible = new Map(vulnerabilities.map(vuln => [vuln.id, vuln.packages_status_by_variant]));
+            const histories = new Map<string, Map<string, Assessment[]>>();
+            for (const assessment of assessments) {
+                const packagesByVariant = visible.get(assessment.vuln_id);
+                if (!packagesByVariant) continue;
+                const byTarget = histories.get(assessment.vuln_id) ?? new Map<string, Assessment[]>();
+                histories.set(assessment.vuln_id, byTarget);
+                for (const target of assessment.targets ?? []) {
+                    if (!target.variant_id || !packagesByVariant[target.variant_id]?.includes(target.package)) continue;
+                    const key = JSON.stringify([target.variant_id, target.package]);
+                    const timeline = byTarget.get(key) ?? [];
+                    timeline.push(assessment);
+                    byTarget.set(key, timeline);
+                }
+            }
+            const total = new Array<number>(count).fill(0);
+            for (const byTarget of histories.values()) {
+                // Each CVE counts once per bucket, even with multiple active targets.
+                const active = new Array<boolean>(count).fill(false);
+                for (const timeline of byTarget.values()) {
+                    activeTrendBuckets(timeline, dates, count).forEach((value, i) => { active[i] ||= value; });
+                }
+                active.forEach((value, i) => { if (value) total[i]++; });
+            }
+            return total;
+        }
 
 function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab,
     projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation, includeOutdated = false,
@@ -171,6 +215,19 @@ function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, ap
             const comparisonScope = useMemo(() => ({
                 baseVariantId, operation: compareOperation, variantIds, multiOperation,
             }), [baseVariantId, compareOperation, variantIds, multiOperation]);
+            const [historicalTrend, setHistoricalTrend] = useState<Assessment[] | null>(null);
+            const [trendError, setTrendError] = useState(false);
+
+            useEffect(() => {
+                setHistoricalTrend(null);
+                setTrendError(false);
+                if (!includeOutdated) return;
+                const controller = new AbortController();
+                Vulnerabilities.historicalAssessmentTrend(variantId, projectId, comparisonScope, controller.signal)
+                    .then(rows => { if (!controller.signal.aborted) setHistoricalTrend(rows); })
+                    .catch(() => { if (!controller.signal.aborted) setTrendError(true); });
+                return () => controller.abort();
+            }, [includeOutdated, variantId, projectId, comparisonScope, vulnerabilities]);
 
             useEffect(() => {
                 setDetailsError(false);
@@ -418,37 +475,13 @@ const packageColumns = [
                 })),
                 datasets: [{
                     label: '# of Vulnerabilities',
-                    data: vulnerabilities.reduce((acc, vuln) => {
-                        let is_active = false
-                        let date_index = 0
-                        let was_active = new Array(nb_points).fill(false)
-
-                        vuln.assessments.forEach(assess => {
-                            const dt = new Date(assess.timestamp);
-
-                            // forward time index if needed
-                            while (dt.getTime() > time_scales[date_index+1]?.getTime() && date_index < (nb_points - 1)) {
-                                if (is_active) was_active[date_index] = true;
-                                date_index++;
-                            }
-
-                            const should_be_active = (assess.simplified_status != 'Not affected' && assess.simplified_status != 'Fixed');
-                            if (is_active != should_be_active) {
-                                if (should_be_active && dt.getTime() >= time_scales[date_index]?.getTime()) {
-                                    // if vulnerability was active at least one time in the month, then classify as active for while month
-                                    was_active[date_index] = true
-                                }
-                                is_active = should_be_active;
-                            }
-                        })
-
-                        while (date_index < nb_points) {
-                            if (is_active) was_active[date_index] = true;
-                            date_index++;
-                        }
-                        was_active.forEach((v, i) => acc[i] += v ? 1 : 0);
-                        return acc;
-                    }, new Array(nb_points).fill(0)),
+                    data: includeOutdated
+                        ? historicalTrendBuckets(vulnerabilities, historicalTrend ?? [], time_scales, nb_points)
+                        : vulnerabilities.reduce((acc, vuln) => {
+                            activeTrendBuckets(vuln.assessments, time_scales, nb_points)
+                                .forEach((active, i) => { if (active) acc[i]++; });
+                            return acc;
+                        }, new Array<number>(nb_points).fill(0)),
                     backgroundColor: 'rgba(0, 150, 150, 0.7)',
                     hoverOffset: 4
                 }]
@@ -631,15 +664,16 @@ const packageColumns = [
               </div>
             </div>
 
-            {!includeOutdated && <div className="p-3">
+            <div className="p-3">
               <div className="bg-zinc-700 p-2 flex items-center justify-center gap-2 rounded-t-md">
                 <div
                   className="text-xl text-white"
-                  title="Based on assessments for today's findings; not historical scan membership or exposure."
+                  title={includeOutdated ? undefined : "Based on assessments for today's findings; not historical scan membership or exposure."}
                 >
-                  Assessment trend for current findings
+                  {includeOutdated ? 'Assessment trend for ever-observed findings' : 'Assessment trend for current findings'}
                 </div>
                 <select
+                  aria-label="Assessment trend interval"
                   className="bg-zinc-800 p-1 text-white rounded w-36"
                   value={timeScale}
                   onChange={(event) => setTimeScale(event.target.value)}
@@ -655,13 +689,17 @@ const packageColumns = [
               </div>
               <div className="bg-zinc-700 p-4 w-full aspect-square rounded-b-md">
                 <div className="h-full">
-                  <Line
+                  {includeOutdated && !historicalTrend ? (
+                    trendError
+                      ? <p role="alert">Could not load assessment history.</p>
+                      : <p role="status">Loading assessment history…</p>
+                  ) : <Line
                     data={vulnEvolutionTime}
                     options={{ ...LineOptions, maintainAspectRatio: false }}
-                  />
+                  />}
                 </div>
               </div>
-            </div>}
+            </div>
 
             {/* Vulnerabilities by Database */}
             <div className="p-3">

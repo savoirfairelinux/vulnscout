@@ -918,6 +918,19 @@ GET /api/vulnerabilities/<vuln_id>/assessments
 
 **Response:** array of assessment objects in the shape above, newest first.
 
+### Read the Historical Assessment Trend
+
+```
+GET /api/vulnerabilities/assessment-trend
+```
+
+Accepts the same project, variant, and comparison parameters as the
+vulnerabilities list. Returns chronological compact assessment rows
+`[id, vulnerability, package, variant, timestamp, status]`, one per
+assessment and exact finding target in the selected ever-observed evidence.
+Pending AI assessments are excluded. Rows are assessment events, not an
+as-of inventory of exposures.
+
 ### List Assessments for Review
 
 ```

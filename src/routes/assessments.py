@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, cast, overload
 from uuid import UUID
 
-from ..models import Assessment as DBAssessment, Package, Finding
+from ..models import Assessment as DBAssessment, Package, Finding, Observation, Scan
 from ..models.assessment import APPROVAL_CONTENT_FIELDS, APPROVAL_EDIT_FIELDS
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
@@ -22,6 +22,7 @@ from ..helpers.assessment_risk_links import (
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 from ._scan_diff import invalidate_scan_list_cache
+from ._evidence_scope import resolve_evidence_scope, vulnerability_evidence
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.assessment_io import (
     build_openvex_doc,
@@ -529,6 +530,15 @@ def init_app(app: Flask) -> None:
             )
         return list(full_by_id.values())
 
+    def _compact_assessment_response(rows: list[CompactAssessment]) -> ResponseReturnValue:
+        payload = json.dumps(rows, separators=(",", ":")).encode()
+        response = app.response_class(payload, mimetype="application/json")
+        if "gzip" in request.headers.get("Accept-Encoding", "") and len(payload) > 1024:
+            response.set_data(gzip.compress(payload, compresslevel=1))
+            response.headers["Content-Encoding"] = "gzip"
+            response.headers["Vary"] = "Accept-Encoding"
+        return response
+
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
         """List assessments with optional variant or project filtering.
@@ -566,20 +576,57 @@ def init_app(app: Flask) -> None:
             scoped_variant_ids = None
 
         if compact:
-            compact_assessments = _get_db_assessment_dicts(scoped_variant_ids, compact=True)
-            payload = json.dumps(compact_assessments, separators=(",", ":")).encode()
-            response = app.response_class(payload, mimetype="application/json")
-            if "gzip" in request.headers.get("Accept-Encoding", "") and len(payload) > 1024:
-                response.set_data(gzip.compress(payload, compresslevel=1))
-                response.headers["Content-Encoding"] = "gzip"
-                response.headers["Vary"] = "Accept-Encoding"
-            return response
+            return _compact_assessment_response(_get_db_assessment_dicts(scoped_variant_ids, compact=True))
 
         assessments = _get_db_assessment_dicts(scoped_variant_ids, compact=False)
         annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments
+
+    @app.route('/api/vulnerabilities/assessment-trend')
+    def historical_assessment_trend() -> ResponseReturnValue:
+        """Return assessment events for exact historical finding targets in the selected evidence.
+
+        OpenAPI:
+        query project_id uuid optional Restrict to variants in this project.
+        query variant_id uuid optional Single variant or pairwise comparison base.
+        query compare_variant_id uuid optional Compared variant in a pairwise comparison.
+        query variant_ids string optional Comma-separated variants for a multi-variant comparison.
+        query operation string optional Comparison operation: union, intersection or difference.
+        response 200 CompactAssessment[] Assessment history, one row per matching target per assessment.
+        response 400 Error Invalid query or variants outside the selected project.
+        response 404 Error A comparison variant does not exist.
+        """
+        scope, err = resolve_evidence_scope(request.args, historical=True)
+        if scope is None:
+            return err if err is not None else ({"error": "Internal error"}, 500)
+        evidence = vulnerability_evidence(scope)
+        if not evidence.ids:
+            return []
+
+        observed = (
+            db.select(Observation.finding_id).join(Scan, Scan.id == Observation.scan_id)
+            .where(Observation.finding_id == AssessmentTarget.finding_id,
+                   Scan.variant_id == AssessmentTarget.variant_id, Scan.id.in_(evidence.scan_ids))
+            .exists()
+        )
+        rows = db.session.execute(
+            db.select(DBAssessment.id, Finding.vulnerability_id, Package, AssessmentTarget.variant_id,
+                      DBAssessment.timestamp, DBAssessment.status)
+            .select_from(AssessmentTarget)
+            .join(DBAssessment, DBAssessment.id == AssessmentTarget.assessment_id)
+            .join(Finding, Finding.id == AssessmentTarget.finding_id)
+            .join(Package, Package.id == Finding.package_id)
+            .where(Finding.vulnerability_id.in_(evidence.ids),
+                   AssessmentTarget.variant_id.in_(scope.contributing_variants),
+                   db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"), observed)
+            .order_by(DBAssessment.timestamp, DBAssessment.id, AssessmentTarget.variant_id, Finding.id)
+        )
+        return _compact_assessment_response([
+            [str(aid), vuln_id, package.string_id, str(vid), ensure_utc_iso(timestamp), status or ""]
+            for aid, vuln_id, package, vid, timestamp, status in rows
+        ])
 
     def _current_context_updates(
         assessments: list[DBAssessment],
