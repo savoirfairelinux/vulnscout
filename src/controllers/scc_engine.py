@@ -66,6 +66,36 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _GIT_PERCENT_RE = re.compile(r"^(?P<stage>[^:]+):\s+(?P<percent>\d{1,3})%")
 
 
+def _read_nvd_git(root: pathlib.Path, *args: str) -> bytes:
+    return subprocess.check_output(
+        ["git", "--no-replace-objects", "--git-dir", str(root / ".git"), *args],
+        env=dict(os.environ, GIT_NO_LAZY_FETCH="1"), stderr=subprocess.PIPE,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _nvd_snapshot_paths(root: pathlib.Path, tree: str) -> frozenset[bytes]:
+    # List the immutable tree only on a miss, once across lookups of this snapshot.
+    return frozenset(_read_nvd_git(root, "ls-tree", "-r", "-z", "--name-only", tree).split(b"\0"))
+
+
+def _nvd_snapshot_path_lookup(root: pathlib.Path, tree: str) -> Callable[[str], bool]:
+    @functools.cache
+    def paths() -> frozenset[bytes] | None:
+        try:
+            return _nvd_snapshot_paths(root, tree)
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    def contains(path: str) -> bool:
+        known_paths = paths()
+        if known_paths is None:
+            raise RuntimeError("Could not verify paths in the local NVD snapshot")
+        return path.encode("ascii") in known_paths
+
+    return contains
+
+
 class _GitProgressReporter:
     """Normalize and rate-limit progress emitted by a Git subprocess."""
 
@@ -647,21 +677,28 @@ class SccEngine:
                 if not isinstance(db, NvdFkieVulnDatabase) or db.git_database.get_date_last_commit() is None:
                     continue
                 root = pathlib.Path(db.export_repro_config()["path"])
-                if any(path.is_file() for path in root.glob("CVE-*/CVE-*xx/CVE-*.json")):
-                    return functools.partial(self._lookup_snapshot_cve, root)
+                if (root / ".git").exists() and any(
+                    path.is_file() for path in root.glob("CVE-*/CVE-*xx/CVE-*.json")
+                ):
+                    tree = _read_nvd_git(root, "rev-parse", "--verify", "HEAD^{tree}").decode("ascii").strip()
+                    return functools.partial(self._lookup_snapshot_cve, root, _nvd_snapshot_path_lookup(root, tree))
         raise RuntimeError("No usable local NVD snapshot")
 
     @staticmethod
-    def _lookup_snapshot_cve(root: pathlib.Path, cve_id: str) -> dict | None:
+    def _lookup_snapshot_cve(root: pathlib.Path, contains: Callable[[str], bool], cve_id: str) -> dict | None:
         # FKIE's get_vuln uses Path.is_file(), which can hide access errors.
         identifier = CveId(cve_id)
-        path = root / f"CVE-{identifier.year}" / (identifier.id[:-2] + "xx") / f"{identifier.id}.json"
+        relative = f"CVE-{identifier.year}/{identifier.id[:-2]}xx/{identifier.id}.json"
+        path = root / relative
         try:
             with path.open("rb") as stream:
                 record = json.load(stream)
         except FileNotFoundError:
-            # A checkout that disappeared after setup is not negative evidence.
-            root.stat()
+            (root / ".git").stat()
+            if contains(relative):
+                raise FileNotFoundError(
+                    f"Tracked CVE record is missing from the local NVD checkout: {cve_id}"
+                ) from None
             return None
         if not isinstance(record, dict) or record.get("id") != cve_id:
             raise ValueError("Invalid record in local NVD snapshot")
