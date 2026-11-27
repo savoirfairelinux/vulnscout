@@ -7,6 +7,7 @@ import type { Project } from '../handlers/project';
 import Variants from '../handlers/variant';
 import type { Variant } from '../handlers/variant';
 import type { FrontendScope } from '../handlers/config';
+import HelpPopover from './HelpPopover';
 
 const greenTheme = true;
 const bgHoverColor = greenTheme ? 'hover:bg-cyan-700' : 'dark:hover:bg-neutral-700';
@@ -25,24 +26,34 @@ type AppliedScope = {
     compareId: string;
 };
 
+export type ApplySelection = (
+    projectId: string, variantId: string, compareVariantId: string, operation: string,
+    variantIds: string[], multiOperation: string, includeOutdated: boolean, evidenceOnly: boolean,
+) => void | boolean | Promise<boolean | void>;
+
 type Props = {
     defaultProject?: { id: string; name: string } | null;
     defaultVariant?: { id: string; name: string } | null;
     defaultScope?: FrontendScope | null;
+    includeOutdated?: boolean;
+    loading?: boolean;
     // Returning (or resolving) false rejects the apply: the previous scope stays applied.
-    onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void | boolean | Promise<boolean | void>;
+    onApply: ApplySelection;
 };
 
-type ApplyArgs = Parameters<Props['onApply']>;
+type ScopeArgs = [string, string, string, string, string[], string];
 
-function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Readonly<Props>) {
+function ProjectVariantSelector({ defaultProject, defaultScope, includeOutdated = false, loading, onApply }: Readonly<Props>) {
     const [isOpen, setIsOpen] = useState(false);
     const buttonRef = useRef<HTMLButtonElement>(null);
-    const panelRef = useRef<HTMLDivElement>(null);
+    const panelRef = useRef<HTMLFieldSetElement>(null);
 
     const [projects, setProjects] = useState<Project[]>([]);
     const [variants, setVariants] = useState<Variant[]>([]);
+    const [variantsProjectId, setVariantsProjectId] = useState('');
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+    const [draftEvidence, setDraftEvidence] = useState<boolean | null>(null);
+    const draftIncludeOutdated = draftEvidence ?? includeOutdated;
 
     // Two mutually-exclusive modes:
     //  - 'select': pick one or more variants; data relevant to *any* of them (union)
@@ -72,6 +83,7 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
     // While the caller decides on an apply (e.g. an unsaved-changes prompt is
     // open), the panel must not close, so a rejection keeps the user's edits.
     const applyPendingRef = useRef(false);
+    const [applyPending, setApplyPending] = useState(false);
     const [applyError, setApplyError] = useState('');
     // Mirror project/variants in refs so the open-restore effect can read the
     // latest values without re-running on every change.
@@ -134,6 +146,7 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
             .then(vs => {
                 if (cancelled) return;
                 setVariants(vs);
+                setVariantsProjectId(selectedProjectId);
                 const restore = pendingRestoreRef.current;
                 pendingRestoreRef.current = null;
                 if (restore) {
@@ -256,30 +269,42 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
     const allSelected = variants.length > 0 && selectedVariantIds.length === variants.length;
 
     // Commit the label and snapshot only once the caller accepts the apply.
-    const requestApply = (args: ApplyArgs, label: string, scope: AppliedScope) => {
+    const requestApply = (args: ScopeArgs, label: string, scope: AppliedScope) => {
+        const applied = appliedScopeRef.current;
+        const evidenceOnly = draftIncludeOutdated !== includeOutdated
+            && applied?.projectId === scope.projectId && applied.mode === scope.mode
+            && (scope.mode === 'compare'
+                ? applied.compareBaseId === scope.compareBaseId && applied.compareId === scope.compareId && applied.compareOp === scope.compareOp
+                : applied.variantIds.length === scope.variantIds.length && scope.variantIds.every(id => applied.variantIds.includes(id)));
         const commit = () => {
-            setAppliedProject(projects.find(p => p.id === scope.projectId)?.name ?? '');
-            setAppliedLabel(label);
-            applyScope(scope);
+            if (!evidenceOnly) {
+                setAppliedProject(projects.find(p => p.id === scope.projectId)?.name ?? '');
+                setAppliedLabel(label);
+                applyScope(scope);
+            }
             setIsOpen(false);
         };
-        const result = onApply(...args);
+        const result = onApply(...args, draftIncludeOutdated, evidenceOnly);
         if (!(result instanceof Promise)) {
             if (result !== false) commit();
             return;
         }
         applyPendingRef.current = true;
+        setApplyPending(true);
         result
             .then(applied => { if (applied !== false) commit(); })
             // The previous scope stays applied; the open panel says why.
             .catch((error: unknown) => setApplyError(
                 `Could not apply the selection: ${error instanceof Error && error.message ? error.message : 'unknown error'}`,
             ))
-            .finally(() => { applyPendingRef.current = false; });
+            .finally(() => {
+                applyPendingRef.current = false;
+                setApplyPending(false);
+            });
     };
 
     const handleApply = () => {
-        if (applyPendingRef.current) return;
+        if (applyDisabled || applyPendingRef.current) return;
         setApplyError('');
         if (mode === 'compare' && compareBaseVariantId && selectedCompareVariantId) {
             const base = variants.find(v => v.id === compareBaseVariantId);
@@ -324,9 +349,11 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
         }
     };
 
-    const applyDisabled = !selectedProjectId
-        || (mode === 'select' && selectedVariantIds.length === 0)
-        || (mode === 'compare' && (!compareBaseVariantId || !selectedCompareVariantId));
+    const applyDisabled = loading || !selectedProjectId || selectedProjectId !== variantsProjectId
+        || (mode === 'select' && !selectedVariantIds.some(id => variants.some(variant => variant.id === id)))
+        || (mode === 'compare' && (compareBaseVariantId === selectedCompareVariantId
+            || !variants.some(variant => variant.id === compareBaseVariantId)
+            || !variants.some(variant => variant.id === selectedCompareVariantId)));
 
     const panelPosition = isOpen ? getPanelPosition() : { top: 0, right: 0 };
 
@@ -334,7 +361,11 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
         <>
             <button
                 ref={buttonRef}
-                onClick={() => setIsOpen(!isOpen)}
+                onClick={() => {
+                    if (applyPendingRef.current) return;
+                    if (!isOpen) setDraftEvidence(null);
+                    setIsOpen(!isOpen);
+                }}
                 className={[
                     'flex items-center h-full px-4 py-2',
                     bgHoverColor,
@@ -355,10 +386,15 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
             </button>
 
             {isOpen && createPortal(
-                <div
+                <fieldset
                     ref={panelRef}
-                    className="fixed z-[9999] bg-cyan-900 text-neutral-50 border border-cyan-700 rounded-lg shadow-xl p-4 w-72"
-                    style={{ top: panelPosition.top, right: panelPosition.right }}
+                    disabled={applyPending}
+                    className="fixed z-[9999] bg-cyan-900 text-neutral-50 border border-cyan-700 rounded-lg shadow-xl p-4 w-72 min-w-0 overflow-y-auto"
+                    style={{
+                        top: panelPosition.top,
+                        right: panelPosition.right,
+                        maxHeight: `calc(100dvh - ${panelPosition.top + 8}px)`,
+                    }}
                 >
                     <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300 mb-3">
                         Project &amp; Variant
@@ -368,7 +404,11 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
                     <label className="block text-sm mb-1">Project</label>
                     <select
                         value={selectedProjectId}
-                        onChange={e => setSelectedProjectId(e.target.value)}
+                        onChange={e => {
+                            pendingRestoreRef.current = null;
+                            setVariantsProjectId('');
+                            setSelectedProjectId(e.target.value);
+                        }}
                         className="w-full rounded px-2 py-1 text-sm bg-cyan-800 border border-cyan-600 focus:outline-none focus:border-cyan-400 mb-3"
                     >
                         <option value="">— select a project —</option>
@@ -511,6 +551,35 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
                         </div>
                     )}
 
+                    <div className="border-t border-cyan-700 pt-3 mb-4">
+                        <div className="relative mb-1 flex items-center gap-2 text-sm">
+                            <span>Evidence mode</span>
+                            <HelpPopover ariaLabel="Evidence mode help" role="tooltip" className="!static"
+                                surfaceClassName="!inset-x-0 !bottom-full !top-auto !mb-2 !mt-0 !w-full">
+                                <p>Applies to evidence in Vulnerabilities, SBOM, and Metrics.</p>
+                                <p className="mt-2"><strong>Current:</strong> Show evidence from the latest published SBOM and applicable tool scans.</p>
+                                <p className="mt-2"><strong>Ever observed:</strong> Include historical evidence from older published scans in the selected scope.</p>
+                            </HelpPopover>
+                        </div>
+                        <div className="flex rounded border border-cyan-600 p-0.5 text-sm"
+                            role="group" aria-label="Evidence mode">
+                            {(['Current', 'Ever observed'] as const).map(label => {
+                                const historical = label === 'Ever observed';
+                                const selected = draftIncludeOutdated === historical;
+                                return (
+                                    <button key={label} type="button" aria-pressed={selected}
+                                        onClick={() => setDraftEvidence(historical === includeOutdated ? null : historical)}
+                                        className={`flex-1 rounded px-2 py-1 font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300 disabled:opacity-50 ${
+                                            selected ? 'bg-cyan-700 text-white' : 'enabled:hover:bg-cyan-800'
+                                        }`}
+                                    >
+                                        {label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+
                     {applyError && <p role="alert" className="text-xs text-amber-300 mb-2">{applyError}</p>}
 
                     {/* Apply button */}
@@ -522,7 +591,7 @@ function ProjectVariantSelector({ defaultProject, defaultScope, onApply }: Reado
                     >
                         Apply
                     </button>
-                </div>,
+                </fieldset>,
                 document.body
             )}
         </>

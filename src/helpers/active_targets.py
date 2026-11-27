@@ -18,7 +18,7 @@ from .active_scans import active_package_ids_for_scans, active_sbom_scan_ids_for
 def variant_active_packages(vuln_id: str, project_uuid: UUID | None = None) -> list[dict[str, Any]]:
     """For each variant observing *vuln_id*, list its findings and the packages still in its active SBOM.
 
-    Backs ``GET /api/vulnerabilities/<id>/variant-active-packages`` and ``flask ai-assess``.
+    Backs AI assessment planning, which also checks for an active observation.
     """
     findings = Finding.get_by_vulnerability(vuln_id)
     # package_id -> string_id for the packages affected by this vulnerability

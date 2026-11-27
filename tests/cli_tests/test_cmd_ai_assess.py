@@ -102,9 +102,14 @@ def ids(app):
 
 
 def test_variant_active_packages_matches_route_and_flags_outdated(app, ids):
+    from uuid import UUID
+
     from src.helpers.active_targets import variant_active_packages
+    from src.models.scan import Scan
 
     with app.app_context():
+        Scan.create("replacement-sbom", UUID(ids["x86"]), scan_type="sbom")
+        _db.session.commit()
         entries = variant_active_packages("CVE-2024-0002")
     assert [(entry["variant_id"], [(f["package"], f["outdated"]) for f in entry["findings"]])
             for entry in entries] == [(ids["x86"], [("busybox@1.36", True)])]

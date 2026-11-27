@@ -35,7 +35,7 @@ from ..models.sbom_observation import SBOMObservation
 from ..models.sbom_package import SBOMPackage
 from ..models.scan import Scan
 from ..models.time_estimate import TimeEstimate
-from ..models.variant import Variant
+from ..models.variant import Variant, lock_scan_membership
 from ..models.vuln_refresh import VulnRefresh
 from ..models.vulnerability import Vulnerability
 from ..models.vulnerability_history import VulnerabilityHistory
@@ -551,13 +551,14 @@ def delete_outdated_data(
 ) -> dict[str, int]:
     """Delete every package observation and custom assessment marked outdated.
 
-    The predicates deliberately mirror ``/api/packages?outdated_only=true``
-    and ``annotate_assessments_outdated``.  Shared records are retained until
-    no scan, assessment, or SBOM relation references them.
+    Cleanup uses the assessment staleness rules, not the Explorer's
+    ever-observed inventory. Shared records are retained until no scan,
+    assessment, or SBOM relation references them.
     Refresh history is cleared globally only when explicitly requested; current
     vulnerability values and refresh timestamps are not reset by this option.
     """
     with write_lock():
+        lock_scan_membership()
         active_identities = _active_identities_by_variant()
         stale_observation_ids, stale_package_pairs, stale_finding_ids = _stale_observations(active_identities)
         stale_package_pairs.update(_stale_sbom_package_pairs(active_identities))
@@ -674,10 +675,10 @@ def delete_empty_scans(candidate_ids: list[str] | None = None) -> dict[str, int]
         if candidate_ids is not None and sorted(candidate_ids) != sorted(current_ids):
             raise ValueError(_STALE_PREVIEW_MESSAGE)
         scan_ids = [uuid.UUID(scan_id) for scan_id in current_ids]
-        for scan_id in scan_ids:
-            scan = db.session.get(Scan, scan_id)
-            if scan is not None:
-                db.session.delete(scan)
+        scans = [scan for scan_id in scan_ids if (scan := db.session.get(Scan, scan_id)) is not None]
+        lock_scan_membership(scan.variant_id for scan in scans)
+        for scan in scans:
+            db.session.delete(scan)
         db.session.commit()
 
     from ..routes._scan_diff import invalidate_scan_list_cache

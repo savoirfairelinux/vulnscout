@@ -784,26 +784,39 @@ class TestVulnRoutesEffort:
         assert "errors" in data
         assert any(e.get("id") == "CVE-2025-ROUTE" for e in data["errors"])
 
-    def test_batch_effort_with_valid_variant_id(self, client, app):
-        """Batch: a valid UUID variant_id is accepted and the item appears in results."""
-        import json as _json
-        from src.models.project import Project
-        from src.models.variant import Variant
+    @pytest.mark.parametrize("observed", [True, False])
+    def test_batch_effort_with_valid_variant_id(self, client, app, observed):
+        from src.models import Finding, Observation, Project, Scan, TimeEstimate, Variant
+
+        vuln_id = "CVE-2025-ROUTE"
         with app.app_context():
             proj = Project.create("BatchEffortProject")
             var = Variant.create("BatchEffortVariant", proj.id)
-            vid = str(var.id)
+            vid = var.id
+            finding_id = _db.session.scalar(_db.select(Finding.id).where(Finding.vulnerability_id == vuln_id))
+            if observed:
+                scan = Scan.create("Effort fixture", vid)
+                Observation.create(finding_id, scan.id)
         response = client.patch("/api/vulnerabilities/batch", json={
             "vulnerabilities": [{
-                "id": "CVE-2025-ROUTE",
+                "id": vuln_id,
                 "effort": {"optimistic": 1, "likely": 4, "pessimistic": 8},
-                "variant_id": vid,
+                "variant_id": str(vid),
             }]
         })
-        assert response.status_code == 200
-        data = _json.loads(response.data)
-        assert "vulnerabilities" in data
-        assert any(v["id"] == "CVE-2025-ROUTE" for v in data["vulnerabilities"])
+        data = response.get_json()
+        with app.app_context():
+            if observed:
+                assert response.status_code == 200
+                assert [v["id"] for v in data["vulnerabilities"]] == [vuln_id]
+                estimate = TimeEstimate.get_by_finding_and_variant(finding_id, vid)
+                assert estimate is not None
+                assert (estimate.optimistic, estimate.likely, estimate.pessimistic) == (1, 4, 8)
+            else:
+                assert response.status_code == 400
+                assert data["count"] == 0
+                assert data["errors"] == [{"id": vuln_id, "error": "No finding for the requested time estimate"}]
+                assert TimeEstimate.get_by_variant(vid) == []
 
 
 # ===========================================================================

@@ -3,7 +3,7 @@ import { useMemo, useState, useCallback, useEffect } from "react";
         import type { Package } from "../handlers/packages";
         import type { CVSS } from "../handlers/vulnerabilities";
         import type { Vulnerability, VulnerabilityPatch } from "../handlers/vulnerabilities";
-        import { SEVERITY_ORDER, getVulnerabilityStatusSummary, isVulnerabilityActive } from "../handlers/vulnerabilities";
+        import Vulnerabilities, { SEVERITY_ORDER, getVulnerabilityStatusSummary, isVulnerabilityActive } from "../handlers/vulnerabilities";
         import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement, LogarithmicScale, ChartEvent, LegendItem, LegendElement } from 'chart.js';
         import { Pie, Line, Bar } from 'react-chartjs-2';
         import TableGeneric from "../components/TableGeneric";
@@ -21,7 +21,7 @@ import { useMemo, useState, useCallback, useEffect } from "react";
         // tiebreaker so vulnerabilities of equal severity keep the same order
         // as the Vulnerability tab (which sorts by severity label and leaves
         // the backend CVE-id order within each severity).
-        function rankTopVulns(vulnerabilities: Vulnerability[]) {
+        function rankTopVulns(vulnerabilities: Vulnerability[], includeOutdated: boolean) {
             return [...vulnerabilities]
                 .filter((vuln) => isVulnerabilityActive(vuln))
                 .map((vuln, index) => {
@@ -29,7 +29,7 @@ import { useMemo, useState, useCallback, useEffect } from "react";
                         id: index + 1,
                         rank: 0,
                         cve: vuln.id,
-                        package: vuln.packages_current.join(", "),
+                        package: (includeOutdated ? vuln.packages : vuln.packages_current).join(", "),
                         severity: vuln.severity.severity,
                         texts: vuln.texts,
                         original: vuln,
@@ -58,6 +58,12 @@ import { useMemo, useState, useCallback, useEffect } from "react";
             setTab: (tab: string) => void;
             appendCVSS: (vulnId: string, vector: string) => CVSS | null;
             projectId?: string;
+            variantId?: string;
+            baseVariantId?: string;
+            compareOperation?: string;
+            variantIds?: string[];
+            multiOperation?: string;
+            includeOutdated?: boolean;
             onAgentContextChange?: (context: AgentViewContext) => void;
         };
 
@@ -152,13 +158,35 @@ import { useMemo, useState, useCallback, useEffect } from "react";
 
 
 
-function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab, projectId, onAgentContextChange }: Readonly<Props>) {
+function Metrics({ vulnerabilities, goToVulnsTabWithFilter, appendAssessment, appendCVSS, patchVuln, setTab,
+    projectId, variantId, baseVariantId, compareOperation, variantIds, multiOperation, includeOutdated = false,
+    onAgentContextChange }: Readonly<Props>) {
             const defaultPieHandler = ChartJS.overrides.pie.plugins.legend.onClick
 
             const [timeScale, setTimeScale] = useState<string>("6_months")
             const [modalVuln, setModalVuln] = useState<Vulnerability | undefined>(undefined);
             const [modalVulnIndex, setModalVulnIndex] = useState<number | undefined>(undefined);
             const [isEditing, setIsEditing] = useState<boolean>(false);
+            const [detailsError, setDetailsError] = useState(false);
+            const comparisonScope = useMemo(() => ({
+                baseVariantId, operation: compareOperation, variantIds, multiOperation,
+            }), [baseVariantId, compareOperation, variantIds, multiOperation]);
+
+            useEffect(() => {
+                setDetailsError(false);
+                if (!modalVuln || modalVuln.details_loaded !== false) return;
+                const controller = new AbortController();
+                Vulnerabilities.getDetails(modalVuln.id, variantId, projectId, controller.signal, comparisonScope, includeOutdated)
+                    .then(details => {
+                        if (!details || controller.signal.aborted) return;
+                        setModalVuln(current => current?.id === details.id ? {
+                            ...current, texts: details.texts, urls: details.urls, cpes: details.cpes,
+                            severity: { ...current.severity, cvss: details.severity.cvss }, details_loaded: true,
+                        } : current);
+                    })
+                    .catch(() => { if (!controller.signal.aborted) setDetailsError(true); });
+                return () => controller.abort();
+            }, [modalVuln, variantId, projectId, comparisonScope, includeOutdated]);
 
             const handlePatchVuln = useCallback((vulnId: string, patch: VulnerabilityPatch) => {
                 patchVuln(vulnId, patch);
@@ -220,7 +248,7 @@ const vulnColumns = useMemo(
               className="bg-slate-800 hover:bg-slate-700 px-2 rounded-lg"
               onClick={() => {
                 // Get the current TopVulns list and find the index
-                const currentTopVulns = rankTopVulns(vulnerabilities);
+                const currentTopVulns = rankTopVulns(vulnerabilities, includeOutdated);
 
                 const index = currentTopVulns.findIndex(item => item.original.id === vuln.id);
                 setModalVuln(vuln);
@@ -237,7 +265,7 @@ const vulnColumns = useMemo(
       enableSorting: false,
     },
   ],
-  [vulnerabilities]
+  [vulnerabilities, includeOutdated]
 );
 
 const packageColumns = [
@@ -429,7 +457,7 @@ const packageColumns = [
   const topVulnerablePackages = useMemo(() => {
     const counts: Record<string, { count: number; version?: string }> = {};
     vulnerabilities.forEach((vuln) => {
-      vuln.packages_current.forEach((pkg) => {
+      (includeOutdated ? vuln.packages : vuln.packages_current).forEach((pkg) => {
         const [pkgName, pkgVersion] = pkg.split("@");
         if (!counts[pkgName]) {
           counts[pkgName] = { count: 0, version: pkgVersion };
@@ -449,11 +477,11 @@ const packageColumns = [
         maxSeverity: { label: "UNKNOWN", index: 0 },
         source: [],
       }));
-  }, [vulnerabilities]);
+  }, [vulnerabilities, includeOutdated]);
 
   const TopVulns = useMemo(() => {
-    return rankTopVulns(vulnerabilities);
-    }, [vulnerabilities]);
+    return rankTopVulns(vulnerabilities, includeOutdated);
+    }, [vulnerabilities, includeOutdated]);
 
     useEffect(() => {
       onAgentContextChange?.({
@@ -603,14 +631,13 @@ const packageColumns = [
               </div>
             </div>
 
-            {/* Exploitable Vulnerabilities */}
-            <div className="p-3">
+            {!includeOutdated && <div className="p-3">
               <div className="bg-zinc-700 p-2 flex items-center justify-center gap-2 rounded-t-md">
                 <div
                   className="text-xl text-white"
-                  title="Active vulnerabilities is the sum of exploitable and Pending Assessment vulnerabilities."
+                  title="Based on assessments for today's findings; not historical scan membership or exposure."
                 >
-                  Active vulnerabilities
+                  Assessment trend for current findings
                 </div>
                 <select
                   className="bg-zinc-800 p-1 text-white rounded w-36"
@@ -634,7 +661,7 @@ const packageColumns = [
                   />
                 </div>
               </div>
-            </div>
+            </div>}
 
             {/* Vulnerabilities by Database */}
             <div className="p-3">
@@ -660,7 +687,7 @@ const packageColumns = [
             <div className="p-3 min-w-0">
               <div className="bg-zinc-700 px-4 py-2 flex items-center justify-between rounded-t-md flex-wrap gap-2">
                 <h3 className="text-xl font-bold text-white">
-                  Most critical unfixed vulnerabilities
+                  {includeOutdated ? 'Most critical unfixed vulnerabilities ever observed' : 'Most critical unfixed vulnerabilities'}
                 </h3>
                 <button
                   className="bg-cyan-800 hover:bg-cyan-700 focus:ring-4 focus:outline-none focus:ring-blue-800 font-medium rounded-lg px-4 py-2 text-center text-white"
@@ -708,6 +735,8 @@ const packageColumns = [
         {modalVuln && (
           <VulnModal
             vuln={modalVuln}
+            detailsLoading={modalVuln.details_loaded === false && !detailsError}
+            detailsError={detailsError}
             isEditing={isEditing}
             onClose={() => {
               setModalVuln(undefined);
@@ -721,6 +750,9 @@ const packageColumns = [
             currentIndex={modalVulnIndex}
             onNavigate={handleModalNavigation}
             projectId={projectId}
+            variantId={variantId}
+            comparisonScope={comparisonScope}
+            includeOutdated={includeOutdated}
           />
         )}
         </div>

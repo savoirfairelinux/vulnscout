@@ -25,13 +25,13 @@ def resolve_package(pkg_string_id: str) -> "Package | None":
 
 
 def find_valid_finding(package_id: UUID, vuln_id: str, variant_id: UUID) -> "Finding | None":
-    """Return the finding when it was actually observed for the variant.
+    """Return a finding backed by a published scan for the variant.
 
     Assessment writes may target active or historical package versions, but
     they must never invent a package/vulnerability/variant relationship that
     was not produced by a scan.
     """
-    return Finding.get_observed_by_variant(package_id, vuln_id, variant_id)
+    return Finding.get_observed_by_variant(package_id, vuln_id, variant_id, published_only=True)
 
 
 def validate_assessment_findings(

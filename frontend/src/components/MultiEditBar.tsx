@@ -114,64 +114,29 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
         return allHaveSameStatus ? firstStatus : undefined;
     }, [selectedVulns, vulnerabilities]);
 
-    function pkg_for_vulns () {
-        const pkg_vulns: {[key: string]: string[]} = {}
-        for (const vuln of vulnerabilities) {
-            if (selectedVulns.includes(vuln.id)) {
-                pkg_vulns[vuln.id] = vuln.packages
-            }
-        }
-        return pkg_vulns
-    }
-
     const addAssessment = async (content: PostAssessment) => {
-        const pkg_vulns = pkg_for_vulns();
-        setIsLoading(true);
-
-        // Build one request item per vulnerability. A multi-variant selection
-        // stays one item so the backend can persist its complete target set on
-        // one Assessment row rather than splitting the user action by variant.
-        type RequestTarget = { vuln_id: string; variant_ids?: string[]; packages: string[] };
-        const targets: RequestTarget[] = [];
-
-        if (variantId) {
-            const selectedVariantIds = [variantId];
-            if (compareOperation === 'intersection' && baseVariantId && baseVariantId !== variantId) {
-                selectedVariantIds.push(baseVariantId);
-            }
-            for (const vuln_id of selectedVulns) {
-                const pkgs = pkg_vulns[vuln_id] ?? [];
-                targets.push({ vuln_id, variant_ids: selectedVariantIds, packages: pkgs });
-            }
-        } else {
-            // All-variants context — one item per vulnerability, covering all
-            // variants where its selected packages were historically observed.
-            await Promise.all(selectedVulns.map(async (vuln_id) => {
-                const variants = await Variants.listByVuln(vuln_id).catch(() => []);
-                const pkgs = pkg_vulns[vuln_id] ?? [];
-                const variant_ids = variants
-                    .filter(variant => !projectId || variant.project_id === projectId)
-                    .map(variant => variant.id);
-                targets.push({
-                    vuln_id,
-                    packages: pkgs,
-                    ...(variant_ids.length > 0 ? { variant_ids } : {}),
-                });
-            }));
-        }
-
-        // Build batch request payload
-        const assessmentRequests = targets.map(({ vuln_id, variant_ids, packages }) => ({
+        const scopedVariants = variantId
+            ? [variantId, ...(compareOperation === 'intersection' && baseVariantId ? [baseVariantId] : [])]
+            : multiOperation === 'difference' ? variantIds?.slice(0, 1) : variantIds;
+        const rows = new Map(vulnerabilities.map(vuln => [vuln.id, vuln]));
+        const assessmentRequests = selectedVulns.map(vuln_id => ({
             vuln_id,
-            packages,
+            targets: Object.entries(rows.get(vuln_id)?.assessment_targets_by_variant ?? {})
+                .filter(([id]) => !scopedVariants || scopedVariants.includes(id))
+                .flatMap(([variant_id, packages]) => packages.map(packageId => ({ variant_id, package: packageId }))),
             status: content.status,
             status_notes: content.status_notes,
             justification: content.justification,
             impact_statement: content.impact_statement,
             workaround: content.workaround,
-            ...(variant_ids ? { variant_ids } : {})
         }));
+        const withoutTargets = assessmentRequests.filter(item => item.targets.length === 0);
+        if (withoutTargets.length > 0) {
+            triggerBanner(`No current package targets for: ${withoutTargets.map(item => item.vuln_id).join(', ')}`, 'error');
+            return;
+        }
 
+        setIsLoading(true);
         try {
             const response = await fetch(import.meta.env.VITE_API_URL + '/api/assessments/batch', {
                 method: 'POST',
@@ -179,7 +144,7 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ assessments: assessmentRequests })
+                body: JSON.stringify({ current_only: true, assessments: assessmentRequests })
             });
 
             const data = await response.json().catch(() => ({}));
@@ -211,55 +176,23 @@ function MultiEditBar ({vulnerabilities, selectedVulns, resetVulns, appendAssess
     };
 
     const saveTimeEstimation = async (content: PostTimeEstimate) => {
-        setIsLoading(true);
-
-        // Build variant-scoped updates for every selected vulnerability.
-        const vulnerabilityUpdates: Array<{
-            id: string;
-            variant_id: string;
-            effort: {
-                optimistic: string;
-                likely: string;
-                pessimistic: string;
-            };
-        }> = [];
-
-        if (variantId) {
-            for (const vuln_id of selectedVulns) {
-                vulnerabilityUpdates.push({
-                    id: vuln_id,
-                    variant_id: variantId,
-                    effort: {
-                        optimistic: content.optimistic.formatAsIso8601(),
-                        likely: content.likely.formatAsIso8601(),
-                        pessimistic: content.pessimistic.formatAsIso8601()
-                    }
-                });
-            }
-        } else {
-            await Promise.all(selectedVulns.map(async (vuln_id) => {
-                const variants = await Variants.listByVuln(vuln_id).catch(() => []);
-                for (const variant of variants.filter(
-                    item => !projectId || item.project_id === projectId)) {
-                    vulnerabilityUpdates.push({
-                        id: vuln_id,
-                        variant_id: variant.id,
-                        effort: {
-                            optimistic: content.optimistic.formatAsIso8601(),
-                            likely: content.likely.formatAsIso8601(),
-                            pessimistic: content.pessimistic.formatAsIso8601()
-                        }
-                    });
-                }
-            }));
-        }
-
-        if (vulnerabilityUpdates.length === 0) {
-            triggerBanner('No variants found for selected vulnerabilities.', 'error');
-            setIsLoading(false);
+        const effort = {
+            optimistic: content.optimistic.formatAsIso8601(),
+            likely: content.likely.formatAsIso8601(),
+            pessimistic: content.pessimistic.formatAsIso8601(),
+        };
+        const rows = new Map(vulnerabilities.map(vuln => [vuln.id, vuln]));
+        const targetsByVulnerability = selectedVulns.map(id => ({ id, targets: rows.get(id)?.effort_variant_ids ?? [] }));
+        const withoutTargets = targetsByVulnerability.filter(item => item.targets.length === 0);
+        if (withoutTargets.length > 0) {
+            triggerBanner(`No time estimate targets for: ${withoutTargets.map(item => item.id).join(', ')}`, 'error');
             return;
         }
 
+        const vulnerabilityUpdates = targetsByVulnerability.flatMap(
+            ({ id, targets }) => targets.map(variant_id => ({ id, variant_id, effort })),
+        );
+        setIsLoading(true);
         try {
             const response = await fetch(import.meta.env.VITE_API_URL + '/api/vulnerabilities/batch', {
                 method: 'PATCH',

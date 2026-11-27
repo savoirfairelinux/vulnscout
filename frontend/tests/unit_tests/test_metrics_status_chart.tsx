@@ -5,7 +5,7 @@
  * (Not affected, Fixed, Pending Assessment, Exploitable), based on whether it
  * has any variant in that status — not by summing the per-variant counts.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
@@ -32,8 +32,9 @@ jest.mock('chart.js', () => ({
 
 // Expose each Pie's `data` prop as JSON so tests can read the computed dataset.
 jest.mock('react-chartjs-2', () => ({
-    Pie: ({ data }: any) => (
-        <div data-testid="pie-chart" data-chart={JSON.stringify(data)} />
+    Pie: ({ data, options }: any) => (
+        <button data-testid="pie-chart" data-chart={JSON.stringify(data)}
+            onClick={() => options.onClick(null, [{ index: 3 }])} />
     ),
     Line: () => <div data-testid="line-chart" />,
     Bar:  () => <div data-testid="bar-chart" />,
@@ -188,5 +189,21 @@ describe('Metrics — Vulnerabilities by Status chart', () => {
         // Pending Assessment: CVE-C → 1
         // Exploitable: CVE-D → 1
         expect(getStatusChartData()).toEqual([1, 2, 1, 1]);
+    });
+
+    test('counts historical-only findings and offers a status drill-down, not an as-of trend', () => {
+        const current = makeVuln('CVE-CURRENT', { 'Pending Assessment': 1 });
+        const historical = { ...makeVuln('CVE-OLD', { Exploitable: 1 }), packages_current: [] };
+        const goToVulnsTabWithFilter = jest.fn();
+        const view = render(<Metrics {...DEFAULT_PROPS} vulnerabilities={[current]} />);
+        expect(screen.getByTestId('line-chart')).toBeVisible();
+        expect(getStatusChartData()).toEqual([0, 0, 1, 0]);
+        view.rerender(<Metrics {...DEFAULT_PROPS} includeOutdated vulnerabilities={[current, historical]}
+            goToVulnsTabWithFilter={goToVulnsTabWithFilter} />);
+        expect(screen.queryByTestId('line-chart')).not.toBeInTheDocument();
+        expect(getStatusChartData()).toEqual([0, 0, 1, 1]);
+        const statusChart = screen.getAllByTestId('pie-chart').find(chart => chart.dataset.chart?.includes('Exploitable'))!;
+        fireEvent.click(statusChart);
+        expect(goToVulnsTabWithFilter).toHaveBeenCalledWith('Status', 'Exploitable');
     });
 });

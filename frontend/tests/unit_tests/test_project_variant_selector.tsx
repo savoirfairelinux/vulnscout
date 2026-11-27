@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 // @ts-expect-error TS6133
 import React from 'react';
@@ -134,6 +135,29 @@ describe('ProjectVariantSelector', () => {
         expect(screen.getByText('Project & Variant')).toBeInTheDocument();
     });
 
+    test('explains the evidence modes with keyboard help without applying a selection', async () => {
+        const onApply = jest.fn();
+        const user = userEvent.setup();
+        render(<ProjectVariantSelector defaultProject={PROJECTS[0]} onApply={onApply} />);
+        await openPanel();
+        expect(screen.queryByText(/applies to evidence in vulnerabilities/i)).not.toBeInTheDocument();
+        const help = screen.getByRole('button', { name: 'Evidence mode help' });
+        help.focus();
+        await user.keyboard('{Enter}');
+        const tooltip = screen.getByRole('tooltip');
+        expect(help).toHaveAttribute('aria-describedby', tooltip.id);
+        expect(tooltip).toHaveTextContent('Applies to evidence in Vulnerabilities, SBOM, and Metrics.');
+        expect(tooltip).toHaveTextContent(/Current: Show evidence from the latest published SBOM/);
+        expect(tooltip).toHaveTextContent(/Ever observed: Include historical evidence/);
+        await user.keyboard('{Escape}');
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+        expect(help).toHaveFocus();
+        await user.click(screen.getByRole('button', { name: 'Ever observed' }));
+        expect(onApply).not.toHaveBeenCalled();
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
+        expect(onApply).toHaveBeenCalledWith('proj-1', '', '', '', [], '', true, true);
+    });
+
     test('clicking the button again closes the dropdown panel', async () => {
         render(<ProjectVariantSelector onApply={jest.fn()} />);
         await openPanel();
@@ -240,7 +264,7 @@ describe('ProjectVariantSelector', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         });
-        expect(onApply).toHaveBeenCalledWith('proj-1', '', '', '', [], '');
+        expect(onApply).toHaveBeenCalledWith('proj-1', '', '', '', [], '', false, false);
     });
 
     test('Apply with a single variant selected calls onApply with that variant id', async () => {
@@ -266,7 +290,7 @@ describe('ProjectVariantSelector', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         });
-        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', '', '', [], '');
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', '', '', [], '', false, false);
     });
 
     test('Apply with a subset of variants (>= 2) calls onApply with union variantIds', async () => {
@@ -295,7 +319,7 @@ describe('ProjectVariantSelector', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         });
-        expect(onApply).toHaveBeenCalledWith('proj-1', '', '', '', ['var-1', 'var-2'], 'union');
+        expect(onApply).toHaveBeenCalledWith('proj-1', '', '', '', ['var-1', 'var-2'], 'union', false, false);
     });
 
     test('Clear all disables Apply and shows a warning', async () => {
@@ -358,7 +382,7 @@ describe('ProjectVariantSelector', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         });
-        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', 'var-2', 'difference', [], '');
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', 'var-2', 'difference', [], '', false, false);
     });
 
     test('reopened select scope initializes the visible compare variant', async () => {
@@ -392,7 +416,7 @@ describe('ProjectVariantSelector', () => {
         });
 
         expect(onApply).toHaveBeenCalledWith(
-            'proj-1', 'var-1', 'var-2', 'difference', [], '',
+            'proj-1', 'var-1', 'var-2', 'difference', [], '', false, false,
         );
     });
 
@@ -418,7 +442,7 @@ describe('ProjectVariantSelector', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         });
-        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', 'var-2', 'intersection', [], '');
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-1', 'var-2', 'intersection', [], '', false, false);
     });
 
     test('swap button swaps base and compare variants', async () => {
@@ -443,7 +467,7 @@ describe('ProjectVariantSelector', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         });
-        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-2', 'var-1', 'difference', [], '');
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-2', 'var-1', 'difference', [], '', false, false);
     });
 
     // -----------------------------------------------------------------------
@@ -475,7 +499,7 @@ describe('ProjectVariantSelector', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         });
-        expect(onApply).toHaveBeenLastCalledWith('proj-1', '', '', '', ['var-1', 'var-2'], 'union');
+        expect(onApply).toHaveBeenLastCalledWith('proj-1', '', '', '', ['var-1', 'var-2'], 'union', false, false);
 
         // Reopen — the applied selection should be restored
         await openPanel();
@@ -501,7 +525,7 @@ describe('ProjectVariantSelector', () => {
         fireEvent.keyDown(document, { key: 'Escape' });
         await act(async () => { resolveApply(false); });
 
-        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-2', '', '', [], '');
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-2', '', '', [], '', false, false);
         expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
         expect(screen.getByRole('checkbox', { name: 'release' })).toBeChecked();
         expect(screen.getByRole('checkbox', { name: 'default' })).not.toBeChecked();
@@ -697,7 +721,7 @@ describe('ProjectVariantSelector', () => {
             fireEvent.click(screen.getByRole('button', {name: 'Apply'}));
         });
         expect(onApply).toHaveBeenCalledWith(
-            'proj-1', 'var-1', 'var-3', 'intersection', [], '',
+            'proj-1', 'var-1', 'var-3', 'intersection', [], '', false, false,
         );
     });
 
@@ -844,7 +868,7 @@ describe('ProjectVariantSelector', () => {
         await act(async () => {
             fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
         });
-        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-2', 'var-3', 'difference', [], '');
+        expect(onApply).toHaveBeenCalledWith('proj-1', 'var-2', 'var-3', 'difference', [], '', false, false);
     });
 
     test('reopening after switching project without applying restores the applied project', async () => {

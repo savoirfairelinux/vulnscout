@@ -6,6 +6,7 @@
 import pytest
 import gzip
 import json
+from uuid import UUID
 from flask import Flask
 from src.bin.webapp import create_app
 from src.routes.vulnerabilities import _compact_json_response
@@ -686,42 +687,200 @@ def test_patch_batch_effort_ordering_error(client):
     assert "Invalid effort values" in data["errors"][0]["error"]
 
 
+def test_bulk_effort_rejects_note_only_targets_and_round_trips_historical_zero(app, client, monkeypatch):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from src.extensions import db
+    from src.models import (
+        Finding, Observation, Package, Project, SBOMDocument, SBOMObservation, SBOMPackage,
+        Scan, TimeEstimate, Variant, Vulnerability,
+    )
+
+    note_id = "TEST-EFFORT-NOTE"
+    historical_id = "TEST-EFFORT-HISTORICAL"
+    with app.app_context():
+        project = Project.create("Effort project")
+        first = Variant.create("first", project.id)
+        second = Variant.create("second", project.id)
+        first_id, second_id, project_id = map(str, (first.id, second.id, project.id))
+        old = Scan.create("old inventory", first.id)
+        old_doc = SBOMDocument.create("/old.cdx.json", "old.cdx.json", old.id)
+        package = Package.find_or_create("test-effort-package", "1")
+        SBOMPackage.create(old_doc.id, package.id)
+        Vulnerability.create_record(id=historical_id)
+        historical_finding = Finding.get_or_create(package.id, historical_id)
+        Observation.create(historical_finding.id, old.id)
+        finding_id = historical_finding.id
+        Scan.create("current inventory", first.id)
+        note_scan = Scan.create("note inventory", second.id)
+        note_doc = SBOMDocument.create("/note.cdx.json", "note.cdx.json", note_scan.id)
+        Vulnerability.create_record(id=note_id)
+        db.session.add_all([
+            SBOMObservation(
+                vulnerability_id=vuln_id, sbom_document_id=note_doc.id, key="description", description="Note only",
+            )
+            for vuln_id in (historical_id, note_id)
+        ])
+        db.session.commit()
+
+    comparison = f"variant_ids={first_id},{second_id}&operation=union"
+    historical = {row["id"]: row for row in client.get(
+        f"/api/vulnerabilities?{comparison}&include_outdated=true"
+    ).get_json()}
+    assert historical[historical_id]["effort_variant_ids"] == [first_id]
+    assert historical[note_id]["effort_variant_ids"] == []
+    current = {row["id"]: row for row in client.get(f"/api/vulnerabilities?{comparison}").get_json()}
+    assert current[historical_id]["effort_variant_ids"] == []
+    difference = client.get(
+        f"/api/vulnerabilities/{historical_id}?variant_ids={first_id},{second_id}"
+        "&operation=difference&include_outdated=true"
+    ).get_json()
+    assert difference["effort_variant_ids"] == []
+
+    effort = {"optimistic": "P0D", "likely": "P0D", "pessimistic": "P0D"}
+    updates = [
+        {"id": note_id, "variant_id": second_id, "effort": effort},
+        {"id": historical_id, "variant_id": second_id, "effort": effort},
+        {"id": historical_id, "variant_id": first_id, "effort": effort},
+    ]
+    rejected = client.patch("/api/vulnerabilities/batch", json={"vulnerabilities": updates[:2]})
+    assert rejected.status_code == 400
+    assert rejected.get_json()["count"] == 0
+    assert rejected.get_json()["error_count"] == 2
+
+    def fail_write(**kwargs):
+        raise SQLAlchemyError("Simulated write failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(TimeEstimate, "create", fail_write)
+        failed = client.patch("/api/vulnerabilities/batch", json={"vulnerabilities": updates[2:]})
+    assert failed.status_code == 400
+    assert failed.get_json()["count"] == 0
+    assert failed.get_json()["errors"] == [{"id": historical_id, "error": "Failed to save time estimate"}]
+
+    mixed = client.patch("/api/vulnerabilities/batch", json={"vulnerabilities": updates})
+    assert mixed.status_code == 200
+    result = mixed.get_json()
+    assert result["count"] == 1
+    assert result["error_count"] == 2
+    assert result["vulnerabilities"][0]["effort"] == effort
+    with app.app_context():
+        estimates = TimeEstimate.get_by_finding(finding_id)
+        assert [(str(row.variant_id), row.optimistic, row.likely, row.pessimistic) for row in estimates] == [
+            (first_id, 0, 0, 0),
+        ]
+    scope = f"project_id={project_id}&include_outdated=true"
+    rows = {row["id"]: row for row in client.get(f"/api/vulnerabilities?{scope}").get_json()}
+    assert rows[historical_id]["effort"] == effort
+    assert client.get(f"/api/vulnerabilities/{historical_id}?{scope}").get_json()["effort"] == effort
+
+
+@pytest.mark.parametrize(("batch", "existing_in_variant"), [(True, False), (True, True), (False, True)])
+def test_effort_prefers_variant_finding_and_survives_scan_cleanup(app, client, batch, existing_in_variant):
+    from src.extensions import db
+    from src.helpers.assessment_io import build_custom_data_export, build_variant_by_name_map, import_custom_data
+    from src.models import Finding, Observation, Package, Project, Scan, TimeEstimate, Variant, Vulnerability
+
+    vuln_id = "TEST-LEGACY-EFFORT"
+    with app.app_context():
+        project = Project.create("Legacy effort")
+        edited = Variant.create("edited", project.id)
+        sibling = Variant.create("sibling", project.id)
+        edited_scan = Scan.create("edited scan", edited.id)
+        sibling_scan = Scan.create("sibling scan", sibling.id)
+        Vulnerability.create_record(id=vuln_id)
+        expected_finding = Finding.get_or_create(Package.find_or_create("edited-package", "1").id, vuln_id)
+        legacy_finding = Finding.get_or_create(Package.find_or_create("sibling-package", "1").id, vuln_id)
+        Observation.create(expected_finding.id, edited_scan.id)
+        Observation.create(legacy_finding.id, sibling_scan.id)
+        edited_id, sibling_scan_id = edited.id, sibling_scan.id
+        project_id = project.id
+        expected_finding_id, legacy_finding_id = expected_finding.id, legacy_finding.id
+        legacy_id = UUID(int=1)
+        estimate_id = UUID(int=2) if existing_in_variant else legacy_id
+        db.session.add(TimeEstimate(id=legacy_id, finding_id=legacy_finding_id, variant_id=edited_id, likely=1))
+        if existing_in_variant:
+            db.session.add(TimeEstimate(id=estimate_id, finding_id=expected_finding_id, variant_id=edited_id, likely=2))
+        sibling_estimate_id = TimeEstimate.create(legacy_finding_id, sibling.id, 2, 2, 2).id
+
+    effort = {"optimistic": "PT3H", "likely": "PT4H", "pessimistic": "PT5H"}
+    update = {"variant_id": str(edited_id), "effort": effort}
+    if batch:
+        response = client.patch("/api/vulnerabilities/batch", json={"vulnerabilities": [{"id": vuln_id, **update}]})
+    else:
+        response = client.patch(f"/api/vulnerabilities/{vuln_id}", json=update)
+    assert response.status_code == 200
+    result = response.get_json()
+    assert (result["vulnerabilities"][0] if batch else result)["effort"] == effort
+    response = client.get(f"/api/vulnerabilities/{vuln_id}?variant_id={edited_id}")
+    assert response.get_json()["effort"] == effort
+    with app.app_context():
+        estimate = TimeEstimate.get_by_finding_and_variant(expected_finding_id, edited_id)
+        assert estimate is not None
+        assert (estimate.id, estimate.optimistic, estimate.likely, estimate.pessimistic) == (estimate_id, 3, 4, 5)
+        if existing_in_variant:
+            legacy = TimeEstimate.get_by_id(legacy_id)
+            assert (legacy.finding_id, legacy.likely) == (legacy_finding_id, 1)
+            exported = build_custom_data_export([edited_id])
+            assert exported["time_estimates"] == [{"vuln_id": vuln_id, "variant": "edited", **effort}]
+            estimate.update(0, 0, 0)
+            assert build_custom_data_export([edited_id])["time_estimates"] == []
+            imported = import_custom_data(
+                json.loads(json.dumps(exported)), build_variant_by_name_map(project_id),
+                use_original_timestamps=True,
+            )
+            assert imported["errors"] == []
+            assert imported["time_estimates_imported"] == 1
+            assert (estimate.optimistic, estimate.likely, estimate.pessimistic) == (3, 4, 5)
+            assert legacy.likely == 1
+        sibling_estimate = TimeEstimate.get_by_id(sibling_estimate_id)
+        assert (sibling_estimate.finding_id, sibling_estimate.likely) == (legacy_finding_id, 2)
+
+    response = client.delete(f"/api/scans/{sibling_scan_id}")
+    assert response.status_code == 200
+    assert response.get_json()["orphaned_findings_removed"] == 1
+    with app.app_context():
+        assert db.session.get(Finding, legacy_finding_id) is None
+        estimates = TimeEstimate.get_by_variant(edited_id)
+        assert [(row.id, row.finding_id, row.optimistic, row.likely, row.pessimistic) for row in estimates] == [
+            (estimate_id, expected_finding_id, 3, 4, 5),
+        ]
+
+
 # ---------------------------------------------------------------------------
 # GET /api/vulnerabilities — compare_variant_id paths (lines 88, 100, 118)
 # ---------------------------------------------------------------------------
 
-def test_get_vulnerabilities_compare_base_none(client):
+@pytest.fixture
+def empty_comparison(app):
+    from src.models import Project, Variant
+
+    with app.app_context():
+        project = Project.create("EmptyComparison")
+        base = Variant.create("Base", project.id)
+        compare = Variant.create("Compare", project.id)
+        return f"variant_id={base.id}&compare_variant_id={compare.id}"
+
+
+def test_get_vulnerabilities_compare_base_none(client, empty_comparison):
     """GET with variant_id+compare_variant_id where base has no scan → base_ids=set() (line 88)."""
-    import uuid
-    base_id = str(uuid.uuid4())
-    compare_id = str(uuid.uuid4())
-    response = client.get(f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}")
+    response = client.get(f"/api/vulnerabilities?{empty_comparison}")
     assert response.status_code == 200
     data = json.loads(response.data)
     assert isinstance(data, list)
 
 
-def test_get_vulnerabilities_compare_intersection_no_scan(client):
+def test_get_vulnerabilities_compare_intersection_no_scan(client, empty_comparison):
     """GET with operation=intersection and compare has no scan → records=[] (line 100)."""
-    import uuid
-    base_id = str(uuid.uuid4())
-    compare_id = str(uuid.uuid4())
-    response = client.get(
-        f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=intersection"
-    )
+    response = client.get(f"/api/vulnerabilities?{empty_comparison}&operation=intersection")
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data == []
 
 
-def test_get_vulnerabilities_compare_difference_no_scan(client):
+def test_get_vulnerabilities_compare_difference_no_scan(client, empty_comparison):
     """GET (default difference) compare has no scan → records=[] (line 118)."""
-    import uuid
-    base_id = str(uuid.uuid4())
-    compare_id = str(uuid.uuid4())
-    response = client.get(
-        f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=difference"
-    )
+    response = client.get(f"/api/vulnerabilities?{empty_comparison}&operation=difference")
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data == []
@@ -794,13 +953,108 @@ def test_get_vulnerabilities_compare_with_data(app, client):
 
         base_id = str(base_variant.id)
         compare_id = str(compare_variant.id)
+        package_id = pkg.string_id
 
     response = client.get(
         f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}&operation=intersection"
     )
     assert response.status_code == 200
     data = json.loads(response.data)
-    assert any(v["id"] == "CVE-COMPARE-0001" for v in data)
+    vulnerability = next(v for v in data if v["id"] == "CVE-COMPARE-0001")
+    assert vulnerability["packages_current_by_variant"] == {
+        base_id: [package_id], compare_id: [package_id],
+    }
+
+
+@pytest.mark.parametrize("pair", [False, True])
+def test_vulnerability_comparison_validates_project_scope(app, client, pair):
+    import uuid
+    from src.models import Project, Variant
+
+    with app.app_context():
+        project = Project.create("ComparisonScope")
+        base = Variant.create("Base", project.id)
+        same_project = Variant.create("Selected", project.id)
+        other_project = Project.create("OtherComparisonScope")
+        other = Variant.create("Other", other_project.id)
+        project_id, other_project_id = str(project.id), str(other_project.id)
+        base_id, selected_id, other_id = str(base.id), str(same_project.id), str(other.id)
+
+    def comparison_query(second_id):
+        if pair:
+            return f"variant_id={base_id}&compare_variant_id={second_id}&operation=intersection"
+        return f"variant_ids={base_id},{second_id}&operation=union"
+
+    for second_id, project_param, status in [
+        (selected_id, project_id, 200),
+        (selected_id, other_project_id, 400),
+        (other_id, project_id, 400),
+        (other_id, None, 400),
+        (str(uuid.uuid4()), project_id, 404),
+    ]:
+        query = f"{comparison_query(second_id)}&include_outdated=true"
+        if project_param:
+            query += f"&project_id={project_param}"
+        assert client.get(f"/api/vulnerabilities?{query}").status_code == status
+        response = client.post(
+            f"/api/vulnerabilities/search-descriptions?{query}",
+            json={"vulnerability_ids": ["CVE-2020-35492"], "terms": ["sample"]},
+        )
+        assert response.status_code == status
+        response = client.get(f"/api/vulnerabilities/CVE-2020-35492?{query}")
+        assert response.status_code == status
+
+
+@pytest.mark.parametrize("include_outdated", ["false", "true"])
+def test_single_variant_evidence_scope_validates_project(app, include_outdated):
+    import uuid
+    from src.models import Project, Variant
+    from src.routes._evidence_scope import resolve_evidence_scope
+
+    with app.app_context():
+        project = Project.create("Selected project")
+        other_project = Project.create("Other project")
+        variant = Variant.create("Selected variant", project.id)
+        args = {"variant_id": str(variant.id), "include_outdated": include_outdated}
+
+        scope, error = resolve_evidence_scope({**args, "project_id": str(other_project.id)})
+        assert scope is None
+        assert error == ({"error": "Variant must belong to the selected project"}, 400)
+
+        scope, error = resolve_evidence_scope({**args, "project_id": str(project.id)})
+        assert error is None
+        assert scope.selected == [variant.id]
+        assert scope.historical is (include_outdated == "true")
+
+        scope, error = resolve_evidence_scope({
+            **args, "project_id": str(project.id), "variant_id": str(uuid.uuid4()),
+        })
+        assert error is None
+        assert scope.selected == []
+
+
+@pytest.mark.parametrize("include_outdated", ["false", "true"])
+def test_explorer_endpoints_honor_explicit_single_variant_project(app, client, include_outdated):
+    from src.models import Project, Variant, Vulnerability
+
+    vuln_id = "CVE-SYNTH-PROJECT-SCOPE"
+    with app.app_context():
+        project = Project.create("Explorer scope")
+        variant = Variant.create("Explorer board", project.id)
+        other_project = Project.create("Other scope")
+        Vulnerability.create_record(vuln_id)
+        query = {"variant_id": str(variant.id), "include_outdated": include_outdated}
+        project_id, other_project_id = str(project.id), str(other_project.id)
+
+    for selected_project, status in [(project_id, 200), (other_project_id, 400)]:
+        scope = {**query, "project_id": selected_project}
+        for path in ("/api/packages", "/api/vulnerabilities", f"/api/vulnerabilities/{vuln_id}"):
+            assert client.get(path, query_string=scope).status_code == status
+        response = client.post(
+            "/api/vulnerabilities/search-descriptions", query_string=scope,
+            json={"vulnerability_ids": [vuln_id], "terms": ["synthetic"]},
+        )
+        assert response.status_code == status
 
 
 # ---------------------------------------------------------------------------
@@ -861,6 +1115,602 @@ def test_current_packages_per_variant_keeps_supplier_identity(app, client):
         variant_id: ["cairo@1.16.0"],
     }
     assert "cairo@1.16.0::Other Supplier" not in vulnerability["packages_current"]
+
+
+def test_vulnerabilities_include_outdated_is_opt_in_and_scoped(app, client):
+    from datetime import datetime, timezone
+
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_observation import SBOMObservation
+    from src.models.sbom_package import SBOMPackage
+    from src.models.scan import Scan
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+
+    with app.app_context():
+        project = Project.create("OutdatedVulnerabilityProject")
+        variant = Variant.create("OutdatedVariant", project.id)
+        sibling = Variant.create("SiblingVariant", project.id)
+        old_package = Package.find_or_create("outdated-lib", "1.0", [], [], "")
+        current_package = Package.find_or_create("outdated-lib", "2.0", [], [], "")
+        sibling_package = Package.find_or_create("sibling-lib", "1.0", [], [], "")
+        original_supplier = Package.find_or_create("supplier-lib", "1.0", supplier="Original")
+        later_supplier = Package.find_or_create("supplier-lib", "1.0", supplier="Later")
+        supplierless_tool = Package.find_or_create("tool-lib", "1.0")
+        documented_tool = Package.find_or_create("tool-lib", "1.0", supplier="Documented")
+        later_tool = Package.find_or_create("tool-lib", "1.0", supplier="Later")
+        db.session.commit()
+
+        old_only = Vulnerability.create_record(
+            id="CVE-OUTDATED-ONLY-0001", description="Old package only", status="high",
+        )
+        shared = Vulnerability.create_record(
+            id="CVE-OUTDATED-SHARED-0001", description="Old and current package", status="high",
+        )
+        sibling_vulnerability = Vulnerability.create_record(
+            id="CVE-OUTDATED-SIBLING-0001", description="Sibling variant", status="high",
+        )
+        notes_only = Vulnerability.create_record(
+            id="CVE-OUTDATED-NOTES", description="Note without a package", status="high",
+        )
+        tool_only_finding_vuln = Vulnerability.create_record(
+            id="CVE-OUTDATED-RETAINED-TOOL", description="Reported by the active tool only", status="high",
+        )
+        db.session.commit()
+
+        old_only_finding = Finding.get_or_create(old_package.id, old_only.id)
+        shared_old_finding = Finding.get_or_create(old_package.id, shared.id)
+        shared_current_finding = Finding.get_or_create(current_package.id, shared.id)
+        sibling_finding = Finding.get_or_create(sibling_package.id, sibling_vulnerability.id)
+        supplier_finding = Finding.get_or_create(original_supplier.id, old_only.id)
+        supplierless_finding = Finding.get_or_create(supplierless_tool.id, old_only.id)
+        notes_sibling_finding = Finding.get_or_create(sibling_package.id, notes_only.id)
+        retained_tool_finding = Finding.get_or_create(current_package.id, tool_only_finding_vuln.id)
+        db.session.commit()
+
+        old_scan = Scan(
+            variant_id=variant.id, scan_type="sbom",
+            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        )
+        current_scan = Scan(
+            variant_id=variant.id, scan_type="sbom",
+            timestamp=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        )
+        sibling_scan = Scan(
+            variant_id=sibling.id, scan_type="sbom",
+            timestamp=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        )
+        stale_tool_scan = Scan(
+            variant_id=variant.id, scan_type="tool", scan_source="osv",
+            timestamp=datetime(2024, 3, 1, tzinfo=timezone.utc),
+        )
+        db.session.add_all([old_scan, current_scan, sibling_scan, stale_tool_scan])
+        db.session.flush()
+        old_document = SBOMDocument(
+            path="/outdated/old.spdx.json", source_name="old.spdx.json",
+            format="spdx", scan_id=old_scan.id,
+        )
+        current_document = SBOMDocument(
+            path="/outdated/current.spdx.json", source_name="current.spdx.json",
+            format="spdx", scan_id=current_scan.id,
+        )
+        sibling_document = SBOMDocument(
+            path="/outdated/sibling.spdx.json", source_name="sibling.spdx.json",
+            format="spdx", scan_id=sibling_scan.id,
+        )
+        tool_document = SBOMDocument(
+            path="/outdated/tool.grype.json", source_name="tool.grype.json",
+            format="grype", scan_id=stale_tool_scan.id,
+        )
+        db.session.add_all([old_document, current_document, sibling_document, tool_document])
+        db.session.flush()
+        db.session.add_all([
+            SBOMPackage(sbom_document_id=old_document.id, package_id=old_package.id),
+            SBOMPackage(sbom_document_id=current_document.id, package_id=current_package.id),
+            SBOMPackage(sbom_document_id=old_document.id, package_id=original_supplier.id),
+            SBOMPackage(sbom_document_id=current_document.id, package_id=later_supplier.id),
+            SBOMPackage(sbom_document_id=tool_document.id, package_id=documented_tool.id),
+            SBOMPackage(sbom_document_id=current_document.id, package_id=later_tool.id),
+            SBOMPackage(sbom_document_id=sibling_document.id, package_id=sibling_package.id),
+            Observation(finding_id=old_only_finding.id, scan_id=old_scan.id),
+            Observation(finding_id=supplier_finding.id, scan_id=old_scan.id),
+            Observation(finding_id=supplierless_finding.id, scan_id=stale_tool_scan.id),
+            Observation(finding_id=shared_old_finding.id, scan_id=old_scan.id),
+            Observation(finding_id=shared_old_finding.id, scan_id=stale_tool_scan.id),
+            Observation(finding_id=shared_current_finding.id, scan_id=current_scan.id),
+            Observation(finding_id=retained_tool_finding.id, scan_id=stale_tool_scan.id),
+            Observation(finding_id=sibling_finding.id, scan_id=sibling_scan.id),
+            Observation(finding_id=notes_sibling_finding.id, scan_id=sibling_scan.id),
+            SBOMObservation(
+                vulnerability_id=old_only.id,
+                sbom_document_id=old_document.id,
+                package_id=old_package.id,
+                key="description",
+                description="legacytoken found in the old SBOM",
+            ),
+            SBOMObservation(
+                vulnerability_id=old_only.id,
+                sbom_document_id=old_document.id,
+                package_id=original_supplier.id,
+                key="description",
+                description="Original supplier only",
+            ),
+            SBOMObservation(
+                vulnerability_id=notes_only.id,
+                sbom_document_id=old_document.id,
+                key="recommendation",
+                description="Scoped recommendation without an affected package",
+            ),
+        ])
+        db.session.commit()
+        variant_id = str(variant.id)
+        project_id = str(project.id)
+
+    current_response = client.get(f"/api/vulnerabilities?variant_id={variant_id}")
+    assert current_response.status_code == 200
+    current = {item["id"]: item for item in current_response.get_json()}
+    retained_id = "CVE-OUTDATED-RETAINED-TOOL"
+    assert set(current) == {"CVE-OUTDATED-SHARED-0001", retained_id}
+
+    outdated_response = client.get(
+        f"/api/vulnerabilities?variant_id={variant_id}&include_outdated=true"
+    )
+    assert outdated_response.status_code == 200
+    outdated = {item["id"]: item for item in outdated_response.get_json()}
+    assert set(outdated) == {
+        "CVE-OUTDATED-ONLY-0001", "CVE-OUTDATED-SHARED-0001", "CVE-OUTDATED-NOTES", retained_id,
+    }
+    assert outdated[retained_id]["packages_status_by_variant"] == {variant_id: ["outdated-lib@2.0"]}
+    assert outdated["CVE-OUTDATED-SHARED-0001"]["packages_current"] == [
+        "outdated-lib@2.0",
+    ]
+    for field in ("packages_current", "packages_current_by_variant"):
+        assert outdated["CVE-OUTDATED-SHARED-0001"][field] == current["CVE-OUTDATED-SHARED-0001"][field]
+    assert outdated["CVE-OUTDATED-SHARED-0001"]["packages_current_by_variant"] == {
+        variant_id: ["outdated-lib@2.0"],
+    }
+    assert outdated["CVE-OUTDATED-SHARED-0001"]["packages_status_by_variant"] == {
+        variant_id: ["outdated-lib@1.0", "outdated-lib@2.0"],
+    }
+    assert outdated["CVE-OUTDATED-ONLY-0001"]["packages_status_by_variant"] == {
+        variant_id: ["outdated-lib@1.0", "supplier-lib@1.0::Original", "tool-lib@1.0", "tool-lib@1.0::Documented"],
+    }
+    assert outdated["CVE-OUTDATED-ONLY-0001"]["packages"] == [
+        "outdated-lib@1.0", "supplier-lib@1.0::Original", "tool-lib@1.0", "tool-lib@1.0::Documented",
+    ]
+    assert outdated["CVE-OUTDATED-NOTES"]["packages"] == []
+    assert outdated["CVE-OUTDATED-NOTES"]["packages_status_by_variant"] == {}
+    notes_details = client.get(
+        f"/api/vulnerabilities/CVE-OUTDATED-NOTES?variant_id={variant_id}&include_outdated=true"
+    )
+    assert notes_details.status_code == 200
+    notes = notes_details.get_json()
+    assert notes["packages"] == notes["packages_current"] == []
+    assert notes["packages_status_by_variant"] == notes["packages_current_by_variant"] == {}
+
+    search_payload = {
+        "vulnerability_ids": ["CVE-OUTDATED-ONLY-0001"],
+        "terms": ["legacytoken"],
+    }
+    active_search = client.post(
+        f"/api/vulnerabilities/search-descriptions?variant_id={variant_id}",
+        json=search_payload,
+    )
+    assert active_search.get_json()["matches"]["legacytoken"] == []
+    historical_search = client.post(
+        f"/api/vulnerabilities/search-descriptions?variant_id={variant_id}&include_outdated=true",
+        json=search_payload,
+    )
+    assert historical_search.get_json()["matches"]["legacytoken"] == [
+        "CVE-OUTDATED-ONLY-0001",
+    ]
+
+    project_response = client.get(
+        f"/api/vulnerabilities?project_id={project_id}&include_outdated=true"
+    )
+    assert project_response.status_code == 200
+    project_ids = {item["id"] for item in project_response.get_json()}
+    assert "CVE-OUTDATED-SIBLING-0001" in project_ids
+
+
+def test_explorer_evidence_agrees_across_findings_packages_search_and_writes(app, client):
+    from datetime import datetime, timezone
+    from src.extensions import db
+    from src.models import Finding, Observation, Package, Project, SBOMDocument, SBOMObservation, SBOMPackage
+    from src.models import Scan, Variant, Vulnerability
+
+    removed_id, retained_id = "CVE-SYNTH-REMOVED", "CVE-SYNTH-RETAINED"
+    tool_old_id, tool_id = "CVE-SYNTH-TOOL-OLD", "CVE-SYNTH-TOOL"
+
+    with app.app_context():
+        project = Project.create("Shared evidence test")
+        base = Variant.create("Board A", project.id)
+        sibling = Variant.create("Board B", project.id)
+        tool = Variant.create("Tool-only board", project.id)
+        removed = Package.find_or_create("synthetic-removed", "1")
+        retained = Package.find_or_create("synthetic-retained", "1")
+        for vuln_id in (removed_id, retained_id, tool_old_id, tool_id):
+            Vulnerability.create_record(vuln_id)
+        removed_finding = Finding.get_or_create(removed.id, removed_id)
+        retained_finding = Finding.get_or_create(retained.id, retained_id)
+        tool_old_finding = Finding.get_or_create(removed.id, tool_old_id)
+        tool_finding = Finding.get_or_create(removed.id, tool_id)
+
+        def sbom(variant, day, packages, findings):
+            scan = Scan(variant_id=variant.id, timestamp=datetime(2026, 1, day, tzinfo=timezone.utc))
+            db.session.add(scan)
+            db.session.flush()
+            doc = SBOMDocument(scan_id=scan.id, path=f"/synthetic/{day}.json", source_name=f"{day}.json", format="cdx")
+            db.session.add(doc)
+            db.session.flush()
+            for package in packages:
+                db.session.add(SBOMPackage(sbom_document_id=doc.id, package_id=package.id))
+            for finding in findings:
+                db.session.add(Observation(scan_id=scan.id, finding_id=finding.id))
+                db.session.add(SBOMObservation(
+                    sbom_document_id=doc.id, vulnerability_id=finding.vulnerability_id, package_id=finding.package_id,
+                    key="test description", description=f"synthetic evidence day {day}",
+                ))
+
+        sbom(base, 1, [removed, retained], [removed_finding, retained_finding])
+        sbom(base, 2, [retained], [])
+        sbom(sibling, 3, [retained], [retained_finding])
+        for day, finding in ((1, tool_old_finding), (2, tool_finding)):
+            tool_scan = Scan(
+                variant_id=tool.id, timestamp=datetime(2026, 1, day, tzinfo=timezone.utc),
+                scan_type="tool", scan_source="osv",
+            )
+            db.session.add(tool_scan)
+            db.session.flush()
+            db.session.add(Observation(scan_id=tool_scan.id, finding_id=finding.id))
+        db.session.commit()
+        project_id, base_id, sibling_id, tool_variant_id = map(str, (project.id, base.id, sibling.id, tool.id))
+
+    def rows(path, query):
+        response = client.get(f"/api/{path}?{query}")
+        assert response.status_code == 200
+        return {row["id"]: row for row in response.get_json()}
+
+    current = f"project_id={project_id}"
+    historical = f"{current}&include_outdated=true"
+    assert set(rows("vulnerabilities", current)) == {retained_id, tool_id}
+    history = rows("vulnerabilities", historical)
+    assert set(history) == {removed_id, retained_id, tool_old_id, tool_id}
+    shared = history[retained_id]
+    assert shared["packages_current_by_variant"] == {sibling_id: ["synthetic-retained@1"]}
+    assert shared["assessment_targets_by_variant"] == shared["packages_current_by_variant"]
+    assert shared["packages_status_by_variant"] == {
+        base_id: ["synthetic-retained@1"], sibling_id: ["synthetic-retained@1"],
+    }
+    assert history[removed_id]["assessment_targets_by_variant"] == {}
+    assert history[tool_id]["packages_current_by_variant"] == {tool_variant_id: ["synthetic-removed@1"]}
+    assert history[tool_old_id]["packages_current"] == []
+    assert {removed_id, tool_old_id}.isdisjoint(rows("vulnerabilities", ""))
+    assert {retained_id, tool_id}.issubset(rows("vulnerabilities", ""))
+
+    for query, historical_view in ((current, False), (historical, True)):
+        inventory = rows("packages", query)
+        assert inventory["synthetic-retained@1"]["outdated"] is False
+        assert inventory["synthetic-retained@1"]["inventory_variant_ids"] == sorted([base_id, sibling_id])
+        assert ("synthetic-removed@1" in inventory) == historical_view
+        if historical_view:
+            assert inventory["synthetic-removed@1"]["inventory_variant_ids"] == [base_id]
+            assert inventory["synthetic-removed@1"]["outdated"] is True
+        detail = client.get(f"/api/vulnerabilities/{retained_id}?{query}").get_json()
+        assert detail == {**rows("vulnerabilities", query)[retained_id], "description": detail["description"]}
+        texts = {text["content"] for text in detail["texts"]}
+        matches = client.post(f"/api/vulnerabilities/search-descriptions?{query}", json={
+            "vulnerability_ids": [retained_id, removed_id], "terms": ["day 1", "day 3"],
+        }).get_json()["matches"]
+        assert ("synthetic evidence day 1" in texts) == historical_view
+        assert "synthetic evidence day 3" in texts
+        assert matches == {"day 1": sorted([removed_id, retained_id]) if historical_view else [], "day 3": [retained_id]}
+
+    pair = f"variant_id={base_id}&compare_variant_id={sibling_id}"
+    assert set(rows("vulnerabilities", pair)) == {retained_id}
+    assert not rows("vulnerabilities", f"{pair}&include_outdated=true")
+    multi = f"variant_ids={base_id},{sibling_id},{tool_variant_id}&operation=difference"
+    assert not rows("vulnerabilities", multi)
+    assert set(rows("vulnerabilities", f"{multi}&include_outdated=true")) == {removed_id}
+    assert set(rows("packages", f"{multi}&include_outdated=true")) == {"synthetic-removed@1"}
+    assert not rows("packages", f"variant_id={tool_variant_id}&include_outdated=true")
+
+    editor = client.get(f"/api/vulnerabilities/{retained_id}/variant-active-packages?{current}").get_json()
+    targets = {row["variant_id"]: row for row in editor}
+    assert targets[base_id]["active_packages"] == []
+    assert targets[base_id]["findings"][0]["outdated"] is True
+    assert targets[sibling_id]["active_packages"] == ["synthetic-retained@1"]
+    assert targets[sibling_id]["findings"][0]["outdated"] is False
+
+    batch = {"assessments": [{
+        "vuln_id": retained_id, "status": "fixed",
+        "targets": [{"variant_id": base_id, "package": "synthetic-retained@1"}],
+    }]}
+    assert client.post("/api/assessments/batch", json={**batch, "current_only": True}).status_code == 400
+    assert client.post("/api/assessments/batch", json=batch).status_code == 200
+
+
+def test_outdated_comparison_recomputes_difference_union_and_intersection(app, client):
+    from datetime import datetime, timezone
+
+    from src.extensions import db
+    from src.models.finding import Finding
+    from src.models.observation import Observation
+    from src.models.package import Package
+    from src.models.project import Project
+    from src.models.sbom_document import SBOMDocument
+    from src.models.sbom_observation import SBOMObservation
+    from src.models.sbom_package import SBOMPackage
+    from src.models.scan import Scan
+    from src.models.time_estimate import TimeEstimate
+    from src.models.variant import Variant
+    from src.models.vulnerability import Vulnerability
+
+    with app.app_context():
+        project = Project.create("OutdatedComparisonProject")
+        base = Variant.create("OutdatedBase", project.id)
+        compare = Variant.create("OutdatedCompare", project.id)
+        third = Variant.create("OutdatedThird", project.id)
+        sibling = Variant.create("OutdatedUnselected", project.id)
+        outside = Variant.create("Outside", Project.create("OutsideComparisonProject").id)
+
+        vulnerabilities = {
+            key: Vulnerability.create_record(
+                id=vuln_id, description=vuln_id, status="high",
+            )
+            for key, vuln_id in {
+                "shared": "CVE-OUTDATED-COMPARE-SHARED",
+                "compare": "CVE-OUTDATED-COMPARE-ONLY",
+                "base": "CVE-OUTDATED-BASE-ONLY",
+                "sibling": "CVE-OUTDATED-UNSELECTED",
+                "outside": "CVE-OUTDATED-OUTSIDE",
+            }.items()
+        }
+        db.session.commit()
+
+        packages = {
+            key: Package.find_or_create(name, version, [], [], "")
+            for key, name, version in [
+                ("shared", "comparison-shared", "1.0"),
+                ("base_current", "base-current", "2.0"),
+                ("compare_only", "compare-only", "1.0"),
+                ("base_only", "base-only", "1.0"),
+                ("sibling_only", "sibling-only", "1.0"),
+                ("outside", "outside-only", "1.0"),
+            ]
+        }
+        db.session.commit()
+
+        scan_specs = [
+            ("base_old", base, datetime(2024, 1, 1, tzinfo=timezone.utc),
+             ["shared", "base_only"]),
+            ("base_current", base, datetime(2024, 6, 1, tzinfo=timezone.utc),
+             ["base_current"]),
+            ("compare_current", compare, datetime(2024, 6, 1, tzinfo=timezone.utc),
+             ["shared", "compare_only"]),
+            ("third_current", third, datetime(2024, 6, 1, tzinfo=timezone.utc),
+             ["shared"]),
+            ("sibling_current", sibling, datetime(2024, 6, 1, tzinfo=timezone.utc),
+             ["sibling_only"]),
+            ("outside_current", outside, datetime(2024, 6, 1, tzinfo=timezone.utc),
+             ["outside"]),
+        ]
+        scans = {}
+        documents = {}
+        for key, variant, timestamp, _package_keys in scan_specs:
+            scan = Scan(
+                variant_id=variant.id, scan_type="sbom", timestamp=timestamp,
+            )
+            db.session.add(scan)
+            scans[key] = scan
+        db.session.flush()
+        for key, _variant, _timestamp, package_keys in scan_specs:
+            document = SBOMDocument(
+                path=f"/outdated-comparison/{key}.spdx.json",
+                source_name=f"{key}.spdx.json",
+                format="spdx",
+                scan_id=scans[key].id,
+            )
+            db.session.add(document)
+            documents[key] = document
+        db.session.flush()
+        for key, _variant, _timestamp, package_keys in scan_specs:
+            for package_key in package_keys:
+                db.session.add(SBOMPackage(
+                    sbom_document_id=documents[key].id,
+                    package_id=packages[package_key].id,
+                ))
+
+        third_tool = Scan(
+            variant_id=third.id, scan_type="tool", scan_source="osv",
+            timestamp=datetime(2024, 3, 1, tzinfo=timezone.utc),
+        )
+        db.session.add(third_tool)
+        db.session.flush()
+        scans["third_tool"] = third_tool
+        observation_specs = [
+            ("base_old", "shared", "shared"),
+            ("base_old", "base_only", "base"),
+            ("compare_current", "shared", "shared"),
+            ("compare_current", "compare_only", "compare"),
+            ("third_tool", "shared", "shared"),
+            ("sibling_current", "sibling_only", "sibling"),
+            ("sibling_current", "sibling_only", "shared"),
+            ("outside_current", "outside", "shared"),
+            ("outside_current", "outside", "base"),
+            ("outside_current", "outside", "outside"),
+        ]
+        for scan_key, package_key, vulnerability_key in observation_specs:
+            finding = Finding.get_or_create(
+                packages[package_key].id, vulnerabilities[vulnerability_key].id,
+            )
+            db.session.add(Observation(
+                finding_id=finding.id, scan_id=scans[scan_key].id,
+            ))
+        db.session.add_all([
+            SBOMObservation(
+                vulnerability_id=vulnerabilities["shared"].id,
+                sbom_document_id=documents[scan_key].id,
+                key="description",
+                description=term,
+            )
+            for scan_key, term in [
+                ("base_old", "basehistoricalterm"), ("sibling_current", "unselectedterm"),
+                ("outside_current", "outsideprojectterm"),
+            ]
+        ])
+        db.session.commit()
+        foreign_finding = Finding.get_or_create(packages["outside"].id, vulnerabilities["base"].id)
+        TimeEstimate.create(finding_id=foreign_finding.id, variant_id=outside.id, optimistic=1, likely=2, pessimistic=3)
+        base_id, compare_id, third_id, project_id = map(
+            str, (base.id, compare.id, third.id, project.id),
+        )
+
+    pair_base = f"/api/vulnerabilities?variant_id={base_id}&compare_variant_id={compare_id}"
+    active_pair = client.get(pair_base)
+    assert {item["id"] for item in active_pair.get_json()} == {
+        "CVE-OUTDATED-COMPARE-SHARED", "CVE-OUTDATED-COMPARE-ONLY",
+    }
+
+    outdated_pair = client.get(f"{pair_base}&include_outdated=true")
+    assert {item["id"] for item in outdated_pair.get_json()} == {
+        "CVE-OUTDATED-COMPARE-ONLY",
+    }
+    outdated_pair_intersection = client.get(
+        f"{pair_base}&operation=intersection&include_outdated=true"
+    )
+    assert {item["id"] for item in outdated_pair_intersection.get_json()} == {
+        "CVE-OUTDATED-COMPARE-SHARED",
+    }
+
+    multi_base = f"/api/vulnerabilities?variant_ids={base_id},{compare_id},{third_id}"
+    active_union = {
+        row["id"]: row["effort_variant_ids"] for row in client.get(f"{multi_base}&operation=union").get_json()
+    }
+    assert active_union["CVE-OUTDATED-COMPARE-SHARED"] == [compare_id, third_id]
+    multi_difference = client.get(
+        f"{multi_base}&operation=difference&include_outdated=true"
+    )
+    assert {item["id"]: item["effort_variant_ids"] for item in multi_difference.get_json()} == {
+        "CVE-OUTDATED-BASE-ONLY": [base_id],
+    }
+    multi_union = client.get(f"{multi_base}&operation=union&include_outdated=true")
+    assert {item["id"]: item["effort_variant_ids"] for item in multi_union.get_json()} == {
+        "CVE-OUTDATED-COMPARE-SHARED": [base_id, compare_id, third_id],
+        "CVE-OUTDATED-COMPARE-ONLY": [compare_id],
+        "CVE-OUTDATED-BASE-ONLY": [base_id],
+    }
+    multi_intersection = client.get(
+        f"{multi_base}&operation=intersection&include_outdated=true"
+    )
+    assert {item["id"] for item in multi_intersection.get_json()} == {
+        "CVE-OUTDATED-COMPARE-SHARED",
+    }
+
+    scope = f"project_id={project_id}&include_outdated=true"
+    base_only_id = "CVE-OUTDATED-BASE-ONLY"
+    project_rows = client.get(f"/api/vulnerabilities?{scope}").get_json()
+    project_row = next(row for row in project_rows if row["id"] == base_only_id)
+    project_details = client.get(f"/api/vulnerabilities/{base_only_id}?{scope}").get_json()
+    assert project_row["effort"] == project_details["effort"] == dict.fromkeys(("optimistic", "likely", "pessimistic"))
+
+    shared_id = "CVE-OUTDATED-COMPARE-SHARED"
+    for historical in (False, True):
+        project_scope = {"project_id": project_id, "include_outdated": str(historical).lower()}
+        for filters, expected_count in [
+            ({}, 4 if historical else 3),
+            ({"variant_id": compare_id}, 2),
+            ({"variant_ids": f"{base_id},{compare_id},{third_id}", "operation": "union"}, 3 if historical else 2),
+        ]:
+            params = {**project_scope, **filters}
+            entries = client.get("/api/vulnerabilities", query_string=params).get_json()
+            assert len(entries) == expected_count
+            inventory = client.get("/api/packages", query_string=params).get_json()
+            assert "outside-only@1.0" not in {item["id"] for item in inventory}
+            shared_row = next(row for row in entries if row["id"] == shared_id)
+            assert "outside-only@1.0" not in shared_row["packages"]
+            detail = client.get(f"/api/vulnerabilities/{shared_id}", query_string=params).get_json()
+            assert detail["packages"] == shared_row["packages"]
+            assert all(text["content"] != "outsideprojectterm" for text in detail["texts"])
+            matches = client.post(
+                "/api/vulnerabilities/search-descriptions", query_string=params,
+                json={"vulnerability_ids": [shared_id, "CVE-OUTDATED-OUTSIDE"],
+                      "terms": ["outsideprojectterm", "CVE-OUTDATED-OUTSIDE"]},
+            ).get_json()
+            assert matches["matches"] == {"outsideprojectterm": [], "cve-outdated-outside": []}
+
+    for scope, expected in (
+        (f"variant_id={base_id}&compare_variant_id={compare_id}&operation=intersection", []),
+        (f"project_id={project_id}&variant_ids={base_id},{compare_id},{third_id}&operation=union", []),
+        (f"project_id={project_id}", [shared_id]),
+    ):
+        result = client.post(
+            f"/api/vulnerabilities/search-descriptions?{scope}&include_outdated=true",
+            json={
+                "vulnerability_ids": [shared_id],
+                "terms": ["basehistoricalterm", "unselectedterm"],
+            },
+        )
+        assert result.status_code == 200
+        assert result.get_json()["matches"] == {
+            "basehistoricalterm": [shared_id],
+            "unselectedterm": expected,
+        }
+        details = client.get(f"/api/vulnerabilities/{shared_id}?{scope}&include_outdated=true")
+        assert details.status_code == 200
+        detail = details.get_json()
+        rows = client.get(f"/api/vulnerabilities?{scope}&include_outdated=true").get_json()
+        scoped_row = next(row for row in rows if row["id"] == shared_id)
+        for key in ("packages", "packages_status_by_variant", "packages_current", "packages_current_by_variant",
+                    "assessment_targets_by_variant"):
+            assert detail[key] == scoped_row[key]
+        assert "outside-only@1.0" not in detail["packages"]
+        text_contents = {text["content"] for text in detail["texts"]}
+        assert "basehistoricalterm" in text_contents
+        assert ("unselectedterm" in text_contents) == bool(expected)
+
+    for scope in (f"variant_id={base_id}&compare_variant_id={compare_id}",
+                  f"variant_ids={compare_id},{base_id},{third_id}&operation=difference"):
+        details = client.get(f"/api/vulnerabilities/{shared_id}?{scope}&include_outdated=true")
+        assert details.status_code == 200
+        text_contents = {text["content"] for text in details.get_json()["texts"]}
+        assert "basehistoricalterm" not in text_contents
+        assert "unselectedterm" not in text_contents
+
+
+def test_agent_vulnerability_detail_requires_one_variant_with_exact_current_targets(app, client):
+    from src.models import Finding, Observation, Package, Project, Scan, Variant, Vulnerability
+
+    vuln_id = "CVE-2099-12347"
+    with app.app_context():
+        project = Project.create("Agent detail fixture")
+        base = Variant.create("base", project.id).id
+        compared = Variant.create("compared", project.id).id
+        scan = Scan.create("Synthetic observations", compared)
+        Vulnerability.create_record(id=vuln_id, description="Synthetic observation")
+        package = Package.find_or_create("agent-detail-fixture", "1")
+        finding = Finding.get_or_create(package.id, vuln_id)
+        Observation.create(finding.id, scan.id)
+
+    route = f"/api/vulnerabilities/{vuln_id}"
+    pair = f"variant_id={base}&compare_variant_id={compared}&operation=difference"
+    exact = {str(compared): ["agent-detail-fixture@1"]}
+    assert client.get(f"{route}?{pair}").get_json()["assessment_targets_by_variant"] == exact
+    assert client.get(f"{route}?{pair}&agent_scoped=1").status_code == 400
+    assert client.get(f"{route}?variant_ids={base},{compared}&agent_scoped=1").status_code == 400
+    assert client.get(f"{route}?agent_scoped=1").status_code == 400
+    assert client.get(f"{route}?variant_id={base}&agent_scoped=1").status_code == 404
+    details = client.get(f"{route}?variant_id={compared}&include_outdated=true&agent_scoped=1")
+    assert details.status_code == 200
+    row = details.get_json()
+    assert row["packages"] == row["packages_current"] == ["agent-detail-fixture@1"]
+    assert row["assessment_targets_by_variant"] == row["packages_current_by_variant"] == exact
+    assert "packages_status_by_variant" not in row
 
 
 def test_get_vulnerability_by_id_with_variant_scope(app, client):
@@ -1272,7 +2122,7 @@ def test_populate_found_by_handles_non_string_doc_formats(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_found_by_spdx_format(app, client):
-    """When earliest scan has an SPDX SBOMDocument, found_by should contain 'spdx3'."""
+    """An active SPDX SBOMDocument contributes 'spdx3' provenance."""
     from src.extensions import db
     from src.models.scan import Scan
     from src.models.sbom_document import SBOMDocument
@@ -1300,7 +2150,7 @@ def test_found_by_spdx_format(app, client):
         scan = Scan(
             id=_uuid.uuid4(),
             variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
-            timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            timestamp=datetime(2099, 1, 1, tzinfo=timezone.utc),
         )
         db.session.add(scan)
         spdx_doc = SBOMDocument(
@@ -1324,13 +2174,14 @@ def test_found_by_spdx_format(app, client):
 
 
 def test_found_by_tool_scan_nvd(app, client):
-    """When earliest scan is a tool scan with scan_source='nvd', found_by should contain 'nvd_cpe'."""
+    """An active NVD tool scan in a variant without an SBOM contributes provenance."""
     from src.extensions import db
     from src.models.scan import Scan
     from src.models.observation import Observation
     from src.models.finding import Finding
     from src.models.package import Package
     from src.models.vulnerability import Vulnerability
+    from src.models.variant import Variant
     from datetime import datetime, timezone
 
     with app.app_context():
@@ -1345,9 +2196,11 @@ def test_found_by_tool_scan_nvd(app, client):
         finding = Finding.get_or_create(pkg.id, "CVE-NVD-0001")
 
         import uuid as _uuid
+        existing_variant = db.session.get(Variant, _uuid.UUID("22222222-2222-2222-2222-222222222222"))
+        tool_variant = Variant.create("NVD-only provenance", existing_variant.project_id)
         scan = Scan(
             id=_uuid.uuid4(),
-            variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
+            variant_id=tool_variant.id,
             scan_type="tool",
             scan_source="nvd",
             timestamp=datetime(2019, 1, 1, tzinfo=timezone.utc),
@@ -1392,7 +2245,7 @@ def test_found_by_mixed_formats_reports_all(app, client):
         scan = Scan(
             id=_uuid.uuid4(),
             variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
-            timestamp=datetime(2018, 1, 1, tzinfo=timezone.utc),
+            timestamp=datetime(2099, 1, 1, tzinfo=timezone.utc),
         )
         db.session.add(scan)
         # Two docs in the same scan: spdx + grype
@@ -1448,7 +2301,7 @@ def test_found_by_yocto_cve_check_mapping(app, client):
         scan = Scan(
             id=_uuid.uuid4(),
             variant_id=_uuid.UUID("22222222-2222-2222-2222-222222222222"),
-            timestamp=datetime(2016, 1, 1, tzinfo=timezone.utc),
+            timestamp=datetime(2099, 1, 1, tzinfo=timezone.utc),
         )
         db.session.add(scan)
         yocto_doc = SBOMDocument(

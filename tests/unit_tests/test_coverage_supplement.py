@@ -633,23 +633,33 @@ class TestConditionParserNullParsed:
 
 
 # ===========================================================================
-# apply_effort — exception branch (vuln_helpers.py lines 105-106)
+# apply_effort — write failure
 # ===========================================================================
 
 class TestApplyEffortExceptionBranch:
-    """Cover the except block in apply_effort by making findings raise."""
-
-    def test_exception_is_swallowed(self):
+    def test_write_failure_is_reported_and_rolls_back(self, app, monkeypatch):
+        from sqlalchemy.exc import SQLAlchemyError
         from src.helpers.vuln_helpers import apply_effort, Effort
+        from src.models import Finding, Package, Project, TimeEstimate, Variant, Vulnerability
 
-        class _BrokenRecord:
-            @property
-            def findings(self):
-                raise RuntimeError("db exploded")
+        project = Project.create("Effort rollback")
+        first = Variant.create("first", project.id)
+        second = Variant.create("second", project.id)
+        first_id, second_id = first.id, second.id
+        vulnerability = Vulnerability.create_record("TEST-EFFORT-ROLLBACK")
+        package = Package.find_or_create("effort-rollback", "1")
+        Finding.get_or_create(package.id, vulnerability.id)
+        create = TimeEstimate.create
 
-        effort = Effort(optimistic=1, likely=2, pessimistic=4)
-        # Must not raise — the except block swallows the error.
-        apply_effort(_BrokenRecord(), None, effort)
+        def fail_second_write(**kwargs):
+            if kwargs["variant_id"] == second_id:
+                raise SQLAlchemyError("Simulated write failure")
+            return create(**kwargs)
+
+        monkeypatch.setattr(TimeEstimate, "create", fail_second_write)
+        assert apply_effort(vulnerability, [first_id, second_id], Effort(1, 2, 4)) == "Failed to save time estimate"
+        assert TimeEstimate.get_by_variant(first_id) == []
+        assert TimeEstimate.get_by_variant(second_id) == []
 
 
 # ===========================================================================

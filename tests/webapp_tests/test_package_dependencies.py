@@ -175,7 +175,7 @@ def _import_grouping_documents(tmp_path, variant, documents):
 
 def _import_legacy_components(tmp_path, variant, documents, monkeypatch):
     with monkeypatch.context() as patch:
-        patch.setattr('src.helpers.jsonld_storage.consolidate_jsonld_packages', lambda session: False)
+        patch.setattr('src.helpers.jsonld_storage.consolidate_jsonld_packages', lambda session, **kwargs: False)
         return _import_grouping_documents(tmp_path, variant, documents)
 
 
@@ -202,6 +202,80 @@ def test_real_zephyr_compiler_metadata_survives_ingestion_and_api(app, tmp_path)
     db.session.expire_all()
     stored = SBOMDocument.get_by_scan(scan_id)[0].build_targets
     assert next(item for item in stored if item['id'] == target['id'])['languages'] == target['languages']
+
+
+def test_postgresql_jsonld_import_locks_variant_before_scan_document_rows(postgres_app, tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import nullcontext
+    from queue import Queue
+    from threading import Event
+    from time import monotonic, sleep
+
+    from src.bin import cmd_process
+    from src.extensions import batch_session
+    from src.models import scan as scan_model
+
+    with postgres_app.app_context():
+        engine = db.engine
+        project = Project.create('jsonld-lock')
+        variant = Variant.create('default', project.id)
+        scan_id = Scan.create('Synthetic JSON-LD scan', variant.id).id
+        for name, content in _grouping_documents().items():
+            path = tmp_path / f'{name}.jsonld'
+            path.write_text(json.dumps(content))
+            SBOMDocument.create(str(path), path.name, scan_id, format='spdx')
+
+    staged, release = Event(), Event()
+    importer_pid, deleter_pid = Queue(), Queue()
+    record_groups = cmd_process.record_jsonld_groups
+
+    def stage_group_changes(*args):
+        record_groups(*args)
+        db.session.flush()
+        assert any(document.jsonld_groups for document in SBOMDocument.get_by_scan(scan_id))
+        staged.set()
+        assert release.wait(8)
+
+    def import_documents():
+        with postgres_app.app_context(), batch_session():
+            importer_pid.put(db.session.scalar(text('SELECT pg_backend_pid()')))
+            read_inputs(ControllersCache(), scan_id)
+
+    def delete_scan():
+        with postgres_app.app_context():
+            deleter_pid.put(db.session.scalar(text('SELECT pg_backend_pid()')))
+            Scan.get_by_id(scan_id).delete()
+
+    monkeypatch.setattr(cmd_process, 'record_jsonld_groups', stage_group_changes)
+    # Prior SQLite fixtures can enable the process-wide SQLite write lock.
+    monkeypatch.setattr(scan_model, 'write_lock', nullcontext)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        importing = workers.submit(import_documents)
+        try:
+            assert staged.wait(5)
+            deleting = workers.submit(delete_scan)
+            importer = importer_pid.get(timeout=5)
+            deleter = deleter_pid.get(timeout=5)
+            deadline = monotonic() + 5
+            with engine.connect().execution_options(isolation_level='AUTOCOMMIT') as connection:
+                while True:
+                    query, blockers = connection.execute(text(
+                        'SELECT query, pg_blocking_pids(pid) FROM pg_stat_activity WHERE pid = :pid'
+                    ), {'pid': deleter}).one()
+                    if importer in blockers:
+                        assert query.startswith('SELECT variants.id'), query
+                        break
+                    assert not deleting.done()
+                    assert monotonic() < deadline, 'Scan deletion did not wait for import'
+                    sleep(0.01)
+        finally:
+            release.set()
+        importing.result()
+        deleting.result()
+
+    with postgres_app.app_context():
+        assert Scan.get_by_id(scan_id) is None
+        assert not SBOMDocument.get_by_scan(scan_id)
 
 
 @pytest.mark.parametrize('reverse', [False, True])

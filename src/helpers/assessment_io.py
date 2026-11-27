@@ -844,6 +844,7 @@ def build_custom_data_export(
     from ..models.time_estimate import TimeEstimate
     from ..models.iso8601_duration import Iso8601Duration
     from ..models.variant import Variant as DBVariant
+    from .vuln_helpers import estimate_has_variant_observation
 
     handmade = DBAssessment.get_by_origin(variant_ids, origin="custom")
     pending_ai = DBAssessment.get_by_origin(variant_ids, origin="ai")
@@ -955,13 +956,7 @@ def build_custom_data_export(
             TimeEstimate.pessimistic,
         )
         .join(_Finding, TimeEstimate.finding_id == _Finding.id)
-        .where(
-            db.or_(
-                TimeEstimate.optimistic > 0,
-                TimeEstimate.likely > 0,
-                TimeEstimate.pessimistic > 0,
-            )
-        )
+        .order_by(estimate_has_variant_observation().desc(), TimeEstimate.id)
     )
     if variant_ids is not None:
         te_query = te_query.where(TimeEstimate.variant_id.in_(variant_ids))
@@ -969,8 +964,6 @@ def build_custom_data_export(
 
     seen_vulns_te: set[tuple[str, str]] = set()
     for vid, te_variant_id, opt, lik, pes in te_rows:
-        if te_variant_id is not None:
-            variant_uuid_set.add(te_variant_id)
         variant_key = str(te_variant_id) if te_variant_id is not None else ""
         dedup_key = (vid, variant_key)
         if dedup_key in seen_vulns_te:
@@ -979,6 +972,10 @@ def build_custom_data_export(
         opt = opt or 0
         lik = lik or 0
         pes = pes or 0
+        if max(opt, lik, pes) <= 0:
+            continue
+        if te_variant_id is not None:
+            variant_uuid_set.add(te_variant_id)
         time_estimates.append({
             "vuln_id": vid,
             "variant": None,
@@ -1535,8 +1532,10 @@ def import_custom_data(
                     target_variant_ids = [None]
 
             assert effort is not None
-            for target_variant_id in target_variant_ids:
-                apply_effort(record, target_variant_id, effort, log_prefix="import-custom-data")
+            effort_error = apply_effort(record, target_variant_ids, effort, log_prefix="import-custom-data")
+            if effort_error:
+                result["errors"].append({"vuln_id": vuln_id, "error": effort_error})
+                continue
             result["time_estimates_imported"] += 1
 
     if (

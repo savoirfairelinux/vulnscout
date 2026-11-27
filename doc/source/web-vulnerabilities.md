@@ -1,6 +1,6 @@
 # Vulnerability Table
 
-Every vulnerability detected across imported SBOMs in your scope is listed here, and the toolbar across the top provides a rich set of controls to narrow down what you see and act on what matters. The vulnerability pool is scoped to the **current scan result** — only vulnerabilities whose findings belong to packages present in the active SBOM are shown, ensuring that stale or cross-variant findings do not appear.
+The vulnerability table shows the **current scan results** in your scope by default. Running tool scans do not replace completed results or contribute findings until they finish successfully. Current package targets are limited to the active SBOM of each variant when one exists. In a variant with only tool scans, exact findings from its active tool scans can still be current targets.
 
 ## Search
 
@@ -28,8 +28,9 @@ VulnScout provides several filter categories, each accessible from a dedicated d
   the newest assessment for each package/variant target in the selected scope.
   Historical assessments superseded for the same target do not contribute;
   updating one package does not hide another package's status. Status filters
-  match any listed status, and a vulnerability remains active while any current
-  target is active.
+  match any listed status. Selected statuses remain visible in the filter so
+  you can clear them even if the current scope has no matches. A vulnerability
+  remains active while any package target in the summary is active.
 - **Packages**: restrict the table to vulnerabilities affecting one or more of the selected packages.
   Use **Select all** to check every package or **Deselect all** to clear even a partial selection.
   Type in the search box to narrow the list. **Select all matching** and **Deselect all matching**
@@ -40,10 +41,40 @@ VulnScout provides several filter categories, each accessible from a dedicated d
   - **EPSS Range**: a percentage-based range slider that narrows the list to vulnerabilities whose Exploit Prediction Scoring System score falls within the specified band.
   - **Attack Vector**: checkboxes for Network, Adjacent, Local, and Physical, reflecting the CVSS attack-vector metric.
   - **First Scan Date**: multi-select by scan timestamp, useful for identifying which vulnerabilities appeared in a particular import run.
+- **Evidence mode**: select **Current** (the default) or **Ever observed**
+  below the variant controls in the navigation bar's **Project & Variant**
+  selector, available on every tab. Click **Apply** to confirm the evidence
+  mode and any project, variant, or comparison edits. Closing the selector
+  without applying discards pending changes. The applied mode carries between
+  tabs and affects Vulnerabilities, SBOM, and Metrics. **Ever observed** includes
+  both current and historical findings in the selected scope. A finding can be
+  historical even when the same package version is still installed, or the
+  same CVE and package are still current in a sibling variant. A later SBOM
+  can remove a tool finding from current results without removing it from
+  **Ever observed**. Description
+  search, hover, details, and statuses follow the selected mode and comparison
+  scope. Bulk status changes still require exact current targets and reject
+  the entire batch if one is no longer current. Deliberate historical edits
+  remain available in the assessment editor for findings from published
+  scans. A running scan does not make its findings editable.
 
-When any filter is active, a small checkmark badge appears on its button so you can tell at a glance which filters are engaged. A **Reset Filters** button in the top-right corner clears everything back to defaults.
+Active filter dropdowns show a small checkmark. **Reset Filters** clears the
+table filters without changing the shared evidence mode.
+
+When you open **Show Vulnerabilities** from the SBOM table with a match
+condition applied, switching evidence modes re-evaluates the condition
+against the clicked package row's variant memberships in the new mode.
+Condition status uses the newest assessment that targets visible evidence,
+and SBOM match counts are specific to each package row.
 
 ## Row Selection and Bulk Editing
+
+Bulk status edits use exact current findings; a supplier match shown in the
+table does not by itself make that package writable. In a multi-variant
+comparison, bulk effort edits update only variants that contributed findings
+for each selected row. In Difference, only the first variant can be updated.
+Historical findings can still receive effort estimates, but a bulk effort edit
+is not submitted if any selected row has no finding-backed target.
 
 Each row has a checkbox on the left. Selecting one or more rows reveals the
 **multi-edit bar**, which applies a single assessment (status, justification,

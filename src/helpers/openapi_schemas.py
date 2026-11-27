@@ -136,7 +136,7 @@ SCHEMAS: dict[str, Any] = {
             "source": {"type": "string", "enum": ["sbom", "purl", "cpe", "download"]},
         }, ("version", "identifier", "source"))),
         "variants": _STRINGS, "sources": _STRINGS, "sbom_documents": _STRINGS,
-        "outdated": _BOOL, "variant_id": _UUID, "finding_ids": _UUIDS,
+        "outdated": _BOOL, "variant_id": _UUID, "inventory_variant_ids": _UUIDS, "finding_ids": _UUIDS,
         "vulnerability_ids": _VULNS,
     }, ("id", "name", "version")),
     "PackageCollection": {
@@ -187,6 +187,9 @@ SCHEMAS: dict[str, Any] = {
         "effort": _ref("Effort"), "advisories": _STRINGS,
         "packages": _PACKAGES, "packages_current": _PACKAGES,
         "packages_current_by_variant": _map(_PACKAGES),
+        "packages_status_by_variant": _map(_PACKAGES),
+        "assessment_targets_by_variant": _map(_PACKAGES),
+        "effort_variant_ids": _array(_UUID),
         "published": _TEXT, "data_fetched_at": _DATE, "data_updated_at": _DATE,
         "nvd_fetched_at": _DATE, "ghsa_fetched_at": _DATE, "euvd_fetched_at": _DATE,
         "first_scan_date": _DATE, "texts": _array(_ref("VulnerabilityText")),
@@ -293,11 +296,16 @@ SCHEMAS: dict[str, Any] = {
         "Status cannot be supplied, even if unchanged. Omit every field to approve unchanged."
     )),
     "AssessmentBatch": _object({
+        "current_only": {"type": "boolean", "default": False, "description": "Require exact active targets."},
         "assessments": _array(_object({
             **_VEX_FIELDS, "vuln_id": _VULN_ID, "packages": _array(_PACKAGE_ID, minItems=1),
             "variant_id": _UUID, "variant_ids": _array(_UUID, minItems=1), "timestamp": _STRING,
-        }, ("vuln_id", "status", "packages"), anyOf=[
-            {"required": ["variant_id"]}, {"required": ["variant_ids"]},
+            "targets": _array(_object({
+                "variant_id": _UUID, "package": _PACKAGE_ID,
+            }, ("variant_id", "package")), minItems=1),
+        }, ("vuln_id", "status"), anyOf=[
+            {"required": ["targets"]}, {"required": ["packages", "variant_id"]},
+            {"required": ["packages", "variant_ids"]},
         ])),
     }, ("assessments",)),
     "AssessmentReconcile": _object({

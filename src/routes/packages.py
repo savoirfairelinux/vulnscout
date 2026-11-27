@@ -5,21 +5,53 @@ import uuid
 
 from flask import Flask
 from flask.typing import ResponseReturnValue
+from sqlalchemy import case, func
 
-from ..models.package import Package
-from ..models.finding import Finding
-from ..models.observation import Observation
-from ..models.scan import Scan
-from ..models.variant import Variant
-from ..models.sbom_document import SBOMDocument
-from ..models.sbom_package import SBOMPackage, PackageEvidence
 from ..extensions import db
-from ..helpers.active_scans import (
-    active_sbom_scan_ids_for_variant,
-    active_sbom_scan_ids_for_project,
-)
-from ._scan_queries import _packages_by_scan_ids, _package_rows
-from ._scan_helpers import parse_uuid_or_400
+from ..models import Finding, Observation, Package, Scan
+from ..models.sbom_package import SBOMPackage, PackageEvidence
+from ._scan_queries import _package_rows
+from ._evidence_scope import package_evidence, resolve_evidence_scope
+
+
+def _exact_package_ids(string_id: str) -> set[uuid.UUID]:
+    # Package names and versions can themselves contain identifier separators.
+    names = {string_id[:offset] for offset, char in enumerate(string_id) if char == "@"}
+    if not names:
+        return set()
+    name_matches = [Package.name.in_(names)]
+    if "None" in names:
+        name_matches.append(Package.name.is_(None))
+    supplier_suffix = case((Package.supplier != "", "::" + Package.supplier), else_="")
+    identifier = func.coalesce(Package.name, "None") + "@" + func.coalesce(Package.version, "None") + supplier_suffix
+    return set(db.session.scalars(db.select(Package.id).where(
+        db.or_(*name_matches), identifier == string_id,
+    )))
+
+
+def _historical_package_links(
+    keys: set[tuple[uuid.UUID, uuid.UUID]],
+) -> dict[tuple[uuid.UUID, uuid.UUID], tuple[set[str], set[str]]]:
+    links: dict[tuple[uuid.UUID, uuid.UUID], tuple[set[str], set[str]]] = {}
+    if keys:
+        rows = db.session.execute(
+            db.select(Finding.package_id, Scan.variant_id, Finding.id, Finding.vulnerability_id)
+            .join(Observation, Observation.finding_id == Finding.id)
+            .join(Scan, Scan.id == Observation.scan_id)
+            .where(
+                Finding.package_id.in_({pid for pid, _ in keys}),
+                Scan.variant_id.in_({vid for _, vid in keys}),
+                Scan.in_progress.is_(False),
+            )
+            .distinct()
+        )
+        for package_id, variant_id, finding_id, vuln_id in rows:
+            key = (package_id, variant_id)
+            if key in keys:
+                findings, vulnerabilities = links.setdefault(key, (set(), set()))
+                findings.add(str(finding_id))
+                vulnerabilities.add(vuln_id)
+    return links
 
 
 def init_app(app: Flask) -> None:
@@ -43,346 +75,88 @@ def init_app(app: Flask) -> None:
         query include_outdated boolean optional Include superseded package evidence within the selected scope.
         query outdated_only boolean optional Return only superseded package evidence.
         response 200 PackageCollection Filtered package collection; an array by default, or a map with format=dict.
-        response 400 Error Invalid identifiers or missing scope for outdated packages.
+        response 400 Error Invalid identifiers or evidence scope.
         """
         from flask import request
-        variant_id = request.args.get('variant_id')
-        project_id = request.args.get('project_id')
-        compare_variant_id = request.args.get('compare_variant_id')
-        variant_ids = request.args.get('variant_ids')
-        include_outdated = request.args.get('include_outdated', '').lower() in ('1', 'true', 'yes')
         outdated_only = request.args.get('outdated_only', '').lower() in ('1', 'true', 'yes')
-        include_outdated = include_outdated or outdated_only
-        if include_outdated and not any((variant_id, project_id, variant_ids)):
+        if outdated_only and not any(request.args.get(key) for key in ("variant_id", "project_id", "variant_ids")):
             return {"error": "A variant or project scope is required for outdated packages"}, 400
-        scope_variant_ids: list[uuid.UUID] = []
-        if variant_id and compare_variant_id:
-            base_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
-            if err:
-                return err
-            if base_uuid is None:
-                return {"error": "Internal error"}, 500
-            compare_uuid, err = parse_uuid_or_400(compare_variant_id, "compare_variant_id")
-            if err:
-                return err
-            if compare_uuid is None:
-                return {"error": "Internal error"}, 500
-            scope_variant_ids = [compare_uuid]
-            operation = request.args.get('operation', 'difference')
-
-            def _pkg_ids_for_variant(variant_uuid: uuid.UUID) -> set[uuid.UUID]:
-                scan_ids = active_sbom_scan_ids_for_variant(variant_uuid)
-                if not scan_ids:
-                    return set()
-                return set(db.session.execute(
-                    db.select(Package.id)
-                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id.in_(scan_ids))
-                    .distinct()
-                ).scalars().all())
-
-            if outdated_only:
-                pkgs = []
-            elif operation == 'intersection':
-                base_ids = _pkg_ids_for_variant(base_uuid)
-                compare_ids = _pkg_ids_for_variant(compare_uuid)
-                result_ids = list(base_ids & compare_ids)
-                pkgs = list(db.session.execute(
-                    db.select(Package)
-                    .where(Package.id.in_(result_ids))
-                    .order_by(Package.name)
-                ).scalars().all()) if result_ids else []
-            else:  # difference (default): packages in compare but NOT in base
-                exclude_ids = list(_pkg_ids_for_variant(base_uuid))
-                compare_scan_ids = active_sbom_scan_ids_for_variant(compare_uuid)
-                if not compare_scan_ids:
-                    pkgs = []
-                else:
-                    pkg_ids_sub = (
-                        db.select(Package.id)
-                        .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                        .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                        .where(SBOMDocument.scan_id.in_(compare_scan_ids))
-                        .distinct()
-                    )
-                    if exclude_ids:
-                        pkg_ids_sub = pkg_ids_sub.where(~Package.id.in_(exclude_ids))
-                    pkgs = list(db.session.execute(
-                        db.select(Package)
-                        .where(Package.id.in_(pkg_ids_sub))
-                        .order_by(Package.name)
-                    ).scalars().all())
-            # Keep enrichment pairwise as well. Without this restriction the
-            # project-wide fallback below can attach an unrelated third
-            # variant that happens to contain the same package, obscuring which
-            # side of the selected comparison actually contains it.
-            compare_scan_ids = active_sbom_scan_ids_for_variant(compare_uuid)
-            active_scan_ids = compare_scan_ids
-            if operation == 'intersection':
-                active_scan_ids = [
-                    *active_sbom_scan_ids_for_variant(base_uuid),
-                    *compare_scan_ids,
-                ]
-        elif variant_ids:
-            # Multi-variant mode: union or intersection of the packages present
-            # in two or more selected variants.
-            raw_ids = [s.strip() for s in variant_ids.split(',') if s.strip()]
-            parsed_uuids: list[uuid.UUID] = []
-            for raw_id in raw_ids:
-                parsed, err = parse_uuid_or_400(raw_id, "variant_ids")
-                if err:
-                    return err
-                if parsed is None:
-                    return {"error": "Internal error"}, 500
-                parsed_uuids.append(parsed)
-            scope_variant_ids = parsed_uuids
-            operation = request.args.get('operation', 'union')
-
-            def _multi_pkg_ids_for_variant(variant_uuid: uuid.UUID) -> set[uuid.UUID]:
-                scan_ids = active_sbom_scan_ids_for_variant(variant_uuid)
-                if not scan_ids:
-                    return set()
-                return set(db.session.execute(
-                    db.select(Package.id)
-                    .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                    .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                    .where(SBOMDocument.scan_id.in_(scan_ids))
-                    .distinct()
-                ).scalars().all())
-
-            if outdated_only:
-                pkgs = []
-            else:
-                id_sets = [_multi_pkg_ids_for_variant(u) for u in parsed_uuids]
-                if not id_sets:
-                    multi_result_ids: list[uuid.UUID] = []
-                elif operation == 'intersection':
-                    multi_result_ids = list(set.intersection(*id_sets))
-                else:  # union (default)
-                    multi_result_ids = list(set.union(*id_sets))
-                pkgs = list(db.session.execute(
-                    db.select(Package)
-                    .where(Package.id.in_(multi_result_ids))
-                    .order_by(Package.name)
-                ).scalars().all()) if multi_result_ids else []
-            # Restrict enrichment to the active SBOM scans of the selected variants
-            active_scan_ids = [
-                sid
-                for parsed in parsed_uuids
-                for sid in active_sbom_scan_ids_for_variant(parsed)
-            ]
-        elif variant_id:
-            variant_uuid, err = parse_uuid_or_400(variant_id, "variant_id")
-            if err:
-                return err
-            if variant_uuid is None:
-                return {"error": "Internal error"}, 500
-            scope_variant_ids = [variant_uuid]
-            sbom_ids = active_sbom_scan_ids_for_variant(variant_uuid)
-            if outdated_only or not sbom_ids:
-                pkgs = []
-            else:
-                pkg_sets = _packages_by_scan_ids(sbom_ids)
-                all_pkg_ids = set().union(*pkg_sets.values()) if pkg_sets else set()
-                pkg_lookup = _package_rows(all_pkg_ids)
-                pkgs = sorted(pkg_lookup.values(), key=lambda p: p.name)
-            active_scan_ids = sbom_ids
-        elif project_id:
-            project_uuid, err = parse_uuid_or_400(project_id, "project_id")
-            if err:
-                return err
-            if project_uuid is None:
-                return {"error": "Internal error"}, 500
-            scope_variant_ids = [variant.id for variant in Variant.get_by_project(project_uuid)]
-            sbom_ids = active_sbom_scan_ids_for_project(project_uuid)
-            if outdated_only or not sbom_ids:
-                pkgs = []
-            else:
-                pkg_sets = _packages_by_scan_ids(sbom_ids)
-                all_pkg_ids = set().union(*pkg_sets.values()) if pkg_sets else set()
-                pkg_lookup = _package_rows(all_pkg_ids)
-                pkgs = sorted(pkg_lookup.values(), key=lambda p: p.name)
-            active_scan_ids = sbom_ids
-        else:
-            pkgs = [] if outdated_only else Package.get_all()
-            active_scan_ids = []
-            scope_variant_ids = [variant.id for variant in Variant.get_all()]
-        source_scan_ids = active_scan_ids
-        if not any((variant_id, project_id, variant_ids)):
-            source_scan_ids = [
-                scan_id for selected_variant in Variant.get_all()
-                for scan_id in active_sbom_scan_ids_for_variant(selected_variant.id)
-            ]
-        source_document_ids = set(db.session.execute(
-            db.select(SBOMDocument.id).where(SBOMDocument.scan_id.in_(source_scan_ids)),
-        ).scalars()) if source_scan_ids else set()
-        package_filter = request.args.get('package_id')
-        if package_filter is not None:
-            pkgs = [pkg for pkg in pkgs if pkg.string_id == package_filter]
-        include_source_files = request.args.get('include_source_files', '').lower() in ('1', 'true', 'yes')
-        evidence = SBOMPackage.evidence_for_documents(
-            source_document_ids, include_source_files=include_source_files, package_ids={pkg.id for pkg in pkgs},
+        scope, err = resolve_evidence_scope(
+            request.args, historical=True if outdated_only else None, allow_unscoped_cross_project=True,
         )
-        snapshots = [pkg.with_sbom_evidence(**evidence.get(
-            pkg.id, PackageEvidence(cpe=[], purl=[], source_urls=[]),
-        )) for pkg in pkgs]
-        result = [pkg.to_dict() for pkg in snapshots]
-        if include_source_files:
-            for item, pkg in zip(result, snapshots):
-                item["source_files"] = pkg.source_files
+        if scope is None:
+            return err if err is not None else ({"error": "Internal error"}, 500)
+        package_filter = request.args.get('package_id')
+        evidence = package_evidence(scope, None if package_filter is None else _exact_package_ids(package_filter))
+        include_source_files = request.args.get('include_source_files', '').lower() in ('1', 'true', 'yes')
+        pkg_lookup = _package_rows(evidence.ids) if evidence.ids else {}
+        # Current package rows group active variants; historical-only memberships stay
+        # separate so drill-down can select the exact variant even for repeated names.
+        documents: dict[tuple[uuid.UUID, uuid.UUID | None], set[uuid.UUID]] = {}
+        variants: dict[tuple[uuid.UUID, uuid.UUID | None], set[uuid.UUID]] = {}
+        sources: dict[tuple[uuid.UUID, uuid.UUID | None], set[str]] = {}
+        names: dict[tuple[uuid.UUID, uuid.UUID | None], set[str]] = {}
+        contributors = set(scope.contributing_variants)
+        for pid, doc, vid, scan, fmt, source in evidence.documents:
+            if pid not in pkg_lookup or vid not in contributors:
+                continue
+            outdated = pid not in evidence.active_by_variant[vid]
+            if outdated_only and not outdated:
+                continue
+            if not outdated and scan not in scope.active_sboms_by_variant[vid]:
+                continue
+            key = (pid, vid if outdated else None)
+            documents.setdefault(key, set()).add(doc)
+            variants.setdefault(key, set()).add(vid)
+            if fmt:
+                sources.setdefault(key, set()).add(fmt)
+            if source:
+                names.setdefault(key, set()).add(source)
 
-        for p in result:
-            p.setdefault("variants", [])
-            p.setdefault("sources", [])
-            p.setdefault("sbom_documents", [])
-            p["outdated"] = False
-
-        # Enrich each package with its variants and sources derived from the
-        # SBOMPackage → SBOMDocument → Scan → Variant chain so that the
-        # frontend can display them even for packages with 0 vulnerabilities.
-        # Fetch the comparatively small document metadata first, then fetch
-        # only package/document UUID pairs.  The previous five-table DISTINCT
-        # query repeated text metadata for every package/document association
-        # and made SQLAlchemy materialize a very large joined result.
-        pkg_ids = [pkg.id for pkg in pkgs]
-        if pkg_ids:
-            document_query = (
-                db.select(
-                    SBOMDocument.id.label("document_id"),
-                    Variant.name.label("variant_name"),
-                    SBOMDocument.format.label("doc_format"),
-                    SBOMDocument.source_name.label("doc_source_name"),
-                )
-                .join(Scan, SBOMDocument.scan_id == Scan.id)
-                .join(Variant, Scan.variant_id == Variant.id)
-            )
-            # Restrict to active (non-deprecated) scan documents only
-            if active_scan_ids:
-                document_query = document_query.where(SBOMDocument.scan_id.in_(active_scan_ids))
-            if variant_id:
-                _v = db.session.get(Variant, uuid.UUID(variant_id))
-                if _v and _v.project_id:
-                    document_query = document_query.where(
-                        Variant.project_id == _v.project_id
-                    )
-                else:
-                    document_query = document_query.where(
-                        Scan.variant_id == uuid.UUID(variant_id)
-                    )
-            elif project_id:
-                document_query = document_query.where(Variant.project_id == uuid.UUID(project_id))
-
-            document_rows = db.session.execute(document_query).all()
-            document_meta = {
-                row.document_id: row
-                for row in document_rows
-            }
-            document_ids = list(document_meta)
-            association_rows = db.session.execute(
-                db.select(SBOMPackage.package_id, SBOMPackage.sbom_document_id)
-                .where(SBOMPackage.sbom_document_id.in_(document_ids))
-            ).all() if document_ids else []
-
-            # Build lookup by package UUID to avoid conflating similarly-named
-            # package rows (e.g. different supplier or near-identical versions).
-            meta: dict = {}
-            selected_package_ids = {str(package_id) for package_id in pkg_ids}
-            for package_id, document_id in association_rows:
-                row = document_meta[document_id]
-                key = str(package_id)
-                if key not in selected_package_ids:
-                    continue
-                if key not in meta:
-                    meta[key] = {"variants": set(), "sources": set(), "sbom_documents": set()}
-                if row.variant_name:
-                    meta[key]["variants"].add(row.variant_name)
-                if row.doc_format:
-                    meta[key]["sources"].add(row.doc_format)
-                if row.doc_source_name:
-                    meta[key]["sbom_documents"].add(row.doc_source_name)
-
-            for p in result:
-                key = str(p.get("package_id", ""))
-                info = meta.get(key, {})
-                p["variants"] = sorted(info.get("variants", set()))
-                p["sources"] = sorted(info.get("sources", set()))
-                p["sbom_documents"] = sorted(info.get("sbom_documents", set()))
-
-        if include_outdated and scope_variant_ids:
-            # A finding is outdated for a variant when the package name/version
-            # it observed historically is absent from that variant's active
-            # SBOM.  Match by name/version rather than package UUID so scanner
-            # findings without supplier metadata still match supplier-qualified
-            # packages from the SBOM.
-            active_identities_by_variant: dict[uuid.UUID, set[tuple[str, str]]] = {}
-            for scope_variant_id in scope_variant_ids:
-                scan_ids = active_sbom_scan_ids_for_variant(scope_variant_id)
-                if not scan_ids:
-                    active_identities_by_variant[scope_variant_id] = set()
-                    continue
-                active_identities_by_variant[scope_variant_id] = {
-                    (name, version)
-                    for name, version in db.session.execute(
-                        db.select(Package.name, Package.version)
-                        .join(SBOMPackage, Package.id == SBOMPackage.package_id)
-                        .join(SBOMDocument, SBOMPackage.sbom_document_id == SBOMDocument.id)
-                        .where(SBOMDocument.scan_id.in_(scan_ids))
-                        .distinct()
-                    )
-                }
-
-            historical_rows = db.session.execute(
-                db.select(Finding, Package, Variant, Scan.scan_source)
-                .join(Package, Finding.package_id == Package.id)
-                .join(Observation, Observation.finding_id == Finding.id)
-                .join(Scan, Observation.scan_id == Scan.id)
-                .join(Variant, Scan.variant_id == Variant.id)
-                .where(Variant.id.in_(scope_variant_ids))
-                .distinct()
-            ).all()
-
-            outdated_rows: dict[tuple[uuid.UUID, uuid.UUID], dict] = {}
-            for finding, package, variant, scan_source in historical_rows:
-                if (package.name, package.version) in active_identities_by_variant.get(variant.id, set()):
-                    continue
-                outdated_key = (package.id, variant.id)
-                if outdated_key not in outdated_rows:
-                    item = package.with_sbom_evidence().to_dict()
-                    item.update({
-                        "variants": [variant.name],
-                        "variant_id": str(variant.id),
-                        "sources": [],
-                        "sbom_documents": [],
-                        "outdated": True,
-                        "finding_ids": [],
-                        "vulnerability_ids": [],
-                    })
-                    outdated_rows[outdated_key] = item
-                item = outdated_rows[outdated_key]
-                finding_id = str(finding.id)
-                if finding_id not in item["finding_ids"]:
-                    item["finding_ids"].append(finding_id)
-                if finding.vulnerability_id not in item["vulnerability_ids"]:
-                    item["vulnerability_ids"].append(finding.vulnerability_id)
-                if scan_source and scan_source not in item["sources"]:
-                    item["sources"].append(scan_source)
-
-            for item in outdated_rows.values():
-                item["finding_ids"].sort()
-                item["vulnerability_ids"].sort()
-                item["sources"].sort()
-            result.extend(sorted(
-                outdated_rows.values(),
-                key=lambda item: (item["name"], item["version"], item["variants"]),
-            ))
+        active_documents = set().union(*(docs for (_, vid), docs in documents.items() if vid is None))
+        active_evidence = SBOMPackage.evidence_for_documents(
+            active_documents, include_source_files=include_source_files, package_ids=set(pkg_lookup),
+        )
+        historical_links = _historical_package_links({(pid, vid) for pid, vid in documents if vid is not None})
+        result = []
+        for key in documents:
+            pid, outdated_vid = key
+            package = pkg_lookup[pid]
+            snapshot = package.with_sbom_evidence(**active_evidence.get(
+                pid, PackageEvidence(cpe=[], purl=[], source_urls=[]),
+            ) if outdated_vid is None else PackageEvidence(cpe=[], purl=[], source_urls=[]))
+            # The snapshot constructor normalizes missing values to empty strings.
+            if package.name is None:
+                snapshot.name = None
+            if package.version is None:
+                snapshot.version = None
+            item = snapshot.to_dict()
+            item.update({
+                "variants": sorted({scope.variants[vid] for vid in variants[key]}),
+                "inventory_variant_ids": sorted(str(vid) for vid in variants[key]),
+                "sources": sorted(sources.get(key, set())),
+                "sbom_documents": sorted(names.get(key, set())),
+                "outdated": outdated_vid is not None,
+            })
+            if outdated_vid is not None:
+                item["variant_id"] = str(outdated_vid)
+                finding_ids, vulnerability_ids = historical_links.get((pid, outdated_vid), (set(), set()))
+                item["finding_ids"] = sorted(finding_ids)
+                item["vulnerability_ids"] = sorted(vulnerability_ids)
+            if include_source_files:
+                item["source_files"] = snapshot.source_files
+            result.append(item)
+        result.sort(key=lambda item: (
+            item["name"] is not None, item["name"] or "", item["version"] is not None, item["version"] or "",
+            item["outdated"], item["variants"],
+        ))
 
         if request.args.get('format', 'list') == "dict":
             dict_result = {}
-            for package in result:
-                key = package["name"] + "@" + package["version"]
-                if package["outdated"]:
-                    key += "@" + package["variant_id"]
-                dict_result[key] = package
+            for item in result:
+                dict_key = f"{item['name']}@{item['version']}"
+                if item["outdated"]:
+                    dict_key += "@" + item["variant_id"]
+                dict_result[dict_key] = item
             return dict_result
         return result

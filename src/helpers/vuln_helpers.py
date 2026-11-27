@@ -11,12 +11,17 @@ Used by both ``routes/vulnerabilities.py`` (batch PATCH) and
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from ..models.vulnerability import Vulnerability as _Vulnerability
 
-from ..models import Metrics, CVSS, Iso8601Duration
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.sql.selectable import Exists
+
+from ..extensions import batch_session, db
+from ..models import CVSS, Finding, Iso8601Duration, Metrics, Observation, Scan, TimeEstimate
 from ..helpers.verbose import verbose
 
 
@@ -35,12 +40,12 @@ def _parse_effort_hours(value: int | str | None) -> int:
     raise ValueError(f"Invalid effort value: {value!r}")
 
 
-def validate_effort(eff: dict[str, int | str | None]) -> tuple[Effort, None] | tuple[None, str]:
+def validate_effort(eff: object) -> tuple[Effort, None] | tuple[None, str]:
     """Validate and parse effort dict with optimistic/likely/pessimistic keys.
 
     Returns ``(effort, None)`` on success or ``(None, error_string) on failure.
     """
-    if not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
+    if not isinstance(eff, dict) or not all(k in eff for k in ("optimistic", "likely", "pessimistic")):
         return None, "Invalid effort values"
     try:
         opt = _parse_effort_hours(eff["optimistic"])
@@ -78,29 +83,61 @@ def validate_and_apply_cvss(
     return None
 
 
+class _MissingEffortTarget(ValueError):
+    pass
+
+
+def estimate_has_variant_observation() -> Exists:
+    """Match an estimate's finding to an observation in its own variant."""
+    return db.select(Observation.finding_id).join(Scan, Scan.id == Observation.scan_id).where(
+        Observation.finding_id == TimeEstimate.finding_id,
+        Scan.variant_id == TimeEstimate.variant_id,
+    ).exists()
+
+
 def apply_effort(
-    record: "_Vulnerability", variant_id: uuid.UUID | None,
+    record: "_Vulnerability", variant_ids: Sequence[uuid.UUID | None],
     effort: Effort,
     log_prefix: str = "",
-) -> None:
-    """Persist effort values to the first finding's TimeEstimate."""
+    *,
+    require_observation: bool = False,
+) -> str | None:
+    """Persist one estimate per requested variant, or report why none were saved."""
     try:
-        from ..models.time_estimate import TimeEstimate
-        for finding in (record.findings or []):
-            if variant_id is not None:
-                existing = TimeEstimate.get_by_finding_and_variant(finding.id, variant_id)
-            else:
-                existing = next(
-                    (te for te in finding.time_estimates if te.variant_id is None),
-                    None,
+        with batch_session():
+            for variant_id in variant_ids:
+                scope = db.select(Finding.id).where(Finding.vulnerability_id == record.id)
+                scoped = require_observation and variant_id is not None
+                if scoped:
+                    scope = scope.join(Observation, Observation.finding_id == Finding.id).join(
+                        Scan, Scan.id == Observation.scan_id,
+                    ).where(Scan.variant_id == variant_id)
+                finding_id = db.session.scalar(scope.order_by(Finding.id).limit(1))
+                if finding_id is None:
+                    raise _MissingEffortTarget("No finding for the requested time estimate")
+
+                estimates = (
+                    db.select(TimeEstimate).join(Finding, Finding.id == TimeEstimate.finding_id)
+                    .where(Finding.vulnerability_id == record.id, TimeEstimate.variant_id == variant_id)
                 )
-            if existing is not None:
-                existing.update(*effort)
-            else:
-                TimeEstimate.create(
-                    finding_id=finding.id, variant_id=variant_id,
-                    optimistic=effort.optimistic, likely=effort.likely, pessimistic=effort.pessimistic
-                )
-            break
-    except Exception as e:
+                # Prefer an estimate we can update in place before repairing a legacy association.
+                if variant_id is not None:
+                    estimates = estimates.order_by(estimate_has_variant_observation().desc())
+                existing = db.session.scalar(estimates.order_by(TimeEstimate.id).limit(1))
+                if existing is not None:
+                    if scoped and existing.finding_id != finding_id:
+                        observed = db.session.scalar(scope.where(Finding.id == existing.finding_id).exists().select())
+                        if not observed:
+                            existing.finding_id = finding_id
+                    existing.update(*effort)
+                else:
+                    TimeEstimate.create(
+                        finding_id=finding_id, variant_id=variant_id,
+                        optimistic=effort.optimistic, likely=effort.likely, pessimistic=effort.pessimistic,
+                    )
+    except _MissingEffortTarget as e:
+        return str(e)
+    except SQLAlchemyError as e:
         verbose(f"[{log_prefix} effort] {e}")
+        return "Failed to save time estimate"
+    return None

@@ -275,10 +275,13 @@ class TestVariantScopedEnrichment:
         assert vuln_a is not None
         assert "beta" in vuln_a["variants"]
 
-    def test_packages_only_include_findings_from_active_scans(self, app, client, ids):
+    @pytest.mark.parametrize("include_outdated", ["false", "true"])
+    def test_first_sbom_filters_current_but_not_exact_historical_tool_findings(self, app, client, ids, include_outdated):
         from src.models.finding import Finding
         from src.models.observation import Observation
         from src.models.package import Package
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
         from src.models.scan import Scan
         from src.models.variant import Variant
         from src.models.vulnerability import Vulnerability
@@ -301,20 +304,57 @@ class TestVariantScopedEnrichment:
                 id="CVE-2026-00001", description="version-scoping regression"
             )
             current_finding = Finding.get_or_create(current_package.id, vulnerability.id)
-            Finding.get_or_create(historical_package.id, vulnerability.id)
+            historical_finding = Finding.get_or_create(historical_package.id, vulnerability.id)
+            older_scan = Scan(
+                variant_id=variant.id, scan_type="tool", scan_source="nvd", timestamp=scan.timestamp - timedelta(days=1)
+            )
+            _db.session.add(older_scan)
+            _db.session.flush()
+            Observation.create(finding_id=historical_finding.id, scan_id=older_scan.id)
             Observation.create(finding_id=current_finding.id, scan_id=scan.id)
             _db.session.commit()
             variant_id = variant.id
 
-        resp = client.get(f"/api/vulnerabilities?variant_id={variant_id}")
+        resp = client.get(f"/api/vulnerabilities?variant_id={variant_id}&include_outdated={include_outdated}")
         assert resp.status_code == 200
         vulnerability_data = _vuln_by_id(json.loads(resp.data), "CVE-2026-00001")
         assert vulnerability_data is not None
-        assert vulnerability_data["packages"] == ["openssl@3.0.0"]
+        assert vulnerability_data["packages"] == (
+            ["openssl@1.0.0", "openssl@3.0.0"] if include_outdated == "true" else ["openssl@3.0.0"]
+        )
         assert vulnerability_data["packages_current"] == ["openssl@3.0.0"]
         assert vulnerability_data["packages_current_by_variant"] == {
             str(variant_id): ["openssl@3.0.0"],
         }
+
+        with app.app_context():
+            scan = Scan.create("first SBOM", variant_id)
+            other_supplier = Package.find_or_create("openssl", "3.0.0", supplier="Unrelated")
+            document = SBOMDocument(scan_id=scan.id, path="first.spdx.json", format="spdx", source_name="first.spdx.json")
+            _db.session.add(document)
+            _db.session.flush()
+            _db.session.add(SBOMPackage(sbom_document_id=document.id, package_id=other_supplier.id))
+            _db.session.commit()
+
+        scope = f"variant_id={variant_id}&include_outdated={include_outdated}"
+        response = client.get(f"/api/vulnerabilities?{scope}")
+        assert response.status_code == 200
+        row = _vuln_by_id(response.get_json(), "CVE-2026-00001")
+        if include_outdated == "true":
+            assert row["packages"] == ["openssl@1.0.0", "openssl@3.0.0"]
+            assert row["packages_current"] == []
+            assert row["assessment_targets_by_variant"] == {}
+            detail = client.get(f"/api/vulnerabilities/CVE-2026-00001?{scope}").get_json()
+            assert detail["packages"] == row["packages"]
+            assert detail["assessment_targets_by_variant"] == {}
+        else:
+            assert row is None
+
+        matches = client.post(f"/api/vulnerabilities/search-descriptions?{scope}", json={
+            "vulnerability_ids": ["CVE-2026-00001"],
+            "terms": ["version-scoping"],
+        }).get_json()["matches"]
+        assert matches["version-scoping"] == (["CVE-2026-00001"] if include_outdated == "true" else [])
 
 
 # ---------------------------------------------------------------------------
