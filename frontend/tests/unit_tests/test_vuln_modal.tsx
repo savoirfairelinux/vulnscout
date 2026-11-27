@@ -4259,6 +4259,21 @@ describe('NVD & EPSS refresh button in VulnModal', () => {
         }));
     });
 
+    test('shows no provider record separately from an individual refresh failure', async () => {
+        fetchMock.resetMocks();
+        fetchMock.mockResponse(async request => ({
+            body: request.url.includes('/refresh?')
+                ? refreshResponse({ status: 200, body: { vulnerabilities: [], outcome: 'no_record' } }, failure(), success())
+                : JSON.stringify([]),
+        }));
+        render(<VulnModal vuln={vulnerability} onClose={() => {}} appendAssessment={() => {}}
+            appendCVSS={() => null} patchVuln={jest.fn()} />);
+        await userEvent.setup().click(screen.getByTitle('Refresh from NVD, EPSS & ENISA EUVD'));
+        expect(await screen.findByText('NVD returned no record.')).toBeInTheDocument();
+        expect(screen.getByText(/EPSS API unavailable/)).toBeInTheDocument();
+        expect(screen.queryByText(/NVD API unavailable/)).not.toBeInTheDocument();
+    });
+
     test('applies refreshed ENISA EUVD and EU KEV data to the modal', async () => {
         const euvd = {
             id: 'EUVD-2010-0001', known_exploited: true, sources: ['CISA'], date_added: '2026-11-01',

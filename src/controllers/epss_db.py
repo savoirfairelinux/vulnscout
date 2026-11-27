@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import math
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -16,13 +17,16 @@ class EPSS_DB(BaseAPIClient):
     Fetches scores directly from the FIRST.org API without local caching.
     """
 
-    def api_get_epss(self, cve_id: str) -> Optional[dict]:
+    def api_get_epss(self, cve_id: str, *, strict: bool = False) -> Optional[dict]:
         """
         Fetch the EPSS score for a single CVE directly from the FIRST.org API.
 
         Returns a dict with keys ``score`` (float) and ``percentile`` (float),
-        or ``None`` if the CVE has no EPSS entry or on any failure.
+        or ``None`` if the CVE has no EPSS entry. Pass ``strict=True`` to
+        propagate failures instead of returning ``None`` for them as well.
         """
+        if strict:
+            return self.api_get_epss_batch([cve_id]).get(cve_id)
         try:
             url = f"{EPSS_API_URL}?cve={urllib.parse.quote(cve_id, safe='')}"
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -67,12 +71,25 @@ class EPSS_DB(BaseAPIClient):
                 raise urllib.error.HTTPError(url, response.status, "Unexpected EPSS response status",
                                              response.headers, None)
             data = self._decode_response_json(response)
-            results = {}
-            for entry in data.get("data", []):
-                cve = entry.get("cve")
-                if cve:
-                    results[cve] = {
-                        "score": float(entry["epss"]),
-                        "percentile": float(entry["percentile"]),
-                    }
+            if (not isinstance(data, dict) or data.get("status") != "OK"
+                    or any(key in data for key in ("error", "errors"))
+                    or data.get("status-code", 200) != 200 or data.get("offset", 0) != 0
+                    or not isinstance(data.get("data"), list)):
+                raise ValueError("Invalid EPSS response")
+            entries = data["data"]
+            if "total" in data and (type(data["total"]) is not int or data["total"] != len(entries)):
+                raise ValueError("Incomplete or inconsistent EPSS response")
+            requested = set(cve_ids)
+            results: dict[str, dict] = {}
+            for entry in entries:
+                cve = entry.get("cve") if isinstance(entry, dict) else None
+                if not isinstance(cve, str) or cve not in requested or cve in results:
+                    raise ValueError("Invalid CVE in EPSS response")
+                values = (entry["epss"], entry["percentile"])
+                if any(type(value) not in (str, int, float) for value in values):
+                    raise ValueError("Invalid score or percentile in EPSS response")
+                score, percentile = map(float, values)
+                if not all(math.isfinite(value) and 0 <= value <= 1 for value in (score, percentile)):
+                    raise ValueError("Invalid score or percentile in EPSS response")
+                results[cve] = {"score": score, "percentile": percentile}
             return results

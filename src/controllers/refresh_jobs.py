@@ -16,11 +16,12 @@ import re
 import time
 import urllib.error
 import uuid
-from typing import Dict, List, Optional, Set, Tuple
+from collections.abc import Callable
+from typing import Dict, List, Set, Tuple
 
 from ..extensions import db
 from ..helpers.refresh_runs import (
-    UNSUPPORTED_CVE_IDENTIFIER, add_targets, target_result, target_results, tracked_refresh,
+    NO_PROVIDER_RECORD, UNSUPPORTED_CVE_IDENTIFIER, add_targets, target_result, target_results, tracked_refresh,
 )
 from ..helpers.active_scans import active_package_ids_for_scans, active_scan_ids_for_variant
 from ..models import Finding, Observation, Scan, Vulnerability
@@ -28,17 +29,17 @@ from .epss_db import EPSS_DB
 from .euvd_db import EUVD_DB
 from .job_context import JobContext, OperationError
 from .nvd_apply import apply_cvss_update, apply_nvd_update
-from .nvd_db import NVD_DB
+from .nvd_db import NVD_DB, parse_nvd_lookup
 from .nvd_extract import extract_cve_details
 from .operation_registry import STATUS_CANCELLED, STATUS_ERROR, registry
-from .scc_engine import get_cve_json, get_engine as _get_scc_engine
+from .scc_engine import get_engine as _get_scc_engine
 from .vulnerabilities import VulnerabilitiesController
 
 EPSS_BATCH_SIZE = 100
 NVD_COMMIT_EVERY = 50
 # Cap prevents burning NVD API rate-limit quota (6 s/CVE without a key).
 MAX_CVE_IDS = 1000
-CVE_RE = re.compile(r'^CVE-\d{4}-\d{4,}$')
+CVE_RE = re.compile(r'^CVE-\d{4}-\d{4,}$', re.ASCII)
 MAX_GHSA_IDS = 500
 GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 GHSA_COMMIT_EVERY = 20
@@ -189,30 +190,26 @@ def run_deferred_refresh(ctx: JobContext) -> None:
 # NVD
 # ---------------------------------------------------------------------------
 
-def _refresh_nvd_record(cve_id: str, mode: str, nvd: Optional[NVD_DB]) -> bool:
-    now = datetime.datetime.now(datetime.timezone.utc)
-    if mode == "api" and nvd is not None:
-        status_code, payload = nvd.api_get_cve(cve_id, max_retries=2)
-        if status_code != 200 or not payload.get("vulnerabilities"):
-            print(f"[bulk NVD refresh] {cve_id}: status={status_code}, skipping", flush=True)
-            return False
-        details = NVD_DB.extract_cve_details(payload["vulnerabilities"][0]["cve"])
-    else:
-        cve_obj = get_cve_json(cve_id)
-        if cve_obj is None:
-            print(
-                f"[bulk NVD refresh] {cve_id}: not found in local NVD database, skipping",
-                flush=True,
-            )
-            return False
-        details = extract_cve_details(cve_obj)
-
+def _refresh_nvd_record(cve_id: str, lookup: Callable[[str], dict | None]) -> bool:
+    cve = lookup(cve_id)
+    if cve is None:
+        return False
     record = db.session.get(Vulnerability, cve_id)
-    if record is not None:
-        apply_nvd_update(record, details, now)
-        apply_cvss_update(record, details, db)
-        return True
-    return False
+    if record is None:
+        raise ValueError("Vulnerability no longer exists in VulnScout")
+    details = extract_cve_details(cve)
+    apply_nvd_update(record, details, datetime.datetime.now(datetime.timezone.utc))
+    apply_cvss_update(record, details, db)
+    return True
+
+
+def _api_nvd_lookup(nvd: NVD_DB) -> Callable[[str], dict | None]:
+    def lookup(cve_id: str) -> dict | None:
+        status_code, payload = nvd.api_get_cve(cve_id, max_retries=2)
+        if status_code != 200:
+            raise ValueError(f"NVD lookup failed (HTTP {status_code})")
+        return parse_nvd_lookup(payload, cve_id)
+    return lookup
 
 
 @tracked_refresh("nvd")
@@ -226,15 +223,15 @@ def run_nvd_refresh(ctx: JobContext) -> None:
         ctx.check_cancelled()
         return
 
-    nvd: Optional[NVD_DB] = None
     sleep_between = 0.0
     if mode == "api":
         sleep_between = _nvd_sleep_interval()
-        nvd = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+        lookup = _api_nvd_lookup(NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY")))
     else:
-        # Pre-warm the shared engine once so per-CVE lookups reuse the cache.
+        # Verify the local snapshot once before looking up the targets.
         try:
-            _get_scc_engine(progress=lambda message: ctx.report(skipped, total, message))
+            engine = _get_scc_engine(progress=lambda message: ctx.report(skipped, total, message))
+            lookup = engine.nvd_snapshot_lookup()
         except Exception as exc:
             raise OperationError("Failed to load local NVD database") from exc
 
@@ -243,9 +240,8 @@ def run_nvd_refresh(ctx: JobContext) -> None:
             _safe_commit("bulk NVD refresh cancel")
             ctx.check_cancelled()
         try:
-            checked = _refresh_nvd_record(cve_id, mode, nvd)
-            target_result("nvd", cve_id, "complete" if checked else "skipped",
-                          None if checked else "Provider record unavailable")
+            checked = _refresh_nvd_record(cve_id, lookup)
+            target_result("nvd", cve_id, "complete" if checked else NO_PROVIDER_RECORD)
         except Exception as exc:
             target_result("nvd", cve_id, "failed", str(exc)[:500])
             print(f"[bulk NVD refresh] error for {cve_id}: {exc}", flush=True)
@@ -311,16 +307,15 @@ def run_epss_refresh(ctx: JobContext) -> None:
             continue
 
         for cve_id in chunk:
-            result = results.get(cve_id)
-            if result:
+            if cve_id in results:
                 try:
-                    _apply_epss_score(cve_id, result["score"], now)
+                    _apply_epss_score(cve_id, results[cve_id]["score"], now)
                     target_result("epss", cve_id)
                 except Exception as exc:
                     target_result("epss", cve_id, "failed", str(exc)[:500])
                     print(f"[bulk EPSS refresh] error updating {cve_id}: {exc}", flush=True)
             else:
-                target_result("epss", cve_id, "skipped", "Provider record unavailable")
+                target_result("epss", cve_id, NO_PROVIDER_RECORD)
             processed += 1
 
         _safe_commit("bulk EPSS refresh")

@@ -47,7 +47,7 @@ function counts(coverage: RefreshCoverage[]) {
     const distinct = (statuses?: RefreshCoverage['status'][]) =>
         new Set(coverage.filter(row => !statuses || statuses.includes(row.status)).map(row => row.vuln_id)).size;
     return {
-        Targeted: distinct(), Checked: distinct(['complete']), Skipped: distinct(['skipped']),
+        Targeted: distinct(), Checked: distinct(['complete']), 'No record': distinct(['no_record']), Skipped: distinct(['skipped']),
         Failed: distinct(['failed']), Cancelled: distinct(['cancelled']), Pending: distinct(['pending']),
     };
 }
@@ -331,11 +331,11 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
             </>}
             {section === 'coverage' && <>
                 <h3 className="font-bold text-base">Per-source coverage and gaps</h3>
-                <p className="text-sm">Unsupported identifiers count as skipped, not checked, but do not leave a coverage gap. Missing provider records and other unverified skips still leave gaps.</p>
+                <p className="text-sm">No record means a successful lookup returned no data for that identifier. This and explicit unsupported identifiers are not coverage gaps or removals. Unverified skips and failures still leave gaps.</p>
                 <div className="overflow-auto max-h-80 rounded border border-gray-600">
                     <table aria-label="Provider coverage" className="w-full text-xs text-left">
                         <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
-                            {['Source', 'Status', 'Targeted', 'Checked', 'Skipped', 'Failed', 'Cancelled', 'Pending'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
+                            {['Source', 'Status', 'Targeted', 'Checked', 'No record', 'Skipped', 'Failed', 'Cancelled', 'Pending'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
                         </tr></thead>
                         <tbody>{sourceNames.map(name => {
                             const outcomes = counts(run.coverage.filter(row => row.source === name));
@@ -344,7 +344,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                                 <th scope="row" className="px-3 py-2">{sourceLabel(name)}</th>
                                 <td className="px-3 py-2">{status === 'incomplete' ? <div className="text-amber-300">
                                     Incomplete coverage
-                                    {outcomes.Targeted === outcomes.Checked && <p>Check operation logs; no unchecked target is recorded in this scope.</p>}
+                                    {outcomes.Targeted === outcomes.Checked + outcomes['No record'] && <p>Check operation logs; no unresolved target is recorded in this scope.</p>}
                                 </div> : status}
                                 </td>
                                 {Object.entries(outcomes).map(([label, count]) => <td key={label} className="px-3 py-2 tabular-nums">{count}</td>)}
@@ -366,7 +366,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                         <tbody>{shownCoverage.map((row, index) => <tr key={`${row.source}-${row.vuln_id}-${index}`} className="border-t border-gray-600 hover:bg-gray-600/40">
                             <td className="px-3 py-2 font-mono">{row.vuln_id}</td>
                             <td className="px-3 py-2">{sourceLabel(row.source)}</td>
-                            <td className="px-3 py-2">{row.status}</td>
+                            <td className="px-3 py-2">{row.status === 'no_record' ? 'No record' : row.status}</td>
                             <td className="px-3 py-2 break-words">{row.error ?? '—'}</td>
                         </tr>)}</tbody>
                     </table>
@@ -393,6 +393,10 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                     ? 'No changes match these filters.'
                     : run.status === 'complete' && run.coverage.length === 0
                         ? 'No vulnerabilities were targeted in this scope. No comparison baseline is available.'
+                    : run.status === 'complete' && summary?.['No record']
+                        ? summary.Checked === 0
+                            ? 'No provider records were returned. No comparison baseline is available.'
+                            : 'No changes were recorded for returned records. Lookups that returned no record cannot be compared.'
                     : run.status === 'complete' && summary?.Checked === 0
                         ? 'No provider checks were performed in this scope. No comparison baseline is available.'
                     : run.status === 'complete'

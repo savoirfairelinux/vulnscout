@@ -5,7 +5,7 @@ export type RefreshScope = { project_id?: string; variant_id?: string };
 export type RefreshCoverage = {
     source: string;
     vuln_id: string;
-    status: 'pending' | 'complete' | 'failed' | 'skipped' | 'cancelled';
+    status: 'pending' | 'complete' | 'no_record' | 'failed' | 'skipped' | 'cancelled';
     error: string | null;
 };
 export type RefreshChange = {
@@ -28,7 +28,10 @@ export type RefreshRunMetadata = {
     started_at: string;
     finished_at: string | null;
     status: 'running' | 'complete' | 'incomplete';
-    summary: { refreshed_vulnerabilities?: number; total_changes: number; changed_vulnerabilities: number; first_enrichments: number };
+    summary: {
+        refreshed_vulnerabilities?: number; no_record_vulnerabilities?: number;
+        total_changes: number; changed_vulnerabilities: number; first_enrichments: number;
+    };
 };
 export const incompleteSources = (run: RefreshRunMetadata): string[] =>
     Object.keys(run.source_status).filter(source => run.source_status[source] === 'incomplete');

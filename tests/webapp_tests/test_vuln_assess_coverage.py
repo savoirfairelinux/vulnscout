@@ -384,11 +384,11 @@ class TestVulnsEpssRefresh:
         resp = client.post("/api/vulnerabilities/CVE-9999-EPSS/epss-refresh")
         assert resp.status_code == 404
 
-    def test_epss_refresh_api_none(self, client):
-        """Lines 1081-1086: EPSS API returns None → 503."""
+    def test_epss_refresh_api_failure(self, client):
+        """A failed EPSS lookup returns 503."""
         from unittest.mock import patch
         with patch("src.routes.vulnerabilities.EPSS_DB") as MockEPSS:
-            MockEPSS.return_value.api_get_epss.return_value = None
+            MockEPSS.return_value.api_get_epss.side_effect = OSError("offline")
             resp = client.post("/api/vulnerabilities/CVE-2020-35492/epss-refresh")
         assert resp.status_code == 503
 

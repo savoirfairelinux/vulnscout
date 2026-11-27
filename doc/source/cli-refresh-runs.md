@@ -39,9 +39,11 @@ when archiving one exact run, including its unchanged targets and coverage.
 
 An unchanged, successfully checked refresh is a valid `complete` artifact with
 zero changes. A field first receiving a value is `first_enrichment`, not a
-comparison against a fabricated historical baseline. Missing provider responses,
-failed targets, skipped work and cancellation produce explicit coverage and an
-`incomplete` artifact; absence from a response is never itself a removal.
+comparison against a fabricated historical baseline. An explicit successful
+NVD or EPSS lookup with no matching record is `no_record`: it does not prevent
+completion and cannot establish that previously stored data is unchanged.
+Failed or unverified lookups, deferred work and cancellation still produce an
+`incomplete` artifact; an absent record is never itself a removal.
 Confirmed field clearing has `change_type: removal`. CVSS fields retain metric
 ID, version and author, and their before/after values include score and vector.
 

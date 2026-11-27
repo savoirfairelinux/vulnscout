@@ -104,10 +104,10 @@ class TestCvssRefresh:
         with patch("src.routes.vulnerabilities.NVD_DB.api_get_cve",
                    return_value=(200, {"vulnerabilities": [{"cve": cve}]})), \
              patch("src.routes.vulnerabilities.get_cve_json", return_value=cve), \
-             patch("src.controllers.refresh_jobs.get_cve_json", return_value=cve), \
-             patch("src.controllers.refresh_jobs._get_scc_engine"), \
+             patch("src.controllers.refresh_jobs._get_scc_engine") as engine, \
              patch("src.routes.vulnerabilities.EPSS_DB") as epss, \
              patch("src.routes.vulnerabilities.EUVD_DB") as euvd:
+            engine.return_value.nvd_snapshot_lookup.return_value = lambda _identifier: cve
             epss.return_value.api_get_epss.return_value = {"score": 0.4}
             euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
             euvd.return_value.get_mapping.return_value = {"dummy": {}}
@@ -378,25 +378,24 @@ class TestSingleCveRefreshMode:
     def test_default_mode_is_local(self, client, existing_cve_id):
         """When no mode is supplied, the local NVD-FKIE database is used."""
         with patch("src.routes.vulnerabilities.get_cve_json") as mock_local:
-            mock_local.return_value = None  # not found in local DB → 503
+            mock_local.return_value = None
             resp = client.post(
                 f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
                 json={},
             )
-        mock_local.assert_called_once_with(existing_cve_id)
-        assert resp.status_code == 503
-        data = resp.get_json()
-        assert data["error_code"] == "unavailable"
+        mock_local.assert_called_once_with(existing_cve_id, strict=True)
+        assert resp.status_code == 200
+        assert resp.get_json()["outcome"] == "no_record"
 
     def test_explicit_local_mode_uses_local_db(self, client, existing_cve_id):
         """mode='local' explicitly routes to the local NVD-FKIE database."""
         with patch("src.routes.vulnerabilities.get_cve_json") as mock_local:
-            mock_local.return_value = None
+            mock_local.side_effect = OSError("unusable local snapshot")
             resp = client.post(
                 f"/api/vulnerabilities/{existing_cve_id}/nvd-refresh",
                 json={"mode": "local"},
             )
-        mock_local.assert_called_once_with(existing_cve_id)
+        mock_local.assert_called_once_with(existing_cve_id, strict=True)
         assert resp.status_code == 503
 
     def test_local_mode_returns_200_when_cve_found(self, client, existing_cve_id):

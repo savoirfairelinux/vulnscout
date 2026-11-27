@@ -25,6 +25,27 @@ from ..helpers.base_api_client import BaseAPIClient
 from .nvd_extract import extract_cve_details, api_weaknesses_to_list_str, api_references_filter_patches
 
 
+def parse_nvd_lookup(payload: object, cve_id: str) -> dict | None:
+    """Return no record only for an explicit, consistent empty result."""
+    if not isinstance(payload, dict) or any(key in payload for key in ("error", "errors", "message")):
+        raise ValueError("Invalid NVD response")
+    matches = payload.get("vulnerabilities")
+    if not isinstance(matches, list):
+        raise ValueError("Missing or invalid NVD vulnerabilities list")
+    total = payload.get("totalResults")
+    if "totalResults" in payload and (type(total) is not int or total != len(matches)):
+        raise ValueError("Inconsistent NVD result count")
+    if not matches:
+        if total == 0:
+            return None
+        raise ValueError("Missing NVD result count for empty lookup")
+    if len(matches) == 1 and isinstance(matches[0], dict):
+        cve = matches[0].get("cve")
+        if isinstance(cve, dict) and cve.get("id") == cve_id:
+            return cve
+    raise ValueError("Invalid NVD CVE record")
+
+
 class NVD_DB(BaseAPIClient):
     """NVD CVE data client.
 

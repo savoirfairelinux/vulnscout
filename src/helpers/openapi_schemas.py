@@ -1174,6 +1174,7 @@ SCHEMAS.update({
     }),
     "VulnerabilityRefreshResponse": _object({
         "vulnerabilities": _array(_ref("Vulnerability")),
+        "outcome": {"type": "string", "enum": ["no_record", "skipped"]},
     }, ("vulnerabilities",)),
     "IndividualRefreshResponse": _object({
         "run_id": _STRING,

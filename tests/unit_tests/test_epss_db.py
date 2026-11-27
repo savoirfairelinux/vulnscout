@@ -220,3 +220,23 @@ def test_api_get_epss_batch_partial_data(monkeypatch):
     result = db.api_get_epss_batch(["CVE-2021-44228", "CVE-9999-0000"])
     assert "CVE-2021-44228" in result
     assert "CVE-9999-0000" not in result
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"status": "OK"}, {"status": "ERROR", "data": []},
+    {"status": "OK", "data": [], "total": 1}, {"status": "OK", "data": [{}]},
+    {"status": "OK", "data": [], "error": "failed"},
+])
+def test_epss_malformed_success_response_is_not_absence(monkeypatch, payload):
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", lambda *_a, **_kw: FakeResp(200, payload))
+    with pytest.raises(ValueError):
+        EPSS_DB().api_get_epss("CVE-2024-0001", strict=True)
+
+
+def test_epss_explicit_empty_is_distinct_from_invalid_json(monkeypatch):
+    response = FakeResp(200, {"status": "OK", "data": [], "total": 0})
+    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", lambda *_a, **_kw: response)
+    assert EPSS_DB().api_get_epss("CVE-2024-0001", strict=True) is None
+    monkeypatch.setattr(response, "read", lambda: b"not-json")
+    with pytest.raises(ValueError):
+        EPSS_DB().api_get_epss_batch(["CVE-2024-0001"])

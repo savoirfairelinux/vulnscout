@@ -16,11 +16,13 @@ containing all selected providers. Loaded data and run results update once after
 every step finishes, fails or is cancelled, not after individual providers.
 Accepted refreshes appear immediately as one operation-queue task with provider
 steps, without waiting for the first streamed progress update.
-Missing provider records, failed requests or deferred checks leave coverage
-incomplete even when queued jobs finish. In that case the banner warns about
-incomplete coverage, names the affected providers when known, and still reports
-observed changes. Targets explicitly skipped because their identifier is
-unsupported by a provider do not leave a gap for that provider.
+Failed or deferred lookups leave coverage incomplete even when queued jobs
+finish. The banner names the affected providers when known and still reports
+observed changes. A successful NVD or EPSS lookup that returns no record is
+reported as **No record**. Like an explicitly unsupported identifier, it
+does not leave a coverage gap, but it does not supply a comparison baseline
+or remove previously stored data. Older artifacts with an unverified
+**Provider record unavailable** reason retain their original classification.
 This view does not run scanners or duplicate the
 vulnerability's
 [Data history](web-vulnerability-details.md#data-history).
@@ -88,7 +90,7 @@ Exact-run JSON and CSV exports include the origin and these same summary counts.
 Older runs retain their recorded coverage and have an unknown origin; historical
 field-history exports continue to group changes by the shared refresh run ID.
 
-**Targeted**, **Checked**, **Changed**, **Skipped**, **Failed**, **Cancelled**
+**Targeted**, **Checked**, **Changed**, **No record**, **Skipped**, **Failed**, **Cancelled**
 and **Pending** count distinct vulnerability IDs, not source/ID pairs. One ID checked by
 several providers is counted once in each applicable category. Categories can
 overlap: for example, NVD can succeed while EPSS fails for the same CVE.
@@ -105,7 +107,8 @@ displayed outcomes, current page or change filter.
   This is a normal empty state, not an API error.
 - **First enrichment** means a field had no previous recorded value. It is an
   addition without a baseline, not a modification to a known prior value.
-- **Zero changes** on a complete run is distinct from an absent run.
+- **Zero changes** on a complete run is distinct from an absent run. A
+  completed lookup without a record cannot establish that data is unchanged.
 - **Running** shows committed changes so far; reload to retrieve progress.
 - **Incomplete**, cancelled coverage and provider failures retain committed
   changes while exposing coverage gaps. They do not prove unchanged data.
