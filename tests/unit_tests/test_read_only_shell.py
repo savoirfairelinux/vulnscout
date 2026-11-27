@@ -1,10 +1,14 @@
+import io
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
 
 import pytest
 
@@ -241,6 +245,44 @@ def test_restart_drains_a_running_shell_job(worker, tmp_path):
             if process.poll() is None:
                 process.kill()
                 process.wait()
+
+
+def test_shutdown_drains_pending_shell_reply(worker, monkeypatch):
+    from src.helpers import host_mount_helper as hh
+
+    helper, _ = worker
+    monkeypatch.setattr(helper, "_shell_job", lambda request: {"output": "fixture"})
+    writing, release = Event(), Event()
+    idle_at_drain: Future[bool] = Future()
+    wait_for = helper._shell_condition.wait_for
+
+    def observe_drain(predicate, timeout):
+        idle_at_drain.set_result(predicate())
+        return wait_for(predicate, timeout)
+
+    class BlockingReply(io.BytesIO):
+        def write(self, data):
+            writing.set()
+            assert release.wait(5)
+            return super().write(data)
+
+    monkeypatch.setattr(helper._shell_condition, "wait_for", observe_drain)
+    handler = object.__new__(hh._Handler)
+    handler.server = SimpleNamespace(helper=helper)
+    handler.rfile = io.BytesIO(b'{"op":"shell"}\n')
+    handler.wfile = BlockingReply()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        handling = pool.submit(handler.handle)
+        try:
+            assert writing.wait(5)
+            draining = pool.submit(helper.drain_shells)
+            assert idle_at_drain.result(timeout=5) is False
+        finally:
+            release.set()
+        handling.result(timeout=5)
+        draining.result(timeout=5)
+    assert json.loads(handler.wfile.getvalue())["result"] == {"output": "fixture"}
 
 
 def test_shell_rejects_remote_docker(worker, monkeypatch, tmp_path):
