@@ -3,6 +3,7 @@ import type { MouseEvent } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBox, faShieldHalved, faFileExport, faClockRotateLeft, faClipboardCheck, faGear, faRobot, faArrowsRotate, faCheck, faCommentDots } from '@fortawesome/free-solid-svg-icons';
 import ProjectVariantSelector from './ProjectVariantSelector';
+import type { ApplySelection } from './ProjectVariantSelector';
 import type { FrontendScope } from '../handlers/config';
 import { ROUTES } from '../routes';
 import VersionDisplay from './VersionDisplay';
@@ -17,7 +18,9 @@ type Props = {
   defaultProject?: { id: string; name: string } | null;
   defaultVariant?: { id: string; name: string } | null;
   defaultScope?: FrontendScope | null;
-  onApply: (projectId: string, variantId: string, compareVariantId: string, operation: string, variantIds: string[], multiOperation: string) => void | boolean | Promise<boolean | void>;
+  includeOutdated?: boolean;
+  loadingScope?: boolean;
+  onApply: ApplySelection;
   trackedScanCount?: number;
   finishedScanCount?: number;
   activeScanCount?: number;
@@ -44,7 +47,7 @@ function useGuardedNavigation() {
   };
 }
 
-function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue, isAgentOpen, onToggleAgent }: Readonly<Props>) {
+function NavigationBar({ defaultProject, defaultVariant, defaultScope, includeOutdated, loadingScope, onApply, trackedScanCount = 0, finishedScanCount = 0, activeScanCount = 0, onOpenOperationQueue, isAgentOpen, onToggleAgent }: Readonly<Props>) {
   const guardedClick = useGuardedNavigation();
   return (
   <nav aria-label="Main navigation" className={`flex ${bgColor}`}>
@@ -193,6 +196,8 @@ function NavigationBar({ defaultProject, defaultVariant, defaultScope, onApply, 
           defaultProject={defaultProject}
           defaultVariant={defaultVariant}
           defaultScope={defaultScope}
+          includeOutdated={includeOutdated}
+          loading={loadingScope}
           onApply={onApply}
         />
       </li>

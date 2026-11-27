@@ -124,8 +124,10 @@ def test_companion_file_evidence_reaches_mcp_in_selected_variant(app, tmp_path, 
     other = Variant.create("other-board", project.id)
     _import(tmp_path, _documents(path="src/other-board.c"), variant=other)
     http = app.test_client()
+    source_queries = []
 
     def get(client, url, *, params):
+        source_queries.append(params)
         response = http.get(url.removeprefix("http://vulnscout.test"), query_string=params)
         return httpx.Response(response.status_code, json=response.json)
 
@@ -133,6 +135,9 @@ def test_companion_file_evidence_reaches_mcp_in_selected_variant(app, tmp_path, 
     result = json.loads(_source_files_impl(
         VulnScoutClient("http://vulnscout.test"), str(variant.id), "lib@1.0", 0, 100,
     ))
+    assert source_queries == [{
+        "variant_id": str(variant.id), "package_id": "lib@1.0", "include_source_files": "true",
+    }]
     expected = _package(app, variant)
     assert result["items"] == expected["source_files"]
     assert result["source_file_count"] == 1

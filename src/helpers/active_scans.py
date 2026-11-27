@@ -11,8 +11,8 @@ Active-scan strategy
 --------------------
 For a given variant the *active set* is:
 
-* The **latest SBOM scan**, plus
-* The **latest tool scan per source** (nvd, osv, …).
+* The **latest completed SBOM scan**, plus
+* The **latest completed tool scan per source** (nvd, osv, …).
 
 This ensures that:
   • Running an OSV enrichment doesn't hide NVD results.
@@ -46,6 +46,11 @@ from ..models.package import Package
 # Active scan IDs
 # ------------------------------------------------------------------
 
+def scan_strategy_key(scan_type: str | None, scan_source: str | None) -> tuple[bool, str | None]:
+    is_tool = scan_type == "tool"
+    return is_tool, scan_source if is_tool else None
+
+
 def active_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list[uuid.UUID]:
     """Return the active Scan IDs for *variant_uuid*.
 
@@ -53,14 +58,13 @@ def active_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list[uuid.UUID]:
     """
     rows = db.session.execute(
         db.select(Scan.id, Scan.scan_type, Scan.scan_source)
-        .where(Scan.variant_id == variant_uuid)
+        .where(Scan.variant_id == variant_uuid, Scan.in_progress.is_(False))
         .order_by(Scan.timestamp.desc(), Scan.id.desc())
     ).all()
     ids: list[uuid.UUID] = []
-    seen_keys: set[str] = set()  # "sbom" or "tool:<source>"
+    seen_keys: set[tuple[bool, str | None]] = set()
     for scan_id, scan_type, scan_source in rows:
-        st = scan_type or "sbom"
-        key = f"tool:{scan_source}" if st == "tool" else "sbom"
+        key = scan_strategy_key(scan_type, scan_source)
         if key not in seen_keys:
             seen_keys.add(key)
             ids.append(scan_id)
@@ -72,14 +76,13 @@ def active_scan_ids_for_project(project_uuid: uuid.UUID) -> list[uuid.UUID]:
     rows = db.session.execute(
         db.select(Scan.id, Scan.variant_id, Scan.scan_type, Scan.scan_source, Scan.timestamp)
         .join(Variant, Scan.variant_id == Variant.id)
-        .where(Variant.project_id == project_uuid)
+        .where(Variant.project_id == project_uuid, Scan.in_progress.is_(False))
         .order_by(Scan.variant_id, Scan.timestamp.desc(), Scan.id.desc())
     ).all()
     ids: list[uuid.UUID] = []
-    seen: dict[uuid.UUID, set[str]] = {}  # variant_id -> set of keys already picked
+    seen: dict[uuid.UUID, set[tuple[bool, str | None]]] = {}
     for scan_id, vid, scan_type, scan_source, _ts in rows:
-        st = scan_type or "sbom"
-        key = f"tool:{scan_source}" if st == "tool" else "sbom"
+        key = scan_strategy_key(scan_type, scan_source)
         variant_seen = seen.setdefault(vid, set())
         if key not in variant_seen:
             variant_seen.add(key)
@@ -100,7 +103,7 @@ def active_sbom_scan_ids_for_variant(variant_uuid: uuid.UUID) -> list[uuid.UUID]
     """
     rows = db.session.execute(
         db.select(Scan.id)
-        .where(Scan.variant_id == variant_uuid)
+        .where(Scan.variant_id == variant_uuid, Scan.in_progress.is_(False))
         .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
         .order_by(Scan.timestamp.desc(), Scan.id.desc())
         .limit(1)
@@ -116,7 +119,7 @@ def active_sbom_scan_ids_for_project(project_uuid: uuid.UUID) -> list[uuid.UUID]
     rows = db.session.execute(
         db.select(Scan.id, Scan.variant_id, Scan.timestamp)
         .join(Variant, Scan.variant_id == Variant.id)
-        .where(Variant.project_id == project_uuid)
+        .where(Variant.project_id == project_uuid, Scan.in_progress.is_(False))
         .where(db.or_(Scan.scan_type == "sbom", Scan.scan_type.is_(None)))
         .order_by(Scan.variant_id, Scan.timestamp.desc(), Scan.id.desc())
     ).all()

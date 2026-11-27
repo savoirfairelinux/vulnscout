@@ -147,7 +147,13 @@ inventory. Reimport the original companion SBOMs together to populate older
 imports. Formats other than SPDX and CycloneDX 1.5+ do not populate this inventory.
 SPDX 2 packages with `filesAnalyzed: false` and no associated file records also
 remain **Not recorded**, including package-only VulnScout exports.
-Outdated packages show **Not in active scan**.
+The SBOM table shows packages from each selected variant's active SBOM,
+including packages without any findings. **Ever observed** mode, available
+in the **Project & Variant** selector, also shows earlier SBOM membership
+after you click **Apply**;
+older variant memberships are marked **Outdated** and do not offer active-scan
+file or dependency evidence. A package that is still installed stays current in
+this table even if one of its vulnerability findings is historical.
 
 The local advisory engine uses resolved compiled-source paths for CVE refinement
 only when the inventory is complete and the advisory supplies affected-file

@@ -578,6 +578,7 @@ def fetch_vulnerabilities_texts(
     include_packages: bool = False,
     variant_ids: list[uuid_module.UUID] | None = None,
     scan_ids: list[uuid_module.UUID] | None = None,
+    scans_by_vulnerability: dict[str, set[uuid_module.UUID]] | None = None,
 ) -> dict[str, list[VulnerabilityText]]:
     vuln_texts: dict[str, list[VulnerabilityText]] = {vuln_id: [] for vuln_id in vuln_ids}
     vuln_desc_query = (
@@ -622,13 +623,18 @@ def fetch_vulnerabilities_texts(
                 .where(Scan.variant_id.in_(variant_ids))
             ))
 
-    if scan_ids is not None:
+    if scan_ids is not None or scans_by_vulnerability is not None:
         sbom_observation_query = sbom_observation_query \
-            .join(SBOMDocument, SBOMObservation.sbom_document_id == SBOMDocument.id) \
-            .where(SBOMDocument.scan_id.in_(scan_ids))
+            .join(SBOMDocument, SBOMObservation.sbom_document_id == SBOMDocument.id)
+        if scan_ids is not None:
+            sbom_observation_query = sbom_observation_query.where(SBOMDocument.scan_id.in_(scan_ids))
+    if scans_by_vulnerability is not None:
+        sbom_observation_query = sbom_observation_query.add_columns(SBOMDocument.scan_id)
 
     records = db.session.execute(sbom_observation_query).all()
     for vuln_id, obs_key, obs_desc, *rest in records:
+        if scans_by_vulnerability is not None and rest.pop() not in scans_by_vulnerability.get(vuln_id, ()):
+            continue
         texts = vuln_texts[vuln_id]
         if include_packages:
             pkg, = rest
@@ -653,7 +659,9 @@ def fetch_vulnerabilities_texts(
                     content=obs_desc,
                     packages=[pkg]
                 ))
-        else:
+        elif scans_by_vulnerability is None or not any(
+            text.title == obs_key and text.content == obs_desc and text.packages is None for text in texts
+        ):
             texts.append(VulnerabilityText(
                 title=obs_key,
                 content=obs_desc,

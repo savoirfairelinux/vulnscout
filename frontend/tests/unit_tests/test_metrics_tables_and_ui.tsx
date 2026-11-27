@@ -187,7 +187,7 @@ describe('Metrics — sections and UI', () => {
         await waitForRender();
         expect(screen.getByText('Vulnerabilities by Severity')).toBeInTheDocument();
         expect(screen.getByText('Vulnerabilities by Status')).toBeInTheDocument();
-        expect(screen.getByText('Active vulnerabilities')).toBeInTheDocument();
+        expect(screen.getByText('Assessment trend for current findings')).toBeInTheDocument();
         expect(screen.getByText('Vulnerabilities by Database')).toBeInTheDocument();
     }, 15_000);
 

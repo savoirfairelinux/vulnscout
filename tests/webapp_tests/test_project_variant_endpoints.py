@@ -22,11 +22,12 @@ from . import write_demo_files
 # ---------------------------------------------------------------------------
 
 def setup_db_with_project_variant(app):
-    """Set up the in-memory DB with two projects/variants and scoped data.
+    """Set up the in-memory DB with scoped data for two projects.
 
     Layout
     ------
     ProjectA / VariantA  →  CairoScan  →  cairo@1.16.0 / CVE-2020-35492
+    ProjectA / ComparisonVariant (empty)
     ProjectB / VariantB  →  BusyScan   →  busybox@1.35.0 (no vulnerability)
 
     The cairo finding has an Observation linked to CairoScan so that the
@@ -56,6 +57,7 @@ def setup_db_with_project_variant(app):
         # --- ProjectA / VariantA -----------------------------------------
         project_a = Project.create("ProjectA")
         variant_a = Variant.create("VariantA", project_a.id)
+        comparison_variant = Variant.create("ComparisonVariant", project_a.id)
         scan_a = Scan.create("scan for VariantA", variant_a.id)
 
         # Package + vulnerability + finding
@@ -135,6 +137,7 @@ def setup_db_with_project_variant(app):
             "project_a_id": str(project_a.id),
             "project_b_id": str(project_b.id),
             "variant_a_id": str(variant_a.id),
+            "comparison_variant_id": str(comparison_variant.id),
             "variant_b_id": str(variant_b.id),
         }
 
@@ -249,9 +252,8 @@ class TestVariantsEndpoint:
         assert response.status_code == 200
         body = json.loads(response.data)
         assert isinstance(body, list)
-        assert len(body) == 1
-        assert body[0]["name"] == "VariantA"
-        assert body[0]["project_id"] == project_id
+        assert {variant["name"] for variant in body} == {"VariantA", "ComparisonVariant"}
+        assert all(variant["project_id"] == project_id for variant in body)
 
     def test_list_variants_serialization(self, client_and_data):
         client, data = client_and_data
@@ -425,24 +427,22 @@ class TestPackagesFiltering:
             "error": "A variant or project scope is required for outdated packages"
         }
 
-    def test_packages_include_outdated_finding_variant_rows(self, client_and_data, app_with_data):
+    def test_packages_include_outdated_sbom_rows_without_a_finding(self, client_and_data, app_with_data):
         client, data = client_and_data
         application, _ = app_with_data
         from src.extensions import db
         from src.models.package import Package
-        from src.models.vulnerability import Vulnerability
-        from src.models.finding import Finding
-        from src.models.observation import Observation
         from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
 
         with application.app_context():
             old_package = Package.find_or_create("cairo", "1.15.0")
-            Vulnerability.create_record("CVE-2099-OLD1")
-            old_finding = Finding.get_or_create(old_package.id, "CVE-2099-OLD1")
-            scan_id = db.session.execute(
-                db.select(Scan.id).where(Scan.variant_id == uuid.UUID(data["variant_a_id"]))
-            ).scalar_one()
-            Observation.create(old_finding.id, scan_id)
+            old_scan = Scan(variant_id=uuid.UUID(data["variant_a_id"]), timestamp=datetime(2015, 1, 1, tzinfo=timezone.utc))
+            db.session.add(old_scan)
+            db.session.flush()
+            old_doc = SBOMDocument.create(path="/old.cdx.json", source_name="old.cdx.json", scan_id=old_scan.id)
+            SBOMPackage.create(old_doc.id, old_package.id)
             db.session.commit()
 
         response = client.get(
@@ -453,26 +453,69 @@ class TestPackagesFiltering:
         old_row = next(item for item in body if item["id"] == "cairo@1.15.0")
         assert old_row["outdated"] is True
         assert old_row["variants"] == ["VariantA"]
-        assert old_row["vulnerability_ids"] == ["CVE-2099-OLD1"]
+        assert old_row["sbom_documents"] == ["old.cdx.json"]
+        assert old_row["finding_ids"] == old_row["vulnerability_ids"] == []
         assert all(item["outdated"] is True for item in body)
+
+    def test_exact_outdated_package_links_use_package_and_variant(self, client_and_data, app_with_data):
+        from src.extensions import db
+        from src.models import Finding, Observation, Package, SBOMDocument, SBOMPackage, Scan, Vulnerability
+
+        client, data = client_and_data
+        application, _ = app_with_data
+        variant_id = data["variant_a_id"]
+        other_id = data["comparison_variant_id"]
+        with application.app_context():
+            old = Scan(variant_id=uuid.UUID(variant_id), timestamp=datetime(2015, 1, 1, tzinfo=timezone.utc))
+            db.session.add(old)
+            db.session.flush()
+            other_scan = Scan.create("other inventory", uuid.UUID(other_id), scan_type="sbom")
+            running = Scan(variant_id=old.variant_id, scan_type="tool", scan_source="osv", in_progress=True)
+            db.session.add(running)
+            db.session.flush()
+            old_doc = SBOMDocument.create("/old.cdx.json", "old.cdx.json", old.id)
+            other_doc = SBOMDocument.create("/other.cdx.json", "other.cdx.json", other_scan.id)
+            target = Package.find_or_create("@example/lib", "1", supplier="A")
+            other_supplier = Package.find_or_create("@example/lib", "1", supplier="B")
+            SBOMPackage.create(old_doc.id, target.id)
+            SBOMPackage.create(old_doc.id, other_supplier.id)
+            SBOMPackage.create(other_doc.id, target.id)
+            finding_ids = {}
+            for index, (package, scan) in enumerate(
+                ((target, old), (other_supplier, old), (target, other_scan), (target, running)), 1,
+            ):
+                vuln_id = f"TEST-PACKAGE-LINK-{index}"
+                Vulnerability.create_record(id=vuln_id)
+                finding = Finding.get_or_create(package.id, vuln_id)
+                Observation.create(finding.id, scan.id)
+                finding_ids[vuln_id] = str(finding.id)
+            package_id = target.string_id
+            db.session.commit()
+
+        params = {"variant_ids": f"{variant_id},{other_id}", "package_id": package_id, "outdated_only": "true"}
+        rows = client.get("/api/packages", query_string={**params, "operation": "intersection"}).get_json()
+        assert [(row["id"], row["variant_id"]) for row in rows] == [(package_id, variant_id)]
+        assert rows[0]["finding_ids"] == [finding_ids["TEST-PACKAGE-LINK-1"]]
+        assert rows[0]["vulnerability_ids"] == ["TEST-PACKAGE-LINK-1"]
+        assert client.get("/api/packages", query_string={**params, "operation": "difference"}).get_json() == []
 
     def test_packages_dict_keeps_active_and_outdated_variant_rows(self, client_and_data, app_with_data):
         client, data = client_and_data
         application, _ = app_with_data
         from src.extensions import db
-        from src.models.finding import Finding
-        from src.models.observation import Observation
         from src.models.package import Package
         from src.models.scan import Scan
+        from src.models.sbom_document import SBOMDocument
+        from src.models.sbom_package import SBOMPackage
 
         with application.app_context():
             cairo = Package.get_by_string_id("cairo@1.16.0")
             assert cairo is not None
-            finding = Finding.get_or_create(cairo.id, "CVE-2020-35492")
-            variant_b_scan_id = db.session.execute(
-                db.select(Scan.id).where(Scan.variant_id == uuid.UUID(data["variant_b_id"]))
-            ).scalar_one()
-            Observation.create(finding.id, variant_b_scan_id)
+            old_scan = Scan(variant_id=uuid.UUID(data["variant_b_id"]), timestamp=datetime(2015, 1, 1, tzinfo=timezone.utc))
+            db.session.add(old_scan)
+            db.session.flush()
+            old_doc = SBOMDocument.create(path="/old.cdx.json", source_name="old.cdx.json", scan_id=old_scan.id)
+            SBOMPackage.create(old_doc.id, cairo.id)
             db.session.commit()
 
         response = client.get(
@@ -486,6 +529,39 @@ class TestPackagesFiltering:
         outdated_key = f"cairo@1.16.0@{data['variant_b_id']}"
         assert body[outdated_key]["outdated"] is True
         assert body[outdated_key]["variant_id"] == data["variant_b_id"]
+
+    def test_packages_keep_null_and_empty_versions_distinct(self, client_and_data, app_with_data):
+        from src.extensions import db
+        from src.models import Package, SBOMDocument, SBOMPackage, Scan
+
+        client, data = client_and_data
+        app, _ = app_with_data
+        variant_id = data["variant_a_id"]
+        with app.app_context():
+            scan = Scan.create("Nullable inventory", uuid.UUID(variant_id), scan_type="sbom")
+            document = SBOMDocument.create("/nullable.cdx.json", "nullable.cdx.json", scan.id)
+            for version in ("1", "", None):
+                package = Package(name="nullable-test-package", version=version or "")
+                package.version = version
+                db.session.add(package)
+                db.session.flush()
+                SBOMPackage.create(document.id, package.id)
+
+        query = {"variant_id": variant_id}
+        response = client.get("/api/packages", query_string=query)
+        assert response.status_code == 200
+        rows = response.get_json()
+        assert [(row["id"], row["version"]) for row in rows] == [
+            ("nullable-test-package@None", None),
+            ("nullable-test-package@", ""),
+            ("nullable-test-package@1", "1"),
+        ]
+        response = client.get("/api/packages", query_string={**query, "format": "dict"})
+        assert response.status_code == 200
+        assert response.get_json() == {row["id"]: row for row in rows}
+        response = client.get("/api/packages", query_string={**query, "package_id": "nullable-test-package@None"})
+        assert response.status_code == 200
+        assert response.get_json() == [rows[0]]
 
     def test_packages_no_filter_returns_all(self, client_and_data):
         client, _ = client_and_data
@@ -848,14 +924,14 @@ class TestVulnerabilitiesFiltering:
         response = client.get("/api/vulnerabilities?project_id=bad-uuid&format=list")
         assert response.status_code == 400
 
-    # Compare-filtering tests use the existing fixture:
-    # VariantA has CVE-2020-35492, VariantB has no vulnerabilities.
+    # Compare-filtering tests use two variants in ProjectA:
+    # VariantA has CVE-2020-35492, ComparisonVariant has no vulnerabilities.
 
     def test_vulnerabilities_compare_difference_returns_compare_unique_vulns(self, client_and_data):
         """difference(base=VB, compare=VA): vulns in VA but NOT in VB → CVE-2020-35492."""
         client, data = client_and_data
         variant_a_id = data["variant_a_id"]
-        variant_b_id = data["variant_b_id"]
+        variant_b_id = data["comparison_variant_id"]
         url = (
             f"/api/vulnerabilities?format=list"
             f"&variant_id={variant_b_id}"
@@ -872,7 +948,7 @@ class TestVulnerabilitiesFiltering:
         """difference(base=VA, compare=VB): vulns in VB but NOT in VA → empty (VB has none)."""
         client, data = client_and_data
         variant_a_id = data["variant_a_id"]
-        variant_b_id = data["variant_b_id"]
+        variant_b_id = data["comparison_variant_id"]
         url = (
             f"/api/vulnerabilities?format=list"
             f"&variant_id={variant_a_id}"
@@ -888,7 +964,7 @@ class TestVulnerabilitiesFiltering:
         """intersection(VA, VB): no common vulns → empty."""
         client, data = client_and_data
         variant_a_id = data["variant_a_id"]
-        variant_b_id = data["variant_b_id"]
+        variant_b_id = data["comparison_variant_id"]
         url = (
             f"/api/vulnerabilities?format=list"
             f"&variant_id={variant_a_id}"
@@ -934,7 +1010,7 @@ class TestVulnerabilitiesFiltering:
     def test_vulnerabilities_compare_default_operation_is_difference(self, client_and_data):
         """Omitting operation defaults to difference."""
         client, data = client_and_data
-        variant_b_id = data["variant_b_id"]
+        variant_b_id = data["comparison_variant_id"]
         variant_a_id = data["variant_a_id"]
         url = (
             f"/api/vulnerabilities?format=list"
@@ -950,7 +1026,7 @@ class TestVulnerabilitiesFiltering:
     def test_vulnerabilities_compare_unknown_operation_falls_back_to_difference(self, client_and_data):
         """An unrecognised operation value is treated as difference."""
         client, data = client_and_data
-        variant_b_id = data["variant_b_id"]
+        variant_b_id = data["comparison_variant_id"]
         variant_a_id = data["variant_a_id"]
         url = (
             f"/api/vulnerabilities?format=list"
@@ -991,7 +1067,7 @@ class TestVulnerabilitiesFiltering:
         """union([VA, VB]): vulns in any selected variant → CVE-2020-35492."""
         client, data = client_and_data
         variant_a_id = data["variant_a_id"]
-        variant_b_id = data["variant_b_id"]
+        variant_b_id = data["comparison_variant_id"]
         url = (
             f"/api/vulnerabilities?format=list"
             f"&variant_ids={variant_a_id},{variant_b_id}"
@@ -1006,7 +1082,7 @@ class TestVulnerabilitiesFiltering:
         """Omitting operation defaults to union."""
         client, data = client_and_data
         variant_a_id = data["variant_a_id"]
-        variant_b_id = data["variant_b_id"]
+        variant_b_id = data["comparison_variant_id"]
         url = (
             f"/api/vulnerabilities?format=list"
             f"&variant_ids={variant_a_id},{variant_b_id}"
@@ -1020,7 +1096,7 @@ class TestVulnerabilitiesFiltering:
         """intersection([VA, VB]): no common vuln → empty."""
         client, data = client_and_data
         variant_a_id = data["variant_a_id"]
-        variant_b_id = data["variant_b_id"]
+        variant_b_id = data["comparison_variant_id"]
         url = (
             f"/api/vulnerabilities?format=list"
             f"&variant_ids={variant_a_id},{variant_b_id}"

@@ -34,6 +34,9 @@ type Vulnerability = {
     packages: string[];
     packages_current: string[];
     packages_current_by_variant?: Record<string, string[]>;
+    packages_status_by_variant?: Record<string, string[]>;
+    assessment_targets_by_variant?: Record<string, string[]>;
+    effort_variant_ids?: string[];
     variants: string[];
     urls: string[];
     cpes?: string[];
@@ -96,6 +99,20 @@ export function patchEffort(saved?: Partial<Record<keyof Vulnerability['effort']
     return (latest: Vulnerability): Vulnerability => ({ ...latest, effort: { ...latest.effort, ...delta } });
 }
 
+export function patchAssessments(removed: Iterable<string>, added: Assessment[] = []) {
+    const replaced = new Set([...removed, ...added.map(assessment => assessment.id)]);
+    return (latest: Vulnerability): Vulnerability => {
+        const assessments = [
+            ...latest.assessments.filter(assessment => !replaced.has(assessment.id)),
+            ...added,
+        ].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const status_summary = buildStatusSummary(
+            assessments, latest.packages_current, latest.packages_current_by_variant, latest.packages_status_by_variant,
+        );
+        return { ...latest, assessments, status_summary, simplified_status: status_summary.dominant_status };
+    };
+}
+
 const SEVERITY_ORDER = ['NONE', 'UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const STATUS_SORT_ORDER = ['unknown', 'Pending Assessment', 'Exploitable', 'Not affected', 'Fixed'];
 const STATUS_DOMINANT_PRIORITY = ['Exploitable', 'Pending Assessment', 'Not affected', 'Fixed', 'unknown'];
@@ -129,8 +146,10 @@ const buildStatusSummary = (
     assessments: Assessment[],
     currentPackages?: string[],
     currentPackagesByVariant?: Record<string, string[]>,
+    statusPackagesByVariant?: Record<string, string[]>,
 ): StatusSummary => {
-    const hasVariantPackageScope = currentPackagesByVariant !== undefined;
+    const packageScopeByVariant = statusPackagesByVariant ?? currentPackagesByVariant;
+    const hasVariantPackageScope = packageScopeByVariant !== undefined;
     let legacyCurrentPackages: Set<string> | undefined;
     if (!hasVariantPackageScope && currentPackages && currentPackages.length > 0
         && assessments.length > 0) {
@@ -160,7 +179,11 @@ const buildStatusSummary = (
     // Supersession applies to exact package/variant targets, not whole variants.
     // Keep a fallback slot for legacy assessments with no package target.
     const latestPerTarget = new Map<string, Assessment>();
-    const globalCurrentPackages = new Set(currentPackages ?? []);
+    const globalCurrentPackages = new Set(
+        statusPackagesByVariant
+            ? Object.values(statusPackagesByVariant).flat()
+            : currentPackages ?? [],
+    );
     assessments.forEach((assessment) => {
         const variantIds = assessmentVariantIds(assessment);
         const keys = variantIds.length > 0 ? variantIds : ['__no_variant__'];
@@ -170,7 +193,7 @@ const buildStatusSummary = (
                 : assessmentPackagesInVariant(assessment, key)) ?? [];
             const currentForVariant = hasVariantPackageScope
                 ? key !== '__no_variant__'
-                    ? new Set(currentPackagesByVariant?.[key] ?? [])
+                    ? new Set(packageScopeByVariant?.[key] ?? [])
                     : globalCurrentPackages
                 : legacyCurrentPackages;
             const packages = targetPackages.length > 0
@@ -281,6 +304,19 @@ const asVulnerability = (data: any): Vulnerability | [] => {
             ? Object.fromEntries(Object.entries(data.packages_current_by_variant)
                 .map(([variantId, packages]) => [variantId, asStringArray(packages)]))
             : undefined,
+        packages_status_by_variant: data?.packages_status_by_variant
+            && typeof data.packages_status_by_variant === 'object'
+            && !Array.isArray(data.packages_status_by_variant)
+            ? Object.fromEntries(Object.entries(data.packages_status_by_variant)
+                .map(([variantId, packages]) => [variantId, asStringArray(packages)]))
+            : undefined,
+        assessment_targets_by_variant: data?.assessment_targets_by_variant
+            && typeof data.assessment_targets_by_variant === 'object'
+            && !Array.isArray(data.assessment_targets_by_variant)
+            ? Object.fromEntries(Object.entries(data.assessment_targets_by_variant)
+                .map(([variantId, packages]) => [variantId, asStringArray(packages)]))
+            : undefined,
+        effort_variant_ids: Array.isArray(data.effort_variant_ids) ? asStringArray(data.effort_variant_ids) : undefined,
         variants: asStringArray(data?.variants),
         urls: asStringArray(data?.urls),
         cpes: asStringArray(data?.cpes),
@@ -339,18 +375,68 @@ const asVulnerability = (data: any): Vulnerability | [] => {
     return vuln
 }
 
+export type ComparisonScope = {
+    baseVariantId?: string;
+    operation?: string;
+    variantIds?: string[];
+    multiOperation?: string;
+};
+
+function setScopeParams(
+    params: URLSearchParams, variantId?: string, projectId?: string, compareVariantId?: string,
+    operation?: string, variantIds?: string[], multiOperation?: string,
+) {
+    if (variantId && compareVariantId) {
+        params.set('variant_id', variantId);
+        params.set('compare_variant_id', compareVariantId);
+        if (operation) params.set('operation', operation);
+    } else if (variantIds && variantIds.length >= 2) {
+        params.set('variant_ids', variantIds.join(','));
+        if (multiOperation) params.set('operation', multiOperation);
+    } else if (variantId) {
+        params.set('variant_id', variantId);
+    }
+    if (projectId) params.set('project_id', projectId);
+}
+
+function setEvidenceScopeParams(
+    params: URLSearchParams, variantId?: string, projectId?: string, comparison?: ComparisonScope,
+    includeOutdated = false,
+) {
+    if (includeOutdated) params.set('include_outdated', 'true');
+    setScopeParams(
+        params, comparison?.baseVariantId ?? variantId, projectId,
+        comparison?.baseVariantId ? variantId : undefined, comparison?.operation,
+        comparison?.variantIds, comparison?.multiOperation,
+    );
+}
+
 class Vulnerabilities {
-    static async matchCondition(condition: string, vulnerabilities: Vulnerability[]): Promise<string[]> {
+    static async matchCondition(condition: string, vulnerabilities: Vulnerability[], signal?: AbortSignal): Promise<string[]> {
         // Facts must stay aligned with the CI fail-condition evaluation in
         // src/bin/cmd_process.py (evaluate_condition) so a given condition
         // matches identically in the UI and in CI pipelines.
         const items = vulnerabilities.map(vulnerability => {
-            const lastAssessment = vulnerability.assessments.reduce<Assessment | undefined>((latest, assessment) => {
-                if (!latest || new Date(assessment.timestamp).getTime() > new Date(latest.timestamp).getTime()) {
+            const targets = vulnerability.packages_status_by_variant ?? vulnerability.packages_current_by_variant;
+            const latestInEvidence = vulnerability.assessments.reduce<Assessment | undefined>((latest, assessment) => {
+                if (targets !== undefined) {
+                    const variants = assessmentVariantIds(assessment);
+                    const applies = variants.length
+                        ? variants.some(variant => targets[variant]?.some(pkg =>
+                            assessmentPackagesInVariant(assessment, variant).includes(pkg)))
+                        : Object.values(targets).some(packages =>
+                            packages.some(pkg => assessment.packages.includes(pkg)));
+                    if (!applies) return latest;
+                }
+                const timestamp = new Date(assessment.timestamp).getTime();
+                const latestTimestamp = latest ? new Date(latest.timestamp).getTime() : -Infinity;
+                if (!latest || timestamp > latestTimestamp
+                    || (timestamp === latestTimestamp && assessment.id > latest.id)) {
                     return assessment;
                 }
                 return latest;
             }, undefined);
+            const status = latestInEvidence?.status;
 
             return {
                 id: vulnerability.id,
@@ -363,11 +449,11 @@ class Vulnerabilities {
                     effort_min: vulnerability.effort.optimistic.total_seconds || false,
                     effort_max: vulnerability.effort.pessimistic.total_seconds || false,
                     known_exploitable: vulnerability.euvd?.known_exploited ?? false,
-                    fixed: lastAssessment ? ['fixed', 'resolved', 'resolved_with_pedigree'].includes(lastAssessment.status) : false,
-                    ignored: lastAssessment ? ['not_affected', 'false_positive'].includes(lastAssessment.status) : false,
-                    affected: lastAssessment ? ['affected', 'exploitable'].includes(lastAssessment.status) : false,
-                    pending: lastAssessment ? ['under_investigation', 'in_triage'].includes(lastAssessment.status) : true,
-                    new: !lastAssessment,
+                    fixed: status ? ['fixed', 'resolved', 'resolved_with_pedigree'].includes(status) : false,
+                    ignored: status ? ['not_affected', 'false_positive'].includes(status) : false,
+                    affected: status ? ['affected', 'exploitable'].includes(status) : false,
+                    pending: !status || ['under_investigation', 'in_triage'].includes(status),
+                    new: !latestInEvidence,
                 },
             };
         });
@@ -375,6 +461,7 @@ class Vulnerabilities {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ condition, items }),
+            signal,
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `Match condition failed (${response.status})`);
@@ -383,21 +470,12 @@ class Vulnerabilities {
             : [];
     }
 
-    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string, signal?: AbortSignal): Promise<Vulnerability[]> {
+    static async list(variantId?: string, projectId?: string, compareVariantId?: string, operation?: string, variantIds?: string[], multiOperation?: string, signal?: AbortSignal, includeOutdated = false): Promise<Vulnerability[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/vulnerabilities", window.location.href);
         url.searchParams.set('format', 'compact');
-        if (variantId && compareVariantId) {
-            url.searchParams.set('variant_id', variantId);
-            url.searchParams.set('compare_variant_id', compareVariantId);
-            if (operation) url.searchParams.set('operation', operation);
-        } else if (variantIds && variantIds.length >= 2) {
-            url.searchParams.set('variant_ids', variantIds.join(','));
-            if (multiOperation) url.searchParams.set('operation', multiOperation);
-            if (projectId) url.searchParams.set('project_id', projectId);
-        } else if (variantId) {
-            url.searchParams.set('variant_id', variantId);
-        } else if (projectId) {
-            url.searchParams.set('project_id', projectId);
+        setScopeParams(url.searchParams, variantId, projectId, compareVariantId, operation, variantIds, multiOperation);
+        if (includeOutdated) {
+            url.searchParams.set('include_outdated', 'true');
         }
         const response = await fetch(url.toString(), {
             mode: "cors",
@@ -412,16 +490,14 @@ class Vulnerabilities {
         variantId?: string,
         projectId?: string,
         signal?: AbortSignal,
+        comparison?: ComparisonScope,
+        includeOutdated = false,
     ): Promise<Vulnerability | null> {
         const url = new URL(
             import.meta.env.VITE_API_URL + `/api/vulnerabilities/${encodeURIComponent(vulnId)}`,
             window.location.href,
         );
-        if (variantId) {
-            url.searchParams.set('variant_id', variantId);
-        } else if (projectId) {
-            url.searchParams.set('project_id', projectId);
-        }
+        setEvidenceScopeParams(url.searchParams, variantId, projectId, comparison, includeOutdated);
         const response = await fetch(url.toString(), { mode: 'cors', signal });
         if (!response.ok) {
             throw new Error(`Failed to load vulnerability details (${response.status})`);
@@ -436,16 +512,14 @@ class Vulnerabilities {
         variantId?: string,
         projectId?: string,
         signal?: AbortSignal,
+        includeOutdated = false,
+        comparison?: ComparisonScope,
     ): Promise<Record<string, string[]>> {
         const url = new URL(
             import.meta.env.VITE_API_URL + '/api/vulnerabilities/search-descriptions',
             window.location.href,
         );
-        if (variantId) {
-            url.searchParams.set('variant_id', variantId);
-        } else if (projectId) {
-            url.searchParams.set('project_id', projectId);
-        }
+        setEvidenceScopeParams(url.searchParams, variantId, projectId, comparison, includeOutdated);
         const response = await fetch(url.toString(), {
             method: 'POST',
             mode: 'cors',
@@ -513,6 +587,7 @@ class Vulnerabilities {
                 vulnAssessments,
                 vuln.packages_current,
                 vuln.packages_current_by_variant,
+                vuln.packages_status_by_variant,
             );
             return {
                 ...vuln,
@@ -534,6 +609,7 @@ class Vulnerabilities {
                     assessments,
                     vuln.packages_current,
                     vuln.packages_current_by_variant,
+                    vuln.packages_status_by_variant,
                 );
                 return {
                     ...vuln,

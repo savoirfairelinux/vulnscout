@@ -389,16 +389,17 @@ describe('Packages.list with filtering params', () => {
         expect(calledUrl).not.toContain('variant_id');
     });
 
-    test('list(variantId, projectId) uses only variant_id', async () => {
+    test.each([false, true])('list retains the project and variant (historical: %s)', async historical => {
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({ json: () => Promise.resolve([]) } as Response)
         );
 
-        await Packages.list('var-1', 'proj-1');
+        await Packages.list('var-1', 'proj-1', undefined, undefined, undefined, undefined, historical);
 
-        const calledUrl: string = (fetchMock.mock.calls[0] as any[])[0];
-        expect(calledUrl).toContain('variant_id=var-1');
-        expect(calledUrl).not.toContain('project_id');
+        const { searchParams } = new URL(fetchMock.mock.calls[0][0] as string);
+        expect(searchParams.get('variant_id')).toBe('var-1');
+        expect(searchParams.get('project_id')).toBe('proj-1');
+        expect(searchParams.get('include_outdated')).toBe(historical ? 'true' : null);
     });
 
     test('list(...variantIds, multiOperation) uses variant_ids, operation and project_id', async () => {
@@ -504,7 +505,7 @@ describe('Vulnerabilities.list with filtering params', () => {
         expect(calledUrl).not.toContain('variant_id');
     });
 
-    test('list(variantId, projectId) prioritises variant_id', async () => {
+    test('list(variantId, projectId) keeps both scope IDs', async () => {
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({ json: () => Promise.resolve([]) } as Response)
         );
@@ -513,7 +514,7 @@ describe('Vulnerabilities.list with filtering params', () => {
 
         const calledUrl: string = (fetchMock.mock.calls[0] as any[])[0];
         expect(calledUrl).toContain('variant_id=var-1');
-        expect(calledUrl).not.toContain('project_id');
+        expect(calledUrl).toContain('project_id=proj-1');
     });
 
     test('list(...variantIds, multiOperation) uses variant_ids, operation and project_id', async () => {

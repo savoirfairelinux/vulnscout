@@ -13,7 +13,7 @@ from ..models.assessment import APPROVAL_CONTENT_FIELDS, APPROVAL_EDIT_FIELDS
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
 from ..extensions import db, batch_session, hold_write_lock, write_lock
-from ..models.variant import Variant as DBVariant
+from ..models.variant import Variant as DBVariant, lock_scan_membership
 from ..models.variant_context import VariantContext
 from ..helpers.assessment_risk_links import (
     MAX_SNAPSHOT_BYTES, RiskLinkError, RiskModelIndex, RiskSnapshot, charge_snapshots, describe_links,
@@ -36,6 +36,8 @@ from ..helpers.assessment_io import (
 )
 from ..helpers.assessment_staleness import annotate_assessments_outdated
 from ..controllers.assessment_targets import annotate_targets
+from ..helpers.active_scans import active_scan_ids_for_variant
+from ..helpers.finding_evidence import finding_packages_for_scans, variant_finding_targets
 from ._assessment_write import (
     apply_reconcile,
     create_assessment_record,
@@ -1513,25 +1515,21 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<vuln_id>/variant-active-packages')
     def list_variant_active_packages(vuln_id: str) -> ResponseReturnValue:
-        """For each variant affected by this vulnerability, return the subset of
-        the vulnerability's packages still present in that variant's active SBOM.
+        """Return exact current and historical finding targets for assessment editing.
 
-        Lets the front-end classify deprecated (variant, package) pairs in a
-        single request instead of one ``/api/packages`` call per variant.
+        A target can be historical even when the package is still in the active SBOM.
 
         OpenAPI:
         query project_id uuid optional Restrict the result to one project.
-        response 200 VariantActivePackages Active packages by variant.
+        response 200 VariantActivePackages Current writable packages and published finding targets by variant.
         """
-        from ..helpers.active_targets import variant_active_packages
-
         project_uuid: UUID | None = None
         project_id = request.args.get('project_id')
         if project_id:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
-        return variant_active_packages(vuln_id, project_uuid), 200
+        return variant_finding_targets(vuln_id, project_uuid), 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str) -> ResponseReturnValue:
@@ -1716,18 +1714,35 @@ def init_app(app: Flask) -> None:
         payload_data = request.get_json()
         if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
+        current_only = payload_data.get("current_only", False)
+        if not isinstance(current_only, bool):
+            return {"error": "current_only must be a boolean"}, 400
 
         errors: list[dict[str, Any]] = []
-        prepared: list[tuple[DBAssessment, list[tuple[UUID, UUID]]]] = []
+        prepared: list[tuple[DBAssessment, dict[tuple[str, UUID], Finding]]] = []
         pkg_cache: dict[str, Package] = {}
 
-        # Validate the complete request before opening the write transaction.
-        # A batch represents one user action, so one invalid package/variant
-        # relationship must cancel every assessment in that action.
+        # Resolve the entire batch before writing any assessments. Current-only
+        # eligibility is rechecked under the write lock just before persisting.
         for item in payload_data["assessments"]:
             if not isinstance(item, dict) or "vuln_id" not in item:
                 errors.append({"error": "Invalid assessment data", "item": item})
                 continue
+
+            exact_targets: set[tuple[str, UUID]] | None = None
+            if current_only and "targets" not in item:
+                errors.append({"vuln_id": item.get("vuln_id"), "error": "current_only requires exact targets"})
+                continue
+            if "targets" in item:
+                exact_targets = _parse_batch_targets(item["targets"])
+                if not exact_targets:
+                    errors.append({"vuln_id": item.get("vuln_id"), "error": "Invalid assessment targets"})
+                    continue
+                item = {
+                    **item,
+                    "packages": sorted({package for package, _ in exact_targets}),
+                    "variant_ids": sorted({str(variant) for _, variant in exact_targets}),
+                }
 
             assessment, status = payload_to_assessment(item)
             if status != 200:
@@ -1795,6 +1810,10 @@ def init_app(app: Flask) -> None:
             except ValueError as exc:
                 errors.append({"vuln_id": vuln_id, "error": str(exc)})
                 continue
+            if exact_targets is not None:
+                missing_targets = exact_targets.difference(resolved)
+                unobserved = sorted(f"{package} in {variant}" for package, variant in missing_targets)
+                resolved = {pair: finding for pair, finding in resolved.items() if pair in exact_targets}
             if unobserved:
                 errors.append({
                     "vuln_id": vuln_id,
@@ -1803,13 +1822,9 @@ def init_app(app: Flask) -> None:
                     + ", ".join(unobserved),
                 })
                 continue
-            item_targets = [
-                (variant_id, finding.id)
-                for (_package, variant_id), finding in resolved.items()
-            ]
-            prepared.append((assessment, item_targets))
+            prepared.append((assessment, resolved))
 
-        if errors:
+        def invalid_batch() -> ResponseReturnValue:
             return {
                 "status": "error",
                 "assessments": [],
@@ -1819,15 +1834,45 @@ def init_app(app: Flask) -> None:
                 "error_count": len(errors),
             }, 400
 
+        if errors:
+            return invalid_batch()
+
         results: list[AssessmentDict] = []
         try:
             with batch_session():
+                if current_only:
+                    _lock_target_writes()
+                    variant_ids_to_check = {
+                        variant_id for _, targets in prepared for _, variant_id in targets
+                    }
+                    lock_scan_membership(variant_ids_to_check)
+                    scan_ids = [
+                        scan_id for variant_id in variant_ids_to_check
+                        for scan_id in active_scan_ids_for_variant(variant_id)
+                    ]
+                    current = finding_packages_for_scans(
+                        scan_ids, {finding.vulnerability_id for _, targets in prepared for finding in targets.values()}
+                    ).writable
+                    for assessment, targets in prepared:
+                        stale = sorted(
+                            f"{package} in {variant_id}"
+                            for (package, variant_id), finding in targets.items()
+                            if package not in current.get(finding.vulnerability_id, {}).get(str(variant_id), ())
+                        )
+                        if stale:
+                            errors.append({
+                                "vuln_id": assessment.vuln_id,
+                                "error": "Package targets are no longer current: " + ", ".join(stale),
+                            })
+                    if errors:
+                        return invalid_batch()
                 # A batch is one user action but may span several CVEs,
                 # several projects and several distinct contents. Each item
                 # creates exactly one row covering every package in that
                 # item; batching never fuses separate items together.
                 created_rows: list[DBAssessment] = []
-                for assessment, item_targets in prepared:
+                for assessment, targets in prepared:
+                    item_targets = [(variant_id, finding.id) for (_, variant_id), finding in targets.items()]
                     created_rows.append(create_assessment_record(
                         assessment, item_targets,
                         timestamp=getattr(assessment, "timestamp", None),
@@ -2056,6 +2101,23 @@ def init_app(app: Flask) -> None:
                 return {"error": "Not a pending AI assessment"}, 400
             session.delete(row)
         return {"status": "success", "deleted": [str(aid)]}, 200
+
+
+def _parse_batch_targets(raw_targets: object) -> set[tuple[str, UUID]] | None:
+    if not isinstance(raw_targets, list) or not raw_targets:
+        return None
+    targets: set[tuple[str, UUID]] = set()
+    for target in raw_targets:
+        if not isinstance(target, dict):
+            return None
+        package, variant = target.get("package"), target.get("variant_id")
+        if not isinstance(package, str) or not package or not isinstance(variant, str):
+            return None
+        variant_id, err = parse_uuid_or_400(variant, "variant_id")
+        if err is not None or variant_id is None:
+            return None
+        targets.add((package, variant_id))
+    return targets
 
 
 def payload_to_assessment(

@@ -1,6 +1,6 @@
-import type { Vulnerability, VulnerabilityPatch } from "../handlers/vulnerabilities";
+import type { ComparisonScope, Vulnerability, VulnerabilityPatch } from "../handlers/vulnerabilities";
 import type { CVSS } from "../handlers/vulnerabilities";
-import Vulnerabilities, { asCVSS, buildStatusSummary, patchEffort } from "../handlers/vulnerabilities";
+import Vulnerabilities, { asCVSS, patchAssessments, patchEffort } from "../handlers/vulnerabilities";
 import type { AiAssessmentEdits, Assessment, AssessmentTargetPair } from "../handlers/assessments";
 import Assessments, { asAssessment, isMultiTarget, appliesToVariant, assessmentPackagesInVariant, coversTarget, reconcileTargetPairs, sharesNotesWithNewTargets } from "../handlers/assessments";
 import { escape } from "lodash-es";
@@ -55,6 +55,8 @@ type Props = {
     onNavigate?: (index: number) => void;
     variantId?: string;
     projectId?: string;
+    comparisonScope?: ComparisonScope;
+    includeOutdated?: boolean;
 };
 
 // How long the inline "Copied" confirmation stays next to a copy button.
@@ -148,7 +150,7 @@ type PendingAiEditTransition =
     | { kind: "exit" };
 
   function VulnModal(props: Readonly<Props>) {
-        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, vulnerabilities, currentIndex, onNavigate, variantId, projectId } = props;
+        const { vuln, detailsLoading = false, detailsError = false, isEditing: initialIsEditing, readOnly = false, onClose, appendAssessment, appendCVSS, vulnerabilities, currentIndex, onNavigate, variantId, projectId, comparisonScope, includeOutdated = false } = props;
     // Full-row saves belong to the snapshot the modal opened with. Its callback
     // carries that revision so Explorer can reread instead of installing a stale row.
     const [patchVuln] = useState(() => props.patchVuln);
@@ -252,7 +254,8 @@ type PendingAiEditTransition =
 
     // Project-scoped package list: prefer packages_current (scoped to
     // the active scan context) and fall back to the full list.
-    const projectPackages = (vuln.packages_current?.length > 0) ? vuln.packages_current : vuln.packages;
+    const projectPackages = vuln.packages_current_by_variant !== undefined || vuln.packages_current?.length > 0
+        ? vuln.packages_current : vuln.packages;
 
     useEffect(() => {
         const closeCpeHint = (event: MouseEvent) => {
@@ -356,7 +359,7 @@ type PendingAiEditTransition =
             const data = await r.json();
             if (current() && Array.isArray(data)) {
                 const fullAssessments = data.flatMap(asAssessment).filter((a): a is Assessment => !Array.isArray(a));
-                const scopedAssessments = variantId
+                const scopedAssessments = variantId && !comparisonScope?.baseVariantId
                     ? fullAssessments.filter(a => appliesToVariant(a, variantId))
                     : fullAssessments;
                 vuln.assessments = scopedAssessments;
@@ -367,7 +370,7 @@ type PendingAiEditTransition =
             // Keep whatever was previously loaded.
         }
         return null;
-    }, [beginRequest, vuln, projectId, variantId]);
+    }, [beginRequest, vuln, projectId, variantId, comparisonScope?.baseVariantId]);
 
     // Fetch server-built assessment rows for this vulnerability (Task 8/11),
     // replacing the old client-side grouping heuristic. When this request is
@@ -698,12 +701,13 @@ type PendingAiEditTransition =
         setRefreshError(null);
         setRefreshedList([]);
         setRefreshOmissions([]);
-        const reloadMetadata = async (): Promise<Vulnerability> => {
-            const details = await Vulnerabilities.getDetails(vuln.id, variantId, projectId);
+        const reloadMetadata = async (): Promise<Partial<Vulnerability>> => {
+            const details = comparisonScope || includeOutdated
+                ? await Vulnerabilities.getDetails(vuln.id, variantId, projectId, undefined, comparisonScope, includeOutdated)
+                : await Vulnerabilities.getDetails(vuln.id, variantId, projectId);
             if (!details) throw new Error("Failed to load refreshed vulnerability details.");
             // Refresh endpoints return global records, not the modal's project/variant scope.
             return {
-                ...vuln,
                 aliases: details.aliases,
                 related_vulnerabilities: details.related_vulnerabilities,
                 urls: details.urls,
@@ -719,6 +723,9 @@ type PendingAiEditTransition =
                 euvd_fetched_at: details.euvd_fetched_at,
             };
         };
+        const metadataForRow = (row: Vulnerability, metadata: Partial<Vulnerability>) =>
+            includeOutdated && row.packages_status_by_variant === undefined
+                ? { ...metadata, texts: row.texts, severity: row.severity } : metadata;
         const latest = (...values: Array<string | undefined>) =>
             values.filter((value): value is string => Boolean(value)).sort().pop();
         try {
@@ -726,7 +733,8 @@ type PendingAiEditTransition =
             if (vuln.id.toUpperCase().startsWith('GHSA-')) {
                 const result = results.ghsa;
                 if (result) {
-                    patchVuln(vuln.id, await reloadMetadata());
+                    const metadata = await reloadMetadata();
+                    patchVuln(vuln.id, latest => ({ ...latest, ...metadataForRow(latest, metadata) }));
                     setRefreshedList(['GHSA']);
                 } else {
                     setRefreshError("GitHub Advisory Database refresh failed. Please try again later.");
@@ -762,7 +770,7 @@ type PendingAiEditTransition =
 
                 const epssUpdated = results.epss !== null;
 
-                let merged = { ...vuln };
+                let merged: Partial<Vulnerability> = {};
 
                 if (nvdUpdated || epssUpdated || euvdValue) {
                     if (nvdUpdated) {
@@ -787,7 +795,6 @@ type PendingAiEditTransition =
                     if (euvdValue) {
                         merged = {
                             ...merged,
-                            aliases: [...new Set([...merged.aliases, ...euvdValue.aliases])],
                             euvd: euvdValue.euvd,
                             euvd_fetched_at: euvdValue.euvd_fetched_at,
                             data_fetched_at: latest(merged.data_fetched_at, euvdValue.data_fetched_at),
@@ -796,7 +803,15 @@ type PendingAiEditTransition =
                         setRefreshedList(prev => [...prev, "ENISA EUVD"]);
                     }
 
-                    patchVuln(vuln.id, merged);
+                    patchVuln(vuln.id, current => ({
+                        ...current,
+                        ...metadataForRow(current, merged),
+                        aliases: euvdValue
+                            ? [...new Set([...(merged.aliases ?? current.aliases), ...euvdValue.aliases])]
+                            : merged.aliases ?? current.aliases,
+                        data_fetched_at: latest(current.data_fetched_at, merged.data_fetched_at),
+                        data_updated_at: latest(current.data_updated_at, merged.data_updated_at),
+                    }));
                 }
 
                 if (errors.length > 0) {
@@ -809,7 +824,7 @@ type PendingAiEditTransition =
             setRefreshing(false);
             setHistoryVersion(version => version + 1);
         }
-    }, [vuln, patchVuln, variantId, projectId]);
+    }, [vuln, patchVuln, variantId, projectId, comparisonScope, includeOutdated]);
 
     const copyRowId = async (row: Assessment) => {
         try {
@@ -878,15 +893,7 @@ type PendingAiEditTransition =
             return approvedById.get(a.id) ?? { ...a, ...edits, origin: "custom" };
         }));
 
-        const assessments = [
-            ...vuln.assessments.filter(a => !approvedById.has(a.id)),
-            ...approved,
-        ].filter(a => a.origin !== "ai" && (!variantId || appliesToVariant(a, variantId)));
-        const summary = buildStatusSummary(assessments, vuln.packages_current, vuln.packages_current_by_variant);
-        vuln.assessments = assessments;
-        vuln.simplified_status = summary.dominant_status;
-        vuln.status_summary = summary;
-        patchVuln(vuln.id, { ...vuln });
+        patchVuln(vuln.id, patchAssessments([row.id], approved));
         refreshAssessmentRows();
         refreshReviews();
         showMessage("AI assessment approved!", "success");
@@ -975,7 +982,6 @@ type PendingAiEditTransition =
 
             try {
                 await Assessments.remove(assessmentToDelete.id);
-                vuln.assessments = vuln.assessments.filter(a => a.id !== assessmentToDelete.id);
                 setAllVulnAssessments(prev => prev.filter(a => a.id !== assessmentToDelete.id));
             } catch (error) {
                 anyError = true;
@@ -983,18 +989,7 @@ type PendingAiEditTransition =
             }
 
             if (!anyError) {
-                const updatedAssessments = [...vuln.assessments];
-                const statusSummary = buildStatusSummary(
-                    updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
-                vuln.simplified_status = statusSummary.dominant_status;
-                vuln.status_summary = statusSummary;
-
-                patchVuln(vuln.id, {
-                    ...vuln,
-                    assessments: updatedAssessments,
-                    simplified_status: statusSummary.dominant_status,
-                    status_summary: statusSummary,
-                });
+                patchVuln(vuln.id, patchAssessments([assessmentToDelete.id]));
                 refreshAssessmentRows();
                 refreshReviews();
                 showMessage("Assessment deleted successfully!", "success");
@@ -1038,22 +1033,16 @@ type PendingAiEditTransition =
                     update_timestamp: data.update_timestamp !== false,
                     timestamp: editSharedTimestamp,
                 };
-                await Assessments.reconcile(editingAssessment.id, body);
-                const reconciledAssessments = await refreshAllVulnAssessments();
+                const result = await Assessments.reconcile(editingAssessment.id, body);
+                await refreshAllVulnAssessments();
                 await refreshAssessmentRows();
                 refreshReviews();
 
-                const updatedAssessments = [...(reconciledAssessments ?? vuln.assessments)];
-                const statusSummary = buildStatusSummary(
-                    updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
-                vuln.simplified_status = statusSummary.dominant_status;
-                vuln.status_summary = statusSummary;
-                patchVuln(vuln.id, {
-                    ...vuln,
-                    assessments: updatedAssessments,
-                    simplified_status: statusSummary.dominant_status,
-                    status_summary: statusSummary,
+                const saved = [...(result.updated ?? []), ...(result.created ?? [])].flatMap(raw => {
+                    const assessment = asAssessment(raw);
+                    return Array.isArray(assessment) ? [] : [assessment];
                 });
+                patchVuln(vuln.id, patchAssessments(result.deleted ?? [], saved));
                 showMessage('Assessment updated successfully!', 'success');
             } catch (e) {
                 showMessage(`Failed to update assessment: ${escape(String(e))}`, 'error');
@@ -1089,6 +1078,8 @@ type PendingAiEditTransition =
         }
 
         let anyError = false;
+        const saved: Assessment[] = [];
+        const removed: string[] = [];
 
         // Helper — normalise an Assessment from the API response
         const normalise = (raw: unknown): Assessment | null => {
@@ -1127,8 +1118,7 @@ type PendingAiEditTransition =
                         } else {
                             const updated = normalise(rd.assessment);
                             if (updated) {
-                                const idx = vuln.assessments.findIndex(a => a.id === existing.id);
-                                if (idx !== -1) vuln.assessments[idx] = updated;
+                                saved.push(updated);
                                 setAllVulnAssessments(prev => prev.map(a => a.id === updated.id ? updated : a));
                             } else {
                                 anyError = true;
@@ -1150,7 +1140,7 @@ type PendingAiEditTransition =
                         method: 'DELETE', mode: 'cors'
                     });
                     if (res.ok) {
-                        vuln.assessments = vuln.assessments.filter(a => a.id !== existing.id);
+                        removed.push(existing.id);
                         setAllVulnAssessments(prev => prev.filter(a => a.id !== existing.id));
                     } else {
                         anyError = true;
@@ -1200,7 +1190,7 @@ type PendingAiEditTransition =
                     for (const raw of result.assessments) {
                         const casted = normalise(raw);
                         if (casted) {
-                            vuln.assessments.push(casted);
+                            saved.push(casted);
                             setAllVulnAssessments(prev => [...prev, casted]);
                         }
                     }
@@ -1215,17 +1205,7 @@ type PendingAiEditTransition =
         }
 
         if (!anyError) {
-            const updatedAssessments = [...vuln.assessments];
-            const statusSummary = buildStatusSummary(
-                updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
-            vuln.simplified_status = statusSummary.dominant_status;
-            vuln.status_summary = statusSummary;
-            patchVuln(vuln.id, {
-                ...vuln,
-                assessments: updatedAssessments,
-                simplified_status: statusSummary.dominant_status,
-                status_summary: statusSummary,
-            });
+            patchVuln(vuln.id, patchAssessments(removed, saved));
             refreshAssessmentRows();
             refreshReviews();
             showMessage('Assessment updated successfully!', 'success');
@@ -1365,12 +1345,21 @@ type PendingAiEditTransition =
                 : coversTarget(a, variantIdValue, pkg)))
             .reduce<Assessment | null>((best, a) => {
                 if (!best) return a;
-                return new Date(a.timestamp).getTime() > new Date(best.timestamp).getTime() ? a : best;
+                const delta = new Date(a.timestamp).getTime() - new Date(best.timestamp).getTime();
+                return delta > 0 || (delta === 0 && a.id > best.id) ? a : best;
             }, null);
 
     type StatusRow = { variant: Variant; pkg: string | null; assessment: Assessment | null; deprecated: boolean };
 
     const allStatusRows: StatusRow[] = availableVariants.flatMap((variant): StatusRow[] => {
+        if (vuln.packages_current_by_variant !== undefined) {
+            const current = vuln.packages_current_by_variant[variant.id] ?? [];
+            const visible = (includeOutdated ? vuln.packages_status_by_variant?.[variant.id] : undefined) ?? current;
+            return visible.map(pkg => ({
+                variant, pkg, assessment: latestAssessmentFor(variant.id, pkg),
+                deprecated: !current.includes(pkg),
+            }));
+        }
         const variantActivePkgs = variantPackageMap[variant.id];
         const variantPkgs = variantActivePkgs ?? [];
         // Packages affected by this vuln that still exist in the variant's active SBOM.
@@ -1554,25 +1543,15 @@ type PendingAiEditTransition =
                     }, 5500);
 
                     appendAssessment(casted);
-                    vuln.assessments.push(casted);
                     // Keep allVulnAssessments in sync so variant tags appear immediately
                     setAllVulnAssessments(prev => [...prev, casted]);
-                    vuln.simplified_status = casted.simplified_status;
 
                     // History renders from the server-built rows, so
                     // refresh them or the assessment just created stays
                     // invisible until the modal is reopened.
                     await refreshAssessmentRows();
 
-                    const updatedAssessments = [...vuln.assessments];
-                    const statusSummary = buildStatusSummary(
-                        updatedAssessments, vuln.packages_current, vuln.packages_current_by_variant);
-                    patchVuln(vuln.id, {
-                        ...vuln,
-                        assessments: updatedAssessments,
-                        simplified_status: statusSummary.dominant_status,
-                        status_summary: statusSummary,
-                    });
+                    patchVuln(vuln.id, patchAssessments([], [casted]));
 
                     const variantCount = casted.variant_ids?.length ?? 0;
                     const packageCount = casted.packages.length;
@@ -1654,8 +1633,7 @@ type PendingAiEditTransition =
             if (Array.isArray(updatedSeverity) && variantId) {
                 // Only use the response severity directly when viewing a specific
                 // variant: the PATCH response is already variant-scoped.
-                const updatedVuln = { ...vuln, severity: { ...vuln.severity, cvss: updatedSeverity } };
-                patchVuln(vuln.id, updatedVuln);
+                patchVuln(vuln.id, latest => ({ ...latest, severity: { ...latest.severity, cvss: updatedSeverity } }));
             } else if (!variantId) {
                 // All-variants mode: the PATCH response is variant-scoped, so it
                 // can't populate the union gauge view. Re-fetch the vulnerability
@@ -1664,8 +1642,7 @@ type PendingAiEditTransition =
                 try {
                     const refreshedCvss = await Vulnerabilities.fetchScopedCvss(vuln.id, projectId);
                     if (refreshedCvss) {
-                        const updatedVuln = { ...vuln, severity: { ...vuln.severity, cvss: refreshedCvss } };
-                        patchVuln(vuln.id, updatedVuln);
+                        patchVuln(vuln.id, latest => ({ ...latest, severity: { ...latest.severity, cvss: refreshedCvss } }));
                     }
                 } catch (e) {
                     console.error("Failed to refresh vulnerability after CVSS save:", e);
@@ -2154,13 +2131,15 @@ type PendingAiEditTransition =
                             </div>
                             {currentAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
-                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on current SBOM packages and variants</h4>
+                                    <h4 className="font-semibold text-gray-200 mb-2">{vuln.packages_current_by_variant !== undefined
+                                        ? 'Assessments on current findings' : 'Assessments on current SBOM packages and variants'}</h4>
                                     {renderStatusTable(sortStatusRows(currentAssessmentRows))}
                                 </div>
                             )}
                             {deprecatedAssessmentRows.length > 0 && (
                                 <div className="mb-4 p-3 rounded-lg bg-gray-800/70 border border-gray-600">
-                                    <h4 className="font-semibold text-gray-200 mb-2">Assessments on old packages and variants (not present in current SBOMs)</h4>
+                                    <h4 className="font-semibold text-gray-200 mb-2">{vuln.packages_current_by_variant !== undefined
+                                        ? 'Assessments on historical findings' : 'Assessments on old packages and variants (not present in current SBOMs)'}</h4>
                                     {renderStatusTable(sortStatusRows(deprecatedAssessmentRows))}
                                 </div>
                             )}
