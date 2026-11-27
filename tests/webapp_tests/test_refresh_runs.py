@@ -10,7 +10,7 @@ import time
 import urllib.error
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 from sqlalchemy import event, text
@@ -484,7 +484,7 @@ def test_queued_provider_applicability_keeps_skips_and_real_gaps(app, client, mo
                 missing[:2], missing[2:],
             ]
         elif applicable:
-            epss.return_value.api_get_epss_batch.assert_called_once_with(applicable)
+            epss.return_value.api_get_epss_batch.assert_called_once_with(applicable, check_cancelled=ANY)
         else:
             engine.assert_not_called()
             epss.assert_not_called()

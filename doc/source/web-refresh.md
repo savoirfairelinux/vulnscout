@@ -18,8 +18,9 @@ Accepted refreshes appear immediately as one operation-queue task with provider
 steps, without waiting for the first streamed progress update.
 Failed or deferred lookups leave coverage incomplete even when queued jobs
 finish. The banner names the affected providers when known and still reports
-observed changes. A successful NVD or EPSS lookup that returns no record is
-reported as **No record**. Like an explicitly unsupported identifier, it
+observed changes. EPSS batches are retried up to twice for temporary DNS
+failures and network timeouts. A successful NVD or EPSS lookup that returns no
+record is reported as **No record**. Like an explicitly unsupported identifier, it
 does not leave a coverage gap, but it does not supply a comparison baseline
 or remove previously stored data. Older artifacts with an unverified
 **Provider record unavailable** reason retain their original classification.

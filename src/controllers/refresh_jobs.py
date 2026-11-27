@@ -27,7 +27,7 @@ from ..helpers.active_scans import active_package_ids_for_scans, active_scan_ids
 from ..models import Finding, Observation, Scan, Vulnerability
 from .epss_db import EPSS_DB
 from .euvd_db import EUVD_DB
-from .job_context import JobContext, OperationError
+from .job_context import CancelledError, JobContext, OperationError
 from .nvd_apply import apply_cvss_update, apply_nvd_update
 from .nvd_db import NVD_DB, parse_nvd_lookup
 from .nvd_extract import extract_cve_details
@@ -296,8 +296,11 @@ def run_epss_refresh(ctx: JobContext) -> None:
             ctx.check_cancelled()
 
         try:
-            results = epss.api_get_epss_batch(chunk)
+            results = epss.api_get_epss_batch(chunk, check_cancelled=ctx.check_cancelled)
+        except CancelledError:
+            raise
         except Exception as exc:
+            ctx.check_cancelled()
             for cve_id in chunk:
                 target_result("epss", cve_id, "failed", str(exc)[:500])
             print(f"[bulk EPSS refresh] batch error: {exc}", flush=True)
@@ -306,6 +309,7 @@ def run_epss_refresh(ctx: JobContext) -> None:
             ctx.report(processed, total, f"EPSS refresh: {processed}/{total}")
             continue
 
+        ctx.check_cancelled()
         for cve_id in chunk:
             if cve_id in results:
                 try:
