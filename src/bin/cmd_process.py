@@ -19,6 +19,7 @@ from ..models.sbom_package import SBOMPackage as SBOMPkg
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
+from ..models.variant import lock_scan_membership
 from ..helpers.env_vars import get_bool_env
 from ..helpers.history_source import current_history_operation, history_source
 from ..extensions import batch_session, db as _db
@@ -227,6 +228,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
         verbose("merger_ci: Using FastSPDX parser")
 
     pkgCtrl: PackagesController = controllers.packages
+    # Consolidation can rewrite findings across variants; lock before ingest can flush any scan-owned rows.
+    lock_scan_membership()
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
     jsonld_documents = []
     file_documents = []
@@ -372,7 +375,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     from ..helpers.jsonld_storage import consolidate_jsonld_packages
 
     with _db.session.begin_nested():
-        consolidated = consolidate_jsonld_packages(_db.session())
+        consolidated = consolidate_jsonld_packages(_db.session(), membership_locked=True)
     if consolidated:
         pkgCtrl._cache.clear()
         pkgCtrl._db_id_cache.clear()

@@ -107,5 +107,8 @@ class Project(Base):
 
     def delete(self) -> None:
         """Delete this project (and its variants via cascade) from the database."""
+        from .variant import lock_scan_membership
+
+        lock_scan_membership(variant.id for variant in self.variants)
         db.session.delete(self)
         db.session.commit()
