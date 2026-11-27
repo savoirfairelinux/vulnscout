@@ -253,13 +253,18 @@ def add_targets(run_id: str, source: str, ids: list[str]) -> None:
 
 
 def target_result(source: str, vuln_id: str, status: str = "complete", error: str | None = None) -> None:
+    target_results(source, [vuln_id], status, error)
+
+
+def target_results(source: str, vuln_ids: list[str], status: str, error: str | None = None) -> None:
+    """Record one outcome for a bounded batch in the caller's transaction."""
     capture = _capture.get()
-    if capture is None:
+    if capture is None or not vuln_ids:
         return
     result = _write(
         update(RefreshTarget)
         .where(RefreshTarget.run_id == capture[0], RefreshTarget.source == source,
-               RefreshTarget.vuln_id == vuln_id)
+               RefreshTarget.vuln_id.in_(vuln_ids))
         .values(status=status, error=error)
     )
     if not result.rowcount:  # type: ignore[attr-defined]

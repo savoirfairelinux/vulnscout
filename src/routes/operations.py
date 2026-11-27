@@ -30,6 +30,7 @@ from ..controllers.refresh_jobs import (
     MAX_GHSA_IDS,
     REFRESH_JOBS,
     _scoped_vulnerability_ids,
+    is_cve_id,
     known_vulnerability_ids,
     normalise_cve_ids,
     normalise_ghsa_ids,
@@ -251,8 +252,8 @@ def _explicit_refresh_options(
             raise _PlanError("euvd refresh requires valid CVE identifiers")
     else:
         ids = normalise_vulnerability_ids(job.get("ids"))
-        if source == "nvd" and mode == "api" and len(ids) > MAX_CVE_IDS:
-            raise _PlanError(f"nvd refresh accepts at most {MAX_CVE_IDS} identifiers in api mode")
+        if source == "nvd" and mode == "api" and sum(map(is_cve_id, ids)) > MAX_CVE_IDS:
+            raise _PlanError(f"nvd refresh accepts at most {MAX_CVE_IDS} CVE identifiers in api mode")
         if scoped_variant_ids is None:
             if source == "nvd":
                 # Unscoped NVD accepts new CVEs but only records known unsupported IDs.

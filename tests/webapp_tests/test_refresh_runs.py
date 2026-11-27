@@ -1047,18 +1047,116 @@ def test_queued_refresh_requires_active_findings_in_scope(app, client, source, s
     assert response.get_json() == {"error": "Refresh identifiers are outside the selected scope"}
 
 
-def test_nvd_api_target_limit_includes_known_unsupported_ids(app, client, monkeypatch):
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("over_limit", [False, True])
+def test_nvd_api_target_limit_counts_only_applicable_cves(app, client, monkeypatch, request, deferred, over_limit):
+    from src.controllers import refresh_jobs as jobs
+    from src.controllers.operation_queue import _Job, queue
+    from src.controllers.operation_registry import registry
     from src.routes import operations
 
     unsupported = "GHSA-ABCD-1234-5678"
-    _add_refresh_scope_ids(app, [unsupported])
+    extra_cves = ["CVE-2099-1112"] if over_limit else []
+    _add_refresh_scope_ids(app, [unsupported, *extra_cves])
+    registry.clear()
+    request.addfinalizer(registry.clear)
+    submitted = []
+    monkeypatch.setattr(type(queue), "submit", lambda self, **kwargs: submitted.append(_Job(**kwargs)))
+    monkeypatch.setattr(jobs, "MAX_CVE_IDS", 1)
     monkeypatch.setattr(operations, "MAX_CVE_IDS", 1)
+    targets = {"variant_ids": [VARIANT]} if deferred else {"ids": [CVE, unsupported, *extra_cves]}
+    scope = {"mode": "api", "project_id": PROJECT, "variant_id": VARIANT}
     response = client.post("/api/operations", json={"jobs": [
-        {"kind": "refresh", "source": "nvd", "ids": [CVE, unsupported],
-         "options": {"mode": "api", "project_id": PROJECT}},
+        {"kind": "refresh", "source": "nvd", **targets, "options": scope},
     ]})
-    assert response.status_code == 400
-    assert "at most 1 identifiers" in response.get_json()["error"]
+    if over_limit and not deferred:
+        assert response.status_code == 400
+        assert "at most 1 CVE identifiers" in response.get_json()["error"]
+        assert not submitted
+        return
+    assert response.status_code == 202
+    job, = submitted
+    with patch.object(jobs, "NVD_DB"), patch.object(jobs, "_refresh_nvd_record", return_value=True) as provider:
+        queue._run_body(job)
+    operation = registry.get(job.op_id)
+    run_id = response.get_json()["queue_id"]
+    run = client.get(f"/api/refresh-runs/{run_id}").get_json()
+    if over_limit:
+        assert operation["status"] == "error"
+        assert "at most 1 CVE identifiers" in operation["error"]
+        assert run["status"] == "incomplete"
+        provider.assert_not_called()
+    else:
+        assert operation["status"] == "done"
+        assert run["status"] == "complete"
+        assert {(row["vuln_id"], row["status"]) for row in run["coverage"]} == {
+            (CVE, "complete"), (unsupported, "skipped"),
+        }
+        provider.assert_called_once()
+        assert provider.call_args.args[:2] == (CVE, "api")
+
+
+@pytest.mark.parametrize("source", ["nvd", "epss"])
+@pytest.mark.parametrize("cancel_after_batch", [True, False])
+def test_cancel_unsupported_refresh_keeps_committed_skip_batch(
+    app, client, monkeypatch, request, source, cancel_after_batch,
+):
+    from src.controllers import refresh_jobs as jobs
+    from src.controllers.operation_queue import _Job, queue
+    from src.controllers.operation_registry import registry
+
+    ids = ["OSV-SYNTHETIC-1", "OSV-SYNTHETIC-2"]
+    if cancel_after_batch:
+        ids.append("OSV-SYNTHETIC-3")
+    _add_refresh_scope_ids(app, ids)
+    registry.clear()
+    request.addfinalizer(registry.clear)
+    submitted = []
+    monkeypatch.setattr(type(queue), "submit", lambda self, **kwargs: submitted.append(_Job(**kwargs)))
+    monkeypatch.setattr(jobs, "SKIP_BATCH_SIZE", 2)
+    response = client.post("/api/operations", json={"jobs": [{
+        "kind": "refresh", "source": source, "ids": ids, "options": {"variant_id": VARIANT},
+    }]})
+    assert response.status_code == 202
+    job, = submitted
+    updates = []
+
+    def record_skip_update(_conn, _cursor, statement, parameters, _context, _executemany):
+        if statement.startswith("UPDATE refresh_run_targets") and parameters[:1] == ("skipped",):
+            updates.append(statement)
+
+    if cancel_after_batch:
+        commit = jobs._safe_commit
+
+        def commit_then_cancel(label):
+            commit(label)
+            job.ctx.request_cancel()
+
+        monkeypatch.setattr(jobs, "_safe_commit", commit_then_cancel)
+    else:
+        monkeypatch.setattr(job.ctx, "report", lambda *_: job.ctx.request_cancel())
+
+    with app.app_context():
+        engine = db.engine
+    event.listen(engine, "before_cursor_execute", record_skip_update)
+    try:
+        with patch.object(jobs, "_get_scc_engine") as nvd, patch.object(jobs, "EPSS_DB") as epss:
+            queue._run_body(job)
+        nvd.assert_not_called()
+        epss.assert_not_called()
+    finally:
+        event.remove(engine, "before_cursor_execute", record_skip_update)
+
+    assert len(updates) == 1
+    assert registry.get(job.op_id)["status"] == "cancelled"
+    run_id = response.get_json()["queue_id"]
+    run = client.get(f"/api/refresh-runs/{run_id}").get_json()
+    assert run["status"] == "incomplete"
+    assert run["source_status"] == {source: "incomplete"}
+    assert run["summary"]["refreshed_vulnerabilities"] == 0
+    assert {row["vuln_id"]: row["status"] for row in run["coverage"]} == {
+        identifier: "skipped" if index < 2 else "cancelled" for index, identifier in enumerate(ids)
+    }
 
 
 def test_dead_owner_is_incomplete_but_concurrent_live_owner_is_not(app, client):
