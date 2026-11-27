@@ -74,12 +74,11 @@ def test_known_ids_and_refresh_helper_edge_cases(monkeypatch):
 
     record = object()
     monkeypatch.setattr(jobs.db, "session", SimpleNamespace(get=MagicMock(return_value=record)))
-    monkeypatch.setattr(jobs, "get_cve_json", lambda _cve_id: {"id": "CVE-2024-0001"})
     monkeypatch.setattr(jobs, "extract_cve_details", lambda _payload: {"id": "CVE-2024-0001"})
     apply_nvd = MagicMock()
     monkeypatch.setattr(jobs, "apply_nvd_update", apply_nvd)
     monkeypatch.setattr(jobs, "apply_cvss_update", MagicMock())
-    jobs._refresh_nvd_record("CVE-2024-0001", "local", None)
+    jobs._refresh_nvd_record("CVE-2024-0001", lambda identifier: {"id": identifier})
     apply_nvd.assert_called_once()
 
     monkeypatch.setattr(jobs.db, "session", SimpleNamespace(get=MagicMock(return_value=None)))
@@ -167,19 +166,32 @@ def test_refresh_nvd_record_api_and_local_paths(monkeypatch):
 
     client = MagicMock()
     client.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {"id": "CVE-2024-1"}}]})
-    monkeypatch.setattr(jobs.NVD_DB, "extract_cve_details", MagicMock(return_value={"id": "CVE-2024-1"}))
-    jobs._refresh_nvd_record("CVE-2024-1", "api", client)
+    lookup = jobs._api_nvd_lookup(client)
+    assert jobs._refresh_nvd_record("CVE-2024-1", lookup)
     apply_nvd.assert_called_once()
     apply_cvss.assert_called_once()
 
     apply_nvd.reset_mock()
     client.api_get_cve.return_value = (404, {})
-    jobs._refresh_nvd_record("CVE-2024-2", "api", client)
+    with pytest.raises(ValueError, match="HTTP 404"):
+        jobs._refresh_nvd_record("CVE-2024-2", lookup)
     apply_nvd.assert_not_called()
 
-    monkeypatch.setattr(jobs, "get_cve_json", lambda _cve_id: None)
-    jobs._refresh_nvd_record("CVE-2024-3", "local", None)
+    client.api_get_cve.return_value = (200, {"vulnerabilities": [], "totalResults": 0})
+    assert not jobs._refresh_nvd_record("CVE-2024-3", lookup)
     apply_nvd.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"vulnerabilities": None}, {"vulnerabilities": []},
+    {"vulnerabilities": [], "totalResults": 1}, {"vulnerabilities": [{"cve": {}}]},
+    {"vulnerabilities": [], "totalResults": 0, "message": "Error"},
+])
+def test_nvd_api_malformed_response_is_not_absence(payload):
+    client = MagicMock()
+    client.api_get_cve.return_value = (200, payload)
+    with pytest.raises(ValueError):
+        jobs._api_nvd_lookup(client)("CVE-2024-0001")
 
 
 def test_run_nvd_refresh_api_and_local_setup_failure(monkeypatch):

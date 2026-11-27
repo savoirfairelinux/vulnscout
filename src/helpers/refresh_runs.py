@@ -36,6 +36,7 @@ _single_run: ContextVar[str | None] = ContextVar("single_refresh_run", default=N
 RESERVED_RUN_IDS = frozenset({"latest"})
 HEARTBEAT_INTERVAL_SECONDS = 60.0
 UNSUPPORTED_CVE_IDENTIFIER = "Provider requires a CVE identifier"
+NO_PROVIDER_RECORD = "no_record"
 # Unlike target gaps, an interrupted execution is incomplete even if every target was settled.
 _SOURCE_INTERRUPTED = "interrupted"
 _CHUNK = 500
@@ -51,7 +52,7 @@ def _inapplicable_target() -> ColumnElement[bool]:
 
 
 def target_has_coverage_gap() -> ColumnElement[bool]:
-    return and_(RefreshTarget.status != "complete", ~_inapplicable_target())
+    return and_(RefreshTarget.status.not_in(("complete", NO_PROVIDER_RECORD)), ~_inapplicable_target())
 
 
 def _process_start(pid: int) -> str | None:
@@ -256,17 +257,18 @@ def target_result(source: str, vuln_id: str, status: str = "complete", error: st
     target_results(source, [vuln_id], status, error)
 
 
-def target_results(source: str, vuln_ids: list[str], status: str, error: str | None = None) -> None:
+def target_results(source: str, vuln_ids: list[str], status: str, error: str | None = None,
+                   *, pending_only: bool = False) -> None:
     """Record one outcome for a bounded batch in the caller's transaction."""
     capture = _capture.get()
     if capture is None or not vuln_ids:
         return
-    result = _write(
-        update(RefreshTarget)
-        .where(RefreshTarget.run_id == capture[0], RefreshTarget.source == source,
-               RefreshTarget.vuln_id.in_(vuln_ids))
-        .values(status=status, error=error)
+    statement = update(RefreshTarget).where(
+        RefreshTarget.run_id == capture[0], RefreshTarget.source == source, RefreshTarget.vuln_id.in_(vuln_ids),
     )
+    if pending_only:
+        statement = statement.where(RefreshTarget.status == "pending")
+    result = _write(statement.values(status=status, error=error))
     if not result.rowcount:  # type: ignore[attr-defined]
         _require_run(capture[0], "Refresh artifact disappeared during execution")
     _heartbeat(capture[0])
@@ -391,8 +393,9 @@ def tracked_single_refresh(source: str):
             try:
                 with capture_source(run_id, source):
                     response = make_response(function(*args, **kwargs))
-                    target_result(source, identifier, "complete" if response.status_code < 400 else "failed",
-                                  None if response.status_code < 400 else f"HTTP {response.status_code}")
+                    target_results(source, [identifier], "complete" if response.status_code < 400 else "failed",
+                                   None if response.status_code < 400 else f"HTTP {response.status_code}",
+                                   pending_only=True)
                     db.session.commit()
             except BaseException:
                 db.session.rollback()

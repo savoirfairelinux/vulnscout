@@ -17,7 +17,7 @@ from sqlalchemy import event, text
 
 from src.bin.webapp import create_app
 from src.controllers.job_context import CancelledError, JobContext
-from src.controllers.refresh_jobs import run_epss_refresh
+from src.controllers.refresh_jobs import run_epss_refresh, run_nvd_refresh
 from src.extensions import db
 from src.helpers.refresh_runs import capture_source, create_run, finish_source, source_statuses, target_result
 from src.models import (
@@ -431,7 +431,7 @@ def _add_refresh_scope_ids(app, identifiers):
         db.session.commit()
 
 
-@pytest.mark.parametrize("scenario", ["mixed", "missing", "unsupported-only", "deferred"])
+@pytest.mark.parametrize("scenario", ["mixed", "missing", "missing-and-failed", "unsupported-only", "deferred"])
 def test_queued_provider_applicability_keeps_skips_and_real_gaps(app, client, monkeypatch, request, scenario):
     from src.controllers import refresh_jobs as jobs
     from src.controllers.operation_queue import _Job, queue
@@ -442,8 +442,9 @@ def test_queued_provider_applicability_keeps_skips_and_real_gaps(app, client, mo
     unsupported = "GHSA-ABCD-1234-5678"
     baseline = "GHSA-ABCD-1234-9999"
     missing = ["CVE-2099-1111", "CVE-2099-1112", "CVE-2099-1113"]
-    applicable = {"mixed": [CVE], "missing": missing, "unsupported-only": [], "deferred": [CVE]}[scenario]
-    _add_refresh_scope_ids(app, [unsupported, baseline, *missing] if scenario == "missing" else [unsupported, baseline])
+    has_missing = scenario in ("missing", "missing-and-failed")
+    applicable = missing if has_missing else ([] if scenario == "unsupported-only" else [CVE])
+    _add_refresh_scope_ids(app, [unsupported, baseline, *(missing if has_missing else [])])
 
     submitted = []
     monkeypatch.setattr(type(queue), "submit", lambda self, **kwargs: submitted.append(_Job(**kwargs)))
@@ -453,7 +454,7 @@ def test_queued_provider_applicability_keeps_skips_and_real_gaps(app, client, mo
     else:
         targets = {"ids": [*applicable, unsupported]}
     payload = [{"kind": "refresh", "source": source, **targets, "options": scope} for source in ("nvd", "epss")]
-    if scenario == "missing":
+    if has_missing:
         payload.append({"kind": "refresh", "source": "euvd", "ids": applicable, "options": scope})
     response = client.post("/api/operations", json={"jobs": payload})
     assert response.status_code == 202
@@ -469,29 +470,37 @@ def test_queued_provider_applicability_keeps_skips_and_real_gaps(app, client, mo
             patch.object(jobs, "_refresh_nvd_record", side_effect=lambda cve, *_: cve == CVE) as nvd, \
             patch.object(jobs, "EPSS_DB") as epss, patch.object(jobs, "EUVD_DB") as euvd:
         epss.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}} if CVE in applicable else {}
+        if scenario == "missing-and-failed":
+            monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 2)
+            epss.return_value.api_get_epss_batch.side_effect = [{}, OSError("DNS lookup failed")]
         euvd.return_value.get_full_mapping.return_value = {CVE: "EUVD-2099-1111"}
         euvd.return_value.get_mapping.return_value = {}
         for job in submitted:
             queue._run_body(job)
             assert registry.get(job.op_id)["status"] == "done"
         assert [call.args[0] for call in nvd.call_args_list] == applicable
-        if applicable:
+        if scenario == "missing-and-failed":
+            assert [call.args[0] for call in epss.return_value.api_get_epss_batch.call_args_list] == [
+                missing[:2], missing[2:],
+            ]
+        elif applicable:
             epss.return_value.api_get_epss_batch.assert_called_once_with(applicable)
         else:
             engine.assert_not_called()
             epss.assert_not_called()
 
     data = client.get(url, query_string=scope).get_json()
-    status = "incomplete" if scenario == "missing" else "complete"
+    status = "incomplete" if scenario == "missing-and-failed" else "complete"
     assert data["status"] == status
-    expected_sources = {"nvd": status, "epss": status}
-    if scenario == "missing":
+    expected_sources = {"nvd": "complete", "epss": status}
+    if has_missing:
         expected_sources["euvd"] = "complete"
         assert {row["vuln_id"] for row in data["coverage"] if row["source"] == "euvd"
                 and row["status"] == "complete"} == set(missing)
         assert data["summary"]["total_changes"] == 0
     assert data["source_status"] == expected_sources
     assert data["summary"]["refreshed_vulnerabilities"] == len(applicable)
+    assert data["summary"]["no_record_vulnerabilities"] == (len(missing) if has_missing else 0)
     with patch("src.routes.refresh_runs.artifact", side_effect=AssertionError("Artifact must not be loaded")):
         metadata = client.get(f"{url}/metadata", query_string=scope)
     assert metadata.status_code == 200
@@ -502,21 +511,29 @@ def test_queued_provider_applicability_keeps_skips_and_real_gaps(app, client, mo
         outcomes = {(row["vuln_id"], row["status"], row["error"])
                     for row in data["coverage"] if row["source"] == source}
         expected = {(unsupported, "skipped", "Provider requires a CVE identifier")}
-        if scenario == "missing":
-            expected.update((identifier, "skipped", "Provider record unavailable") for identifier in missing)
+        if has_missing:
+            expected.update((identifier, "no_record", None) for identifier in missing)
+            if source == "epss" and scenario == "missing-and-failed":
+                expected.remove((missing[-1], "no_record", None))
+                expected.add((missing[-1], "failed", "DNS lookup failed"))
         elif applicable:
             expected.add((CVE, "complete", None))
         assert outcomes == expected
 
 
-@pytest.mark.parametrize("other_outcome", ["legacy-summary", "unknown-skip", "source-interruption"])
+@pytest.mark.parametrize("other_outcome", [
+    "legacy-summary", "legacy-unavailable", "unknown-skip", "source-interruption",
+])
 def test_only_explicit_inapplicability_can_correct_coverage(app, client, other_outcome):
     unsupported = "GHSA-ABCD-1234-5678"
     with app.app_context():
         run = create_run({"nvd": [CVE, unsupported]})
         with capture_source(run, "nvd"):
             target_result("nvd", unsupported, "skipped", "Provider requires a CVE identifier")
-            target_result("nvd", CVE, "skipped" if other_outcome == "unknown-skip" else "complete")
+            if other_outcome == "legacy-unavailable":
+                target_result("nvd", CVE, "skipped", "Provider record unavailable")
+            else:
+                target_result("nvd", CVE, "skipped" if other_outcome == "unknown-skip" else "complete")
         finish_source(run, "nvd", error="Source refresh failed" if other_outcome == "source-interruption" else None)
         if other_outcome == "legacy-summary":
             db.session.get(RefreshRunSource, (run, "nvd")).status = "incomplete"
@@ -531,7 +548,8 @@ def test_only_explicit_inapplicability_can_correct_coverage(app, client, other_o
     assert export["coverage"][1]["status"] == "skipped"
 
 
-def test_partial_provider_response_is_incomplete_not_removal(app, client):
+@pytest.mark.parametrize("valid", [True, False])
+def test_partial_epss_responses_distinguish_omission_from_invalid_payload(app, client, valid):
     missing = "CVE-2099-1111"
     with app.app_context():
         Vulnerability.create_record(id=missing, epss_score=0.1)
@@ -540,16 +558,37 @@ def test_partial_provider_response_is_incomplete_not_removal(app, client):
             response = request.return_value.__enter__.return_value
             response.status = 200
             response.read.return_value = json.dumps({
+                "status": "OK" if valid else "ERROR",
                 "data": [{"cve": CVE, "epss": "0.8", "percentile": "0.9"}],
             }).encode()
             run_epss_refresh(JobContext("test", {"ids": [CVE, missing]}, run))
     data = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert data["status"] == ("complete" if valid else "incomplete")
+    assert [entry["status"] for entry in data["coverage"]] == (["complete", "no_record"] if valid else ["failed"] * 2)
+    assert [row["vuln_id"] for row in data["changes"]] == ([CVE] if valid else [])
+    with app.app_context():
+        assert float(db.session.get(Vulnerability, missing).epss_score) == 0.1
+
+
+@pytest.mark.parametrize("error_response", [(503, {}), (200, {})])
+def test_nvd_error_is_incomplete_even_with_successful_omission(app, client, error_response):
+    missing = "CVE-2099-1111"
+    with app.app_context():
+        Vulnerability.create_record(id=missing, description="Stored NVD description")
+        run = create_run({"nvd": [missing, CVE]})
+        with patch("src.controllers.refresh_jobs.NVD_DB") as api, patch("src.controllers.refresh_jobs.time.sleep"):
+            api.return_value.api_get_cve.side_effect = [(200, {"vulnerabilities": [], "totalResults": 0}), error_response]
+            run_nvd_refresh(JobContext("test", {"ids": [missing, CVE], "mode": "api"}, run))
+        assert db.session.get(Vulnerability, missing).description == "Stored NVD description"
+
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
     assert data["status"] == "incomplete"
-    assert [entry["status"] for entry in data["coverage"]] == ["complete", "skipped"]
-    assert [row["vuln_id"] for row in data["changes"]] == [CVE]
+    assert data["source_status"] == {"nvd": "incomplete"}
+    assert {row["vuln_id"]: row["status"] for row in data["coverage"]} == {missing: "no_record", CVE: "failed"}
+    assert data["changes"] == []
 
 
-def test_provider_completion_preserves_one_pending_batch_and_its_coverage_gaps(app, client):
+def test_provider_completion_preserves_one_pending_batch_and_no_record_outcomes(app, client):
     missing = "CVE-2099-1111"
     with app.app_context():
         Vulnerability.create_record(id=missing, epss_score=0.1)
@@ -560,7 +599,7 @@ def test_provider_completion_preserves_one_pending_batch_and_its_coverage_gaps(a
     partial = client.get(f"/api/refresh-runs/{run}").get_json()
     assert partial["status"] == "running"
     assert partial["finished_at"] is None
-    assert partial["source_status"] == {"epss": "incomplete", "euvd": "pending"}
+    assert partial["source_status"] == {"epss": "complete", "euvd": "pending"}
     assert client.get("/api/refresh-runs").get_json()["total"] == 1
 
     with app.app_context():
@@ -569,10 +608,10 @@ def test_provider_completion_preserves_one_pending_batch_and_its_coverage_gaps(a
             target_result("euvd", missing)
         finish_source(run, "euvd")
     finished = client.get(f"/api/refresh-runs/{run}").get_json()
-    assert finished["status"] == "incomplete"
+    assert finished["status"] == "complete"
     assert finished["finished_at"] is not None
-    assert finished["source_status"] == {"epss": "incomplete", "euvd": "complete"}
-    assert any(row["source"] == "epss" and row["status"] == "skipped" for row in finished["coverage"])
+    assert finished["source_status"] == {"epss": "complete", "euvd": "complete"}
+    assert any(row["source"] == "epss" and row["status"] == "no_record" for row in finished["coverage"])
     listing = client.get("/api/refresh-runs").get_json()
     assert listing["total"] == 1
     assert listing["runs"][0]["run_id"] == run
@@ -704,6 +743,39 @@ def test_single_refresh_exposes_exact_identity_and_scope_rejects_outside(app, cl
     assert client.post(f"/api/vulnerabilities/{CVE}/epss-refresh?project_id={uuid.uuid4()}").status_code == 404
 
 
+def test_individual_no_record_preserves_stored_enrichment(app, client):
+    with app.app_context():
+        record = db.session.get(Vulnerability, CVE)
+        record.description = "Stored NVD description"
+        record.epss_score = 0.1
+        db.session.commit()
+
+    with patch("src.routes.vulnerabilities.NVD_DB") as nvd, \
+         patch("src.routes.vulnerabilities.EPSS_DB") as epss, \
+         patch("src.routes.vulnerabilities.EUVD_DB") as euvd:
+        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [], "totalResults": 0})
+        epss.return_value.api_get_epss.return_value = None
+        euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
+        euvd.return_value.get_mapping.return_value = {"dummy": {}}
+        response = client.post(f"/api/vulnerabilities/{CVE}/refresh", json={"mode": "api"})
+        epss.return_value.api_get_epss.assert_called_once_with(CVE, strict=True)
+
+    run = client.get(f"/api/refresh-runs/{response.headers['X-Refresh-Run-ID']}").get_json()
+    assert run["status"] == "complete"
+    for source in ("nvd", "epss"):
+        assert response.get_json()["results"][source] == {
+            "status": 200, "body": {"vulnerabilities": [], "outcome": "no_record"},
+        }
+    assert {row["source"]: row["status"] for row in run["coverage"]} == {
+        "nvd": "no_record", "epss": "no_record", "euvd": "complete",
+    }
+    assert not [change for change in run["changes"] if change["source"] in ("nvd", "epss")]
+    with app.app_context():
+        record = db.session.get(Vulnerability, CVE)
+        assert record.description == "Stored NVD description"
+        assert float(record.epss_score) == 0.1
+
+
 @pytest.mark.parametrize("changed", [False, True])
 def test_individual_refresh_groups_sources_and_exports_history(app, client, changed):
     with app.app_context():
@@ -724,7 +796,7 @@ def test_individual_refresh_groups_sources_and_exports_history(app, client, chan
          patch("src.routes.vulnerabilities.EUVD_DB") as euvd, \
          patch("src.routes.vulnerabilities.apply_nvd_update", side_effect=nvd_update), \
          patch("src.routes.vulnerabilities._apply_euvd", side_effect=euvd_update):
-        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {}}]})
+        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {"id": CVE}}]})
         nvd.extract_cve_details.return_value = {}
         epss.return_value.api_get_epss.return_value = {"score": 0.5 if changed else 0.1}
         euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
@@ -805,7 +877,7 @@ def test_individual_refresh_payloads_exclude_other_scopes(app, client, identifie
          patch("src.routes.vulnerabilities._apply_euvd"), \
          patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
                return_value="2025-01-01T00:00:00Z"):
-        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {}}]})
+        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {"id": identifier}}]})
         nvd.extract_cve_details.return_value = {}
         epss.return_value.api_get_epss.return_value = {"score": 0.5, "percentile": 0.9}
         euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
@@ -1076,7 +1148,9 @@ def test_nvd_api_target_limit_counts_only_applicable_cves(app, client, monkeypat
         return
     assert response.status_code == 202
     job, = submitted
-    with patch.object(jobs, "NVD_DB"), patch.object(jobs, "_refresh_nvd_record", return_value=True) as provider:
+    with patch.object(jobs, "NVD_DB") as provider:
+        lookup = provider.return_value.api_get_cve
+        lookup.return_value = (200, {"vulnerabilities": [], "totalResults": 0})
         queue._run_body(job)
     operation = registry.get(job.op_id)
     run_id = response.get_json()["queue_id"]
@@ -1085,15 +1159,14 @@ def test_nvd_api_target_limit_counts_only_applicable_cves(app, client, monkeypat
         assert operation["status"] == "error"
         assert "at most 1 CVE identifiers" in operation["error"]
         assert run["status"] == "incomplete"
-        provider.assert_not_called()
+        lookup.assert_not_called()
     else:
         assert operation["status"] == "done"
         assert run["status"] == "complete"
         assert {(row["vuln_id"], row["status"]) for row in run["coverage"]} == {
-            (CVE, "complete"), (unsupported, "skipped"),
+            (CVE, "no_record"), (unsupported, "skipped"),
         }
-        provider.assert_called_once()
-        assert provider.call_args.args[:2] == (CVE, "api")
+        lookup.assert_called_once_with(CVE, max_retries=2)
 
 
 @pytest.mark.parametrize("source", ["nvd", "epss"])
@@ -1283,6 +1356,7 @@ def test_run_list_is_paginated_in_the_database_without_loading_change_bodies(app
     assert all("coverage" not in item and "changes" not in item for item in data["runs"])
     assert data["runs"][0]["summary"] == {
         "total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0, "refreshed_vulnerabilities": 1,
+        "no_record_vulnerabilities": 0,
     }
     assert data["runs"][0]["status"] == "complete"
     assert not [statement for statement in statements if "snapshot" in statement]

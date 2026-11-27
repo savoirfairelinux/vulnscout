@@ -31,10 +31,10 @@ from ..models import (
 )
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.history_source import refresh_history
-from ..helpers.refresh_runs import tracked_single_refresh
+from ..helpers.refresh_runs import NO_PROVIDER_RECORD, UNSUPPORTED_CVE_IDENTIFIER, target_result, tracked_single_refresh
 from ..extensions import db
 from ..controllers.scc_engine import get_cve_json
-from ..controllers.nvd_db import NVD_DB
+from ..controllers.nvd_db import NVD_DB, parse_nvd_lookup
 from ..controllers.nvd_extract import extract_cve_details
 from ..controllers.nvd_apply import apply_cvss_update, apply_nvd_update
 from ..controllers.epss_db import EPSS_DB
@@ -1436,6 +1436,10 @@ def init_app(app: Flask) -> None:
             response["error_count"] = len(errors)
         return response, 200 if results else 400
 
+    def _unreturned_refresh(source: str, identifier: str, status: str) -> ResponseReturnValue:
+        target_result(source, identifier, status, UNSUPPORTED_CVE_IDENTIFIER if status == "skipped" else None)
+        return jsonify({"vulnerabilities": [], "outcome": status}), 200
+
     @app.route('/api/vulnerabilities/<cve_id>/nvd-refresh', methods=['POST'])
     @tracked_single_refresh("nvd")
     @refresh_history("nvd")
@@ -1444,7 +1448,7 @@ def init_app(app: Flask) -> None:
 
         OpenAPI:
         body NvdRefreshRequest optional Request body containing mode: local or api.
-        response 200 VulnerabilityRefreshResponse Refreshed vulnerability collection.
+        response 200 VulnerabilityRefreshResponse Refreshed vulnerability collection or a completed lookup without data.
         response 404 Error CVE not found.
         response 401 Error NVD API key rejected.
         response 403 Error NVD API credentials forbidden.
@@ -1455,6 +1459,8 @@ def init_app(app: Flask) -> None:
         rec = db.session.get(Vulnerability, cve_id_upper)
         if rec is None:
             return jsonify({"error": "CVE not found"}), 404
+        if not CVE_RE.fullmatch(cve_id_upper):
+            return _unreturned_refresh("nvd", cve_id_upper, "skipped")
 
         body = request.get_json(force=True, silent=True) or {}
         mode = body.get("mode", "local")  # "local" (default) or "api"
@@ -1484,22 +1490,31 @@ def init_app(app: Flask) -> None:
                     "error_code": "unauthorized",
                     "api_key_configured": api_key_configured,
                 }), status_code
-            if status_code != 200 or not data_api.get("vulnerabilities"):
+            try:
+                if status_code != 200:
+                    raise ValueError(f"NVD lookup failed (HTTP {status_code})")
+                cve_obj = parse_nvd_lookup(data_api, cve_id_upper)
+                if cve_obj is None:
+                    return _unreturned_refresh("nvd", cve_id_upper, NO_PROVIDER_RECORD)
+                details = NVD_DB.extract_cve_details(cve_obj)
+            except (ValueError, KeyError, TypeError, AttributeError) as e:
                 return jsonify({
-                    "error": "NVD API returned no data for this CVE",
+                    "error": str(e),
                     "error_code": "unavailable",
                     "api_key_configured": api_key_configured,
                 }), 503
-            cve_obj = data_api["vulnerabilities"][0]["cve"]
-            details = NVD_DB.extract_cve_details(cve_obj)
         else:
-            cve_obj = get_cve_json(cve_id_upper)
-            if cve_obj is None:
+            try:
+                cve_obj = get_cve_json(cve_id_upper, strict=True)
+                if cve_obj is None:
+                    return _unreturned_refresh("nvd", cve_id_upper, NO_PROVIDER_RECORD)
+                details = extract_cve_details(cve_obj)
+            except Exception as e:
+                current_app.logger.warning("Local NVD refresh failed: %s", e)
                 return jsonify({
-                    "error": "CVE not found in local NVD database",
+                    "error": "Local NVD lookup failed",
                     "error_code": "unavailable",
                 }), 503
-            details = extract_cve_details(cve_obj)
         now = datetime.datetime.now(datetime.timezone.utc)
         apply_nvd_update(rec, details, now)
 
@@ -1538,7 +1553,7 @@ def init_app(app: Flask) -> None:
         """Refresh EPSS data for a single CVE.
 
         OpenAPI:
-        response 200 VulnerabilityRefreshResponse Refreshed vulnerability collection.
+        response 200 VulnerabilityRefreshResponse Refreshed vulnerability collection or a completed lookup without data.
         response 404 Error CVE not found.
         response 503 Error EPSS data source unavailable.
         """
@@ -1547,9 +1562,15 @@ def init_app(app: Flask) -> None:
         if rec is None:
             return jsonify({"error": "CVE not found"}), 404
 
-        epss_data = EPSS_DB().api_get_epss(cve_id_upper)
+        if not CVE_RE.fullmatch(cve_id_upper):
+            return _unreturned_refresh("epss", cve_id_upper, "skipped")
+        try:
+            epss_data = EPSS_DB().api_get_epss(cve_id_upper, strict=True)
+        except Exception as e:
+            current_app.logger.warning("EPSS refresh failed: %s", e)
+            return jsonify({"error": "EPSS API lookup failed"}), 503
         if epss_data is None:
-            return jsonify({"error": "EPSS API returned no data for this CVE"}), 503
+            return _unreturned_refresh("epss", cve_id_upper, NO_PROVIDER_RECORD)
 
         now = datetime.datetime.now(datetime.timezone.utc)
         new_score = decimal.Decimal(str(epss_data["score"]))

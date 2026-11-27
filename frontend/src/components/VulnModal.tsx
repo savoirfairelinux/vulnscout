@@ -582,6 +582,7 @@ type PendingAiEditTransition =
     const [showBanner, setShowBanner] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [refreshError, setRefreshError] = useState<string | null>(null);
+    const [refreshOmissions, setRefreshOmissions] = useState<string[]>([]);
     const [refreshedList, setRefreshedList] = useState<string[]>([]);
     const [historyVersion, setHistoryVersion] = useState(0);
     // Identifies which copy button was last used, so only that one confirms.
@@ -608,6 +609,7 @@ type PendingAiEditTransition =
         setRefreshing(false);
         setRefreshError(null);
         setRefreshedList([]);
+        setRefreshOmissions([]);
     }, [vuln.id]);
 
     useEffect(() => {
@@ -695,6 +697,7 @@ type PendingAiEditTransition =
         setRefreshing(true);
         setRefreshError(null);
         setRefreshedList([]);
+        setRefreshOmissions([]);
         const reloadMetadata = async (): Promise<Vulnerability> => {
             const details = await Vulnerabilities.getDetails(vuln.id, variantId, projectId);
             if (!details) throw new Error("Failed to load refreshed vulnerability details.");
@@ -730,9 +733,15 @@ type PendingAiEditTransition =
                 }
             } else {
                 const errors: string[] = [];
+                const omissions: string[] = [];
+                if (results.nvdOmission) omissions.push(results.nvdOmission === "no_record"
+                    ? "NVD returned no record" : "NVD requires a CVE identifier");
+                if (results.epssOmission) omissions.push(results.epssOmission === "no_record"
+                    ? "EPSS returned no record" : "EPSS requires a CVE identifier");
+                setRefreshOmissions(omissions);
                 const nvdValue = results.nvd;
                 const nvdUpdated = nvdValue?.kind === "success";
-                if (!nvdUpdated) {
+                if (!nvdUpdated && !results.nvdOmission) {
                     if (nvdValue?.kind === "error" && nvdValue.code === "rate_limited") {
                         errors.push(nvdValue.apiKeyConfigured
                             ? "NVD rate-limited. Your NVD API key may be exhausted, please try again later."
@@ -743,7 +752,7 @@ type PendingAiEditTransition =
                         errors.push("NVD API unavailable. Please try again later.");
                     }
                 }
-                if (!results.epss) {
+                if (!results.epss && !results.epssOmission) {
                     errors.push("EPSS API unavailable");
                 }
                 const euvdValue = results.euvd;
@@ -1781,6 +1790,7 @@ type PendingAiEditTransition =
                         {partialRefreshed && <span className="ml-2 text-xs">{refreshedList.join(', ')} Updated</span>}
                     </button>
                     {refreshError && <span className="text-xs text-red-400">{refreshError}</span>}
+                    {refreshOmissions.length > 0 && <span className="text-xs">{refreshOmissions.join(". ")}.</span>}
                 </div>
             )}
             {!readOnly && (

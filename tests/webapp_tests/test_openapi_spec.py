@@ -678,7 +678,7 @@ def test_vulnerability_refresh_response_envelope_matches_runtime(client, app, co
 
     vuln_id = "CVE-2024-1234"
     if source == "nvd":
-        monkeypatch.setattr(vulnerabilities, "get_cve_json", lambda cve_id: {"id": cve_id})
+        monkeypatch.setattr(vulnerabilities, "get_cve_json", lambda cve_id, *, strict: {"id": cve_id})
         monkeypatch.setattr(vulnerabilities, "extract_cve_details", lambda cve: {"description": "Refreshed NVD data"})
     elif source == "epss":
         epss = Mock()

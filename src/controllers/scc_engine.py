@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import functools
 import fcntl
+import json
 import logging
 import os
 import pathlib
@@ -639,6 +640,33 @@ class SccEngine:
             )
         return None
 
+    def nvd_snapshot_lookup(self) -> Callable[[str], dict | None]:
+        """Prepare a local lookup that raises when absence cannot be verified."""
+        for databases in self._managed_databases().values():
+            for db in databases:
+                if not isinstance(db, NvdFkieVulnDatabase) or db.git_database.get_date_last_commit() is None:
+                    continue
+                root = pathlib.Path(db.export_repro_config()["path"])
+                if any(path.is_file() for path in root.glob("CVE-*/CVE-*xx/CVE-*.json")):
+                    return functools.partial(self._lookup_snapshot_cve, root)
+        raise RuntimeError("No usable local NVD snapshot")
+
+    @staticmethod
+    def _lookup_snapshot_cve(root: pathlib.Path, cve_id: str) -> dict | None:
+        # FKIE's get_vuln uses Path.is_file(), which can hide access errors.
+        identifier = CveId(cve_id)
+        path = root / f"CVE-{identifier.year}" / (identifier.id[:-2] + "xx") / f"{identifier.id}.json"
+        try:
+            with path.open("rb") as stream:
+                record = json.load(stream)
+        except FileNotFoundError:
+            # A checkout that disappeared after setup is not negative evidence.
+            root.stat()
+            return None
+        if not isinstance(record, dict) or record.get("id") != cve_id:
+            raise ValueError("Invalid record in local NVD snapshot")
+        return record
+
 
 def _get_engine(progress: ProgressCallback | None = None) -> SccEngine:
     """Build or reuse the process-wide engine and refresh its databases."""
@@ -691,7 +719,7 @@ def reset_engine() -> None:
         _ENGINE = None
 
 
-def get_cve_json(cve_id: str) -> "dict | None":
+def get_cve_json(cve_id: str, *, strict: bool = False) -> "dict | None":
     """Look up a CVE by ID in the local NVD-FKIE database.
 
     Reuses the already-built engine without triggering a git fetch so
@@ -700,7 +728,8 @@ def get_cve_json(cve_id: str) -> "dict | None":
     performs the initial build (including a first fetch).
 
     Returns the raw NVD CVE JSON dict (same schema as NVD API v2) or ``None``
-    if the CVE is not found or the database is not yet initialised.
+    if the CVE is not found or the database is not yet initialised. In strict
+    mode, lookup failures propagate instead of being reported as absence.
     """
     with _ENGINE_LOCK:
         engine = _ENGINE
@@ -712,6 +741,8 @@ def get_cve_json(cve_id: str) -> "dict | None":
         # lock for its full multi-minute duration) does not stall vuln-detail
         # requests.
         engine = get_engine()
+    if strict:
+        return engine.nvd_snapshot_lookup()(cve_id)
     try:
         return engine.get_nvd_cve_json(cve_id)
     except Exception as exc:

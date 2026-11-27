@@ -22,6 +22,41 @@ from sbom_cve_check.vuln.comp_id import CompId
 from sbom_cve_check.vuln.vex import VexStatus
 
 
+def test_nvd_snapshot_requires_usable_checkout_and_reads_local_records(monkeypatch, tmp_path):
+    from src.controllers import scc_engine
+
+    snapshot = MagicMock(spec=scc_engine.NvdFkieVulnDatabase)
+    snapshot.git_database = MagicMock()
+    snapshot.export_repro_config.return_value = {"path": str(tmp_path)}
+    engine = object.__new__(scc_engine.SccEngine)
+    monkeypatch.setattr(engine, "_managed_databases", lambda: {"nvd": [snapshot]})
+    folder = tmp_path / "CVE-2099" / "CVE-2099-12xx"
+    folder.mkdir(parents=True)
+
+    snapshot.git_database.get_date_last_commit.return_value = None
+    with pytest.raises(RuntimeError, match="No usable local NVD snapshot"):
+        engine.nvd_snapshot_lookup()
+
+    snapshot.git_database.get_date_last_commit.return_value = object()
+    with pytest.raises(RuntimeError, match="No usable local NVD snapshot"):
+        engine.nvd_snapshot_lookup()
+
+    (folder / "CVE-2099-1200.json").write_text('{"id":"CVE-2099-1200"}')
+    lookup = engine.nvd_snapshot_lookup()
+    identifier = "CVE-2099-1234"
+    record = folder / f"{identifier}.json"
+    assert lookup(identifier) is None
+    record.write_text('{"id":"CVE-2099-1234"}')
+    assert lookup(identifier) == {"id": identifier}
+    record.write_text("not JSON")
+    with pytest.raises(ValueError):
+        lookup(identifier)
+    record.unlink()
+    record.mkdir()
+    with pytest.raises(IsADirectoryError):
+        lookup(identifier)
+
+
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------

@@ -1807,15 +1807,15 @@ def test_epss_refresh_cve_not_found(client):
     assert "not found" in data["error"].lower()
 
 
-def test_epss_refresh_api_returns_none_gives_503(client):
-    """POST epss-refresh when EPSS API returns None gives 503."""
+def test_epss_refresh_api_failure_gives_503(client):
+    """POST epss-refresh gives 503 when the EPSS lookup fails."""
     from unittest.mock import patch
     with patch("src.routes.vulnerabilities.EPSS_DB") as mock_epss_cls:
-        mock_epss_cls.return_value.api_get_epss.return_value = None
+        mock_epss_cls.return_value.api_get_epss.side_effect = OSError("offline")
         response = client.post("/api/vulnerabilities/CVE-2020-35492/epss-refresh")
     assert response.status_code == 503
     data = json.loads(response.data)
-    assert "no data" in data["error"].lower()
+    assert "lookup failed" in data["error"].lower()
 
 
 def test_epss_refresh_success(client):

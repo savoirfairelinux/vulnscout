@@ -277,6 +277,22 @@ describe('Refresh overview', () => {
         }
     });
 
+    test('shows a completed lookup with no record without implying comparison', async () => {
+        const noRecord: RefreshRun = {
+            ...run, coverage: [{ source: 'nvd', vuln_id: 'CVE-2099-1234', status: 'no_record', error: null }],
+            changes: [], total: 0,
+            summary: { ...run.summary, refreshed_vulnerabilities: 0, no_record_vulnerabilities: 1, total_changes: 0 },
+        };
+        detail.mockResolvedValue(noRecord);
+        show();
+        await openResult();
+        expect(await screen.findByText('No provider records were returned. No comparison baseline is available.')).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        await selectSection('Coverage');
+        expect(within(screen.getByRole('table', { name: 'Vulnerability coverage' }))
+            .getByRole('row', { name: /CVE-2099-1234 NVD No record/ })).toBeInTheDocument();
+    });
+
     test('shows first enrichment separately from modifications and renders long values', async () => {
         const enrichment = { ...run, summary: { ...run.summary, first_enrichments: 1 }, changes: [{
             ...run.changes[0], before: null, after: 'Long value '.repeat(1000), kind: 'first_enrichment', change_type: 'addition',
@@ -529,7 +545,7 @@ describe('Refresh overview', () => {
         await openResult();
         expect(await screen.findByText(/Coverage is incomplete\. Unchanged data cannot be concluded/)).toBeInTheDocument();
         await selectSection('Coverage');
-        expect(await screen.findByText(/Check operation logs; no unchecked target/)).toBeInTheDocument();
+        expect(await screen.findByText(/Check operation logs; no unresolved target/)).toBeInTheDocument();
         expect(screen.queryByText(/Refresh complete: zero changes/)).not.toBeInTheDocument();
     });
 
