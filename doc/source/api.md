@@ -1915,12 +1915,17 @@ Fetches NVD data for the given CVE and updates the stored description, CVSS scor
 | `mode` | string | `"local"` (default) or `"api"`. |
 
 **Response:** `200` with `{"vulnerabilities": [<updated vulnerability>]}`.
+If the lookup verifies that there is no NVD record, the response is
+`{"vulnerabilities": [], "outcome": "no_record"}`. An existing identifier
+unsupported by NVD returns `{"vulnerabilities": [], "outcome": "skipped"}`.
+Neither outcome changes stored vulnerability data.
 
 **Error responses:**
 
 | Code | `error_code` | Condition |
 |------|--------------|-----------|
-| `503` | `unavailable` | Local mode: CVE not found in the local database. API mode: NVD API unreachable or returned no data. |
+| `404` | — | Identifier is not stored. |
+| `503` | `unavailable` | The local snapshot or API lookup failed, or its result could not be verified. |
 | `429` | `rate_limited` | API mode only: NVD rate limit exceeded. |
 | `401`/`403` | `unauthorized` | API mode only: API key rejected by NVD. |
 
@@ -1937,7 +1942,11 @@ GHSA refresh accepts a `GHSA-xxxx-xxxx-xxxx` identifier and updates the advisory
 Identifiers are normalized to uppercase. Neither endpoint creates findings.
 
 **Response:** `200` with `{"vulnerabilities":[<updated vulnerability>]}`.
-EPSS returns `404` for an unknown CVE and `503` for unavailable data.
+EPSS returns `200` with `{"vulnerabilities": [], "outcome": "no_record"}` for
+a verified miss or `{"vulnerabilities": [], "outcome": "skipped"}` for an
+existing unsupported identifier. Neither outcome changes stored vulnerability
+data. EPSS returns `404` for an unknown identifier and `503` for a failed or
+unverifiable lookup.
 GHSA returns `400` for invalid identifiers, `404` for missing local/upstream advisories,
 `502` for other upstream HTTP errors, and `503` for network/unusable published-date data.
 
@@ -2048,7 +2057,8 @@ Detail/latest responses have this shape:
     {"source": "epss", "vuln_id": "CVE-2020-35492", "status": "complete",
      "error": null, "packages": []}
   ],
-  "summary": {"total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0},
+  "summary": {"refreshed_vulnerabilities": 1, "no_record_vulnerabilities": 0,
+              "total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0},
   "changes": [
     {"vuln_id": "CVE-2020-35492", "source": "epss", "field": "epss_score",
      "before": 0.1, "after": 0.2, "kind": "changed", "change_type": "modification",
@@ -2065,11 +2075,17 @@ and `summary` but no `coverage`, `changes`, `total`, `limit` or `offset`, so a
 page only costs work for the runs it contains. Summary counts cover
 the complete filtered change set, not just the current page; changed CVEs include
 first enrichments. A zero-change run with complete coverage is successful.
+`refreshed_vulnerabilities` counts distinct identifiers with at least one
+`complete` outcome in scope. `no_record_vulnerabilities` counts distinct
+identifiers with at least one `no_record` outcome in scope. One identifier can
+count in both fields if its provider outcomes differ.
 `running` means sources remain pending; `incomplete` means a source did not
-finish successfully or an applicable target was not successfully checked.
+finish successfully or a target has an unverified outcome.
 Explicitly unsupported identifiers remain in coverage as `skipped` with a reason,
-but are neither checked nor gaps. A missing provider record is still a gap.
-Coverage statuses are `pending`, `complete`, `failed`,
+but are neither checked nor gaps. A verified NVD or EPSS miss is `no_record`:
+it does not create a gap or supply a baseline for comparison. Failed or
+unverified lookups and historical skips without verified reasons remain gaps.
+Coverage statuses are `pending`, `complete`, `no_record`, `failed`,
 `skipped` or `cancelled`; source statuses are `pending`, `complete` or `incomplete`.
 Provider absence is not evidence of a removal.
 
