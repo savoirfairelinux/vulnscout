@@ -468,19 +468,10 @@ search of `src` never scans `build`. `get_merged_context` lists them under
 modified by the context feature; approve and attach an appropriate host folder
 explicitly if its contents are still needed as evidence.
 
-**Image prerequisite:** The default `v0.25.1` release does not contain the
-helper or the container-side attach command. Until a release includes them,
-build this checkout with the same engine the launcher uses (Podman when
-installed, otherwise Docker). Select it before starting the container:
-
-```bash
-podman build -t localhost/vulnscout:host-folders .  # or docker build
-./vulnscout config set VULNSCOUT_IMAGE localhost/vulnscout:host-folders
-./vulnscout start
-```
-
-`--dev` alone does not supply the host helper. Once the image is selected,
-no per-folder setup is required.
+**Image prerequisite:** The default `v0.26` image includes the host helper and
+the container-side attach command. If you have overridden `VULNSCOUT_IMAGE`,
+use an image with host-folder support before starting the container.
+`--dev` alone does not supply the host helper.
 
 **From the CLI** (use an existing project and variant; both default to `default`):
 

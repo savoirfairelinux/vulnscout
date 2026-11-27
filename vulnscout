@@ -270,7 +270,7 @@ if [[ -e "$HOST_CONFIG_FILE" || -L "$HOST_CONFIG_FILE" ]]; then
     done < "$HOST_CONFIG_FILE"
 fi
 CONTAINER_NAME="${VULNSCOUT_CONTAINER:-vulnscout}"
-DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.25.1}"
+DOCKER_IMAGE="${VULNSCOUT_IMAGE:-docker.io/sflinux/vulnscout:v0.26}"
 # Resolve the operator-selected root, never a socket path inside the shared cache.
 VULNSCOUT_CACHE_DIR="$(realpath -m -- "${VULNSCOUT_CACHE_DIR:-$VULNSCOUT_BUILD_DIR/cache}")"
 VULNSCOUT_HOST_HELPER_STATE_DIR="$(realpath -m -- "${VULNSCOUT_HOST_HELPER_STATE_DIR:-$VULNSCOUT_BUILD_DIR/host-helper}")"
@@ -1128,7 +1128,7 @@ host_helper_script() {
         /scan/src/helpers/host_mount_helper.py > "$tmp" 2>/dev/null || [ ! -s "$tmp" ]; then
         rm -f "$tmp"
         console_err error "Error: cannot extract the host folder helper from $DOCKER_IMAGE."
-        console_err error "Build this checkout's Dockerfile, set VULNSCOUT_IMAGE to that image, and run './vulnscout start' before retrying. The v0.25.1 release lacks host folders; --dev is not sufficient."
+        console_err error "Select a VulnScout image with host-folder support (v0.26 or later) and run './vulnscout start' before retrying. --dev is not sufficient."
         return 1
     fi
     mv -- "$tmp" "$cached" || return 1

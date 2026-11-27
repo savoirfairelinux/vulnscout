@@ -2,7 +2,7 @@
 
 The `./vulnscout` script is the main host-side entry point for running VulnScout.
 It manages the container lifecycle (Docker or Podman) and forwards commands to the container's entrypoint.
-The default container image is `docker.io/sflinux/vulnscout:v0.25.1`.
+The default container image is `docker.io/sflinux/vulnscout:v0.26`.
 
 This page introduces command syntax, options, and project/variant selection.
 For task-specific instructions, see [VulnScout Workflow](vulnscout-workflow.md).
@@ -164,9 +164,8 @@ HTTP export.
 
 Agents can browse, read and search folders from the container host without
 copying files, uploading archives or restarting the container. The host command
-itself approves the selected folder for that variant and alias. First select
-a [compatible image](ai-assessments.md#attached-host-folders); the `v0.25.1`
-release does not include this feature.
+itself approves the selected folder for that variant and alias. The default
+image supports [host-folder attachments](ai-assessments.md#attached-host-folders).
 
 ```bash
 ./vulnscout ai-context attach -p demo -v x86 src=/work/app build=/work/build/tmp/work
