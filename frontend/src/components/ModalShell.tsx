@@ -130,6 +130,7 @@ export type ModalShellProps = {
     closeOnEscape?: boolean;
     closeOnBackdrop?: boolean;
     closeOnPanel?: boolean;
+    suspendUnderlyingDialogs?: boolean;
     embedded?: boolean;
     compactEmbedded?: boolean;
     testId?: string;
@@ -160,6 +161,7 @@ export default function ModalShell({
     closeOnEscape = true,
     closeOnBackdrop = true,
     closeOnPanel = false,
+    suspendUnderlyingDialogs = false,
     embedded = false,
     compactEmbedded = false,
     testId = "modal-backdrop",
@@ -186,6 +188,16 @@ export default function ModalShell({
         lockBodyScroll();
         panel?.focus();
 
+        const suspendedOverlays: HTMLElement[] = [];
+        if (suspendUnderlyingDialogs && panel) {
+            for (const overlay of document.querySelectorAll<HTMLElement>('[data-modal-overlay]')) {
+                if (overlay === panel.parentElement) break;
+                if (overlay.contains(panel) || overlay.hasAttribute("inert")) continue;
+                overlay.setAttribute("inert", "");
+                suspendedOverlays.push(overlay);
+            }
+        }
+
         const handleKeyDown = (event: KeyboardEvent) => {
             const openModalPanels = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
             if (openModalPanels[openModalPanels.length - 1] !== panel) return;
@@ -206,10 +218,12 @@ export default function ModalShell({
 
             const firstElement = focusableElements[0];
             const lastElement = focusableElements[focusableElements.length - 1];
-            if (event.shiftKey && document.activeElement === firstElement) {
+            const activeElement = document.activeElement;
+            const focusAtBoundary = activeElement === panel || !panel.contains(activeElement);
+            if (event.shiftKey && (focusAtBoundary || activeElement === firstElement)) {
                 event.preventDefault();
                 lastElement.focus();
-            } else if (!event.shiftKey && document.activeElement === lastElement) {
+            } else if (!event.shiftKey && (focusAtBoundary || activeElement === lastElement)) {
                 event.preventDefault();
                 firstElement.focus();
             }
@@ -218,10 +232,11 @@ export default function ModalShell({
         document.addEventListener("keydown", handleKeyDown);
         return () => {
             document.removeEventListener("keydown", handleKeyDown);
+            for (const overlay of suspendedOverlays) overlay.removeAttribute("inert");
             unlockBodyScroll();
             previouslyFocusedElement?.focus();
         };
-    }, [closeOnEscape, embedded, isOpen]);
+    }, [closeOnEscape, embedded, isOpen, suspendUnderlyingDialogs]);
 
     if (!isOpen) return null;
 

@@ -1947,10 +1947,16 @@ describe('Vulnerability Modal', () => {
             await user.click(newTarget);
             await user.click(saveButton);
             const confirmation = screen.getByRole('dialog', { name: confirmationTitle });
+            expect(saveButton.closest('[inert]')).not.toBeNull();
+            expect(confirmation).toHaveFocus();
+            await user.tab({ shift: true });
+            expect(within(confirmation).getByRole('button', { name: 'Back to edit' })).toHaveFocus();
             expect(reconcileCalls()).toHaveLength(0);
 
-            await user.click(within(confirmation).getByRole('button', { name: 'Back to edit' }));
+            await user.keyboard('{Escape}');
             expect(screen.queryByRole('dialog', { name: confirmationTitle })).not.toBeInTheDocument();
+            expect(saveButton.closest('[inert]')).toBeNull();
+            expect(saveButton).toHaveFocus();
             expect(reconcileCalls()).toHaveLength(0);
             expect(newTarget).toBeChecked();
             const notes = editor.getByPlaceholderText(/Free text notes/);
