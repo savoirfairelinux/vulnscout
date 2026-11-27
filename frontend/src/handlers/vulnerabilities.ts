@@ -1,5 +1,5 @@
 import type { Assessment } from "./assessments";
-import { asStringArray, assessmentPackagesInVariant, assessmentVariantIds } from "./assessments";
+import { asAssessment, asStringArray, assessmentPackagesInVariant, assessmentVariantIds } from "./assessments";
 import Iso8601Duration from "./iso8601duration";
 import { Cvss2, Cvss3P0, Cvss3P1, Cvss4P0 } from 'ae-cvss-calculator';
 
@@ -412,6 +412,17 @@ function setEvidenceScopeParams(
 }
 
 class Vulnerabilities {
+    static async historicalAssessmentTrend(
+        variantId?: string, projectId?: string, comparison?: ComparisonScope, signal?: AbortSignal,
+    ): Promise<Assessment[]> {
+        const url = new URL(import.meta.env.VITE_API_URL + '/api/vulnerabilities/assessment-trend', window.location.href);
+        setEvidenceScopeParams(url.searchParams, variantId, projectId, comparison);
+        const response = await fetch(url.toString(), { signal });
+        if (!response.ok) throw new Error(`Failed to load assessment trend: ${response.status}`);
+        const rows = await response.json();
+        return rows.flatMap(asAssessment);
+    }
+
     static async matchCondition(condition: string, vulnerabilities: Vulnerability[], signal?: AbortSignal): Promise<string[]> {
         // Facts must stay aligned with the CI fail-condition evaluation in
         // src/bin/cmd_process.py (evaluate_condition) so a given condition
