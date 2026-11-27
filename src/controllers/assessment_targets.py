@@ -9,9 +9,14 @@ ordered, so the front-ends stop reimplementing it and drifting apart.
 
 from uuid import UUID
 
+from ..extensions import db
+from ..helpers.active_scans import active_scan_ids_for_variants
 from ..helpers.assessment_risk_links import RiskModelIndex
 from ..helpers.assessment_staleness import annotate_assessments_outdated
+from ..helpers.finding_evidence import finding_packages_for_scans
 from ..models.assessment import Assessment
+from ..models.observation import Observation
+from ..models.scan import Scan
 
 
 def annotate_targets(assessments: list[Assessment], link_scope: set[UUID] | None = None) -> list[dict]:
@@ -52,3 +57,36 @@ def annotate_targets(assessments: list[Assessment], link_scope: set[UUID] | None
             targets, key=lambda t: (t["variant_id"] or "", t["package"]))
 
     return sorted(dicts, key=lambda d: d["timestamp"] or "", reverse=True)
+
+
+def annotate_review_evidence(assessments: list[Assessment], payload: list[dict]) -> None:
+    """Mark previously observed custom targets absent from current published evidence."""
+    custom = {str(row.id): row for row in assessments if row.origin == "custom"}
+    targets = [target for row in custom.values() for target in row.target_rows]
+    if not targets:
+        return
+    variants = {target.variant_id for target in targets}
+    published = set(db.session.execute(
+        db.select(Scan.variant_id, Observation.finding_id)
+        .join(Observation, Observation.scan_id == Scan.id)
+        .where(Scan.in_progress.is_(False), Scan.variant_id.in_(variants),
+               Observation.finding_id.in_({target.finding_id for target in targets}))
+        .distinct()
+    ).tuples())
+    current = finding_packages_for_scans(
+        active_scan_ids_for_variants(variants), {row.vuln_id for row in custom.values() if row.vuln_id},
+        collect_writable_targets=True,
+    ).writable_targets
+    outdated = published - current
+
+    for entry in payload:
+        if (row := custom.get(entry["id"])) is None:
+            continue
+        missing = {
+            (str(target.variant_id), target.finding.package.string_id)
+            for target in row.target_rows
+            if (target.variant_id, target.finding_id) in outdated
+        }
+        for target in entry["targets"]:
+            target["outdated"] = (target["variant_id"], target["package"]) in missing
+        entry["outdated"] = bool(missing)

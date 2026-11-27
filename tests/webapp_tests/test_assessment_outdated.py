@@ -179,6 +179,67 @@ def _build_outdated_db(app, *, include_v2_finding: bool = True, include_v2_in_ac
         return assess_id
 
 
+def test_review_marks_missing_exact_finding_with_retained_package(app_factory):
+    app = app_factory()
+    assessment_id = _build_outdated_db(app, include_v2_finding=False, include_unchanged_second_pkg=True)
+    with app.app_context():
+        firefox = Package.get_by_string_id("firefox@1.0")
+        chrome = Package.get_by_string_id("chrome@1.0")
+        old_finding = Finding.get_or_create(firefox.id, CVE_ID)
+        current_finding = Finding.get_or_create(chrome.id, CVE_ID)
+        document = _db.session.scalar(_db.select(SBOMDocument).where(SBOMDocument.scan_id == SCAN_V2_ID))
+        latest = _db.session.get(Scan, SCAN_V2_ID)
+        latest.in_progress = True
+        sibling = Variant.create("tool-only", PROJECT_ID)
+        tool = Scan(variant_id=sibling.id, scan_type="tool", scan_source="nvd")
+        _db.session.add_all([
+            SBOMPackage(sbom_document_id=document.id, package_id=firefox.id),
+            Observation(finding_id=current_finding.id, scan_id=latest.id),
+            tool,
+        ])
+        _db.session.flush()
+        _db.session.add(Observation(finding_id=old_finding.id, scan_id=tool.id))
+        _db.session.add_all([
+            AssessmentTarget(assessment_id=assessment_id, variant_id=VARIANT_ID, finding_id=current_finding.id),
+            AssessmentTarget(assessment_id=assessment_id, variant_id=sibling.id, finding_id=old_finding.id),
+        ])
+        _db.session.commit()
+        sibling_id, old_finding_id = sibling.id, old_finding.id
+
+    client = app.test_client()
+    url = f"/api/reviews/assessments?project_id={PROJECT_ID}&origin=custom"
+
+    def review():
+        response = client.get(url)
+        assert response.status_code == 200
+        row, = response.json
+        assert row["id"] == str(assessment_id)
+        return row
+
+    assert review()["outdated"] is False
+    with app.app_context():
+        _db.session.get(Scan, SCAN_V2_ID).in_progress = False
+        _db.session.commit()
+
+    row = review()
+    assert row["outdated"] is True
+    assert {(t["variant_id"], t["package"]): t["outdated"] for t in row["targets"]} == {
+        (str(VARIANT_ID), "firefox@1.0"): True,
+        (str(VARIANT_ID), "chrome@1.0"): False,
+        (str(sibling_id), "firefox@1.0"): False,
+    }
+    assert row["status_notes"] == "No network access on this build"
+    assert row["superseded_by"] == []
+
+    with app.app_context():
+        tool = Scan(variant_id=VARIANT_ID, scan_type="tool", scan_source="osv")
+        _db.session.add(tool)
+        _db.session.flush()
+        _db.session.add(Observation(finding_id=old_finding_id, scan_id=tool.id))
+        _db.session.commit()
+    assert review()["outdated"] is False
+
+
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------

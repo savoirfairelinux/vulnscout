@@ -2266,6 +2266,7 @@ describe('Review — filters, search and keyboard', () => {
     test('Outdated includes rows with mixed current and outdated assessments', async () => {
         const mixedRow = makeMultiTargetAssessment('mixed-1', 'CVE-2020-MIXED', [
             { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v1', pkg: 'pkgC@1.0.0', outdated: false },
             { variantId: 'v2', pkg: 'pkgB@1.0.0', outdated: false },
         ]);
         mockNetwork([mixedRow, makeAssessment('current', 'v1')]);
@@ -2279,6 +2280,8 @@ describe('Review — filters, search and keyboard', () => {
             expect(screen.queryByText('CVE-2020-1111')).not.toBeInTheDocument();
         });
         expect(screen.getByText('CVE-2020-MIXED')).toBeInTheDocument();
+        expect(screen.getByText('Partly outdated')).toBeVisible();
+        expect(screen.queryByText(/^Outdated$/, { selector: 'span' })).not.toBeInTheDocument();
     });
 
     test('Outdated on the AI Assessments tab includes rows whose context is outdated', async () => {

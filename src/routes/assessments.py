@@ -35,7 +35,7 @@ from ..helpers.assessment_io import (
     reconcile_review_export,
 )
 from ..helpers.assessment_staleness import annotate_assessments_outdated
-from ..controllers.assessment_targets import annotate_targets
+from ..controllers.assessment_targets import annotate_review_evidence, annotate_targets
 from ..helpers.active_scans import active_scan_ids_for_variant
 from ..helpers.finding_evidence import finding_packages_for_scans, variant_finding_targets
 from ._assessment_write import (
@@ -1462,6 +1462,7 @@ def init_app(app: Flask) -> None:
 
         rows = list(db.session.execute(query).scalars())
         assessments = annotate_targets(rows, set(variant_ids) if variant_ids is not None else None)
+        annotate_review_evidence(rows, assessments)
 
         # Enrich with vulnerability texts for front-end tooltips (single DB
         # pass) — the review table spans several CVEs, unlike the vuln-scoped
