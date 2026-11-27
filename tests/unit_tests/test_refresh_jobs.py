@@ -9,11 +9,12 @@ import datetime
 import decimal
 import urllib.error
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
-from src.controllers import refresh_jobs as jobs
+from src.controllers import epss_db, refresh_jobs as jobs
+from src.controllers.job_context import CancelledError, JobContext
 
 
 def job_context(ids, **options):
@@ -275,6 +276,44 @@ def test_epss_refresh_handles_update_errors_and_cancellation(monkeypatch):
     ctx.check_cancelled.side_effect = RuntimeError("cancelled")
     with pytest.raises(RuntimeError, match="cancelled"):
         jobs.run_epss_refresh(ctx)
+
+
+def test_epss_refresh_continues_after_exhausting_batch_retries(monkeypatch):
+    exhausted, following = "CVE-2024-0001", "CVE-2024-0002"
+    request = MagicMock(side_effect=[
+        TimeoutError("timed out")] * 3 + [{following: {"score": 0.5, "percentile": 0.7}}])
+    sleep = MagicMock()
+    record = MagicMock()
+    monkeypatch.setattr(epss_db.EPSS_DB, "_request_epss_batch", request)
+    monkeypatch.setattr(epss_db.time, "sleep", sleep)
+    monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 1)
+    monkeypatch.setattr(jobs, "_safe_commit", MagicMock())
+    monkeypatch.setattr(jobs, "_apply_epss_score", MagicMock())
+    monkeypatch.setattr(jobs, "target_result", record)
+
+    jobs.run_epss_refresh(job_context([exhausted, following]))
+
+    assert request.call_args_list == [call([exhausted])] * 3 + [call([following])]
+    first, second = [args.args[0] for args in sleep.call_args_list]
+    assert 1 <= first <= 1.25
+    assert 2 <= second <= 2.25
+    assert record.call_args_list == [call("epss", exhausted, "failed", "timed out"), call("epss", following)]
+
+
+def test_epss_refresh_cancelled_in_backoff_does_not_fail_batch(monkeypatch):
+    ctx = JobContext("test-refresh", options={"ids": ["CVE-2024-0001"]})
+    monkeypatch.setattr(ctx, "report", MagicMock())
+    request = MagicMock(side_effect=TimeoutError("timed out"))
+    record = MagicMock()
+    monkeypatch.setattr(epss_db.EPSS_DB, "_request_epss_batch", request)
+    monkeypatch.setattr(epss_db.time, "sleep", lambda _delay: ctx.request_cancel())
+    monkeypatch.setattr(jobs, "target_result", record)
+
+    with pytest.raises(CancelledError):
+        jobs.run_epss_refresh(ctx)
+
+    request.assert_called_once()
+    record.assert_not_called()
 
 
 def test_apply_and_run_ghsa_refresh(monkeypatch):

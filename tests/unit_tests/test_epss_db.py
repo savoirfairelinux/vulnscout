@@ -4,11 +4,14 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import json
+import socket
 import urllib.error
 from email.message import Message
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
+
+from src.controllers import epss_db
 from src.controllers.epss_db import EPSS_DB
 
 
@@ -166,6 +169,48 @@ def test_api_get_epss_batch_success(monkeypatch):
     assert abs(result["CVE-2023-0001"]["percentile"] - 0.56789) < 1e-5
 
 
+@pytest.mark.parametrize("error", [
+    urllib.error.URLError(socket.gaierror(socket.EAI_AGAIN, "temporary DNS failure")),
+    urllib.error.URLError(TimeoutError("connect timed out")),
+    TimeoutError("read timed out"),
+])
+def test_api_get_epss_batch_retries_transient_errors(monkeypatch, error):
+    cve = "CVE-2024-0001"
+    response = FakeResp(200, {
+        "status": "OK", "data": [{"cve": cve, "epss": "0.5", "percentile": "0.7"}],
+    })
+    request = MagicMock(side_effect=[error, response])
+    sleep = MagicMock()
+    monkeypatch.setattr(epss_db.urllib.request, "urlopen", request)
+    monkeypatch.setattr(epss_db.time, "sleep", sleep)
+
+    assert EPSS_DB().api_get_epss_batch([cve]) == {cve: {"score": 0.5, "percentile": 0.7}}
+    assert request.call_count == 2
+    sleep.assert_called_once()
+    assert 1 <= sleep.call_args.args[0] <= 1.25
+
+
+@pytest.mark.parametrize("error", [
+    urllib.error.URLError(socket.gaierror(socket.EAI_NONAME, "permanent DNS failure")),
+    urllib.error.HTTPError("http://example.com", 503, "Unavailable", None, None),
+])
+def test_api_get_epss_batch_does_not_retry_other_errors(monkeypatch, error):
+    request = MagicMock(side_effect=error)
+    monkeypatch.setattr(epss_db.urllib.request, "urlopen", request)
+    with pytest.raises(type(error)) as raised:
+        EPSS_DB().api_get_epss_batch(["CVE-2024-0001"])
+    assert raised.value is error
+    request.assert_called_once()
+
+
+def test_strict_single_request_does_not_retry_timeouts(monkeypatch):
+    request = MagicMock(side_effect=TimeoutError("read timed out"))
+    monkeypatch.setattr(epss_db.urllib.request, "urlopen", request)
+    with pytest.raises(TimeoutError):
+        EPSS_DB().api_get_epss("CVE-2024-0001", strict=True)
+    request.assert_called_once()
+
+
 def test_api_get_epss_batch_non_200(monkeypatch):
     """An unsuccessful response must not look like missing scores."""
     monkeypatch.setattr(
@@ -235,8 +280,12 @@ def test_epss_malformed_success_response_is_not_absence(monkeypatch, payload):
 
 def test_epss_explicit_empty_is_distinct_from_invalid_json(monkeypatch):
     response = FakeResp(200, {"status": "OK", "data": [], "total": 0})
-    monkeypatch.setattr("src.controllers.epss_db.urllib.request.urlopen", lambda *_a, **_kw: response)
-    assert EPSS_DB().api_get_epss("CVE-2024-0001", strict=True) is None
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(epss_db.urllib.request, "urlopen", request)
+    assert EPSS_DB().api_get_epss_batch(["CVE-2024-0001"]) == {}
+    request.assert_called_once()
+    request.reset_mock()
     monkeypatch.setattr(response, "read", lambda: b"not-json")
     with pytest.raises(ValueError):
         EPSS_DB().api_get_epss_batch(["CVE-2024-0001"])
+    request.assert_called_once()

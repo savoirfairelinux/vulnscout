@@ -2,13 +2,26 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import math
+import random
+import socket
+import time
 import urllib.request
 import urllib.parse
 import urllib.error
+from collections.abc import Callable
 from typing import Optional
 from ..helpers.base_api_client import BaseAPIClient
 
 EPSS_API_URL = "https://api.first.org/data/v1/epss"
+
+
+def _is_retryable(exc: OSError) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return False
+    cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return isinstance(cause, TimeoutError) or (
+        isinstance(cause, socket.gaierror) and cause.errno == socket.EAI_AGAIN
+    )
 
 
 class EPSS_DB(BaseAPIClient):
@@ -26,7 +39,7 @@ class EPSS_DB(BaseAPIClient):
         propagate failures instead of returning ``None`` for them as well.
         """
         if strict:
-            return self.api_get_epss_batch([cve_id]).get(cve_id)
+            return self._request_epss_batch([cve_id]).get(cve_id)
         try:
             url = f"{EPSS_API_URL}?cve={urllib.parse.quote(cve_id, safe='')}"
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -51,9 +64,12 @@ class EPSS_DB(BaseAPIClient):
             print(f"Error fetching EPSS for {cve_id}: {e}", flush=True)
             return None
 
-    def api_get_epss_batch(self, cve_ids: list[str]) -> dict[str, dict]:
+    def api_get_epss_batch(
+        self, cve_ids: list[str], *, check_cancelled: Callable[[], None] | None = None,
+    ) -> dict[str, dict]:
         """
-        Fetch EPSS scores for a batch of CVE IDs in a single API call.
+        Fetch EPSS scores for a batch of CVE IDs, retrying transient DNS failures
+        and timeouts up to twice. Each request retains its 30-second I/O timeout.
 
         The FIRST.org API accepts up to 100 comma-separated CVE IDs per request.
         Returns a dict mapping each CVE ID that has a score to
@@ -63,6 +79,21 @@ class EPSS_DB(BaseAPIClient):
         """
         if not cve_ids:
             return {}
+        delays = iter((1, 2))
+        while True:
+            if check_cancelled is not None:
+                check_cancelled()
+            try:
+                return self._request_epss_batch(cve_ids)
+            except OSError as exc:
+                delay = next(delays, None)
+                if delay is None or not _is_retryable(exc):
+                    raise
+                if check_cancelled is not None:
+                    check_cancelled()
+                time.sleep(delay + random.uniform(0, 0.25))
+
+    def _request_epss_batch(self, cve_ids: list[str]) -> dict[str, dict]:
         encoded = ",".join(urllib.parse.quote(c, safe='') for c in cve_ids)
         url = f"{EPSS_API_URL}?cve={encoded}&limit={len(cve_ids)}"
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
