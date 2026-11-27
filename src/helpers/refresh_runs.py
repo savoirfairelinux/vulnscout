@@ -20,7 +20,7 @@ import socket
 import time
 from pathlib import Path
 
-from sqlalchemy import and_, case, event, exists, insert, select, update
+from sqlalchemy import ColumnElement, and_, case, event, exists, insert, select, update
 from sqlalchemy.orm import Session
 
 from ..extensions import db, hold_write_lock
@@ -35,8 +35,24 @@ _single_run: ContextVar[str | None] = ContextVar("single_refresh_run", default=N
 # Identifiers that collide with fixed /api/refresh-runs/<name> routes.
 RESERVED_RUN_IDS = frozenset({"latest"})
 HEARTBEAT_INTERVAL_SECONDS = 60.0
+UNSUPPORTED_CVE_IDENTIFIER = "Provider requires a CVE identifier"
+NO_PROVIDER_RECORD = "no_record"
+# Unlike target gaps, an interrupted execution is incomplete even if every target was settled.
+_SOURCE_INTERRUPTED = "interrupted"
 _CHUNK = 500
 _last_heartbeat: dict[str, float] = {}
+
+
+def _inapplicable_target() -> ColumnElement[bool]:
+    return and_(
+        RefreshTarget.source.in_(("nvd", "epss")),
+        RefreshTarget.status == "skipped",
+        RefreshTarget.error.is_not_distinct_from(UNSUPPORTED_CVE_IDENTIFIER),
+    )
+
+
+def target_has_coverage_gap() -> ColumnElement[bool]:
+    return and_(RefreshTarget.status.not_in(("complete", NO_PROVIDER_RECORD)), ~_inapplicable_target())
 
 
 def _process_start(pid: int) -> str | None:
@@ -116,7 +132,7 @@ def reconcile_interrupted_runs() -> None:
         _write(
             update(RefreshRunSource)
             .where(RefreshRunSource.run_id == run_id, RefreshRunSource.status == "pending")
-            .values(status="incomplete")
+            .values(status=_SOURCE_INTERRUPTED)
         )
         _write(
             update(RefreshRun)
@@ -238,15 +254,21 @@ def add_targets(run_id: str, source: str, ids: list[str]) -> None:
 
 
 def target_result(source: str, vuln_id: str, status: str = "complete", error: str | None = None) -> None:
+    target_results(source, [vuln_id], status, error)
+
+
+def target_results(source: str, vuln_ids: list[str], status: str, error: str | None = None,
+                   *, pending_only: bool = False) -> None:
+    """Record one outcome for a bounded batch in the caller's transaction."""
     capture = _capture.get()
-    if capture is None:
+    if capture is None or not vuln_ids:
         return
-    result = _write(
-        update(RefreshTarget)
-        .where(RefreshTarget.run_id == capture[0], RefreshTarget.source == source,
-               RefreshTarget.vuln_id == vuln_id)
-        .values(status=status, error=error)
+    statement = update(RefreshTarget).where(
+        RefreshTarget.run_id == capture[0], RefreshTarget.source == source, RefreshTarget.vuln_id.in_(vuln_ids),
     )
+    if pending_only:
+        statement = statement.where(RefreshTarget.status == "pending")
+    result = _write(statement.values(status=status, error=error))
     if not result.rowcount:  # type: ignore[attr-defined]
         _require_run(capture[0], "Refresh artifact disappeared during execution")
     _heartbeat(capture[0])
@@ -264,14 +286,15 @@ def finish_source(run_id: str, source: str, status: str = "failed", error: str |
     # Lock the parent before changing sources or deciding whether all have settled.
     _heartbeat(run_id, force=True)
     _ensure_source(run_id, source)
-    unchecked = exists().where(RefreshTarget.run_id == run_id, RefreshTarget.source == source,
-                               RefreshTarget.status != "complete")
+    gap = exists().where(RefreshTarget.run_id == run_id, RefreshTarget.source == source,
+                         target_has_coverage_gap())
     _write(
         update(RefreshRunSource)
         .where(RefreshRunSource.run_id == run_id, RefreshRunSource.source == source)
         .values(status=case(
-            (and_(RefreshRunSource.status != "incomplete", ~unchecked), "complete"), else_="incomplete",
-        ) if status == "failed" and error is None else "incomplete")
+            (RefreshRunSource.status == _SOURCE_INTERRUPTED, _SOURCE_INTERRUPTED),
+            (and_(RefreshRunSource.status != "incomplete", ~gap), "complete"), else_="incomplete",
+        ) if status == "failed" and error is None else _SOURCE_INTERRUPTED)
     )
     now = datetime.now(timezone.utc)
     pending = exists().where(RefreshRunSource.run_id == run_id, RefreshRunSource.status == "pending")
@@ -287,8 +310,18 @@ def finish_source(run_id: str, source: str, status: str = "failed", error: str |
 
 def source_statuses(run_id: str) -> dict[str, str]:
     """Source outcomes in the order the run declared its sources."""
+    targets = (RefreshTarget.run_id == RefreshRunSource.run_id, RefreshTarget.source == RefreshRunSource.source)
+    # Old summaries counted every skip as a gap. Require positive evidence of
+    # inapplicability and leave source-level interruptions incomplete.
+    status = case(
+        (RefreshRunSource.status == _SOURCE_INTERRUPTED, "incomplete"),
+        (and_(RefreshRunSource.status == "incomplete",
+              exists().where(*targets, _inapplicable_target()),
+              ~exists().where(*targets, target_has_coverage_gap())), "complete"),
+        else_=RefreshRunSource.status,
+    )
     return {source: status for source, status in db.session.execute(
-        select(RefreshRunSource.source, RefreshRunSource.status)
+        select(RefreshRunSource.source, status)
         .where(RefreshRunSource.run_id == run_id).order_by(RefreshRunSource.position)
     )}
 
@@ -360,8 +393,9 @@ def tracked_single_refresh(source: str):
             try:
                 with capture_source(run_id, source):
                     response = make_response(function(*args, **kwargs))
-                    target_result(source, identifier, "complete" if response.status_code < 400 else "failed",
-                                  None if response.status_code < 400 else f"HTTP {response.status_code}")
+                    target_results(source, [identifier], "complete" if response.status_code < 400 else "failed",
+                                   None if response.status_code < 400 else f"HTTP {response.status_code}",
+                                   pending_only=True)
                     db.session.commit()
             except BaseException:
                 db.session.rollback()

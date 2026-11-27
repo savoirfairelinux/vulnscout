@@ -144,6 +144,38 @@ describe("Assessments target/reconcile handlers", () => {
     expect(assessments[0].id).toBe("a1");
   });
 
+  test("approveAi without edits sends no body", async () => {
+    fetchSpy.mockResolvedValueOnce(response({ assessments: [] }));
+
+    await Assessments.approveAi("a1");
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBeUndefined();
+    expect(init.headers).toBeUndefined();
+  });
+
+  test("approveAi serializes only editable content and the review fingerprint", async () => {
+    fetchSpy.mockResolvedValueOnce(response({
+      assessments: [{ id: "a1", vuln_id: "CVE-2026-0001", status: "affected", status_notes: "Edited", origin: "custom", timestamp: "2026-08-19T00:00:00Z" }],
+    }));
+
+    const edits = { status_notes: "Edited", expected_fingerprint: "original" };
+    const assessmentWithEdits = { status: "affected", ...edits };
+    const assessments = await Assessments.approveAi("a1", assessmentWithEdits);
+
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    expect(init).toEqual(expect.objectContaining({ method: "POST", headers: { "Content-Type": "application/json" } }));
+    expect(JSON.parse(String(init.body))).toEqual(edits);
+    expect(assessments[0].status_notes).toBe("Edited");
+  });
+
+  test("approveAi surfaces the server error message", async () => {
+    fetchSpy.mockResolvedValueOnce(response({ error: "Invalid justification" }, false, 400));
+
+    await expect(Assessments.approveAi("a1", { justification: "bogus" }))
+      .rejects.toThrow("Invalid justification");
+  });
+
   test("rejectAi posts to the reject endpoint and returns deleted ids", async () => {
     fetchSpy.mockResolvedValueOnce(response({ deleted: ["a1"] }));
 

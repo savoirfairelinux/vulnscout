@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, TypedDict
+from typing import NotRequired, Optional, TypedDict
 
 from ..controllers.context import ProjectContextController, VariantContextController
 from ..models.project import Project
@@ -34,6 +34,7 @@ class ExportedFile(TypedDict):
 class VariantEntry(TypedDict):
     """One exported variant's context (nested under its project)."""
     variant_name: str
+    context_configured: NotRequired[bool]
     variant_description: Optional[str]
     environment: Optional[str]
     other_info: Optional[str]
@@ -69,7 +70,7 @@ def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntr
             "system": {key: getattr(vc, f"system_{key}") for key in SYSTEM_KEYS},
             "stride_model": vc.stride_model if vc.stride_model is not None else empty_stride_model(),
         }
-    return {
+    entry: VariantEntry = {
         "variant_name": variant.name,
         "variant_description": vc.variant_description if vc else None,
         "environment": vc.environment if vc else None,
@@ -80,6 +81,12 @@ def variant_entry(variant: Variant, vc: Optional[VariantContext]) -> VariantEntr
             for f in sorted(vc.files, key=lambda f: f.original_name)
         ] if vc else [],
     }
+    if vc and (vc.stride_model is not None or any(v and v.strip() for v in editor["system"].values())):
+        entry["context_configured"] = True
+    elif not vc or not any(v and v.strip() for v in (vc.variant_description, vc.environment, vc.other_info)):
+        entry["context_configured"] = False
+    # Text-only saves carry no authority to clear the destination's System or STRIDE.
+    return entry
 
 
 def project_entry(project: Project, pc: Optional[ProjectContext],
@@ -285,6 +292,14 @@ def import_entries(entries: list) -> dict:
             ignored.append({**ident, "reason": "Variant not found"})
             continue
 
+        configured = entry.get("context_configured")
+        if "context_configured" in entry and not isinstance(configured, bool):
+            failed.append({**ident, "reason": "context_configured must be a boolean"})
+            continue
+        if configured is False:
+            ignored.append({**ident, "reason": "Source variant has no saved context"})
+            continue
+
         failure = _apply_entry(project, variant, entry)
         if failure is not None:
             failed.append({**ident, "reason": failure})
@@ -309,7 +324,8 @@ def _apply_entry(project: Project, variant: Variant, entry: dict) -> Optional[st
         return "Missing mandatory field(s): description"
 
     try:
-        VariantContextController.save_editor(variant.id, _editor_payload(entry), commit=False)
+        VariantContextController.save_editor(variant.id, _editor_payload(entry), commit=False,
+                                             replace_empty_model=entry.get("context_configured") is True)
     except StrideValidationError as exc:
         return str(exc)
     ProjectContextController.upsert(project.id, description=description, commit=False)

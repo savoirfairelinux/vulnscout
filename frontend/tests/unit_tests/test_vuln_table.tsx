@@ -4,7 +4,7 @@ fetchMock.enableMocks();
 
 jest.setTimeout(15000);
 
-import { act, fireEvent, render as rtlRender, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { act, fireEvent, render as rtlRender, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import type { RenderOptions } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
@@ -333,6 +333,52 @@ describe('Vulnerability Table', () => {
         expect(atk_vector_header).toBeInTheDocument();
         expect(source_header).toBeInTheDocument();
     })
+
+    test('Outdated switches the status summary and filter between current and historical targets', async () => {
+        const currentPackage = 'scope-lib@2';
+        const historicalPackage = 'scope-lib@1';
+        const current = {
+            ...vulnerabilities[0],
+            packages: [currentPackage],
+            packages_current: [currentPackage],
+            packages_current_by_variant: { 'variant-1': [currentPackage] },
+        };
+        const assessments = [currentPackage, historicalPackage].map((pkg, index) => ({
+            id: `status-${index}`, vuln_id: current.id, packages: [pkg], variant_id: 'variant-1',
+            origin: 'custom', status: index === 0 ? 'under_investigation' : 'fixed',
+            simplified_status: index === 0 ? 'Pending Assessment' : 'Fixed',
+            timestamp: '2026-11-01T12:00:00Z', responses: [],
+        }));
+        const historical = {
+            ...current, packages: [currentPackage, historicalPackage],
+            packages_status_by_variant: { 'variant-1': [currentPackage, historicalPackage] },
+        };
+        const table = (includeOutdated: boolean) => <TableVulnerabilities key={String(includeOutdated)}
+            includeOutdated={includeOutdated}
+            vulnerabilities={Vulnerabilities.enrich_with_assessments([includeOutdated ? historical : current], assessments)}
+            variantId="variant-1" preferenceScopeKey="outdated-status-tests"
+            appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />;
+        const { rerender } = render(table(false));
+
+        const user = userEvent.setup();
+        expect(screen.getByRole('cell', { name: 'Pending Assessment' })).toBeVisible();
+        await user.click(screen.getByRole('button', { name: /^status$/i }));
+        expect(screen.queryByRole('checkbox', { name: 'Fixed' })).not.toBeInTheDocument();
+
+        rerender(table(true));
+        expect(await screen.findByRole('cell', { name: 'Pending Assessment, Fixed' })).toBeVisible();
+        await user.click(screen.getByRole('button', { name: /^status$/i }));
+        await user.click(screen.getByRole('checkbox', { name: 'Fixed' }));
+        expect(screen.getByRole('cell', { name: 'Pending Assessment, Fixed' })).toBeVisible();
+
+        rerender(table(false));
+        expect(screen.queryByRole('cell', { name: /Pending Assessment/ })).not.toBeInTheDocument();
+        await user.click(screen.getByRole('button', { name: /^status$/i }));
+        const fixed = screen.getByRole('checkbox', { name: 'Fixed' });
+        expect(fixed).toBeChecked();
+        await user.click(fixed);
+        expect(screen.getByRole('cell', { name: 'Pending Assessment' })).toBeVisible();
+    });
 
     test('renders columns in a fixed canonical order regardless of saved toggle order', async () => {
         // ARRANGE - a scrambled visibleColumns order in local storage
@@ -891,7 +937,10 @@ describe('Vulnerability Table', () => {
         );
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const rows = vulnerabilities.map(vuln => ({
+            ...vuln, assessment_targets_by_variant: { 'variant-1': vuln.packages_current },
+        }));
+        render(<TableVulnerabilities vulnerabilities={rows} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const select_all = await screen.getByTitle(/select all/i);
@@ -930,9 +979,9 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        // 3 Variants.listByVuln calls (one per selected vulnerability) + 1 batch assessment API call
-        // (no GHSA progress poll: the test data contains no GHSA- vulnerabilities)
-        expect(fetchMock).toHaveBeenCalledTimes(4);
+        const [request] = fetchMock.mock.calls;
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(request[1]?.body as string).assessments).toHaveLength(rows.length);
     })
 
     test('select and change time estimate', async () => {
@@ -956,7 +1005,8 @@ describe('Vulnerability Table', () => {
         );
 
         // ARRANGE
-        render(<TableVulnerabilities vulnerabilities={vulnerabilities} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
+        const rows = vulnerabilities.map((vuln, index) => ({ ...vuln, effort_variant_ids: [`variant-${index}`] }));
+        render(<TableVulnerabilities vulnerabilities={rows} appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />);
 
         const user = userEvent.setup();
         const select_all = await screen.getByTitle(/select all/i);
@@ -980,9 +1030,12 @@ describe('Vulnerability Table', () => {
         await user.click(btn);
 
         // ASSERT
-        // 2 Variants.listByVuln + 1 batch time estimate API call
-        // (no GHSA progress poll: the test data contains no GHSA- vulnerabilities)
-        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [, request] = fetchMock.mock.calls[0];
+        expect(request?.method).toBe('PATCH');
+        expect(JSON.parse(request?.body as string).vulnerabilities).toEqual(expect.arrayContaining(
+            rows.map(row => expect.objectContaining({ id: row.id, variant_id: row.effort_variant_ids[0] })),
+        ));
     })
 
     test('show description when hovering vulnerability', async () => {
@@ -1027,6 +1080,39 @@ describe('Vulnerability Table', () => {
         await waitFor(() => {
             expect(screen.getByRole('tooltip').textContent).toContain('Lazily loaded hover description');
         });
+    });
+
+    test('historical comparison uses scoped details in both hover and modal without reusing current hover text', async () => {
+        const compact = { ...vulnerabilities[0], details_loaded: false, texts: [] };
+        fetchMock.mockResponse(async request => {
+            const url = new URL(request.url);
+            if (url.pathname === `/api/vulnerabilities/${compact.id}`) {
+                const scoped = url.searchParams.get('variant_ids') === 'first,second'
+                    && url.searchParams.get('operation') === 'union'
+                    && url.searchParams.get('project_id') === 'project-1';
+                expect(scoped).toBe(true);
+                const historical = url.searchParams.get('include_outdated') === 'true';
+                return JSON.stringify({
+                    ...compact, texts: [{ title: 'description', content: historical ? 'Selected historical text' : 'Current view text' }],
+                });
+            }
+            return '[]';
+        });
+        const table = (includeOutdated: boolean) => <TableVulnerabilities includeOutdated={includeOutdated} vulnerabilities={[compact]}
+            projectId="project-1" variantIds={['first', 'second']} multiOperation="union"
+            appendAssessment={() => {}} appendCVSS={() => null} patchVuln={() => {}} />;
+        const { container, rerender } = render(table(false));
+        const row = () => container.querySelector('tr.row-with-hover-effect')!;
+        fireEvent.mouseEnter(row());
+        await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Current view text'));
+        fireEvent.mouseLeave(row());
+
+        rerender(table(true));
+        fireEvent.mouseEnter(row());
+        await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent('Selected historical text'));
+        fireEvent.mouseLeave(row());
+        fireEvent.click(screen.getByText(compact.id));
+        await waitFor(() => expect(within(screen.getByRole('dialog')).getByText('Selected historical text')).toBeVisible());
     });
 
     test('filter by severity', async () => {
@@ -3286,6 +3372,45 @@ describe('Status helper, banner close, package filter, modal navigation, first s
 
         await waitFor(() => {
             expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+        });
+    });
+
+    test('packages filter select all / deselect all toggles every package', async () => {
+        const historicalVulnerability = { ...vulnerabilities[0], id: 'CVE-2020-9876', packages_current: [] };
+        render(
+            <TableVulnerabilities
+                vulnerabilities={[...vulnerabilities, historicalVulnerability]}
+                appendAssessment={() => {}}
+                appendCVSS={() => null}
+                patchVuln={() => {}}
+                filterLabel="Package"
+                filterValue="aaabbbccc@1.0.0"
+            />
+        );
+
+        const user = userEvent.setup();
+        await waitFor(() => {
+            expect(screen.queryByRole('cell', {name: /CVE-2018-5678/})).not.toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole('button', { name: /^packages$/i }));
+        const packageCheckboxes = () => within(screen.getByRole('searchbox', { name: 'Search packages' }).parentElement as HTMLElement)
+            .getAllByRole('checkbox');
+
+        await user.click(screen.getByRole('button', { name: 'Select all' }));
+        packageCheckboxes().forEach(checkbox => expect(checkbox).toBeChecked());
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: /CVE-2010-1234/})).toBeInTheDocument();
+            expect(screen.getByRole('cell', {name: /CVE-2018-5678/})).toBeInTheDocument();
+            expect(screen.queryByRole('cell', {name: historicalVulnerability.id})).not.toBeInTheDocument();
+        });
+
+        // Clearing the selection removes the Packages filter entirely
+        await user.click(screen.getByRole('button', { name: 'Deselect all' }));
+        packageCheckboxes().forEach(checkbox => expect(checkbox).not.toBeChecked());
+        expect(screen.getByRole('button', { name: 'Select all' })).toBeInTheDocument();
+        await waitFor(() => {
+            expect(screen.getByRole('cell', {name: historicalVulnerability.id})).toBeInTheDocument();
         });
     });
 

@@ -19,6 +19,7 @@ from ..models.sbom_package import SBOMPackage as SBOMPkg
 from ..models.scan import Scan as ScanModel
 from ..models.finding import Finding as FindingModel
 from ..models.observation import Observation
+from ..models.variant import lock_scan_membership
 from ..helpers.env_vars import get_bool_env
 from ..helpers.history_source import current_history_operation, history_source
 from ..extensions import batch_session, db as _db
@@ -227,6 +228,8 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
         verbose("merger_ci: Using FastSPDX parser")
 
     pkgCtrl: PackagesController = controllers.packages
+    # Consolidation can rewrite findings across variants; lock before ingest can flush any scan-owned rows.
+    lock_scan_membership()
     docs = SBOMDocument.get_by_scan(scan_id) if scan_id is not None else SBOMDocument.get_all()
     jsonld_documents = []
     file_documents = []
@@ -246,7 +249,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
             # Prefer the explicit format stored at registration time (set by
             # scan.sh via the --spdx / --cdx / --openvex / --yocto-cve / --yocto-vex / --grype
             # options) and fall back to content-sniffing only when it is absent.
-            fmt = doc.format  # 'spdx', 'cdx', 'openvex', 'yocto_cve_check', 'yocto_vex', 'grype', or None
+            fmt = doc.format
             doc.build_targets = None
 
             if fmt == "spdx" or (
@@ -327,10 +330,10 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
                 yocto_vex.load_from_dict(data)
             elif fmt == "yocto_cve_check" or (fmt is None and "package" in data and "matches" not in data):
                 yocto.load_from_dict(data)
-            elif fmt == "grype" or (fmt is None and "matches" in data):
+            elif fmt in ("grype", "scoped_grype") or (fmt is None and "matches" in data):
                 _db.session.flush()
                 with history_source("grype"):
-                    grype.load_from_dict(data)
+                    grype.load_from_dict(data, scoped=fmt == "scoped_grype")
                     _db.session.flush()
             else:
                 print_message(f"Warning: unknown format for {doc.path}, skipping", role="warning")
@@ -372,7 +375,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
     from ..helpers.jsonld_storage import consolidate_jsonld_packages
 
     with _db.session.begin_nested():
-        consolidated = consolidate_jsonld_packages(_db.session())
+        consolidated = consolidate_jsonld_packages(_db.session(), membership_locked=True)
     if consolidated:
         pkgCtrl._cache.clear()
         pkgCtrl._db_id_cache.clear()
@@ -434,6 +437,7 @@ def read_inputs(controllers: ControllersCache, scan_id=None):
               help="Yocto VEX JSON file (may be repeated).")
 @click.option("--grype", "grype_inputs", multiple=True, type=click.Path(exists=True),
               help="Grype vulnerability JSON file (may be repeated).")
+@click.option("--scoped-grype", "scoped_grype_inputs", multiple=True, type=click.Path(exists=True), hidden=True)
 @click.option("--run-id", default=None,
               help="Group tool scans from the same invocation under this run ID (ignored for SBOM imports).")
 @with_appcontext
@@ -446,6 +450,7 @@ def create_project_context(
     yocto_cve_inputs: tuple,
     yocto_vex_inputs: tuple,
     grype_inputs: tuple,
+    scoped_grype_inputs: tuple,
     run_id: str | None,
 ) -> None:
     """Register SBOM inputs into the database under a named project/variant scan.
@@ -464,7 +469,7 @@ def create_project_context(
     has_sbom_inputs = bool(spdx_inputs or cdx_inputs or openvex_inputs or yocto_cve_inputs or yocto_vex_inputs)
     scan_type = "sbom" if has_sbom_inputs else "tool"
     scan_description = "empty description"
-    scan_source = "grype" if (not has_sbom_inputs and grype_inputs) else None
+    scan_source = "grype" if (not has_sbom_inputs and (grype_inputs or scoped_grype_inputs)) else None
 
     scan = ScanController.create(scan_description, variant_obj.id, scan_type=scan_type,
                                  scan_source=scan_source,
@@ -478,6 +483,7 @@ def create_project_context(
         (yocto_cve_inputs, "yocto_cve_check"),
         (yocto_vex_inputs, "yocto_vex"),
         (grype_inputs, "grype"),
+        (scoped_grype_inputs, "scoped_grype"),
     ]
     for files, fmt in format_groups:
         for sbom_file in files:

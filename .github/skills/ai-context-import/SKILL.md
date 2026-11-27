@@ -122,8 +122,8 @@ Use the exact labels below; they are the labels on the page.
 | Threat model | **Threats** | **STRIDE category** (required), **Description**, **Targets** (required, at least one component or interaction) |
 | Risks | **Risks** | **Description**, **Threats** (required, at least one), **Likelihood**, **Impact**, **Mitigation**, **Residual risk / decision** |
 
-The **Codebase directory** is administrator-managed and is never configured from
-a document. Uploaded attachments must also remain unchanged.
+Host attachments are managed separately and are never configured from a document.
+Uploaded attachments must also remain unchanged.
 The project description (sidebar item **Project description**) is
 outside this skill; if the document states the product's purpose, you may
 suggest one at the end, clearly labelled as optional.
@@ -161,8 +161,7 @@ no rating.
   example `(Source: report.pdf p.14)` or `(Source: threagile.yaml, risk_tracking)`.
   Cite System text paragraphs the same way when they come from different places.
 - **Limits:** at most 20,000 characters per text field and 500 rows per table.
-  Saving also needs a threat model: at least one System text field or one
-  Components, Interactions or Threats row.
+  Context and System can be saved without adding threats or risks.
 - **Volume.** Each row is pasted by hand. When the document yields more than
   about 30 threats or risks, group them: one threat per (category, kind of
   problem) with all affected targets ticked, and one risk per distinct rating and

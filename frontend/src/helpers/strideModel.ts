@@ -1,5 +1,5 @@
 import type {
-    MergedContext, Rating, StrideModel, SystemFields, VariantDraft,
+    MergedContext, Rating, StrideModel, VariantDraft,
 } from '../handlers/context';
 
 export const STRIDE_CATEGORIES: readonly {
@@ -21,8 +21,6 @@ export const RATING_OPTIONS: readonly {
     { value: 'medium', label: 'Medium' },
     { value: 'high', label: 'High' },
 ];
-
-const SYSTEM_KEYS: (keyof SystemFields)[] = ['scope', 'actors', 'entry_points', 'trust_boundaries'];
 
 export function emptyStrideModel(): StrideModel {
     return { components: [], interactions: [], threats: [], risks: [] };
@@ -87,17 +85,6 @@ export function isReferenced(model: StrideModel, id: string): boolean {
 }
 
 const hasText = (value: string): boolean => value.trim() !== '';
-
-/** Mirrors the server: whether the STRIDE threat model renders to non-empty text. */
-export function hasThreatModel(draft: VariantDraft): boolean {
-    const { components, interactions, threats } = draft.stride;
-    return (
-        SYSTEM_KEYS.some(key => hasText(draft.system[key])) ||
-        components.length > 0 ||
-        interactions.length > 0 ||
-        threats.length > 0
-    );
-}
 
 /** Field path -> message for every blank required STRIDE field (paths match the server's). */
 export function requiredFieldErrors(model: StrideModel): Record<string, string> {

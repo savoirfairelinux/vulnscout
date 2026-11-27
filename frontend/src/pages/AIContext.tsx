@@ -12,7 +12,7 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import { useDocUrl } from "../helpers/useDocUrl";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
 import { useLoadedDraft } from "../hooks/useLoadedDraft";
-import { draftFromContext, draftsEqual, emptyDraft, hasThreatModel, requiredFieldErrors } from "../helpers/strideModel";
+import { draftFromContext, draftsEqual, emptyDraft, requiredFieldErrors } from "../helpers/strideModel";
 import ContextSidebar from "../components/aiContext/ContextSidebar";
 import type { SidebarSelection } from "../components/aiContext/ContextSidebar";
 import ProjectDescriptionPanel from "../components/aiContext/ProjectDescriptionPanel";
@@ -20,7 +20,8 @@ import ContextTransferControls, { ImportDetails } from "../components/aiContext/
 import VariantEditor, { type VariantTab } from "../components/aiContext/VariantEditor";
 import CopyFromDialog, { type CopySourceProject } from "../components/aiContext/CopyFromDialog";
 import { BUTTON_SECONDARY, ERROR } from "../components/aiContext/styles";
-import { AGENT_WRITE_EVENT, type AgentViewContext, type AgentAction } from "../types/agent";
+import { type AgentViewContext, type AgentAction } from "../types/agent";
+import useAgentWriteRefresh from "../hooks/useAgentWriteRefresh";
 import { agentActionState, enqueueAgentActions, openAgentChat, removeAgentTask } from "../handlers/agentQueue";
 import useAgentQueue from "../hooks/useAgentQueue";
 import AgentActionButton from "../components/AgentActionButton";
@@ -364,11 +365,6 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
             return { kind: 'project', projectId, description: projectDraft.draft.trim(), sent: projectDraft.draft };
         }
         if (variantDraft.baseline === null) return null;
-        if (!hasThreatModel(variantDraft.draft)) {
-            setFieldError("A threat model is required.");
-            setVariantTab('threat_model');
-            return null;
-        }
         const missing = requiredFieldErrors(variantDraft.draft.stride);
         const first = Object.keys(missing)[0];
         if (first !== undefined) {
@@ -481,27 +477,22 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
     useEffect(() => () => registerGuard(null), [registerGuard]);
 
     // Agent updates reload only a clean open item, so unsaved edits are never replaced.
-    const agentRefreshRef = useRef<(tool?: string) => void>(() => undefined);
-    useEffect(() => {
-        agentRefreshRef.current = (tool?: string) => {
-            if (tool === 'update_project_context' && selected?.kind === 'project') {
-                if (projectDraft.dirty) showBanner(DIRTY_PROJECT_AGENT_TEXT, "error");
-                else reloadProject();
-            }
-            if (tool === 'update_variant_context' && selected?.kind === 'variant') {
-                if (variantDraft.dirty) showBanner(DIRTY_VARIANT_AGENT_TEXT, "error");
-                else reloadVariant();
-            }
-            if (tool === 'propose_variant_threat_model' && selected?.kind === 'variant') {
-                void loadAiDraftRef.current();
-            }
-        };
+    // One announcement may cover several coalesced writes, so every tool that wrote is considered.
+    useAgentWriteRefresh(({ tools }) => {
+        const reads: Promise<void>[] = [];
+        if (tools.includes('update_project_context') && selected?.kind === 'project') {
+            if (projectDraft.dirty) showBanner(DIRTY_PROJECT_AGENT_TEXT, "error");
+            else reads.push(reloadProject());
+        }
+        if (tools.includes('update_variant_context') && selected?.kind === 'variant') {
+            if (variantDraft.dirty) showBanner(DIRTY_VARIANT_AGENT_TEXT, "error");
+            else reads.push(reloadVariant());
+        }
+        if (tools.includes('propose_variant_threat_model') && selected?.kind === 'variant') {
+            reads.push(loadAiDraftRef.current());
+        }
+        return Promise.allSettled(reads);
     });
-    useEffect(() => {
-        const refresh = (event: Event) => agentRefreshRef.current((event as CustomEvent<{ tool?: string }>).detail?.tool);
-        window.addEventListener(AGENT_WRITE_EVENT, refresh);
-        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
-    }, []);
 
     const handleSelect = async (next: SidebarSelection) => {
         const same = next.kind === selected?.kind && (next.kind === 'project' || (selected?.kind === 'variant' && next.id === selected.id));
@@ -715,6 +706,7 @@ function AIContext({ scope, onAgentContextChange }: Readonly<{
                                     <p className="text-sm text-zinc-400">{variantDraft.loading ? 'Loading variant context…' : ''}</p>
                                 ) : (
                                     <VariantEditor
+                                        projectName={projectName}
                                         variantId={selected.id}
                                         variantName={openVariant?.name ?? ''}
                                         draft={variantDraft.draft}

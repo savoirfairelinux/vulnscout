@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import functools
 import fcntl
+import json
 import logging
 import os
 import pathlib
@@ -63,6 +64,36 @@ _MISSING = object()
 ProgressCallback = Callable[[str], None]
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _GIT_PERCENT_RE = re.compile(r"^(?P<stage>[^:]+):\s+(?P<percent>\d{1,3})%")
+
+
+def _read_nvd_git(root: pathlib.Path, *args: str) -> bytes:
+    return subprocess.check_output(
+        ["git", "--no-replace-objects", "--git-dir", str(root / ".git"), *args],
+        env=dict(os.environ, GIT_NO_LAZY_FETCH="1"), stderr=subprocess.PIPE,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _nvd_snapshot_paths(root: pathlib.Path, tree: str) -> frozenset[bytes]:
+    # List the immutable tree only on a miss, once across lookups of this snapshot.
+    return frozenset(_read_nvd_git(root, "ls-tree", "-r", "-z", "--name-only", tree).split(b"\0"))
+
+
+def _nvd_snapshot_path_lookup(root: pathlib.Path, tree: str) -> Callable[[str], bool]:
+    @functools.cache
+    def paths() -> frozenset[bytes] | None:
+        try:
+            return _nvd_snapshot_paths(root, tree)
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    def contains(path: str) -> bool:
+        known_paths = paths()
+        if known_paths is None:
+            raise RuntimeError("Could not verify paths in the local NVD snapshot")
+        return path.encode("ascii") in known_paths
+
+    return contains
 
 
 class _GitProgressReporter:
@@ -639,6 +670,40 @@ class SccEngine:
             )
         return None
 
+    def nvd_snapshot_lookup(self) -> Callable[[str], dict | None]:
+        """Prepare a local lookup that raises when absence cannot be verified."""
+        for databases in self._managed_databases().values():
+            for db in databases:
+                if not isinstance(db, NvdFkieVulnDatabase) or db.git_database.get_date_last_commit() is None:
+                    continue
+                root = pathlib.Path(db.export_repro_config()["path"])
+                if (root / ".git").exists() and any(
+                    path.is_file() for path in root.glob("CVE-*/CVE-*xx/CVE-*.json")
+                ):
+                    tree = _read_nvd_git(root, "rev-parse", "--verify", "HEAD^{tree}").decode("ascii").strip()
+                    return functools.partial(self._lookup_snapshot_cve, root, _nvd_snapshot_path_lookup(root, tree))
+        raise RuntimeError("No usable local NVD snapshot")
+
+    @staticmethod
+    def _lookup_snapshot_cve(root: pathlib.Path, contains: Callable[[str], bool], cve_id: str) -> dict | None:
+        # FKIE's get_vuln uses Path.is_file(), which can hide access errors.
+        identifier = CveId(cve_id)
+        relative = f"CVE-{identifier.year}/{identifier.id[:-2]}xx/{identifier.id}.json"
+        path = root / relative
+        try:
+            with path.open("rb") as stream:
+                record = json.load(stream)
+        except FileNotFoundError:
+            (root / ".git").stat()
+            if contains(relative):
+                raise FileNotFoundError(
+                    f"Tracked CVE record is missing from the local NVD checkout: {cve_id}"
+                ) from None
+            return None
+        if not isinstance(record, dict) or record.get("id") != cve_id:
+            raise ValueError("Invalid record in local NVD snapshot")
+        return record
+
 
 def _get_engine(progress: ProgressCallback | None = None) -> SccEngine:
     """Build or reuse the process-wide engine and refresh its databases."""
@@ -691,7 +756,7 @@ def reset_engine() -> None:
         _ENGINE = None
 
 
-def get_cve_json(cve_id: str) -> "dict | None":
+def get_cve_json(cve_id: str, *, strict: bool = False) -> "dict | None":
     """Look up a CVE by ID in the local NVD-FKIE database.
 
     Reuses the already-built engine without triggering a git fetch so
@@ -700,7 +765,8 @@ def get_cve_json(cve_id: str) -> "dict | None":
     performs the initial build (including a first fetch).
 
     Returns the raw NVD CVE JSON dict (same schema as NVD API v2) or ``None``
-    if the CVE is not found or the database is not yet initialised.
+    if the CVE is not found or the database is not yet initialised. In strict
+    mode, lookup failures propagate instead of being reported as absence.
     """
     with _ENGINE_LOCK:
         engine = _ENGINE
@@ -712,6 +778,8 @@ def get_cve_json(cve_id: str) -> "dict | None":
         # lock for its full multi-minute duration) does not stall vuln-detail
         # requests.
         engine = get_engine()
+    if strict:
+        return engine.nvd_snapshot_lookup()(cve_id)
     try:
         return engine.get_nvd_cve_json(cve_id)
     except Exception as exc:

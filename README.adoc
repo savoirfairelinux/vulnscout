@@ -73,7 +73,7 @@ cd vulnscout
 ./vulnscout serve
 ----
 
-The launcher uses `docker.io/sflinux/vulnscout:v0.25.1` by default.
+The launcher uses `docker.io/sflinux/vulnscout:v0.26` by default.
 It pulls the image if needed, starts the container, and imports the
 supplied packages and findings.
 Import alone does not request additional scans or a complete metadata refresh.
@@ -117,7 +117,10 @@ The embedded Agent uses the *GitHub Copilot SDK* and its agent runtime to
 communicate with the selected AI provider and invoke the bundled MCP server
 over stdio. MCP tools call VulnScout's REST API rather than accessing the
 database directly. The embedded Agent has no shell, arbitrary filesystem,
-or web research tools; source evidence is provided through uploaded references.
+or web research tools; source evidence is provided through uploaded references
+or host folders attached read-only with
+`./vulnscout ai-context attach -p demo -v x86 src=/work/app` (see
+link:doc/source/ai-assessments.md#attached-host-folders[Attached host folders]).
 
 The embedded Agent is *localhost-only and single-user*. Provider credentials
 stay on the backend, but assessment context and source evidence may be sent

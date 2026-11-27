@@ -544,12 +544,16 @@ class TestImportCustomDataTimeEstimates:
             result = import_custom_data(data, {})
         assert any("not found" in e.get("error", "").lower() for e in result["errors"])
 
-    def test_te_with_explicit_variant_id_imports(self, app, variant_and_project):
-        """Lines 847, 862-863, 871-875: variant_id → apply_effort + increment."""
-        from src.models.vulnerability import Vulnerability
+    @pytest.mark.parametrize("has_finding", [True, False])
+    def test_te_with_explicit_variant_id_imports(self, app, variant_and_project, has_finding):
+        from src.models import Finding, Package, TimeEstimate, Vulnerability
+
         _, var = variant_and_project
         with app.app_context():
             Vulnerability.create_record("CVE-2099-TEOK")
+            if has_finding:
+                package = Package.find_or_create("effort-import", "1")
+                finding = Finding.get_or_create(package.id, "CVE-2099-TEOK")
             data = {
                 "version": 1,
                 "time_estimates": [{
@@ -561,7 +565,18 @@ class TestImportCustomDataTimeEstimates:
                 }]
             }
             result = import_custom_data(data, {var.name: var})
-        assert result["time_estimates_imported"] == 1
+            if has_finding:
+                assert result["time_estimates_imported"] == 1
+                assert result["errors"] == []
+                estimate = TimeEstimate.get_by_finding_and_variant(finding.id, var.id)
+                assert estimate is not None
+                assert (estimate.optimistic, estimate.likely, estimate.pessimistic) == (1, 2, 4)
+            else:
+                assert result["time_estimates_imported"] == 0
+                assert result["errors"] == [{
+                    "vuln_id": "CVE-2099-TEOK", "error": "No finding for the requested time estimate",
+                }]
+                assert TimeEstimate.get_by_variant(var.id) == []
 
     def test_final_status_error_when_only_errors(self, app, variant_and_project):
         """Line 882: status set to 'error' when nothing imported but errors exist."""

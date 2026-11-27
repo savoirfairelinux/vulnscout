@@ -4,10 +4,16 @@
 import { asVulnerability, type Vulnerability } from './vulnerabilities';
 import type { NvdRefreshResult } from './nvdRefresh';
 
+type Omission = 'no_record' | 'skipped';
 type ProviderResult = {
     status: number;
-    body: { vulnerabilities?: unknown[]; error_code?: string; api_key_configured?: boolean } | null;
+    body: { vulnerabilities?: unknown[]; error_code?: string; api_key_configured?: boolean; outcome?: Omission } | null;
 };
+
+function omission(result?: ProviderResult): Omission | undefined {
+    const outcome = result?.status === 200 ? result.body?.outcome : undefined;
+    return outcome === 'no_record' || outcome === 'skipped' ? outcome : undefined;
+}
 
 function vulnerability(result?: ProviderResult): Vulnerability | null {
     const raw = result?.status === 200 && result.body?.vulnerabilities?.[0];
@@ -33,6 +39,7 @@ export async function refreshIndividual(id: string, projectId?: string, variantI
     const nvd: NvdRefreshResult = nvdVuln
         ? { kind: 'success', vuln: nvdVuln }
         : { kind: 'error', code, apiKeyConfigured: nvdBody?.api_key_configured ?? true };
-    return { nvd, epss: vulnerability(data.results.epss), euvd: vulnerability(data.results.euvd),
+    return { nvd, nvdOmission: omission(data.results.nvd),
+        epss: vulnerability(data.results.epss), epssOmission: omission(data.results.epss), euvd: vulnerability(data.results.euvd),
         ghsa: vulnerability(data.results.ghsa) };
 }

@@ -5,17 +5,24 @@ import gzip
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any, Literal, overload
+from typing import Any, Literal, cast, overload
 from uuid import UUID
 
-from ..models import Assessment as DBAssessment, Package, Finding
+from ..models import Assessment as DBAssessment, Package, Finding, Observation, Scan
+from ..models.assessment import APPROVAL_CONTENT_FIELDS, APPROVAL_EDIT_FIELDS
 from ..models.assessment_target import AssessmentTarget, GroupInvariantError
 from ..models.assessment_review import AssessmentReview, fingerprint_assessment
-from ..extensions import db, batch_session
-from ..models.variant import Variant as DBVariant
+from ..extensions import db, batch_session, hold_write_lock, write_lock
+from ..models.variant import Variant as DBVariant, lock_scan_membership
+from ..models.variant_context import VariantContext
+from ..helpers.assessment_risk_links import (
+    MAX_SNAPSHOT_BYTES, RiskLinkError, RiskModelIndex, RiskSnapshot, charge_snapshots, describe_links,
+    preview_link, resolve_links,
+)
 from ._scan_helpers import parse_uuid_or_400
 from ._scan_queries import VulnerabilityText, fetch_vulnerabilities_texts
 from ._scan_diff import invalidate_scan_list_cache
+from ._evidence_scope import resolve_evidence_scope, vulnerability_evidence
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.assessment_io import (
     build_openvex_doc,
@@ -29,7 +36,9 @@ from ..helpers.assessment_io import (
     reconcile_review_export,
 )
 from ..helpers.assessment_staleness import annotate_assessments_outdated
-from ..controllers.assessment_targets import annotate_targets
+from ..controllers.assessment_targets import annotate_review_evidence, annotate_targets
+from ..helpers.active_scans import active_scan_ids_for_variant
+from ..helpers.finding_evidence import finding_packages_for_scans, variant_finding_targets
 from ._assessment_write import (
     apply_reconcile,
     create_assessment_record,
@@ -44,7 +53,9 @@ from ._assessment_write import (
 
 from flask import request, Flask
 from flask.typing import ResponseReturnValue
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
+from sqlalchemy.engine import CursorResult
+from werkzeug.exceptions import RequestEntityTooLarge
 
 _SCANNER_AUTHORS = {
     "nvd",
@@ -72,6 +83,14 @@ def _is_scanner_author(author: str | None) -> bool:
     return False
 
 
+def _lock_target_writes() -> None:
+    hold_write_lock()
+    if db.session.get_bind().dialect.name == "sqlite":
+        # SQLite ignores FOR UPDATE. Reserve its database writer before
+        # reading membership, including against writers in other processes.
+        db.session.execute(db.update(DBAssessment).where(false()).values(origin=DBAssessment.origin))
+
+
 def _replace_pending_ai(
     vuln_id: str, targets: list[tuple[UUID, UUID]]
 ) -> list[dict[str, Any]]:
@@ -90,9 +109,11 @@ def _replace_pending_ai(
     """
     replacing = set(targets)
     replaced: list[dict[str, Any]] = []
-    for row in DBAssessment.get_by_vulnerability(vuln_id):
-        if row.origin != "ai":
-            continue
+    _lock_target_writes()
+    pending = db.select(DBAssessment).join(AssessmentTarget).join(Finding).where(
+        Finding.vulnerability_id == vuln_id.upper(), DBAssessment.origin == "ai",
+    ).order_by(DBAssessment.id).with_for_update(of=DBAssessment).execution_options(populate_existing=True)
+    for row in db.session.scalars(pending).unique().all():
         overlap = [t for t in row.target_rows if (t.variant_id, t.finding_id) in replacing]
         if not overlap:
             continue
@@ -125,7 +146,7 @@ def _assessments_for_vulnerability(
 def _resolve_pending_ai_row(
     assessment_id: str,
 ) -> "tuple[DBAssessment | None, ResponseReturnValue | None]":
-    """Resolve the pending AI row an approve/reject request applies to."""
+    """Read the suggestion to validate before the conditional approval write."""
     existing = DBAssessment.get_by_id(assessment_id)
     if existing is None:
         return None, ({"error": "Assessment not found"}, 404)
@@ -134,19 +155,168 @@ def _resolve_pending_ai_row(
     return existing, None
 
 
-def _approve_row(row: "DBAssessment") -> ResponseReturnValue:
-    """Turn a pending AI row into a custom assessment."""
+_APPROVAL_REQUEST_MAX_BYTES = 64 * 1024
+
+
+def _reviewed_links(
+    row: DBAssessment, edits: object, *, approval: bool = False,
+) -> dict[AssessmentTarget, list[RiskSnapshot]]:
+    """Validate all proposed replacements and retained references before applying any."""
+    if not isinstance(edits, list):
+        raise RiskLinkError("target_risk_links must be a list")
+    members = {(str(t.variant_id), t.finding.package.string_id): t for t in row.target_rows}
+    requested: dict[AssessmentTarget, object] = {}
+    for edit in edits:
+        if not isinstance(edit, dict) or set(edit) != {"variant_id", "package", "risk_links"}:
+            raise RiskLinkError("Each risk link edit requires variant_id, package and risk_links")
+        if not isinstance(edit["variant_id"], str) or not isinstance(edit["package"], str):
+            raise RiskLinkError("Invalid risk link target")
+        target = members.get((edit["variant_id"], edit["package"]))
+        if target is None or target in requested:
+            raise RiskLinkError("Unknown or repeated risk link target")
+        requested[target] = edit["risk_links"]
+    variants = {t.variant_id for t in members.values() if t in requested or t.risk_links}
+    models = dict(db.session.execute(
+        select(VariantContext.variant_id, VariantContext.stride_model)
+        .where(VariantContext.variant_id.in_(variants)).order_by(VariantContext.variant_id).with_for_update()
+    ).tuples().all())
+    replacements = {}
+    remaining = MAX_SNAPSHOT_BYTES
+    indexes = {vid: RiskModelIndex(models.get(vid)) for vid in variants}
+    for target in members.values():
+        if target.variant_id not in indexes:
+            continue
+        index = indexes[target.variant_id]
+        retained = target.risk_links or []
+        confirmed: set[tuple[str, str | None]] = set()
+        if target in requested:
+            try:
+                replacements[target] = resolve_links(requested[target], index,
+                                                     confirmed=confirmed if approval else None)
+            except RiskLinkError as exc:
+                raise RiskLinkError(f"{target.finding.package.string_id} ({target.variant_id}): {exc}") from exc
+            kept = {(r["risk_id"], r.get("threat_id")) for r in replacements[target]}
+            retained = [r for r in retained if (r["risk_id"], r.get("threat_id")) in kept - confirmed]
+        remaining = charge_snapshots(remaining, replacements.get(target, retained))
+        if retained and any(link["stale"] for link in describe_links(retained, index)):
+            raise RiskLinkError(f"Stale modeled risk link for {target.finding.package.string_id} "
+                                f"({target.variant_id}): correct or remove it before approval")
+    return replacements
+
+
+def _validate_content_edit(
+    existing: "DBAssessment", payload: dict[str, Any], *, preserve_omitted: bool = False,
+) -> "tuple[DBAssessment | None, str | None]":
+    """Apply a partial content edit to a copy of *existing* and validate it.
+
+    Returns the validated in-memory assessment, or an error message. The
+    stored row is never modified, so a rejected edit leaves it untouched.
+    """
+    mem_assess = DBAssessment.from_dict(existing.to_dict())
+
+    if "status" in payload and isinstance(payload["status"], str):
+        if not mem_assess.set_status(payload["status"]):
+            return None, "Invalid status"
+        if mem_assess.status not in ["not_affected", "false_positive"]:
+            mem_assess.justification = ""
+            mem_assess.impact_statement = ""
+
+    if "status_notes" in payload and isinstance(payload["status_notes"], str):
+        mem_assess.set_status_notes(payload["status_notes"], False)
+
+    if "justification" in payload and isinstance(payload["justification"], str):
+        if payload["justification"] == "":
+            mem_assess.justification = ""
+        elif not mem_assess.set_justification(payload["justification"]):
+            return None, "Invalid justification"
+    elif not preserve_omitted and mem_assess.is_justification_required():
+        return None, "Justification required"
+
+    if "impact_statement" in payload and isinstance(payload["impact_statement"], str):
+        if payload["impact_statement"] == "":
+            mem_assess.impact_statement = ""
+        else:
+            mem_assess.set_not_affected_reason(payload["impact_statement"], False)
+
+    if "workaround" in payload and isinstance(payload["workaround"], str):
+        mem_assess.set_workaround(payload["workaround"])
+
+    if (preserve_omitted and mem_assess.is_justification_required()
+            and not mem_assess.get_justification_openvex() and not (mem_assess.impact_statement or "").strip()):
+        return None, "Justification required"
+
+    return mem_assess, None
+
+
+def _approve_row(
+    row: "DBAssessment", payload: dict[str, Any],
+) -> ResponseReturnValue:
+    """Turn a pending AI row into a custom assessment.
+
+    Apply edits only if the validated snapshot still matches.
+    """
+    values: dict[str, Any] = {
+        "origin": "custom",
+        "timestamp": datetime.now(timezone.utc),
+    }
+    condition = (DBAssessment.id == row.id) & (DBAssessment.origin == "ai")
+    conflict = "Assessment changed before approval; reload and review it again"
+    expected_targets = None
+    expected_responses = None
+    if "expected_fingerprint" in payload and payload["expected_fingerprint"] != row.approval_fingerprint():
+        return {"error": conflict}, 409
+    check_links = "target_risk_links" in payload or any(t.risk_links for t in row.target_rows)
+    if "expected_fingerprint" in payload or check_links:
+        expected_targets = {(t.variant_id, t.finding_id) for t in row.target_rows}
+        expected_responses = list(row.responses or [])
+    has_edits = any(key in payload for key in APPROVAL_EDIT_FIELDS)
+    if has_edits or "expected_fingerprint" in payload:
+        # The omitted fields used during validation must still match at write time.
+        for field in APPROVAL_CONTENT_FIELDS:
+            condition &= getattr(DBAssessment, field) == getattr(row, field)
+    if has_edits:
+        reviewed_state = row.get_status_cdx_vex()
+        content, error = _validate_content_edit(row, payload, preserve_omitted=True)
+        if content is None:
+            return {"error": error or "Invalid request data"}, 400
+        if content.get_status_cdx_vex() != reviewed_state:
+            return {"error": "Changing this justification would change the CycloneDX verdict"}, 400
+        values.update({key: getattr(content, key) for key in APPROVAL_EDIT_FIELDS if key in payload})
     with batch_session():
-        row.update(origin="custom")
+        if expected_targets is not None:
+            # Target writers take the same parent lock before changing membership.
+            _lock_target_writes()
+            locked = db.session.execute(
+                db.select(DBAssessment.responses).where(condition).with_for_update()
+            ).one_or_none()
+            if locked is None or (locked.responses or []) != expected_responses:
+                return {"error": conflict}, 409
+            pairs = db.session.execute(
+                db.select(AssessmentTarget.variant_id, AssessmentTarget.finding_id)
+                .where(AssessmentTarget.assessment_id == row.id).with_for_update()
+            ).tuples()
+            if set(pairs) != expected_targets:
+                return {"error": conflict}, 409
+        else:
+            hold_write_lock()
+        try:
+            link_edits = (_reviewed_links(row, payload.get("target_risk_links", []), approval=True)
+                          if check_links else {})
+        except RiskLinkError as exc:
+            return {"error": str(exc)}, 400
+        result = db.session.execute(
+            db.update(DBAssessment)
+            .where(condition)
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if cast(CursorResult[Any], result).rowcount != 1:
+            return {"error": conflict}, 409
+        for target, links in link_edits.items():
+            target.risk_links = links or None
+        db.session.flush()
+        db.session.refresh(row)
     return {"status": "success", "assessments": [row.to_dict()]}, 200
-
-
-def _reject_row(row: "DBAssessment") -> ResponseReturnValue:
-    """Delete a rejected pending AI row."""
-    deleted_id = str(row.id)
-    with batch_session():
-        row.delete()
-    return {"status": "success", "deleted": [deleted_id]}, 200
 
 
 def _parse_batch_record_ids() -> tuple[list[UUID] | None, str | None]:
@@ -240,6 +410,7 @@ def init_app(app: Flask) -> None:
                     DBAssessment.source.label("source"),
                     DBAssessment.origin.label("origin"),
                     AssessmentTarget.variant_id.label("variant_id"),
+                    AssessmentTarget.risk_links,
                     DBAssessment.timestamp.label("timestamp"),
                     DBAssessment.status.label("status"),
                     DBAssessment.status_notes.label("status_notes"),
@@ -275,6 +446,7 @@ def init_app(app: Flask) -> None:
             )
 
         full_by_id: dict[str, AssessmentDict] = {}
+        linked_pairs: dict[UUID, list[dict[str, Any]]] = {}
         compact_result: list[CompactAssessment] = []
         for row in db.session.execute(query):
             package_id = ""
@@ -326,12 +498,25 @@ def init_app(app: Flask) -> None:
             # The pair, kept alongside the two flattened sets: those describe
             # the cross-product, which a sparse target set is not.
             if package_id and variant_id:
-                pair = {"variant_id": variant_id, "package": package_id}
+                pair: dict[str, Any] = {"variant_id": variant_id, "package": package_id}
                 if pair not in entry["targets"]:
                     entry["targets"].append(pair)
+                    if row.risk_links:
+                        pair["risk_links"] = row.risk_links
+                        linked_pairs.setdefault(row.variant_id, []).append(pair)
 
         if compact:
             return compact_result
+
+        if linked_pairs:
+            models = dict(db.session.execute(
+                select(VariantContext.variant_id, VariantContext.stride_model)
+                .where(VariantContext.variant_id.in_(linked_pairs))
+            ).tuples().all())
+            for vid, linked in linked_pairs.items():
+                index = RiskModelIndex(models.get(vid))
+                for pair in linked:
+                    pair["risk_links"] = describe_links(pair["risk_links"], index)
 
         for entry in full_by_id.values():
             entry["variant_ids"].sort()
@@ -344,6 +529,15 @@ def init_app(app: Flask) -> None:
                 entry["variant_ids"][0] if len(entry["variant_ids"]) == 1 else None
             )
         return list(full_by_id.values())
+
+    def _compact_assessment_response(rows: list[CompactAssessment]) -> ResponseReturnValue:
+        payload = json.dumps(rows, separators=(",", ":")).encode()
+        response = app.response_class(payload, mimetype="application/json")
+        if "gzip" in request.headers.get("Accept-Encoding", "") and len(payload) > 1024:
+            response.set_data(gzip.compress(payload, compresslevel=1))
+            response.headers["Content-Encoding"] = "gzip"
+            response.headers["Vary"] = "Accept-Encoding"
+        return response
 
     @app.route('/api/assessments')
     def index_assess() -> ResponseReturnValue:
@@ -382,20 +576,57 @@ def init_app(app: Flask) -> None:
             scoped_variant_ids = None
 
         if compact:
-            compact_assessments = _get_db_assessment_dicts(scoped_variant_ids, compact=True)
-            payload = json.dumps(compact_assessments, separators=(",", ":")).encode()
-            response = app.response_class(payload, mimetype="application/json")
-            if "gzip" in request.headers.get("Accept-Encoding", "") and len(payload) > 1024:
-                response.set_data(gzip.compress(payload, compresslevel=1))
-                response.headers["Content-Encoding"] = "gzip"
-                response.headers["Vary"] = "Accept-Encoding"
-            return response
+            return _compact_assessment_response(_get_db_assessment_dicts(scoped_variant_ids, compact=True))
 
         assessments = _get_db_assessment_dicts(scoped_variant_ids, compact=False)
         annotate_assessments_outdated(assessments)
         if request.args.get('format', 'list') == "dict":
             return {a["id"]: a for a in assessments}
         return assessments
+
+    @app.route('/api/vulnerabilities/assessment-trend')
+    def historical_assessment_trend() -> ResponseReturnValue:
+        """Return assessment events for exact historical finding targets in the selected evidence.
+
+        OpenAPI:
+        query project_id uuid optional Restrict to variants in this project.
+        query variant_id uuid optional Single variant or pairwise comparison base.
+        query compare_variant_id uuid optional Compared variant in a pairwise comparison.
+        query variant_ids string optional Comma-separated variants for a multi-variant comparison.
+        query operation string optional Comparison operation: union, intersection or difference.
+        response 200 CompactAssessment[] Assessment history, one row per matching target per assessment.
+        response 400 Error Invalid query or variants outside the selected project.
+        response 404 Error A comparison variant does not exist.
+        """
+        scope, err = resolve_evidence_scope(request.args, historical=True)
+        if scope is None:
+            return err if err is not None else ({"error": "Internal error"}, 500)
+        evidence = vulnerability_evidence(scope)
+        if not evidence.ids:
+            return []
+
+        observed = (
+            db.select(Observation.finding_id).join(Scan, Scan.id == Observation.scan_id)
+            .where(Observation.finding_id == AssessmentTarget.finding_id,
+                   Scan.variant_id == AssessmentTarget.variant_id, Scan.id.in_(evidence.scan_ids))
+            .exists()
+        )
+        rows = db.session.execute(
+            db.select(DBAssessment.id, Finding.vulnerability_id, Package, AssessmentTarget.variant_id,
+                      DBAssessment.timestamp, DBAssessment.status)
+            .select_from(AssessmentTarget)
+            .join(DBAssessment, DBAssessment.id == AssessmentTarget.assessment_id)
+            .join(Finding, Finding.id == AssessmentTarget.finding_id)
+            .join(Package, Package.id == Finding.package_id)
+            .where(Finding.vulnerability_id.in_(evidence.ids),
+                   AssessmentTarget.variant_id.in_(scope.contributing_variants),
+                   db.or_(DBAssessment.origin.is_(None), DBAssessment.origin != "ai"), observed)
+            .order_by(DBAssessment.timestamp, DBAssessment.id, AssessmentTarget.variant_id, Finding.id)
+        )
+        return _compact_assessment_response([
+            [str(aid), vuln_id, package.string_id, str(vid), ensure_utc_iso(timestamp), status or ""]
+            for aid, vuln_id, package, vid, timestamp, status in rows
+        ])
 
     def _current_context_updates(
         assessments: list[DBAssessment],
@@ -473,7 +704,7 @@ def init_app(app: Flask) -> None:
         from ..models.variant import Variant as DBVariant
         variant_id = request.args.get('variant_id')
         project_id = request.args.get('project_id')
-        variant_ids: list[UUID] | None
+        variant_ids: list[UUID] | None = None
         if variant_id:
             vid, err = parse_uuid_or_400(variant_id, "variant_id")
             if err:
@@ -481,18 +712,18 @@ def init_app(app: Flask) -> None:
             if vid is None:
                 return {"error": "Internal error"}, 500
             variant_ids = [vid]
-            assessments = DBAssessment.get_by_origin([vid], origin=origin)
-        elif project_id:
+        if project_id:
             pid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
             if pid is None:
                 return {"error": "Internal error"}, 500
-            variant_ids = [variant.id for variant in DBVariant.get_by_project(pid)]
-            assessments = DBAssessment.get_by_origin(variant_ids, origin=origin)
-        else:
-            variant_ids = None
-            assessments = DBAssessment.get_by_origin(origin=origin)
+            project_variants = [v.id for v in DBVariant.get_by_project(pid)]
+            variant_ids = (project_variants if variant_ids is None else
+                           [vid for vid in variant_ids if vid in project_variants])
+        if variant_ids == []:
+            return [], 200
+        assessments = DBAssessment.get_by_origin(variant_ids, origin=origin)
 
         # Enrich with vulnerability texts for front-end tooltips (single DB pass)
         vuln_ids = {a.vuln_id for a in assessments if a.vuln_id}
@@ -501,8 +732,10 @@ def init_app(app: Flask) -> None:
         context_updates = _current_context_updates(assessments) if origin == "ai" else {}
 
         assessments_serialized = []
+        link_scope = set(variant_ids) if variant_ids is not None else None
+        indexes: dict[UUID, RiskModelIndex] = {}
         for a in assessments:
-            a_ser = a.to_dict()
+            a_ser = a.to_dict(link_scope=link_scope, link_indexes=indexes)
             a_ser["vuln_texts"] = list(map(VulnerabilityText.to_dict, vuln_texts[a.vuln_id]))
             if origin == "ai":
                 a_ser["context_outdated"] = _is_context_outdated(a, context_updates)
@@ -1066,6 +1299,34 @@ def init_app(app: Flask) -> None:
         status_code = 200 if result["status"] == "success" else 400
         return result, status_code
 
+    @app.get('/api/assessments/<assessment_id>/risk-link-preview')
+    def assessment_risk_link_preview(assessment_id: str) -> ResponseReturnValue:
+        """Compare one saved link with its current model without expanding every Review row.
+
+        OpenAPI:
+        query variant_id uuid required Target variant.
+        query package string required Target package string ID.
+        query risk_id string required Saved risk ID.
+        query threat_id string optional Saved associated threat ID.
+        response 200 RiskLinkPreview Current modeled descriptions and revision.
+        response 404 Error Pending suggestion, link or model record no longer available.
+        """
+        row = DBAssessment.get_by_id(assessment_id)
+        variant, package = request.args.get("variant_id"), request.args.get("package")
+        ids = {k: request.args[k] for k in ("risk_id", "threat_id") if k in request.args}
+        if row and row.origin == "ai" and "risk_id" in ids:
+            for target in row.target_rows:
+                if str(target.variant_id) != variant or target.finding.package.string_id != package:
+                    continue
+                if any((r["risk_id"], r.get("threat_id")) == (ids["risk_id"], ids.get("threat_id"))
+                       for r in target.risk_links or []):
+                    context = target.variant.context
+                    try:
+                        return preview_link(ids, context.stride_model if context else None), 200
+                    except RiskLinkError:
+                        break
+        return {"error": "This modeled link is no longer available; correct or remove it"}, 404
+
     @app.route('/api/assessments/<assessment_id>')
     def assess_by_id(assessment_id: str) -> ResponseReturnValue:
         """Return a single assessment by identifier.
@@ -1121,7 +1382,7 @@ def init_app(app: Flask) -> None:
             ).scalars())
 
         rows = _assessments_for_vulnerability(vuln_id, project_variant_ids)
-        assessments = annotate_targets(rows)
+        assessments = annotate_targets(rows, project_variant_ids)
 
         ai_rows = [row for row in rows if row.origin == "ai"]
         if ai_rows:
@@ -1167,17 +1428,21 @@ def init_app(app: Flask) -> None:
         if req.vuln_id.upper() != (existing.vuln_id or "").upper():
             return {"error": "vuln_id does not match this assessment's vulnerability"}, 400
 
-        existing_by_key = index_targets(existing)
-        targets, target_err = resolve_targets(req, existing_by_key)
-        if target_err:
-            return target_err, 400
-
-        deletion_err = validate_deletions(existing, targets)
-        if deletion_err:
-            return deletion_err, 400
-
         try:
             with batch_session():
+                _lock_target_writes()
+                existing = db.session.scalar(
+                    db.select(DBAssessment).where(DBAssessment.id == assessment_uuid).with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if existing is None:
+                    return {"error": "Assessment not found"}, 404
+                targets, target_err = resolve_targets(req, index_targets(existing))
+                if target_err:
+                    return target_err, 400
+                deletion_err = validate_deletions(existing, targets)
+                if deletion_err:
+                    return deletion_err, 400
                 result = apply_reconcile(req, existing, targets)
         except GroupInvariantError as e:
             return {"error": str(e)}, 400
@@ -1232,7 +1497,8 @@ def init_app(app: Flask) -> None:
                 query = query.join(AssessmentTarget, AssessmentTarget.assessment_id == DBAssessment.id)
                 joined_targets = True
             query = query.where(AssessmentTarget.variant_id.in_(project_variant_ids))
-            variant_ids = project_variant_ids
+            variant_ids = (project_variant_ids if variant_ids is None else
+                           [vid for vid in variant_ids if vid in project_variant_ids])
 
         origin = request.args.get('origin')
         if origin:
@@ -1242,7 +1508,8 @@ def init_app(app: Flask) -> None:
             query = query.distinct()
 
         rows = list(db.session.execute(query).scalars())
-        assessments = annotate_targets(rows)
+        assessments = annotate_targets(rows, set(variant_ids) if variant_ids is not None else None)
+        annotate_review_evidence(rows, assessments)
 
         # Enrich with vulnerability texts for front-end tooltips (single DB
         # pass) — the review table spans several CVEs, unlike the vuln-scoped
@@ -1296,25 +1563,21 @@ def init_app(app: Flask) -> None:
 
     @app.route('/api/vulnerabilities/<vuln_id>/variant-active-packages')
     def list_variant_active_packages(vuln_id: str) -> ResponseReturnValue:
-        """For each variant affected by this vulnerability, return the subset of
-        the vulnerability's packages still present in that variant's active SBOM.
+        """Return exact current and historical finding targets for assessment editing.
 
-        Lets the front-end classify deprecated (variant, package) pairs in a
-        single request instead of one ``/api/packages`` call per variant.
+        A target can be historical even when the package is still in the active SBOM.
 
         OpenAPI:
         query project_id uuid optional Restrict the result to one project.
-        response 200 VariantActivePackages Active packages by variant.
+        response 200 VariantActivePackages Current writable packages and published finding targets by variant.
         """
-        from ..helpers.active_targets import variant_active_packages
-
         project_uuid: UUID | None = None
         project_id = request.args.get('project_id')
         if project_id:
             project_uuid, err = parse_uuid_or_400(project_id, "project_id")
             if err:
                 return err
-        return variant_active_packages(vuln_id, project_uuid), 200
+        return variant_finding_targets(vuln_id, project_uuid), 200
 
     @app.route("/api/vulnerabilities/<vuln_id>/assessments", methods=["POST"])
     def add_assessment(vuln_id: str) -> ResponseReturnValue:
@@ -1337,6 +1600,10 @@ def init_app(app: Flask) -> None:
             return {"error": "Invalid vuln_id"}, 400
 
         explicit_targets: list[tuple[str, UUID]] | None = None
+        link_edits = []
+        ai_generated = bool(payload_data.get("ai_generated"))
+        if "risk_links" in payload_data or "target_risk_links" in payload_data:
+            return {"error": "Specify risk_links inside each exact target"}, 400
         raw_targets = payload_data.get("targets")
         if raw_targets is not None:
             if not isinstance(raw_targets, list) or not raw_targets:
@@ -1358,6 +1625,16 @@ def init_app(app: Flask) -> None:
                 if target_variant_id is None:
                     return {"error": "Invalid variant_id"}, 400
                 pair = (package_id, target_variant_id)
+                if "risk_links" in target:
+                    links = target["risk_links"]
+                    if ai_generated:
+                        if links != []:
+                            return {
+                                "error": "AI assessments must cite modeled risks in status_notes, not risk_links",
+                            }, 400
+                    else:
+                        link_edits.append({"variant_id": str(target_variant_id), "package": package_id,
+                                           "risk_links": links})
                 if pair not in explicit_targets:
                     explicit_targets.append(pair)
             payload_data["packages"] = list(dict.fromkeys(
@@ -1392,7 +1669,6 @@ def init_app(app: Flask) -> None:
                 return {"error": "Invalid variant_id"}, 400
             variant_ids.append(parsed)
 
-        ai_generated = bool(payload_data.get("ai_generated"))
         target_origin = "ai" if ai_generated else "custom"
 
         # Use a single timestamp so the created row's own targets (and any
@@ -1459,7 +1735,10 @@ def init_app(app: Flask) -> None:
                 # overwrite previous user assessments on the same target set.
                 db_a = create_assessment_record(
                     assessment, targets, timestamp=shared_timestamp, origin=target_origin)
-        except GroupInvariantError as e:
+                if link_edits:
+                    for target_row, links in _reviewed_links(db_a, link_edits).items():
+                        target_row.risk_links = links or None
+        except (GroupInvariantError, RiskLinkError) as e:
             return {"error": str(e)}, 400
         except Exception as e:
             return {"error": f"DB error: {e}"}, 500
@@ -1483,18 +1762,35 @@ def init_app(app: Flask) -> None:
         payload_data = request.get_json()
         if not payload_data or "assessments" not in payload_data or not isinstance(payload_data["assessments"], list):
             return {"error": "Invalid request data. Expected: {assessments: [...]}"}, 400
+        current_only = payload_data.get("current_only", False)
+        if not isinstance(current_only, bool):
+            return {"error": "current_only must be a boolean"}, 400
 
         errors: list[dict[str, Any]] = []
-        prepared: list[tuple[DBAssessment, list[tuple[UUID, UUID]]]] = []
+        prepared: list[tuple[DBAssessment, dict[tuple[str, UUID], Finding]]] = []
         pkg_cache: dict[str, Package] = {}
 
-        # Validate the complete request before opening the write transaction.
-        # A batch represents one user action, so one invalid package/variant
-        # relationship must cancel every assessment in that action.
+        # Resolve the entire batch before writing any assessments. Current-only
+        # eligibility is rechecked under the write lock just before persisting.
         for item in payload_data["assessments"]:
             if not isinstance(item, dict) or "vuln_id" not in item:
                 errors.append({"error": "Invalid assessment data", "item": item})
                 continue
+
+            exact_targets: set[tuple[str, UUID]] | None = None
+            if current_only and "targets" not in item:
+                errors.append({"vuln_id": item.get("vuln_id"), "error": "current_only requires exact targets"})
+                continue
+            if "targets" in item:
+                exact_targets = _parse_batch_targets(item["targets"])
+                if not exact_targets:
+                    errors.append({"vuln_id": item.get("vuln_id"), "error": "Invalid assessment targets"})
+                    continue
+                item = {
+                    **item,
+                    "packages": sorted({package for package, _ in exact_targets}),
+                    "variant_ids": sorted({str(variant) for _, variant in exact_targets}),
+                }
 
             assessment, status = payload_to_assessment(item)
             if status != 200:
@@ -1562,6 +1858,10 @@ def init_app(app: Flask) -> None:
             except ValueError as exc:
                 errors.append({"vuln_id": vuln_id, "error": str(exc)})
                 continue
+            if exact_targets is not None:
+                missing_targets = exact_targets.difference(resolved)
+                unobserved = sorted(f"{package} in {variant}" for package, variant in missing_targets)
+                resolved = {pair: finding for pair, finding in resolved.items() if pair in exact_targets}
             if unobserved:
                 errors.append({
                     "vuln_id": vuln_id,
@@ -1570,13 +1870,9 @@ def init_app(app: Flask) -> None:
                     + ", ".join(unobserved),
                 })
                 continue
-            item_targets = [
-                (variant_id, finding.id)
-                for (_package, variant_id), finding in resolved.items()
-            ]
-            prepared.append((assessment, item_targets))
+            prepared.append((assessment, resolved))
 
-        if errors:
+        def invalid_batch() -> ResponseReturnValue:
             return {
                 "status": "error",
                 "assessments": [],
@@ -1586,15 +1882,45 @@ def init_app(app: Flask) -> None:
                 "error_count": len(errors),
             }, 400
 
+        if errors:
+            return invalid_batch()
+
         results: list[AssessmentDict] = []
         try:
             with batch_session():
+                if current_only:
+                    _lock_target_writes()
+                    variant_ids_to_check = {
+                        variant_id for _, targets in prepared for _, variant_id in targets
+                    }
+                    lock_scan_membership(variant_ids_to_check)
+                    scan_ids = [
+                        scan_id for variant_id in variant_ids_to_check
+                        for scan_id in active_scan_ids_for_variant(variant_id)
+                    ]
+                    current = finding_packages_for_scans(
+                        scan_ids, {finding.vulnerability_id for _, targets in prepared for finding in targets.values()}
+                    ).writable
+                    for assessment, targets in prepared:
+                        stale = sorted(
+                            f"{package} in {variant_id}"
+                            for (package, variant_id), finding in targets.items()
+                            if package not in current.get(finding.vulnerability_id, {}).get(str(variant_id), ())
+                        )
+                        if stale:
+                            errors.append({
+                                "vuln_id": assessment.vuln_id,
+                                "error": "Package targets are no longer current: " + ", ".join(stale),
+                            })
+                    if errors:
+                        return invalid_batch()
                 # A batch is one user action but may span several CVEs,
                 # several projects and several distinct contents. Each item
                 # creates exactly one row covering every package in that
                 # item; batching never fuses separate items together.
                 created_rows: list[DBAssessment] = []
-                for assessment, item_targets in prepared:
+                for assessment, targets in prepared:
+                    item_targets = [(variant_id, finding.id) for (_, variant_id), finding in targets.items()]
                     created_rows.append(create_assessment_record(
                         assessment, item_targets,
                         timestamp=getattr(assessment, "timestamp", None),
@@ -1642,14 +1968,30 @@ def init_app(app: Flask) -> None:
                 return {"error": "Invalid allowed_variant_ids"}, 400
             try:
                 allowed_ids = {UUID(value) for value in raw_ids}
-                assessment_uuid = UUID(assessment_id)
             except ValueError:
                 return {"error": "Invalid allowed_variant_ids or assessment ID"}, 400
-            existing = db.session.execute(
-                db.select(DBAssessment).where(DBAssessment.id == assessment_uuid).with_for_update()
-            ).scalar_one_or_none()
-        else:
-            existing = DBAssessment.get_by_id(assessment_id)
+        try:
+            assessment_uuid = UUID(assessment_id)
+        except ValueError:
+            if allowed_ids is not None:
+                return {"error": "Invalid allowed_variant_ids or assessment ID"}, 400
+            return {"error": "Assessment not found"}, 404
+
+        with write_lock():
+            # Serialize the read used for validation with edited approvals.
+            _lock_target_writes()
+            result, status = _update_locked_assessment(assessment_uuid, allowed_ids, payload_data)
+            if status != 200:
+                db.session.rollback()
+            return result, status
+
+    def _update_locked_assessment(
+        assessment_uuid: UUID, allowed_ids: set[UUID] | None, payload_data: dict[str, Any],
+    ) -> tuple[dict[str, Any], int]:
+        existing = db.session.scalar(
+            db.select(DBAssessment).where(DBAssessment.id == assessment_uuid).with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if existing is None:
             return {"error": "Assessment not found"}, 404
         if allowed_ids is not None:
@@ -1658,7 +2000,6 @@ def init_app(app: Flask) -> None:
                 .where(AssessmentTarget.assessment_id == existing.id).with_for_update()
             ).scalars().all()
             if not current_ids or not set(current_ids) <= allowed_ids:
-                db.session.rollback()
                 return {"error": "Assessment targets changed or are outside the current agent scope."}, 409
             db.session.expire(existing, ["target_rows"])
         if not existing.target_rows or any(
@@ -1677,35 +2018,9 @@ def init_app(app: Flask) -> None:
         # explicitly approves/rejects it via the dedicated endpoints.
         new_origin = "ai" if existing.origin == "ai" else "custom"
 
-        # Reconstruct Assessment DTO for validation
-        mem_assess = DBAssessment.from_dict(existing.to_dict())
-
-        if "status" in payload_data and isinstance(payload_data["status"], str):
-            if not mem_assess.set_status(payload_data["status"]):
-                return {"error": "Invalid status"}, 400
-            if mem_assess.status not in ["not_affected", "false_positive"]:
-                mem_assess.justification = ""
-                mem_assess.impact_statement = ""
-
-        if "status_notes" in payload_data and isinstance(payload_data["status_notes"], str):
-            mem_assess.set_status_notes(payload_data["status_notes"], False)
-
-        if "justification" in payload_data and isinstance(payload_data["justification"], str):
-            if payload_data["justification"] == "":
-                mem_assess.justification = ""
-            elif not mem_assess.set_justification(payload_data["justification"]):
-                return {"error": "Invalid justification"}, 400
-        elif mem_assess.is_justification_required():
-            return {"error": "Justification required"}, 400
-
-        if "impact_statement" in payload_data and isinstance(payload_data["impact_statement"], str):
-            if payload_data["impact_statement"] == "":
-                mem_assess.impact_statement = ""
-            else:
-                mem_assess.set_not_affected_reason(payload_data["impact_statement"], False)
-
-        if "workaround" in payload_data and isinstance(payload_data["workaround"], str):
-            mem_assess.set_workaround(payload_data["workaround"])
+        mem_assess, content_error = _validate_content_edit(existing, payload_data)
+        if mem_assess is None:
+            return {"error": content_error or "Invalid request data"}, 400
 
         update_timestamp = payload_data.get("update_timestamp", True)
         if not isinstance(update_timestamp, bool):
@@ -1763,17 +2078,49 @@ def init_app(app: Flask) -> None:
     def approve_ai_assessment(assessment_id: str) -> ResponseReturnValue:
         """Approve a pending AI assessment, converting it to custom.
 
+        An optional body edits the suggestion's rationale in the same
+        transaction. Approval cannot change the suggested status.
+
         OpenAPI:
-        response 200 Assessment Approved assessment.
-        response 400 Error Not a pending AI assessment.
+        body AssessmentApproval optional Rationale edits applied before approval.
+        response 200 AssessmentWriteResult Approved assessment.
+        response 400 Error Not a pending AI assessment, or invalid content edits.
         response 404 Error Assessment not found.
+        response 409 Error Assessment changed before approval.
+        response 413 Error Request body exceeds the approval size limit.
         """
+        # Only a JSON body carries edits; any other body is ignored as before.
+        payload: Any = {}
+        current_limit = request.max_content_length
+        limit = min(
+            current_limit, _APPROVAL_REQUEST_MAX_BYTES
+        ) if current_limit is not None else _APPROVAL_REQUEST_MAX_BYTES
+        # Werkzeug can stop a terminated, lengthless stream at its limit
+        # without signalling overflow. Read at most one extra byte to tell.
+        request.max_content_length = limit + 1 if request.content_length is None else limit
+        try:
+            body = request.get_data(cache=True) if request.is_json else b""
+            if len(body) > limit:
+                raise RequestEntityTooLarge()
+            if body:
+                payload = request.get_json(silent=True)
+                if not isinstance(payload, dict):
+                    return {"error": "Invalid request data"}, 400
+        except RequestEntityTooLarge:
+            return {"error": "Request body exceeds the approval size limit"}, 413
+        if payload.keys() - (*APPROVAL_EDIT_FIELDS, "expected_fingerprint", "target_risk_links"):
+            return {"error": "Approval accepts only rationale fields, target_risk_links and expected_fingerprint"}, 400
+        if any(not isinstance(value, str) for k, value in payload.items() if k != "target_risk_links"):
+            return {"error": "Assessment edit fields must be strings"}, 400
+        for field in APPROVAL_EDIT_FIELDS:
+            if field in payload and "\x00" in payload[field]:
+                return {"error": f"{field} must not contain NUL characters"}, 400
         row, err = _resolve_pending_ai_row(assessment_id)
         if err is not None:
             return err
         if row is None:
             return {"error": "Internal error"}, 500
-        return _approve_row(row)
+        return _approve_row(row, payload)
 
     @app.route("/api/assessments/<assessment_id>/reject", methods=["POST"])
     def reject_ai_assessment(assessment_id: str) -> ResponseReturnValue:
@@ -1784,12 +2131,41 @@ def init_app(app: Flask) -> None:
         response 400 Error Not a pending AI assessment.
         response 404 Error Assessment not found.
         """
-        row, err = _resolve_pending_ai_row(assessment_id)
-        if err is not None:
-            return err
-        if row is None:
-            return {"error": "Internal error"}, 500
-        return _reject_row(row)
+        try:
+            aid = UUID(assessment_id)
+        except ValueError:
+            return {"error": "Assessment not found"}, 404
+        session = db.session()
+        with session.begin():
+            # Match approval's parent-first ordering before cascading to targets.
+            _lock_target_writes()
+            row = session.scalar(
+                db.select(DBAssessment).where(DBAssessment.id == aid).with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if row is None:
+                return {"error": "Assessment not found"}, 404
+            if row.origin != "ai":
+                return {"error": "Not a pending AI assessment"}, 400
+            session.delete(row)
+        return {"status": "success", "deleted": [str(aid)]}, 200
+
+
+def _parse_batch_targets(raw_targets: object) -> set[tuple[str, UUID]] | None:
+    if not isinstance(raw_targets, list) or not raw_targets:
+        return None
+    targets: set[tuple[str, UUID]] = set()
+    for target in raw_targets:
+        if not isinstance(target, dict):
+            return None
+        package, variant = target.get("package"), target.get("variant_id")
+        if not isinstance(package, str) or not package or not isinstance(variant, str):
+            return None
+        variant_id, err = parse_uuid_or_400(variant, "variant_id")
+        if err is not None or variant_id is None:
+            return None
+        targets.add((package, variant_id))
+    return targets
 
 
 def payload_to_assessment(

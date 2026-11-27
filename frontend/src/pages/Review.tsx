@@ -1,23 +1,24 @@
-import { useEffect, useState, useMemo, useRef, useCallback } from "react";
+import { useEffect, useLayoutEffect, useState, useMemo, useRef, useCallback } from "react";
 import { createColumnHelper, OnChangeFn, Row, RowSelectionState, Table } from "@tanstack/react-table";
 import TableGeneric from "../components/TableGeneric";
 import Assessments from "../handlers/assessments";
-import type { Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
-import { asAssessment, isMultiTarget, reconcileTargetPairs } from "../handlers/assessments";
+import type { AiAssessmentEdits, Assessment, ReviewTimeEstimate, ReviewCustomCvss } from "../handlers/assessments";
+import { asAssessment, isMultiTarget, reconcileTargetPairs, sharesNotesWithNewTargets } from "../handlers/assessments";
 import type { Vulnerability } from "../handlers/vulnerabilities";
 import { asVulnerability } from "../handlers/vulnerabilities";
 import VulnModal from "../components/VulnModal";
 import FilterOption from "../components/FilterOption";
-import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCircleQuestion, faCircleInfo, faFileExport, faFileImport, faPenToSquare, faTrash, faBook, faCheck, faXmark, faCopy, faTriangleExclamation, faRobot } from '@fortawesome/free-solid-svg-icons';
 import { detectReviewExportFormat, downloadJson, sanitizeFilename, formatTimestampForFilename } from '../helpers/exportJson';
 import AssessmentReviews, { verdictOf, describeReviewSummary } from "../handlers/assessmentReviews";
 import type { AssessmentReview, ReviewVerdict } from "../handlers/assessmentReviews";
 import EditAssessment from '../components/EditAssessment';
+import EditAiAssessment from '../components/EditAiAssessment';
 import type { EditAssessmentData } from '../components/EditAssessment';
 import type { Variant } from '../handlers/variant';
 import ConfirmationModal from '../components/ConfirmationModal';
+import ConfirmSharedAssessmentNotes from '../components/ConfirmSharedAssessmentNotes';
 import MessageBanner from '../components/MessageBanner';
 import Variants from '../handlers/variant';
 import Packages from '../handlers/packages';
@@ -28,7 +29,8 @@ import ExplicitSearchInput from '../components/ExplicitSearchInput';
 import ModalShell from '../components/ModalShell';
 import useDismissablePopover from '../hooks/useDismissablePopover';
 import PopoverSurface from '../components/PopoverSurface';
-import { AGENT_WRITE_EVENT, type AgentAction, type AgentViewContext } from '../types/agent';
+import { type AgentAction, type AgentViewContext } from '../types/agent';
+import useAgentWriteRefresh from '../hooks/useAgentWriteRefresh';
 import { ACTIONS_PER_REQUEST, agentActionState, enqueueAgentActions, openAgentChat } from '../handlers/agentQueue';
 import AgentActionButton from '../components/AgentActionButton';
 import useAgentQueue from '../hooks/useAgentQueue';
@@ -62,6 +64,7 @@ export type { AssessmentMutation };
  *  and search, and a hover-tooltip `texts` field. */
 type ReviewRow = {
     id: string;
+    approval_fingerprint?: string;
     vuln_id: string;
     status: string;
     simplified_status: string;
@@ -84,12 +87,14 @@ type ReviewRow = {
     extractedSuppliers: string[];
 };
 
+type ReviewEditSubmission = {
+    data: EditAssessmentData;
+    targets: NonNullable<EditAssessmentData['targets']>;
+};
+
 /** Adapt a server-returned Assessment into the flattened shape the table
  *  columns and edit/delete/approve flows consume. */
-function toReviewRow(
-    assessment: Assessment,
-    vulnDescriptions: Record<string, { title: string; content: string }[]>,
-): ReviewRow {
+function toReviewRow(assessment: Assessment): ReviewRow {
     const targets = assessment.targets ?? [];
     const packages = [...new Set(targets.map(t => t.package))];
     const variant_ids = [...new Set(
@@ -97,6 +102,7 @@ function toReviewRow(
     )];
     return {
         id: assessment.id,
+        approval_fingerprint: assessment.approval_fingerprint,
         vuln_id: assessment.vuln_id,
         status: assessment.status,
         simplified_status: assessment.simplified_status,
@@ -111,7 +117,8 @@ function toReviewRow(
         targets,
         packages,
         variant_ids,
-        texts: vulnDescriptions[assessment.vuln_id] ?? [],
+        texts: assessment.vuln_texts?.length ? assessment.vuln_texts
+            : [{ title: "description", content: "No description available" }],
         extractedSuppliers: [...new Set(
             packages.map(p => extractSupplierName(splitPkgId(p).supplier)).filter(s => s !== '')
         )],
@@ -232,6 +239,13 @@ function hasOutdatedAssessment(row: ReviewRow): boolean {
     return row.targets.some(t => t.outdated) || row.context_outdated;
 }
 
+type OutdatedFilter = 'all' | 'only' | 'hide';
+
+function matchesOutdatedFilter(row: ReviewRow, filter: OutdatedFilter): boolean {
+    if (filter === 'all') return true;
+    return hasOutdatedAssessment(row) === (filter === 'only');
+}
+
 function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChange }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#review");
     const [activeTab, setActiveTab] = useState<ReviewTab>('assessments');
@@ -248,7 +262,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [selectedJustifications, setSelectedJustifications] = useState<string[]>([]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([]);
     const [selectedAiReviews, setSelectedAiReviews] = useState<string[]>([]);
-    const [showOnlyOutdated, setShowOnlyOutdated] = useState(false);
+    const [outdatedFilter, setOutdatedFilter] = useState<OutdatedFilter>('all');
     const [reviews, setReviews] = useState<Record<string, AssessmentReview[]>>({});
     const [showShortcutHelper, setShowShortcutHelper] = useState(false);
     const [showSearchHelper, setShowSearchHelper] = useState(false);
@@ -261,9 +275,41 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const [editCompatibilityLoading, setEditCompatibilityLoading] = useState(false);
     const [editCompatibilityError, setEditCompatibilityError] = useState<string | undefined>();
     const [editSubmitting, setEditSubmitting] = useState(false);
+    const editInFlight = useRef(false);
     const [editHasUnsavedChanges, setEditHasUnsavedChanges] = useState(false);
-    const [showDiscardEditConfirmation, setShowDiscardEditConfirmation] = useState(false);
-    const [pendingEmptyTargetEdit, setPendingEmptyTargetEdit] = useState<EditAssessmentData | null>(null);
+    const [discardEditor, setDiscardEditor] = useState<'assessment' | 'ai' | null>(null);
+    const [pendingTargetEdit, setPendingTargetEdit] = useState<
+        (ReviewEditSubmission & { kind: 'delete' | 'share-notes' }) | null
+    >(null);
+    const [aiEditingRow, setAiEditingRow] = useState<ReviewRow | null>(null);
+    const [aiEditHasChanges, setAiEditHasChanges] = useState(false);
+    const [aiEditSaving, setAiEditSaving] = useState(false);
+    const [aiEditError, setAiEditError] = useState<string | null>(null);
+    const listScope = useMemo(() => ({ projectId, variantId }), [projectId, variantId]);
+    const [refreshFailed, setRefreshFailed] = useState(false);
+    const activeListScope = useRef<typeof listScope | null>(null);
+    const listGeneration = useRef(0);
+    const installedGeneration = useRef(0);
+    useLayoutEffect(() => {
+        activeListScope.current = listScope;
+        setRefreshFailed(false);
+        setLoading(true);
+        setAssessments([]);
+        setAiAssessments([]);
+        setAiEditingRow(null);
+        setDiscardEditor(editor => editor === 'ai' ? null : editor);
+        setAiEditSaving(false);
+        setAiEditError(null);
+        return () => { activeListScope.current = null; };
+    }, [listScope]);
+    const beginListRequest = useCallback(() => {
+        const generation = ++listGeneration.current;
+        return (install = false) => {
+            if (activeListScope.current !== listScope || generation < installedGeneration.current) return false;
+            if (install) installedGeneration.current = generation;
+            return true;
+        };
+    }, [listScope]);
     const [rowToDelete, setRowToDelete] = useState<ReviewRow | null>(null);
     // Identifies which copy button was last used, so only that one confirms.
     const [copiedRowKey, setCopiedRowKey] = useState<string | null>(null);
@@ -420,9 +466,10 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         return () => { cancelled = true; };
     }, [editVariants, editingRow]);
 
-    const refreshReviews = useCallback(async () => {
-        const data = await AssessmentReviews.fetchForScope(variantId, projectId);
-        setReviews(data);
+    const refreshReviews = useCallback(async (read = AssessmentReviews.fetchForScope) => {
+        const version = reviewScopeVersion.current;
+        const data = await read(variantId, projectId);
+        if (version === reviewScopeVersion.current) setReviews(data);
     }, [variantId, projectId]);
 
     useEffect(() => {
@@ -436,6 +483,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     useEffect(() => {
         setLoading(true);
         setError(null);
+        const current = beginListRequest();
         Promise.all([
             Assessments.listForReview(variantId, projectId, 'custom'),
             Assessments.listForReview(variantId, projectId, 'ai'),
@@ -443,6 +491,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             Assessments.listReviewCustomCvss(variantId, projectId),
         ])
             .then(([reviewRows, aiRows, teData, cvssData]) => {
+                if (activeListScope.current !== listScope) return;
                 // Build tooltip descriptions from vuln_texts included in the response.
                 const descMap: Record<string, { title: string; content: string }[]> = {};
                 for (const a of [...reviewRows, ...aiRows]) {
@@ -462,25 +511,28 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         descMap[c.vuln_id] = c.vuln_texts || [{ title: "description", content: "No description available" }];
                     }
                 }
-                setAssessments(reviewRows.map(a => toReviewRow(a, descMap)));
-                setAiAssessments(aiRows.map(a => toReviewRow(a, descMap)));
+                if (current(true)) {
+                    setAssessments(reviewRows.map(toReviewRow));
+                    setAiAssessments(aiRows.map(toReviewRow));
+                }
                 setTimeEstimates(teData);
                 setCustomCvss(cvssData.filter((item) => item.origin === 'custom'));
                 setLoading(false);
                 setVulnDescriptions(descMap);
             })
             .catch(err => {
+                if (activeListScope.current !== listScope) return;
                 console.error(err);
                 setError("Failed to load review data");
                 setLoading(false);
             });
-    }, [variantId, projectId]);
+    }, [variantId, projectId, listScope, beginListRequest]);
 
     const applySearch = () => setSearch(draftSearch.trim());
 
     const openAssessmentEditor = (row: ReviewRow) => {
         setEditHasUnsavedChanges(false);
-        setPendingEmptyTargetEdit(null);
+        setPendingTargetEdit(null);
         setShowBanner(false);
         setEditingRow(row);
     };
@@ -488,14 +540,18 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const closeAssessmentEditor = () => {
         if (editSubmitting) return;
         if (editHasUnsavedChanges) {
-            setShowDiscardEditConfirmation(true);
+            setDiscardEditor('assessment');
             return;
         }
         setEditingRow(null);
     };
 
     const discardAssessmentEdit = () => {
-        setShowDiscardEditConfirmation(false);
+        setDiscardEditor(null);
+        if (discardEditor === 'ai') {
+            closeAiAssessmentEditor();
+            return;
+        }
         setEditHasUnsavedChanges(false);
         setEditingRow(null);
     };
@@ -548,7 +604,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     const hasSupplierInfo = useMemo(() => supplierList.length > 0, [supplierList]);
 
     const filteredAssessments = useMemo(() => assessments.filter((a) => {
-        if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
+        if (!matchesOutdatedFilter(a, outdatedFilter)) {
             return false;
         }
         if (selectedAiReviews.length) {
@@ -566,7 +622,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             if (!selectedSuppliers.some(s => rowSuppliers.includes(s))) return false;
         }
         return true;
-    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedAiReviews, showOnlyOutdated, reviews]);
+    }), [assessments, selectedStatuses, selectedJustifications, selectedSuppliers, selectedAiReviews, outdatedFilter, reviews]);
 
     // Records the display order (filtered + sorted, deduped by vuln_id) of the
     // currently visible tab's table so the modal can navigate across it. Only one
@@ -596,7 +652,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         setSelectedJustifications([]);
         setSelectedSuppliers([]);
         setSelectedAiReviews([]);
-        setShowOnlyOutdated(false);
+        setOutdatedFilter('all');
     };
 
     const transferProjectId = projectId ?? allVariants.find(v => v.id === variantId)?.project_id;
@@ -743,7 +799,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 .then(result => {
                     if (result.status === 'success') {
                         Assessments.listForReview(variantId, projectId, 'custom')
-                            .then(rows => setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions))));
+                            .then(rows => setAssessments(rows.map(toReviewRow)));
                         showMessage('Assessments imported successfully!', 'success');
                     } else {
                         showMessage(`Import error: ${result.error || 'Unknown error'}`, 'error');
@@ -800,7 +856,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
 
                 if (data.status === 'success') {
                     Assessments.listForReview(variantId, projectId, 'custom')
-                        .then(rows => setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions))));
+                        .then(rows => setAssessments(rows.map(toReviewRow)));
                     const assessmentsImported = data.assessments_imported ?? 0;
                     const assessmentsSkipped = data.assessments_skipped ?? 0;
                     const cvssImported = data.cvss_imported ?? 0;
@@ -828,34 +884,39 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             }
         };
         reader.readAsText(file);
-    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy, vulnDescriptions]);
+    }, [variantId, projectId, showMessage, transferFormat, transferVariantIds, importTimestampPolicy]);
 
     /** Refetch just the handmade-assessments list (used after edits/deletes
      * that don't touch the AI-pending list). */
     const refreshAssessments = useCallback(async () => {
         const rows = await Assessments.listForReview(variantId, projectId, 'custom');
-        setAssessments(rows.map(a => toReviewRow(a, vulnDescriptions)));
-    }, [variantId, projectId, vulnDescriptions]);
+        setAssessments(rows.map(toReviewRow));
+    }, [variantId, projectId]);
 
     /** Refetch both the handmade and AI-pending assessment lists (used after
      * approving/rejecting a pending AI assessment from the AI Assessments
      * table, since approving moves a row from one list to the other). */
-    const refreshAssessmentLists = useCallback(async () => {
-        const [reviewRows, aiRows] = await Promise.all([
+    const refreshAssessmentLists = useCallback(async (current = beginListRequest()) => {
+        const [reviewRows, aiRows] = await Promise.allSettled([
             Assessments.listForReview(variantId, projectId, 'custom'),
             Assessments.listForReview(variantId, projectId, 'ai'),
         ]);
-        setAssessments(reviewRows.map(a => toReviewRow(a, vulnDescriptions)));
-        setAiAssessments(aiRows.map(a => toReviewRow(a, vulnDescriptions)));
-    }, [variantId, projectId, vulnDescriptions]);
+        if (!current()) return;
+        if (reviewRows.status === 'rejected') throw reviewRows.reason;
+        if (aiRows.status === 'rejected') throw aiRows.reason;
+        if (!current(true)) return;
+        setAssessments(reviewRows.value.map(toReviewRow));
+        setAiAssessments(aiRows.value.map(toReviewRow));
+    }, [variantId, projectId, beginListRequest]);
 
-    useEffect(() => {
-        const refresh = () => {
-            void Promise.all([refreshAssessmentLists(), refreshReviews()]).catch(() => {});
-        };
-        window.addEventListener(AGENT_WRITE_EVENT, refresh);
-        return () => window.removeEventListener(AGENT_WRITE_EVENT, refresh);
-    }, [refreshAssessmentLists, refreshReviews]);
+    useAgentWriteRefresh(async () => {
+        const results = await Promise.allSettled([refreshAssessmentLists(), refreshReviews(AssessmentReviews.fetchForScopeStrict)]);
+        if (activeListScope.current === listScope) {
+            setRefreshFailed(results.some(result => result.status === 'rejected'));
+        }
+    }, {
+        scopeKey: JSON.stringify([projectId, variantId]),
+    });
 
     const handleDeleteRow = useCallback(async () => {
         if (!rowToDelete) return;
@@ -903,6 +964,48 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
             showMessage(`Failed to approve AI assessment: ${String(e)}`, 'error');
         }
     }, [refreshAssessmentLists, showMessage]);
+
+    const openAiAssessmentEditor = useCallback((row: ReviewRow) => {
+        setAiEditHasChanges(false);
+        setAiEditError(null);
+        setShowBanner(false);
+        setAiEditingRow(row);
+    }, []);
+
+    const closeAiAssessmentEditor = useCallback(() => {
+        if (aiEditSaving) return;
+        setAiEditError(null);
+        setAiEditingRow(null);
+    }, [aiEditSaving]);
+
+    const handleConfirmAiEdit = useCallback(async (edits: AiAssessmentEdits) => {
+        if (!aiEditingRow || aiEditSaving) return;
+        setAiEditSaving(true);
+        setAiEditError(null);
+        try {
+            await Assessments.approveAi(aiEditingRow.id, edits);
+        } catch (e) {
+            if (activeListScope.current !== listScope) return;
+            // Stay in edit mode so the user keeps their changes and can retry.
+            const message = e instanceof Error ? e.message : String(e);
+            setAiEditError(`Failed to approve AI assessment: ${message}`);
+            setAiEditSaving(false);
+            return;
+        }
+        if (activeListScope.current !== listScope) return;
+        setAiEditingRow(null);
+        setAiEditSaving(false);
+        const current = beginListRequest();
+        // The POST committed. Older list requests must not restore this row.
+        current(true);
+        setAiAssessments(rows => rows.filter(row => row.id !== aiEditingRow.id));
+        try {
+            await refreshAssessmentLists(current);
+        } catch {
+            // The approval succeeded; the lists refresh on the next load.
+        }
+        if (current()) showMessage('AI assessment approved!', 'success');
+    }, [aiEditingRow, aiEditSaving, refreshAssessmentLists, showMessage, beginListRequest, listScope]);
 
     const handleRejectAiRow = useCallback(async (row: ReviewRow) => {
         try {
@@ -1040,8 +1143,9 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         variantId,
     ]);
 
-    const persistEditedAssessment = useCallback(async (data: EditAssessmentData) => {
-        if (!editingRow) return;
+    const persistEditedAssessment = useCallback(async ({ data, targets }: ReviewEditSubmission) => {
+        if (!editingRow || editInFlight.current) return;
+        editInFlight.current = true;
         setEditSubmitting(true);
 
         const targetVariantIds: string[] =
@@ -1057,8 +1161,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 vuln_id: editingRow.vuln_id,
                 packages: targetPackages,
                 variant_ids: targetVariantIds,
-                targets: data.targets ?? reconcileTargetPairs(
-                    editingRow.targets, targetPackages, targetVariantIds),
+                targets,
                 status: data.status,
                 justification: data.justification,
                 impact_statement: data.impact_statement,
@@ -1074,24 +1177,31 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
         } catch {
             showMessage('Failed to update assessment.', 'error');
         } finally {
+            editInFlight.current = false;
             setEditSubmitting(false);
         }
     }, [editingRow, refreshAssessments, refreshReviews, onAssessmentChanged, showMessage]);
 
     const handleSaveEdit = useCallback((data: EditAssessmentData) => {
+        if (!editingRow || pendingTargetEdit || editInFlight.current) return;
+        const targets = data.targets ?? reconcileTargetPairs(
+            editingRow.targets, data.packages ?? editingRow.packages, data.variant_ids ?? editingRow.variant_ids);
         if (data.targets !== undefined && data.targets.length === 0) {
-            setPendingEmptyTargetEdit(data);
+            setPendingTargetEdit({ kind: 'delete', data, targets });
             return;
         }
-        void persistEditedAssessment(data);
-    }, [persistEditedAssessment]);
+        if (sharesNotesWithNewTargets(data.status_notes, editingRow.targets, targets)) {
+            setPendingTargetEdit({ kind: 'share-notes', data, targets });
+            return;
+        }
+        void persistEditedAssessment({ data, targets });
+    }, [editingRow, pendingTargetEdit, persistEditedAssessment]);
 
-    const confirmEmptyTargetEdit = useCallback(() => {
-        if (!pendingEmptyTargetEdit) return;
-        const data = pendingEmptyTargetEdit;
-        setPendingEmptyTargetEdit(null);
-        void persistEditedAssessment(data);
-    }, [pendingEmptyTargetEdit, persistEditedAssessment]);
+    const confirmTargetEdit = useCallback(() => {
+        if (!pendingTargetEdit) return;
+        setPendingTargetEdit(null);
+        void persistEditedAssessment(pendingTargetEdit);
+    }, [pendingTargetEdit, persistEditedAssessment]);
 
     const fetchVulnForModal = useCallback(async (vulnId: string): Promise<Vulnerability | undefined> => {
         try {
@@ -1210,15 +1320,18 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                         {vids.map(vid => {
                             const name = variantNames[vid] ?? vid.slice(0, 8);
                             const variantTargets = row.targets.filter(t => t.variant_id === vid);
-                            const isOutdated = variantTargets.length > 0 && variantTargets.every(t => t.outdated);
+                            const isOutdated = variantTargets.some(t => t.outdated);
+                            const allOutdated = variantTargets.every(t => t.outdated);
                             return (
                                 <span
                                     key={vid}
                                     className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${isOutdated ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300' : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'}`}
-                                    title={isOutdated ? 'Package version is not present in this variant’s current SBOM' : undefined}
+                                    title={isOutdated ? 'Assessed findings are missing from this variant’s current evidence' : undefined}
                                 >
                                     {name}
-                                    {isOutdated && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide">Outdated</span>}
+                                    {isOutdated && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide">
+                                        {allOutdated ? 'Outdated' : 'Partly outdated'}
+                                    </span>}
                                 </span>
                             );
                         })}
@@ -1407,6 +1520,13 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                     <FontAwesomeIcon icon={faCheck} className="w-4 h-4" />
                 </button>
                 <button
+                    onClick={() => openAiAssessmentEditor(info.row.original)}
+                    className="text-blue-400 hover:text-blue-300 transition-colors"
+                    title="Edit AI suggestion"
+                >
+                    <FontAwesomeIcon icon={faPenToSquare} className="w-4 h-4" />
+                </button>
+                <button
                     onClick={() => handleRejectAiRow(info.row.original)}
                     className="text-red-400 hover:text-red-300 transition-colors"
                     title="Reject AI suggestion"
@@ -1416,7 +1536,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 <CopyIdButton row={info.row.original} copiedKey={copiedRowKey} onCopy={copyRowId} />
             </div>
         ),
-    }), [handleApproveAiRow, handleRejectAiRow, copiedRowKey, copyRowId]);
+    }), [handleApproveAiRow, openAiAssessmentEditor, handleRejectAiRow, copiedRowKey, copyRowId]);
 
     const aiColumns = useMemo(
         () => columns.map(c => (c.id === 'actions' ? aiActionsColumn : c)),
@@ -1586,7 +1706,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
     }
 
     const filterReviewRows = (list: ReviewRow[]) => list.filter((a) => {
-        if (showOnlyOutdated && !hasOutdatedAssessment(a)) {
+        if (!matchesOutdatedFilter(a, outdatedFilter)) {
             return false;
         }
         if (selectedStatuses.length && !selectedStatuses.includes(a.simplified_status)) {
@@ -1630,6 +1750,7 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 forAllValues={(row) => row.packages}
                 estimateRowHeight={50}
                 hasPagination={true}
+                clampPageOnFilter
                 hoverField="texts"
                 hoverIdField="vuln_id"
                 onFilteredDataChange={onFilteredDataChange}
@@ -1716,11 +1837,20 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                             />
                         )}
 
-                        <ToggleSwitch
-                            enabled={showOnlyOutdated}
-                            setEnabled={setShowOnlyOutdated}
-                            label="Outdated"
-                        />
+                        <label className="flex items-center gap-2 text-white">
+                            Outdated
+                            <select
+                                className={`rounded border bg-sky-900 px-2 py-1 hover:bg-sky-950 ${
+                                    outdatedFilter === 'all' ? 'border-transparent' : 'border-cyan-400'
+                                }`}
+                                value={outdatedFilter}
+                                onChange={event => setOutdatedFilter(event.target.value as OutdatedFilter)}
+                            >
+                                <option className="bg-sky-900 text-white" value="all">All</option>
+                                <option className="bg-sky-900 text-white" value="only">Outdated</option>
+                                <option className="bg-sky-900 text-white" value="hide">Not outdated</option>
+                            </select>
+                        </label>
                         <div className="flex items-center mx-3">
                             <div className="border-l h-8 dark:border-neutral-300"></div>
                         </div>
@@ -1841,8 +1971,14 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 />
             )}
 
-            {showBanner && (
+            {(showBanner || refreshFailed) && (
                 <div className="sticky top-0 z-10">
+                    <MessageBanner
+                        type="error"
+                        message="Failed to refresh review data after an AI write."
+                        isVisible={refreshFailed}
+                        onClose={() => setRefreshFailed(false)}
+                    />
                     <MessageBanner
                         type={bannerType}
                         message={bannerMessage}
@@ -2066,25 +2202,58 @@ function Review({ variantId, projectId, onAssessmentChanged, onAgentContextChang
                 </ModalShell>
             )}
 
+            {aiEditingRow && (
+                <ModalShell
+                    isOpen={true}
+                    title={aiEditingRow.vuln_id}
+                    onClose={() => {
+                        if (aiEditHasChanges) setDiscardEditor('ai');
+                        else closeAiAssessmentEditor();
+                    }}
+                    closeLabel="Close AI assessment editor"
+                    closeDisabled={aiEditSaving}
+                    closeOnEscape={!aiEditSaving}
+                    closeOnBackdrop={false}
+                    size="large"
+                    contentClassName="overflow-y-auto p-6 md:p-6"
+                >
+                    <EditAiAssessment
+                        assessment={aiEditingRow}
+                        onConfirm={edits => { void handleConfirmAiEdit(edits); }}
+                        onCancel={closeAiAssessmentEditor}
+                        onFieldsChange={setAiEditHasChanges}
+                        triggerBanner={showMessage}
+                        saving={aiEditSaving}
+                        errorMessage={aiEditError}
+                    />
+                </ModalShell>
+            )}
+
             <ConfirmationModal
-                isOpen={pendingEmptyTargetEdit !== null}
+                isOpen={pendingTargetEdit?.kind === 'delete'}
                 title="Delete Assessment"
                 message="No targets remain. Saving this edit will delete the assessment. This action cannot be undone."
                 confirmText="Yes, delete"
                 cancelText="Keep editing"
                 showTitleIcon={true}
-                onConfirm={confirmEmptyTargetEdit}
-                onCancel={() => setPendingEmptyTargetEdit(null)}
+                onConfirm={confirmTargetEdit}
+                onCancel={() => setPendingTargetEdit(null)}
+            />
+
+            <ConfirmSharedAssessmentNotes
+                isOpen={pendingTargetEdit?.kind === 'share-notes'}
+                onConfirm={confirmTargetEdit}
+                onCancel={() => setPendingTargetEdit(null)}
             />
 
             <ConfirmationModal
-                isOpen={showDiscardEditConfirmation}
+                isOpen={discardEditor !== null}
                 title="Discard assessment changes?"
                 message="Your unsaved assessment changes will be lost."
                 confirmText="Discard changes"
                 cancelText="Keep editing"
                 onConfirm={discardAssessmentEdit}
-                onCancel={() => setShowDiscardEditConfirmation(false)}
+                onCancel={() => setDiscardEditor(null)}
             />
         </div>
     );

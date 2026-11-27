@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import RefreshControls from '../../src/components/RefreshControls';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
 import Operations from '../../src/handlers/operations';
+import RefreshRuns from '../../src/handlers/refreshRuns';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
 import VulnerabilityHistory from '../../src/handlers/vulnerabilityHistory';
@@ -74,6 +75,12 @@ describe('Refresh controls batch lifecycle', () => {
         const summary = jest.spyOn(VulnerabilityHistory, 'changesSince').mockResolvedValue({
             since: accepted[0].started_at!, total: 1, vulnerabilities: 1, fields: { epss_score: 1 },
         });
+        jest.spyOn(RefreshRuns, 'metadata').mockResolvedValue({
+            run_id: 'current-batch', scope: { project_id: null, variant_id: null },
+            sources: ['nvd', 'epss', 'euvd'], source_status: { nvd: 'complete', epss: 'complete', euvd: 'complete' },
+            status: 'complete', started_at: accepted[0].started_at!, finished_at: '2026-01-01T10:06:00Z',
+            summary: { total_changes: 1, changed_vulnerabilities: 1, first_enrichments: 0 },
+        });
         const fetch = jest.spyOn(globalThis, 'fetch');
         render(<MemoryRouter><RefreshControls vulnerabilities={vulnerabilities}
             getRefreshVulnerabilities={async () => vulnerabilities} onRefreshComplete={complete} /></MemoryRouter>);
@@ -106,7 +113,7 @@ describe('Refresh controls batch lifecycle', () => {
         if (status === 'done') {
             expect(summary).toHaveBeenCalledWith(accepted[0].started_at, ['nvd', 'epss', 'euvd'],
                 'current-batch', accepted.map(item => item.op_id));
-            expect(await screen.findByRole('alert')).toHaveTextContent('Refresh complete: 1 value changed');
+            expect(await screen.findByRole('alert')).toHaveTextContent('Refresh complete: 1 CVE updated.');
         } else {
             expect(summary).not.toHaveBeenCalled();
             expect(await screen.findByRole('alert')).toHaveTextContent(`partially completed: nvd ${status}`);

@@ -154,7 +154,7 @@ class TestGetMergedContextImpl:
                         "description": "proj desc",
                         "variant_id": "v1",
                         "variant_description": "var desc",
-                        "codebase_directory": {"file_id": "directory", "path": "/cache/source"},
+                        "mounts": [{"alias": "src", "file_id": "mount:src"}],
                         "environment": "linux",
                         "threat_model": "CVSS >= 7",
                         "risks": "none",
@@ -166,7 +166,7 @@ class TestGetMergedContextImpl:
             result = _get_merged_context_impl(client, "p1", "v1")
         assert "proj desc" in result
         assert "var desc" in result
-        assert "/cache/source" in result
+        assert "mount:src" in result
         assert "CVSS >= 7" in result
         assert "report.pdf" in result
         assert "codebase_source=" not in result and "codebase_path=" not in result
@@ -463,8 +463,7 @@ class TestVariantThreatModel:
 
 class TestAiContextFormGuide:
     LABELS = (
-        "Project description", "Variant description", "Codebase directory", "Create codebase directory",
-        "Refresh directory status", "Environment", "Other information", "System scope and assets",
+        "Project description", "Variant description", "Environment", "Other information", "System scope and assets",
         "Actors and access", "Entry points and data flows", "Trust boundaries", "Components",
         "Interactions", "Description / role", "Trust zone", "Interface / protocol", "Data / commands",
         "Trust boundary", "Threats", "STRIDE category", "Targets", "Risks", "Likelihood", "Impact",
@@ -518,8 +517,7 @@ class TestAiContextFormGuide:
 class TestAiContextImportSkill:
     ROOT = Path(__file__).resolve().parents[2]
     SKILL_DIR = ROOT / ".github/skills/ai-context-import"
-    FORM_LABELS = tuple(label for label in TestAiContextFormGuide.LABELS
-                        if label not in ("Create codebase directory", "Refresh directory status")) + (
+    FORM_LABELS = TestAiContextFormGuide.LABELS + (
         "Description", "Source", "Destination", "Not rated",
     )
 

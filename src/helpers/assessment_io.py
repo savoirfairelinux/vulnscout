@@ -16,6 +16,7 @@ from datetime import datetime as _dt, timezone as _tz
 from typing import TYPE_CHECKING, Any
 
 from .datetime_utils import normalize_timestamp_for_sort
+from .assessment_risk_links import MAX_SNAPSHOT_BYTES, RiskLinkError, RiskSnapshot, charge_snapshots, portable_snapshots
 
 if TYPE_CHECKING:
     from ..models.variant import Variant as _Variant
@@ -264,6 +265,10 @@ def _is_valid_v2_target(target: object) -> bool:
     if not isinstance(target, dict):
         return False
     if not isinstance(target.get("package"), str):
+        return False
+    try:
+        portable_snapshots(target.get("risk_links", []))
+    except RiskLinkError:
         return False
     return (
         isinstance(target.get("variant"), str)
@@ -549,6 +554,7 @@ def duplicate_multitarget_assessment_exists(
     impact_statement: str | None = None,
     workaround: str | None = None,
     responses: "list[str] | None" = None,
+    risk_snapshots: dict[tuple[_uuid.UUID, _uuid.UUID], list[RiskSnapshot]] | None = None,
 ) -> bool:
     """Return True when an assessment with exactly this target set already exists.
 
@@ -602,8 +608,10 @@ def duplicate_multitarget_assessment_exists(
         return False
 
     candidates = db.session.execute(
-        db.select(DBAssessment).where(DBAssessment.id.in_(candidate_ids))
-    ).scalars().all()
+        db.select(DBAssessment.id, DBAssessment.source, DBAssessment.simplified_status, DBAssessment.status_notes,
+                  DBAssessment.justification, DBAssessment.impact_statement, DBAssessment.workaround,
+                  DBAssessment.responses).where(DBAssessment.id.in_(candidate_ids))
+    ).all()
     expected_responses = sorted(str(value) for value in (responses or []))
     matching_ids = {
         assessment.id
@@ -619,19 +627,22 @@ def duplicate_multitarget_assessment_exists(
     if not matching_ids:
         return False
 
-    rows = db.session.execute(
-        db.select(
-            AssessmentTarget.assessment_id,
-            AssessmentTarget.variant_id,
-            AssessmentTarget.finding_id,
-        ).where(AssessmentTarget.assessment_id.in_(matching_ids))
-    ).all()
+    target_ids = db.select(
+        AssessmentTarget.assessment_id, AssessmentTarget.variant_id, AssessmentTarget.finding_id,
+    ).where(AssessmentTarget.assessment_id.in_(matching_ids))
+    # OpenVEX carries no snapshots. Compare membership without loading the JSON.
+    if risk_snapshots is None:
+        target_sets: dict[_uuid.UUID, set[tuple[_uuid.UUID, _uuid.UUID]]] = {}
+        for assessment_id, v, f in db.session.execute(target_ids):
+            target_sets.setdefault(assessment_id, set()).add((v, f))
+        return any(pairs == wanted for pairs in target_sets.values())
 
-    by_assessment: "dict[_uuid.UUID, set[tuple[_uuid.UUID, _uuid.UUID]]]" = {}
-    for assessment_id, v, f in rows:
-        by_assessment.setdefault(assessment_id, set()).add((v, f))
+    by_assessment: dict[_uuid.UUID, dict[tuple[_uuid.UUID, _uuid.UUID], list[RiskSnapshot]]] = {}
+    for assessment_id, v, f, links in db.session.execute(target_ids.add_columns(AssessmentTarget.risk_links)):
+        by_assessment.setdefault(assessment_id, {})[v, f] = links or []
 
-    return any(pairs == wanted for pairs in by_assessment.values())
+    expected = {pair: risk_snapshots.get(pair, []) for pair in wanted}
+    return any(pairs == expected for pairs in by_assessment.values())
 
 
 def import_statements(
@@ -833,6 +844,7 @@ def build_custom_data_export(
     from ..models.time_estimate import TimeEstimate
     from ..models.iso8601_duration import Iso8601Duration
     from ..models.variant import Variant as DBVariant
+    from .vuln_helpers import estimate_has_variant_observation
 
     handmade = DBAssessment.get_by_origin(variant_ids, origin="custom")
     pending_ai = DBAssessment.get_by_origin(variant_ids, origin="ai")
@@ -889,6 +901,7 @@ def build_custom_data_export(
                     {
                         "variant": row.variant.name if row.variant is not None else None,
                         "package": row.finding.package.string_id,
+                        **({"risk_links": row.risk_links} if row.risk_links else {}),
                     }
                     for row in target_rows
                 ],
@@ -943,13 +956,7 @@ def build_custom_data_export(
             TimeEstimate.pessimistic,
         )
         .join(_Finding, TimeEstimate.finding_id == _Finding.id)
-        .where(
-            db.or_(
-                TimeEstimate.optimistic > 0,
-                TimeEstimate.likely > 0,
-                TimeEstimate.pessimistic > 0,
-            )
-        )
+        .order_by(estimate_has_variant_observation().desc(), TimeEstimate.id)
     )
     if variant_ids is not None:
         te_query = te_query.where(TimeEstimate.variant_id.in_(variant_ids))
@@ -957,8 +964,6 @@ def build_custom_data_export(
 
     seen_vulns_te: set[tuple[str, str]] = set()
     for vid, te_variant_id, opt, lik, pes in te_rows:
-        if te_variant_id is not None:
-            variant_uuid_set.add(te_variant_id)
         variant_key = str(te_variant_id) if te_variant_id is not None else ""
         dedup_key = (vid, variant_key)
         if dedup_key in seen_vulns_te:
@@ -967,6 +972,10 @@ def build_custom_data_export(
         opt = opt or 0
         lik = lik or 0
         pes = pes or 0
+        if max(opt, lik, pes) <= 0:
+            continue
+        if te_variant_id is not None:
+            variant_uuid_set.add(te_variant_id)
         time_estimates.append({
             "vuln_id": vid,
             "variant": None,
@@ -1222,6 +1231,8 @@ def import_custom_data(
 
                 resolved_targets: list[tuple[_uuid.UUID, _uuid.UUID]] = []
                 seen_pairs: set[tuple[_uuid.UUID, _uuid.UUID]] = set()
+                snapshots: dict[tuple[_uuid.UUID, _uuid.UUID], list[RiskSnapshot]] = {}
+                remaining = MAX_SNAPSHOT_BYTES
                 for raw_target in raw_targets:
                     pkg_string = (
                         raw_target.get("package")
@@ -1238,8 +1249,20 @@ def import_custom_data(
                     assert v_id is not None and f_id is not None
 
                     pair = (v_id, f_id)
+                    try:
+                        links = portable_snapshots(raw_target.get("risk_links", []))
+                        if pair in seen_pairs and links != snapshots.get(pair, []):
+                            raise RiskLinkError("Conflicting snapshots for the same target")
+                        if pair not in seen_pairs:
+                            remaining = charge_snapshots(remaining, links)
+                    except RiskLinkError as exc:
+                        result["errors"].append({"vuln_id": vuln_name, "package": pkg_string, "error": str(exc)})
+                        resolved_targets.clear()
+                        break
                     if pair in seen_pairs:
                         continue
+                    if links:
+                        snapshots[pair] = links
                     seen_pairs.add(pair)
                     resolved_targets.append(pair)
 
@@ -1248,6 +1271,7 @@ def import_custom_data(
 
                 if duplicate_multitarget_assessment_exists(
                     resolved_targets, status=status, origin=origin, timestamp=imported_ts,
+                    risk_snapshots=snapshots,
                     simplified_status=imported_simplified_status,
                     status_notes=status_notes,
                     justification=justification,
@@ -1271,7 +1295,7 @@ def import_custom_data(
                         timestamp=imported_ts,
                         commit=True,
                     )
-                    DBAssessment.create(targets=resolved_targets, **create_kwargs)
+                    DBAssessment.create(targets=resolved_targets, risk_snapshots=snapshots, **create_kwargs)
                     result[imported_key] += 1
                 except Exception as e:
                     # A single catch-all: GroupInvariantError (targets can't
@@ -1508,8 +1532,10 @@ def import_custom_data(
                     target_variant_ids = [None]
 
             assert effort is not None
-            for target_variant_id in target_variant_ids:
-                apply_effort(record, target_variant_id, effort, log_prefix="import-custom-data")
+            effort_error = apply_effort(record, target_variant_ids, effort, log_prefix="import-custom-data")
+            if effort_error:
+                result["errors"].append({"vuln_id": vuln_id, "error": effort_error})
+                continue
             result["time_estimates_imported"] += 1
 
     if (

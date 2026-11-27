@@ -12,10 +12,11 @@ A/zlib — so two independent collections would wrongly imply the cross-product.
 import uuid
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import ForeignKey, Table, select
+from sqlalchemy import JSON, ForeignKey, Table, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..extensions import db, Base
+from ..helpers.assessment_risk_links import RiskSnapshot
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
@@ -51,6 +52,7 @@ class AssessmentTarget(Base):
     finding_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("findings.id"), primary_key=True, index=True
     )
+    risk_links: Mapped[list[RiskSnapshot] | None] = mapped_column(JSON(none_as_null=True))
 
     assessment: Mapped["Assessment"] = relationship(back_populates="target_rows")
     finding: Mapped["Finding"] = relationship(

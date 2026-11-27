@@ -9,11 +9,12 @@ import datetime
 import decimal
 import urllib.error
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
-from src.controllers import refresh_jobs as jobs
+from src.controllers import epss_db, refresh_jobs as jobs
+from src.controllers.job_context import CancelledError, JobContext
 
 
 def job_context(ids, **options):
@@ -70,16 +71,15 @@ def test_known_ids_and_refresh_helper_edge_cases(monkeypatch):
 
     monkeypatch.setattr(jobs, "DB_LOOKUP_CHUNK", 1)
     monkeypatch.setattr(jobs.db, "session", SimpleNamespace(query=lambda _column: Query()))
-    assert jobs.known_cve_ids(["CVE-2024-0001", "CVE-2024-0002"]) == ["CVE-2024-0001"]
+    assert jobs.known_vulnerability_ids(["CVE-2024-0001", "GHSA-1234-5678-9012"]) == {"CVE-2024-0001"}
 
     record = object()
     monkeypatch.setattr(jobs.db, "session", SimpleNamespace(get=MagicMock(return_value=record)))
-    monkeypatch.setattr(jobs, "get_cve_json", lambda _cve_id: {"id": "CVE-2024-0001"})
     monkeypatch.setattr(jobs, "extract_cve_details", lambda _payload: {"id": "CVE-2024-0001"})
     apply_nvd = MagicMock()
     monkeypatch.setattr(jobs, "apply_nvd_update", apply_nvd)
     monkeypatch.setattr(jobs, "apply_cvss_update", MagicMock())
-    jobs._refresh_nvd_record("CVE-2024-0001", "local", None)
+    jobs._refresh_nvd_record("CVE-2024-0001", lambda identifier: {"id": identifier})
     apply_nvd.assert_called_once()
 
     monkeypatch.setattr(jobs.db, "session", SimpleNamespace(get=MagicMock(return_value=None)))
@@ -128,7 +128,6 @@ def test_deferred_refresh_resolves_new_ids_when_it_starts(monkeypatch):
         jobs, "_scoped_vulnerability_ids",
         lambda _variant_ids: {"CVE-2024-0001", "CVE-2024-0002"},
     )
-    monkeypatch.setattr(jobs, "known_cve_ids", lambda ids: ids)
     runner = MagicMock()
     monkeypatch.setitem(jobs.REFRESH_JOBS, "epss", runner)
 
@@ -168,23 +167,36 @@ def test_refresh_nvd_record_api_and_local_paths(monkeypatch):
 
     client = MagicMock()
     client.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {"id": "CVE-2024-1"}}]})
-    monkeypatch.setattr(jobs.NVD_DB, "extract_cve_details", MagicMock(return_value={"id": "CVE-2024-1"}))
-    jobs._refresh_nvd_record("CVE-2024-1", "api", client)
+    lookup = jobs._api_nvd_lookup(client)
+    assert jobs._refresh_nvd_record("CVE-2024-1", lookup)
     apply_nvd.assert_called_once()
     apply_cvss.assert_called_once()
 
     apply_nvd.reset_mock()
     client.api_get_cve.return_value = (404, {})
-    jobs._refresh_nvd_record("CVE-2024-2", "api", client)
+    with pytest.raises(ValueError, match="HTTP 404"):
+        jobs._refresh_nvd_record("CVE-2024-2", lookup)
     apply_nvd.assert_not_called()
 
-    monkeypatch.setattr(jobs, "get_cve_json", lambda _cve_id: None)
-    jobs._refresh_nvd_record("CVE-2024-3", "local", None)
+    client.api_get_cve.return_value = (200, {"vulnerabilities": [], "totalResults": 0})
+    assert not jobs._refresh_nvd_record("CVE-2024-3", lookup)
     apply_nvd.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"vulnerabilities": None}, {"vulnerabilities": []},
+    {"vulnerabilities": [], "totalResults": 1}, {"vulnerabilities": [{"cve": {}}]},
+    {"vulnerabilities": [], "totalResults": 0, "message": "Error"},
+])
+def test_nvd_api_malformed_response_is_not_absence(payload):
+    client = MagicMock()
+    client.api_get_cve.return_value = (200, payload)
+    with pytest.raises(ValueError):
+        jobs._api_nvd_lookup(client)("CVE-2024-0001")
 
 
 def test_run_nvd_refresh_api_and_local_setup_failure(monkeypatch):
-    ctx = job_context(["CVE-2024-1", "CVE-2024-2"], mode="api")
+    ctx = job_context(["CVE-2024-0001", "CVE-2024-0002"], mode="api")
     client = MagicMock()
     monkeypatch.setattr(jobs, "NVD_DB", lambda **_kwargs: client)
     monkeypatch.setattr(jobs, "_nvd_sleep_interval", lambda: 0.0)
@@ -203,7 +215,7 @@ def test_run_nvd_refresh_api_and_local_setup_failure(monkeypatch):
 
     monkeypatch.setattr(jobs, "_get_scc_engine", MagicMock(side_effect=ValueError("missing")))
     with pytest.raises(RuntimeError, match="Failed to load local NVD database"):
-        jobs.run_nvd_refresh(job_context(["CVE-2024-1"]))
+        jobs.run_nvd_refresh(job_context(["CVE-2024-0001"]))
 
 
 def test_nvd_refresh_handles_item_errors_periodic_commits_and_cancellation(monkeypatch):
@@ -237,14 +249,14 @@ def test_apply_and_run_epss_refresh(monkeypatch):
     assert "epss_data_updated_at" not in record.update_record.call_args.kwargs
 
     client = MagicMock()
-    client.api_get_epss_batch.side_effect = [{"CVE-2024-1": {"score": "0.5"}}, RuntimeError("offline")]
+    client.api_get_epss_batch.side_effect = [{"CVE-2024-0001": {"score": "0.5"}}, RuntimeError("offline")]
     monkeypatch.setattr(jobs, "EPSS_DB", lambda: client)
     applied = MagicMock()
     monkeypatch.setattr(jobs, "_apply_epss_score", applied)
     committed = MagicMock()
     monkeypatch.setattr(jobs, "_safe_commit", committed)
     monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 1)
-    ctx = job_context(["CVE-2024-1", "CVE-2024-2"])
+    ctx = job_context(["CVE-2024-0001", "CVE-2024-0002"])
     jobs.run_epss_refresh(ctx)
     applied.assert_called_once()
     assert committed.call_count == 2
@@ -264,6 +276,44 @@ def test_epss_refresh_handles_update_errors_and_cancellation(monkeypatch):
     ctx.check_cancelled.side_effect = RuntimeError("cancelled")
     with pytest.raises(RuntimeError, match="cancelled"):
         jobs.run_epss_refresh(ctx)
+
+
+def test_epss_refresh_continues_after_exhausting_batch_retries(monkeypatch):
+    exhausted, following = "CVE-2024-0001", "CVE-2024-0002"
+    request = MagicMock(side_effect=[
+        TimeoutError("timed out")] * 3 + [{following: {"score": 0.5, "percentile": 0.7}}])
+    sleep = MagicMock()
+    record = MagicMock()
+    monkeypatch.setattr(epss_db.EPSS_DB, "_request_epss_batch", request)
+    monkeypatch.setattr(epss_db.time, "sleep", sleep)
+    monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 1)
+    monkeypatch.setattr(jobs, "_safe_commit", MagicMock())
+    monkeypatch.setattr(jobs, "_apply_epss_score", MagicMock())
+    monkeypatch.setattr(jobs, "target_result", record)
+
+    jobs.run_epss_refresh(job_context([exhausted, following]))
+
+    assert request.call_args_list == [call([exhausted])] * 3 + [call([following])]
+    first, second = [args.args[0] for args in sleep.call_args_list]
+    assert 1 <= first <= 1.25
+    assert 2 <= second <= 2.25
+    assert record.call_args_list == [call("epss", exhausted, "failed", "timed out"), call("epss", following)]
+
+
+def test_epss_refresh_cancelled_in_backoff_does_not_fail_batch(monkeypatch):
+    ctx = JobContext("test-refresh", options={"ids": ["CVE-2024-0001"]})
+    monkeypatch.setattr(ctx, "report", MagicMock())
+    request = MagicMock(side_effect=TimeoutError("timed out"))
+    record = MagicMock()
+    monkeypatch.setattr(epss_db.EPSS_DB, "_request_epss_batch", request)
+    monkeypatch.setattr(epss_db.time, "sleep", lambda _delay: ctx.request_cancel())
+    monkeypatch.setattr(jobs, "target_result", record)
+
+    with pytest.raises(CancelledError):
+        jobs.run_epss_refresh(ctx)
+
+    request.assert_called_once()
+    record.assert_not_called()
 
 
 def test_apply_and_run_ghsa_refresh(monkeypatch):

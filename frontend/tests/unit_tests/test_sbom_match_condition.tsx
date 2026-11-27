@@ -47,7 +47,7 @@ describe('SBOM match condition', () => {
         }));
     });
 
-    test('filters packages and carries matching vulnerability IDs into drill-down', async () => {
+    test('filters packages and carries the condition into drill-down', async () => {
         const requests: RequestInit[] = [];
         global.fetch = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
             requests.push(init ?? {});
@@ -72,7 +72,7 @@ describe('SBOM match condition', () => {
         expect(body.items[0].data).toMatchObject({ cvss: 9.8, cvss_min: 9.8, pending: true, new: true });
 
         fireEvent.click(screen.getByRole('button', { name: 'Show Vulnerabilities' }));
-        expect(onShowVulns).toHaveBeenCalledWith('alpha@1.0', ['CVE-HIGH']);
+        expect(onShowVulns).toHaveBeenCalledWith('alpha@1.0', 'cvss >= 7 and pending', undefined);
 
         fireEvent.change(screen.getByLabelText('Match condition'), { target: { value: 'cvss > 11' } });
         fireEvent.keyDown(screen.getByLabelText('Match condition'), { key: 'Enter' });

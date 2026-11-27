@@ -10,6 +10,8 @@ from urllib.parse import unquote
 
 from packageurl import PackageURL
 
+from .cpe import split_cpe_fields
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,10 +66,8 @@ def _purl_release_key(purl: PackageURL) -> str:
 
 
 def _cpe_version(identifier: str) -> str | None:
-    # An escaped colon belongs to its component, not to the CPE delimiter.
-    parts = re.findall(r"(?:\\.|[^:\\])*(?::|$)", identifier)
-    fields = [part[:-1] if part.endswith(":") else part for part in parts[:-1]]
-    if "".join(parts) == identifier and identifier.startswith("cpe:2.3:") and len(fields) == 13:
+    fields = split_cpe_fields(identifier)
+    if fields and identifier.startswith("cpe:2.3:") and len(fields) == 13:
         version = fields[5]
         if not version or version == "-" or any(token in {"*", "?"} for token in re.findall(r"\\.|.", version)):
             return None
@@ -77,7 +77,7 @@ def _cpe_version(identifier: str) -> str | None:
                 return None
             version += "-" + update
         return re.sub(r"\\(.)", r"\1", version)
-    if "".join(parts) == identifier and identifier.startswith("cpe:/") and 5 <= len(fields) <= 8:
+    if fields and identifier.startswith("cpe:/") and 5 <= len(fields) <= 8:
         if fields[4] in {"", "-"} or "*" in fields[4] or "?" in fields[4]:
             return None
         version = unquote(fields[4])

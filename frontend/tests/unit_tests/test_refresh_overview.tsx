@@ -33,7 +33,7 @@ const run: RefreshRun = {
     coverage: [
         { vuln_id: 'CVE-1', source: 'nvd', status: 'complete', error: null },
         { vuln_id: 'CVE-1', source: 'epss', status: 'complete', error: null },
-        { vuln_id: 'CVE-2', source: 'nvd', status: 'skipped', error: 'Not supported' },
+        { vuln_id: 'GHSA-ABCD-1234-5678', source: 'nvd', status: 'skipped', error: 'Provider requires a CVE identifier' },
     ],
     summary: { refreshed_vulnerabilities: 2, total_changes: 2, changed_vulnerabilities: 1, first_enrichments: 0 },
     changes: [{
@@ -120,7 +120,7 @@ describe('Refresh overview', () => {
         expect(screen.getByRole('table', { name: 'Refresh metadata' })).toHaveTextContent('Finished');
         await selectSection('Coverage');
         const coverage = screen.getByRole('table', { name: 'Vulnerability coverage' });
-        expect(within(coverage).getByRole('row', { name: 'CVE-2 NVD skipped Not supported' })).toBeInTheDocument();
+        expect(within(coverage).getByRole('row', { name: /GHSA-ABCD-1234-5678 NVD skipped Provider requires a CVE identifier/ })).toBeInTheDocument();
         expect(screen.getByRole('table', { name: 'Provider coverage' })).toHaveTextContent('NVD');
     });
 
@@ -264,6 +264,35 @@ describe('Refresh overview', () => {
         expect(await screen.findByText('Refresh complete: zero changes. Checked data is unchanged.')).toBeInTheDocument();
     });
 
+    test('does not imply data was checked when all targets were unsupported', async () => {
+        detail.mockResolvedValue({ ...run, coverage: run.coverage.filter(row => row.status === 'skipped'),
+            changes: [], total: 0 });
+        show();
+        await openResult();
+        expect(await screen.findByText('No provider checks were performed in this scope. No comparison baseline is available.')).toBeInTheDocument();
+        await selectSection('Overview');
+        const counts = within(screen.getByRole('table', { name: 'Distinct vulnerability counts' }));
+        for (const row of ['Targeted 1', 'Checked 0', 'Skipped 1']) {
+            expect(counts.getByRole('row', { name: row })).toBeInTheDocument();
+        }
+    });
+
+    test('shows a completed lookup with no record without implying comparison', async () => {
+        const noRecord: RefreshRun = {
+            ...run, coverage: [{ source: 'nvd', vuln_id: 'CVE-2099-1234', status: 'no_record', error: null }],
+            changes: [], total: 0,
+            summary: { ...run.summary, refreshed_vulnerabilities: 0, no_record_vulnerabilities: 1, total_changes: 0 },
+        };
+        detail.mockResolvedValue(noRecord);
+        show();
+        await openResult();
+        expect(await screen.findByText('No provider records were returned. No comparison baseline is available.')).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        await selectSection('Coverage');
+        expect(within(screen.getByRole('table', { name: 'Vulnerability coverage' }))
+            .getByRole('row', { name: /CVE-2099-1234 NVD No record/ })).toBeInTheDocument();
+    });
+
     test('shows first enrichment separately from modifications and renders long values', async () => {
         const enrichment = { ...run, summary: { ...run.summary, first_enrichments: 1 }, changes: [{
             ...run.changes[0], before: null, after: 'Long value '.repeat(1000), kind: 'first_enrichment', change_type: 'addition',
@@ -278,21 +307,32 @@ describe('Refresh overview', () => {
         expect(screen.getByText(/Long value Long value/)).toHaveClass('max-h-48');
     });
 
-    test('retains committed changes in partial/cancelled/failed runs and exposes gaps', async () => {
-        const partial: RefreshRun = { ...run, status: 'incomplete', coverage: [
+    test('retains committed changes and makes unchecked provider outcomes easy to find', async () => {
+        const partial: RefreshRun = { ...run, status: 'incomplete',
+            source_status: { nvd: 'incomplete', epss: 'incomplete' }, coverage: [
             ...run.coverage,
-            { source: 'epss', vuln_id: 'CVE-2', status: 'cancelled', error: null },
-            { source: 'nvd', vuln_id: 'CVE-3', status: 'failed', error: 'Provider unavailable' },
+            { source: 'nvd', vuln_id: 'CVE-2', status: 'skipped', error: 'Provider record unavailable' },
+            { source: 'epss', vuln_id: 'CVE-2', status: 'skipped', error: 'Provider record unavailable' },
+            { source: 'epss', vuln_id: 'CVE-3', status: 'failed', error: 'Provider request failed' },
+            { source: 'nvd', vuln_id: 'CVE-4', status: 'cancelled', error: null },
         ] };
         latest.mockResolvedValue(partial);
         detail.mockResolvedValue(partial);
         show();
         await openResult();
-        expect(await screen.findByRole('alert')).toHaveTextContent('Incomplete refresh — cancelled coverage — source failures');
+        expect(await screen.findByRole('alert')).toHaveTextContent('Run finished with incomplete coverage for NVD, EPSS.');
         expect(await screen.findByText('New description')).toBeInTheDocument();
         await selectSection('Coverage');
-        expect(within(screen.getByRole('table', { name: 'Vulnerability coverage' }))
-            .getByRole('row', { name: 'CVE-3 NVD failed Provider unavailable' })).toBeInTheDocument();
+        const targetRegion = screen.getByRole('region', { name: 'Target outcomes' });
+        expect(targetRegion).toHaveAttribute('tabindex', '0');
+        expect(targetRegion).not.toContainElement(screen.getByText('Showing unchecked targets and recorded reasons.'));
+        const outcomes = within(within(targetRegion).getByRole('table', { name: 'Vulnerability coverage' }));
+        expect(outcomes.getByRole('row', { name: 'CVE-2 NVD skipped Provider record unavailable' })).toBeInTheDocument();
+        expect(outcomes.getByRole('row', { name: 'CVE-3 EPSS failed Provider request failed' })).toBeInTheDocument();
+        expect(outcomes.getByRole('row', { name: /CVE-4 NVD cancelled/ })).toBeInTheDocument();
+        expect(outcomes.queryByRole('row', { name: /CVE-1 NVD complete/ })).not.toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: 'Show all target outcomes' }));
+        expect(outcomes.getByRole('row', { name: /CVE-1 NVD complete/ })).toBeInTheDocument();
         expect(screen.queryByText(/Refresh complete: zero changes/)).not.toBeInTheDocument();
     });
 
@@ -318,24 +358,31 @@ describe('Refresh overview', () => {
         expect(detail.mock.calls[0][2].aborted).toBe(true);
     });
 
-    test('keeps the coverage section selected when reloading popup results', async () => {
-        show();
-        await openResult();
-        await selectSection('Coverage');
-        await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reload results' }));
-        expect(await screen.findByRole('table', { name: 'Provider coverage' })).toBeInTheDocument();
-        expect(within(screen.getByRole('navigation', { name: 'Refresh result sections' }))
-            .getByRole('button', { name: /^Coverage/ })).toHaveAttribute('aria-pressed', 'true');
+    test('only offers a result retry on load error and does not reload the timeline', async () => {
+        detail.mockRejectedValueOnce(new Error('HTTP 503'));
+        show('/refresh?run=persisted-run');
+        const popup = within(screen.getByRole('dialog'));
+        expect(await popup.findByRole('alert')).toHaveTextContent('HTTP 503');
+        await userEvent.click(popup.getByRole('button', { name: 'Retry' }));
+        expect(await popup.findByText('New description')).toBeInTheDocument();
+        expect(popup.queryByRole('button', { name: /reload results|retry/i })).not.toBeInTheDocument();
+        expect(detail.mock.calls[1][1]).toEqual(detail.mock.calls[0][1]);
+        expect(list).toHaveBeenCalledTimes(1);
     });
 
-    test('server-scoped shared CVE is shown in another visible variant and reload is read-only', async () => {
+    test('counts distinct scoped targets across providers, not the current changes page', async () => {
+        detail.mockImplementation(async (_id, filters) =>
+            filters.limit === undefined ? run : { ...run, coverage: [run.coverage[0]] });
         show('/refresh?run=persisted-run', { projectId: 'project-a', variantId: 'variant-b' });
         expect(await screen.findByText('New description')).toBeInTheDocument();
         expect(detail).toHaveBeenCalledWith('persisted-run',
             { project_id: 'project-a', variant_id: 'variant-b' }, expect.any(AbortSignal));
-        await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reload results' }));
-        await waitFor(() => expect(detail.mock.calls.filter(call => call[1].limit === undefined)).toHaveLength(2));
-        expect(await screen.findByText('New description')).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: 'Coverage 2' }));
+        const targets = within(screen.getByRole('table', { name: 'Vulnerability coverage' }));
+        expect(targets.getAllByRole('row')).toHaveLength(4);
+        const providers = within(screen.getByRole('table', { name: 'Provider coverage' }));
+        expect(within(providers.getByRole('row', { name: /^NVD / })).getAllByRole('cell')[1]).toHaveTextContent('2');
+        expect(within(providers.getByRole('row', { name: /^EPSS / })).getAllByRole('cell')[1]).toHaveTextContent('1');
     });
 
     test('paginates persisted runs without opening results or loading hidden changes', async () => {
@@ -373,9 +420,9 @@ describe('Refresh overview', () => {
 
     test.each([
         ['running', /Refresh in progress.*only committed changes/],
-        ['incomplete', /Incomplete coverage.*inspect provider outcomes/],
+        ['incomplete', /Run finished with incomplete coverage for NVD/],
     ] as const)('timeline cards make %s coverage explicit without opening details', async (status, message) => {
-        list.mockResolvedValue({ runs: [{ ...run, status }], total: 1, limit: 20, offset: 0 });
+        list.mockResolvedValue({ runs: [{ ...run, status, source_status: { nvd: 'incomplete', epss: 'complete' } }], total: 1, limit: 20, offset: 0 });
         show();
         const card = await screen.findByRole('article');
         expect(within(card).getByText(message)).toBeInTheDocument();
@@ -404,7 +451,7 @@ describe('Refresh overview', () => {
             'variantIds' in scope ? scope.variantIds : undefined,
             'multiOperation' in scope ? scope.multiOperation : undefined);
         expect(enqueue).toHaveBeenCalledWith(['nvd', 'epss', 'euvd'].map(source => ({
-            kind: 'refresh', source, ids: ['CVE-new'],
+            kind: 'refresh', source, ids: source === 'euvd' ? ['CVE-new'] : ['CVE-new', 'GHSA-new'],
             options: { mode: 'local', project_id: 'project-a', ...(refreshVariant ? { variant_id: refreshVariant } : {}) },
         })));
         await waitFor(() => expect(complete).toHaveBeenCalled());
@@ -508,7 +555,7 @@ describe('Refresh overview', () => {
         await openResult();
         expect(await screen.findByText(/Coverage is incomplete\. Unchanged data cannot be concluded/)).toBeInTheDocument();
         await selectSection('Coverage');
-        expect(await screen.findByText(/This source has incomplete coverage/)).toBeInTheDocument();
+        expect(await screen.findByText(/Check operation logs; no unresolved target/)).toBeInTheDocument();
         expect(screen.queryByText(/Refresh complete: zero changes/)).not.toBeInTheDocument();
     });
 

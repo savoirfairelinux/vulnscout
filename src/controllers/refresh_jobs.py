@@ -16,27 +16,30 @@ import re
 import time
 import urllib.error
 import uuid
-from typing import Dict, List, Optional, Set, Tuple
+from collections.abc import Callable
+from typing import Dict, List, Set, Tuple
 
 from ..extensions import db
-from ..helpers.refresh_runs import add_targets, target_result, tracked_refresh
+from ..helpers.refresh_runs import (
+    NO_PROVIDER_RECORD, UNSUPPORTED_CVE_IDENTIFIER, add_targets, target_result, target_results, tracked_refresh,
+)
 from ..helpers.active_scans import active_package_ids_for_scans, active_scan_ids_for_variant
 from ..models import Finding, Observation, Scan, Vulnerability
 from .epss_db import EPSS_DB
 from .euvd_db import EUVD_DB
-from .job_context import JobContext, OperationError
+from .job_context import CancelledError, JobContext, OperationError
 from .nvd_apply import apply_cvss_update, apply_nvd_update
-from .nvd_db import NVD_DB
+from .nvd_db import NVD_DB, parse_nvd_lookup
 from .nvd_extract import extract_cve_details
 from .operation_registry import STATUS_CANCELLED, STATUS_ERROR, registry
-from .scc_engine import get_cve_json, get_engine as _get_scc_engine
+from .scc_engine import get_engine as _get_scc_engine
 from .vulnerabilities import VulnerabilitiesController
 
 EPSS_BATCH_SIZE = 100
 NVD_COMMIT_EVERY = 50
 # Cap prevents burning NVD API rate-limit quota (6 s/CVE without a key).
 MAX_CVE_IDS = 1000
-CVE_RE = re.compile(r'^CVE-\d{4}-\d{4,}$')
+CVE_RE = re.compile(r'^CVE-\d{4}-\d{4,}$', re.ASCII)
 MAX_GHSA_IDS = 500
 GHSA_RE = re.compile(r'^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
 GHSA_COMMIT_EVERY = 20
@@ -47,6 +50,7 @@ EUVD_COMMIT_EVERY = 200
 # Kept under SQLite's 999 bound-parameter limit so the "which of these exist?"
 # intersection stays an indexed ``WHERE id IN (...)`` bounded by request size.
 DB_LOOKUP_CHUNK = 500
+SKIP_BATCH_SIZE = 500
 
 
 def _nvd_sleep_interval() -> float:
@@ -66,11 +70,19 @@ def _safe_commit(label: str) -> None:
         db.session.expunge_all()
 
 
-def normalise_cve_ids(raw_ids: object) -> List[str]:
+def normalise_vulnerability_ids(raw_ids: object) -> List[str]:
     if not isinstance(raw_ids, list):
         return []
-    candidates = [c.strip().upper() for c in raw_ids if isinstance(c, str) and c.strip()]
-    return [c for c in dict.fromkeys(candidates) if CVE_RE.match(c)]
+    candidates = (c.strip().upper() for c in raw_ids if isinstance(c, str))
+    return list(dict.fromkeys(c for c in candidates if c and "\x00" not in c))
+
+
+def is_cve_id(identifier: str) -> bool:
+    return CVE_RE.fullmatch(identifier.strip().upper()) is not None
+
+
+def normalise_cve_ids(raw_ids: object) -> List[str]:
+    return [c for c in normalise_vulnerability_ids(raw_ids) if is_cve_id(c)]
 
 
 def normalise_ghsa_ids(raw_ids: object) -> List[str]:
@@ -80,14 +92,31 @@ def normalise_ghsa_ids(raw_ids: object) -> List[str]:
     return [c for c in dict.fromkeys(candidates) if GHSA_RE.match(c)]
 
 
-def known_cve_ids(cve_ids: List[str]) -> List[str]:
-    """Intersect *cve_ids* with the database in request-bounded chunks."""
+def known_vulnerability_ids(ids: List[str]) -> Set[str]:
+    """Intersect the supplied IDs with the database in bounded chunks."""
     known: Set[str] = set()
-    for start in range(0, len(cve_ids), DB_LOOKUP_CHUNK):
-        chunk = cve_ids[start:start + DB_LOOKUP_CHUNK]
+    for start in range(0, len(ids), DB_LOOKUP_CHUNK):
+        chunk = ids[start:start + DB_LOOKUP_CHUNK]
         rows = db.session.query(Vulnerability.id).filter(Vulnerability.id.in_(chunk)).all()
         known.update(row[0] for row in rows)
-    return [cve_id for cve_id in cve_ids if cve_id in known]
+    return known
+
+
+def _applicable_cve_targets(ctx: JobContext, source: str) -> tuple[list[str], int]:
+    ctx.check_cancelled()
+    ids: list[str] = ctx.options["ids"]
+    applicable: list[str] = []
+    skipped = 0
+    for start in range(0, len(ids), SKIP_BATCH_SIZE):
+        unsupported: list[str] = []
+        for identifier in ids[start:start + SKIP_BATCH_SIZE]:
+            (applicable if is_cve_id(identifier) else unsupported).append(identifier)
+        if unsupported:
+            target_results(source, unsupported, "skipped", UNSUPPORTED_CVE_IDENTIFIER)
+            _safe_commit(f"bulk {source} refresh unsupported targets")
+            skipped += len(unsupported)
+        ctx.check_cancelled()
+    return applicable, skipped
 
 
 def _scoped_vulnerability_ids(variant_ids: List[str]) -> Set[str]:
@@ -135,16 +164,16 @@ def run_deferred_refresh(ctx: JobContext) -> None:
 
     source = str(ctx.options["source"])
     existing_ids = set(ctx.options.get("exclude_ids", []))
-    scoped_ids = _scoped_vulnerability_ids(list(ctx.options["variant_ids"]))
+    discovered = sorted(_scoped_vulnerability_ids(list(ctx.options["variant_ids"])) - existing_ids)
     if source == "ghsa":
-        ids = normalise_ghsa_ids(sorted(scoped_ids - existing_ids))
+        ids = normalise_ghsa_ids(discovered)
+    elif source == "euvd":
+        ids = normalise_cve_ids(discovered)
     else:
-        ids = normalise_cve_ids(sorted(scoped_ids - existing_ids))
-        if source == "epss":
-            ids = known_cve_ids(ids)
-        if source == "nvd" and ctx.options.get("mode") == "api" and len(ids) > MAX_CVE_IDS:
+        ids = discovered
+        if source == "nvd" and ctx.options.get("mode") == "api" and sum(map(is_cve_id, ids)) > MAX_CVE_IDS:
             raise OperationError(
-                f"nvd refresh accepts at most {MAX_CVE_IDS} identifiers in api mode"
+                f"nvd refresh accepts at most {MAX_CVE_IDS} CVE identifiers in api mode"
             )
 
     if not ids:
@@ -161,72 +190,66 @@ def run_deferred_refresh(ctx: JobContext) -> None:
 # NVD
 # ---------------------------------------------------------------------------
 
-def _refresh_nvd_record(cve_id: str, mode: str, nvd: Optional[NVD_DB]) -> bool:
-    now = datetime.datetime.now(datetime.timezone.utc)
-    if mode == "api" and nvd is not None:
-        status_code, payload = nvd.api_get_cve(cve_id, max_retries=2)
-        if status_code != 200 or not payload.get("vulnerabilities"):
-            print(f"[bulk NVD refresh] {cve_id}: status={status_code}, skipping", flush=True)
-            return False
-        details = NVD_DB.extract_cve_details(payload["vulnerabilities"][0]["cve"])
-    else:
-        cve_obj = get_cve_json(cve_id)
-        if cve_obj is None:
-            print(
-                f"[bulk NVD refresh] {cve_id}: not found in local NVD database, skipping",
-                flush=True,
-            )
-            return False
-        details = extract_cve_details(cve_obj)
-
+def _refresh_nvd_record(cve_id: str, lookup: Callable[[str], dict | None]) -> bool:
+    cve = lookup(cve_id)
+    if cve is None:
+        return False
     record = db.session.get(Vulnerability, cve_id)
-    if record is not None:
-        apply_nvd_update(record, details, now)
-        apply_cvss_update(record, details, db)
-        return True
-    return False
+    if record is None:
+        raise ValueError("Vulnerability no longer exists in VulnScout")
+    details = extract_cve_details(cve)
+    apply_nvd_update(record, details, datetime.datetime.now(datetime.timezone.utc))
+    apply_cvss_update(record, details, db)
+    return True
+
+
+def _api_nvd_lookup(nvd: NVD_DB) -> Callable[[str], dict | None]:
+    def lookup(cve_id: str) -> dict | None:
+        status_code, payload = nvd.api_get_cve(cve_id, max_retries=2)
+        if status_code != 200:
+            raise ValueError(f"NVD lookup failed (HTTP {status_code})")
+        return parse_nvd_lookup(payload, cve_id)
+    return lookup
 
 
 @tracked_refresh("nvd")
 def run_nvd_refresh(ctx: JobContext) -> None:
     """Refresh NVD/CVSS metadata from the local FKIE database or the REST API."""
-    cve_ids: List[str] = list(ctx.options["ids"])
+    cve_ids, skipped = _applicable_cve_targets(ctx, "nvd")
     mode = ctx.options.get("mode", "local")
-    total = len(cve_ids)
-    ctx.report(0, total, f"Starting bulk NVD refresh: 0/{total}")
-    if not total:
+    total = len(cve_ids) + skipped
+    ctx.report(skipped, total, f"Starting bulk NVD refresh: {skipped}/{total}")
+    if not cve_ids:
+        ctx.check_cancelled()
         return
 
-    nvd: Optional[NVD_DB] = None
     sleep_between = 0.0
     if mode == "api":
         sleep_between = _nvd_sleep_interval()
-        nvd = NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY"))
+        lookup = _api_nvd_lookup(NVD_DB(nvd_api_key=os.getenv("NVD_API_KEY")))
     else:
-        # Pre-warm the shared engine once so per-CVE lookups reuse the cache.
+        # Verify the local snapshot once before looking up the targets.
         try:
-            _get_scc_engine(progress=lambda message: ctx.report(0, total, message))
+            engine = _get_scc_engine(progress=lambda message: ctx.report(skipped, total, message))
+            lookup = engine.nvd_snapshot_lookup()
         except Exception as exc:
             raise OperationError("Failed to load local NVD database") from exc
 
-    done = 0
-    for cve_id in cve_ids:
+    for done, cve_id in enumerate(cve_ids, start=1):
         if ctx.is_cancelled():
             _safe_commit("bulk NVD refresh cancel")
             ctx.check_cancelled()
         try:
-            checked = _refresh_nvd_record(cve_id, mode, nvd)
-            target_result("nvd", cve_id, "complete" if checked else "skipped",
-                          None if checked else "Provider record unavailable")
+            checked = _refresh_nvd_record(cve_id, lookup)
+            target_result("nvd", cve_id, "complete" if checked else NO_PROVIDER_RECORD)
         except Exception as exc:
             target_result("nvd", cve_id, "failed", str(exc)[:500])
             print(f"[bulk NVD refresh] error for {cve_id}: {exc}", flush=True)
 
-        done += 1
-        ctx.report(done, total, f"NVD refresh: {done}/{total} ({cve_id})")
+        ctx.report(done + skipped, total, f"NVD refresh: {done + skipped}/{total} ({cve_id})")
         if done % NVD_COMMIT_EVERY == 0:
             _safe_commit("bulk NVD refresh")
-        if mode == "api" and done < total:
+        if mode == "api" and done < len(cve_ids):
             time.sleep(sleep_between)
 
     _safe_commit("bulk NVD refresh final")
@@ -255,25 +278,29 @@ def _apply_epss_score(cve_id: str, score: object, now: datetime.datetime) -> Non
 @tracked_refresh("epss")
 def run_epss_refresh(ctx: JobContext) -> None:
     """Refresh EPSS scores in batches of :data:`EPSS_BATCH_SIZE`."""
-    cve_ids: List[str] = list(ctx.options["ids"])
-    total = len(cve_ids)
-    ctx.report(0, total, f"Starting bulk EPSS refresh: 0/{total}")
-    if not total:
+    cve_ids, skipped = _applicable_cve_targets(ctx, "epss")
+    total = len(cve_ids) + skipped
+    ctx.report(skipped, total, f"Starting bulk EPSS refresh: {skipped}/{total}")
+    if not cve_ids:
+        ctx.check_cancelled()
         return
 
     epss = EPSS_DB()
     now = datetime.datetime.now(datetime.timezone.utc)
-    processed = 0
+    processed = skipped
 
-    for start in range(0, total, EPSS_BATCH_SIZE):
+    for start in range(0, len(cve_ids), EPSS_BATCH_SIZE):
         chunk = cve_ids[start:start + EPSS_BATCH_SIZE]
         if ctx.is_cancelled():
             _safe_commit("bulk EPSS refresh cancel")
             ctx.check_cancelled()
 
         try:
-            results = epss.api_get_epss_batch(chunk)
+            results = epss.api_get_epss_batch(chunk, check_cancelled=ctx.check_cancelled)
+        except CancelledError:
+            raise
         except Exception as exc:
+            ctx.check_cancelled()
             for cve_id in chunk:
                 target_result("epss", cve_id, "failed", str(exc)[:500])
             print(f"[bulk EPSS refresh] batch error: {exc}", flush=True)
@@ -282,17 +309,17 @@ def run_epss_refresh(ctx: JobContext) -> None:
             ctx.report(processed, total, f"EPSS refresh: {processed}/{total}")
             continue
 
+        ctx.check_cancelled()
         for cve_id in chunk:
-            result = results.get(cve_id)
-            if result:
+            if cve_id in results:
                 try:
-                    _apply_epss_score(cve_id, result["score"], now)
+                    _apply_epss_score(cve_id, results[cve_id]["score"], now)
                     target_result("epss", cve_id)
                 except Exception as exc:
                     target_result("epss", cve_id, "failed", str(exc)[:500])
                     print(f"[bulk EPSS refresh] error updating {cve_id}: {exc}", flush=True)
             else:
-                target_result("epss", cve_id, "skipped", "Provider record unavailable")
+                target_result("epss", cve_id, NO_PROVIDER_RECORD)
             processed += 1
 
         _safe_commit("bulk EPSS refresh")

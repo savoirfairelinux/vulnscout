@@ -16,10 +16,12 @@ from ..models.assessment import Assessment, STATUS_TO_SIMPLIFIED
 from ..models.assessment_target import AssessmentTarget
 from ..models.package import Package
 from ..models.sbom_package import SBOMReimportRequiredError
+from ..models.variant import lock_scan_membership
 from ..extensions import db as _db
 from ..extensions import write_lock as _write_lock
 from ..helpers.active_scans import active_sbom_scan_ids_for_variant, package_snapshots_for_sbom_scans
 from ..helpers.history_source import history_source
+from ..helpers.scan_configuration import read_scan_configuration
 from ..helpers.scan_filters import filter_scannable_packages
 from ..helpers.scan_runs import tool_scan
 from ..controllers.operation_registry import new_queue_id
@@ -43,7 +45,14 @@ from flask.cli import with_appcontext
 # Shared helpers for vuln scan commands
 # ---------------------------------------------------------------------------
 
-def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
+def _scan_configuration(project_name: str) -> dict:
+    try:
+        return read_scan_configuration(project_name)
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(f"Unable to read scan configuration: {exc}") from exc
+
+
+def _resolve_active_packages(variant_uuid: uuid.UUID, project_name: str | None = None) -> list[Package]:
     """Resolve active SBOM-scoped package snapshots for a variant, raising on failure."""
     echo("Resolving active packages…", role="info")
     latest_ids = active_sbom_scan_ids_for_variant(variant_uuid)
@@ -55,7 +64,44 @@ def _resolve_active_packages(variant_uuid: uuid.UUID) -> list[Package]:
         raise click.ClickException(str(exc)) from exc
     if not packages:
         raise click.ClickException("No packages found for variant")
-    return filter_scannable_packages(packages)
+    options = _scan_configuration(project_name) if project_name is not None else {}
+    return filter_scannable_packages(packages, **options)
+
+
+class _CLIGrypeFilterContext:
+    def __init__(self, options: dict):
+        self.options = options
+
+    def log(self, message: str) -> None:
+        echo(message, role="info")
+
+
+@click.command("filter-grype-scan", cls=Command)
+@click.option("--project", required=True)
+@click.option("--variant", default=None)
+@click.option("--stage", type=click.Choice(["sbom", "matches"]), required=True)
+@click.option("--scanned-sbom", type=click.Path(exists=True, dir_okay=False),
+              help="Filtered CycloneDX file supplied to Grype (matches stage).")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@with_appcontext
+def filter_grype_scan_command(project: str, variant: str | None, stage: str, scanned_sbom: str | None,
+                              path: str) -> None:
+    """Apply wizard scan scope to a Grype input or result."""
+    from ..controllers.scan_jobs import _deduplicate_cyclonedx, _filter_grype_matches, _variant_sbom_packages
+
+    if stage == "matches":
+        if scanned_sbom is None:
+            raise click.UsageError("--scanned-sbom is required for the matches stage")
+        _filter_grype_matches(_CLIGrypeFilterContext({}), path, scanned_sbom)
+        return
+
+    project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
+    options = _scan_configuration(project_obj.name)
+    sbom_packages = _variant_sbom_packages(variant_obj.id)
+    if not sbom_packages and not options["exclude_native"]:
+        return
+    ctx = _CLIGrypeFilterContext(options)
+    _deduplicate_cyclonedx(ctx, path, exclude_kernel=False, exclude_native=options["exclude_native"])
 
 
 @click.command("new-scan-run-id", cls=Command)
@@ -128,7 +174,7 @@ def nvd_scan_command(project: str, variant: str | None, mode: str, run_id: str |
     project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
     variant_uuid = variant_obj.id
 
-    packages = _resolve_active_packages(variant_uuid)
+    packages = _resolve_active_packages(variant_uuid, project_obj.name)
 
     engine = None
     if mode == "local":
@@ -254,7 +300,7 @@ def osv_scan_command(project: str, variant: str | None, run_id: str | None = Non
 
     osv = OSVClient()
 
-    packages = _resolve_active_packages(variant_uuid)
+    packages = _resolve_active_packages(variant_uuid, project_obj.name)
 
     purl_to_packages: dict[str, list[Package]] = {}
     for pkg in packages:
@@ -263,7 +309,7 @@ def osv_scan_command(project: str, variant: str | None, run_id: str | None = Non
             if purl_str.startswith("pkg:"):
                 purl_to_packages.setdefault(purl_str, []).append(pkg)
 
-    if not purl_to_packages:
+    if packages and not purl_to_packages:
         raise click.ClickException(
             "No packages with valid PURL identifiers"
         )
@@ -761,6 +807,7 @@ class _SccBulkWriter:
         ):
             for chunk in spool.chunks(self._SELECT_CHUNK):
                 with _write_lock():
+                    lock_scan_membership([self._variant_uuid])
                     # Remove our observations and reconcile their assessments
                     # atomically, so failing scans cannot preserve each other.
                     finding_ids = _db.select(AssessmentTarget.finding_id).where(
@@ -822,6 +869,7 @@ class _SccBulkWriter:
 
         for chunk in self._created_finding_ids.chunks(self._SELECT_CHUNK):
             with _write_lock():
+                lock_scan_membership([self._variant_uuid])
                 _db.session.execute(
                     _db.delete(Observation).where(
                         Observation.scan_id == self._scan_id,
@@ -883,7 +931,7 @@ def sbom_cve_check_scan_command(project: str, variant: str | None, run_id: str |
     project_obj, variant_obj = resolve_project_variant(project, variant, create=True)
     variant_uuid = variant_obj.id
 
-    packages = _resolve_active_packages(variant_uuid)
+    packages = _resolve_active_packages(variant_uuid, project_obj.name)
     echo(f"Resolved {len(packages)} active packages", role="info")
 
     echo("Loading local CVE databases (NVD-FKIE + CVEList) and building index…", role="info")

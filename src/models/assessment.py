@@ -1,15 +1,18 @@
 # Copyright (C) 2026 Savoir-faire Linux, Inc.
 # SPDX-License-Identifier: GPL-3.0-only
 
+import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from sqlalchemy import orm, Text, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, relationship, selectinload, mapped_column
 
 from ..extensions import db, Base
 from ..helpers.assessment_io import parse_imported_timestamp
+from ..helpers.assessment_risk_links import RiskModelIndex, RiskSnapshot, describe_links
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.verbose import verbose
 from .vulnerability import Vulnerability
@@ -26,6 +29,8 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 VALID_STATUS_OPENVEX = ["under_investigation", "not_affected", "affected", "fixed"]
+APPROVAL_EDIT_FIELDS = ("status_notes", "justification", "impact_statement", "workaround")
+APPROVAL_CONTENT_FIELDS = ("status", *APPROVAL_EDIT_FIELDS)
 VALID_STATUS_CDX_VEX = ["in_triage", "false_positive", "not_affected", "exploitable",
                         "resolved", "resolved_with_pedigree"]
 STATUS_CDX_VEX_TO_OPENVEX = {
@@ -220,7 +225,11 @@ class Assessment(Base):
         return [(t.variant_id, t.finding_id) for t in self.target_rows]
 
     @property
-    def target_pairs(self) -> "list[dict[str, str]]":
+    def target_pairs(self) -> "list[dict[str, Any]]":
+        return self._target_pairs(None, {})
+
+    def _target_pairs(self, link_scope: set[uuid.UUID] | None,
+                      indexes: dict[uuid.UUID, RiskModelIndex]) -> "list[dict[str, Any]]":
         """Every target as a serialisable ``(variant_id, package)`` pair.
 
         ``packages`` and ``variant_ids`` are two independent flattened sets, so
@@ -231,7 +240,7 @@ class Assessment(Base):
         must read this instead.  Ordered like :attr:`packages`, and empty for a
         DTO, which has no stored targets.
         """
-        pairs: list[dict[str, str]] = []
+        pairs: list[dict[str, Any]] = []
         try:
             for target in self._sorted_target_rows():
                 if target.finding is None or target.finding.package is None:
@@ -240,6 +249,13 @@ class Assessment(Base):
                     "variant_id": str(target.variant_id),
                     "package": target.finding.package.string_id,
                 })
+                if link_scope is not None and target.variant_id not in link_scope:
+                    pairs[-1]["risk_links_out_of_scope"] = True
+                elif target.risk_links:
+                    if target.variant_id not in indexes:
+                        context = target.variant.context
+                        indexes[target.variant_id] = RiskModelIndex(context.stride_model if context else None)
+                    pairs[-1]["risk_links"] = describe_links(target.risk_links, indexes[target.variant_id])
         except Exception as e:
             verbose(f"[Assessment.target_pairs {self.id!r}] {e}")
         return pairs
@@ -364,6 +380,8 @@ class Assessment(Base):
         return None
 
     def get_status_cdx_vex(self) -> Optional[str]:
+        if self.status == "not_affected" and self.justification == "component_not_present":
+            return "false_positive"
         if self.status in VALID_STATUS_CDX_VEX:
             return self.status
         if self.status in STATUS_OPENVEX_TO_CDX_VEX:
@@ -449,20 +467,32 @@ class Assessment(Base):
     # Serialisation
     # ==================================================================
 
-    def to_dict(self) -> dict:
+    def approval_fingerprint(self) -> str:
+        values = [getattr(self, field) or "" for field in APPROVAL_CONTENT_FIELDS]
+        pairs = sorted((str(t.variant_id), str(t.finding_id)) for t in self.target_rows)
+        fields: list[Any] = [values, self.responses or [], pairs]
+        links = sorted((str(t.variant_id), str(t.finding_id), t.risk_links) for t in self.target_rows if t.risk_links)
+        if links:
+            fields.append(links)
+        content = json.dumps(fields, separators=(",", ":"), sort_keys=True)
+        return hashlib.sha256(content.encode()).hexdigest()
+
+    def to_dict(self, *, link_scope: set[uuid.UUID] | None = None,
+                link_indexes: dict[uuid.UUID, RiskModelIndex] | None = None) -> dict:
         ts = ensure_utc_iso(self.timestamp)
         variant_ids = sorted({str(t.variant_id) for t in self.target_rows})
         return {
             "id": str(self.id),
             "source": self.source or "",
             "origin": self.origin or "sbom",
+            **({"approval_fingerprint": self.approval_fingerprint()} if self.origin == "ai" else {}),
             "vuln_id": self.vuln_id,
             "packages": list(self.packages),
             "variant_id": str(self.single_variant_id) if self.single_variant_id else None,
             "variant_ids": variant_ids,
             # packages x variant_ids is the cross-product, which a sparse
             # target set is not; consumers pairing the two must read this.
-            "targets": self.target_pairs,
+            "targets": self._target_pairs(link_scope, link_indexes if link_indexes is not None else {}),
             "timestamp": ts,
             "last_update": ts or "",
             "status": self.status or "",
@@ -547,8 +577,7 @@ class Assessment(Base):
         if self.justification:
             cdx_justif = self.get_justification_cdx_vex()
 
-        if self.status == "not_affected" and self.justification == "component_not_present":
-            cdx_state = "false_positive"
+        if self.status == "not_affected" and cdx_state == "false_positive":
             cdx_justif = ""
 
         cdx_response = list(self.responses or [])
@@ -632,6 +661,7 @@ class Assessment(Base):
         responses: Optional[list] = None,
         timestamp: Optional[datetime] = None,
         commit: bool = True,
+        risk_snapshots: dict[tuple[uuid.UUID, uuid.UUID], list[RiskSnapshot]] | None = None,
     ) -> "Assessment":
         """Create a new assessment, persist it and return it.
 
@@ -677,7 +707,8 @@ class Assessment(Base):
         db.session.add(assessment)
         for target_variant_id, target_finding_id in resolved_targets:
             assessment.target_rows.append(AssessmentTarget(
-                variant_id=target_variant_id, finding_id=target_finding_id))
+                variant_id=target_variant_id, finding_id=target_finding_id,
+                risk_links=(risk_snapshots or {}).get((target_variant_id, target_finding_id)) or None))
         if commit:
             db.session.commit()
         else:

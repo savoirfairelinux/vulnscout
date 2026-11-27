@@ -3,7 +3,6 @@ import { createColumnHelper, Row } from '@tanstack/react-table'
 import { lazy, Suspense, useMemo, useState, useRef, useEffect, useCallback } from "react";
 import TableGeneric from "../components/TableGeneric";
 import FilterOption from "../components/FilterOption";
-import ToggleSwitch from "../components/ToggleSwitch";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faC, faCircleQuestion, faCircleInfo, faBook, faDiagramProject } from '@fortawesome/free-solid-svg-icons';
 import { useDocUrl } from '../helpers/useDocUrl';
@@ -36,15 +35,14 @@ type PackageRow = Package & {
 type Props = {
     packages: Package[];
     vulnerabilities?: Vulnerability[];
-    onShowVulns?: (packageId: string, matchingVulnerabilityIds?: string[]) => void;
+    onShowVulns?: (packageId: string, matchCondition?: string, packageVariantIds?: string[]) => void;
     variantId?: string;
     projectId?: string;
     variantIds?: string[];
     compareVariantId?: string;
     operation?: string;
     dataRevision?: number;
-    onLoadOutdatedPackages?: () => Promise<Package[]>;
-    outdatedScopeKey?: string;
+    includeOutdated?: boolean;
     preferenceScopeKey?: string;
     onAgentContextChange?: (context: AgentViewContext) => void;
 };
@@ -67,8 +65,8 @@ const sortVunerabilitiesFn = (rowA: Row<Package>, rowB: Row<Package>, ignore: st
 const fuseKeys = ['id', 'name', 'version', 'cpe', 'purl', 'versionMetadataSearch']
 const emptyVulnerabilities: Vulnerability[] = [];
 
-function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, onLoadOutdatedPackages,
-    outdatedScopeKey, preferenceScopeKey = 'unscoped', onAgentContextChange, variantId, projectId, variantIds,
+function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onShowVulns, includeOutdated = false,
+    preferenceScopeKey = 'unscoped', onAgentContextChange, variantId, projectId, variantIds,
     compareVariantId, operation, dataRevision }: Readonly<Props>) {
     const docUrl = useDocUrl("interactive-mode.html#sbom-table");
     const preferenceKey = `vulnscout.tables.packages.${encodeURIComponent(preferenceScopeKey)}`;
@@ -86,10 +84,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     const [selectedSources, setSelectedSources] = useLocalStorageState<string[]>(`${preferenceKey}.sources`, []);
     const [selectedSbomDocs, setSelectedSbomDocs] = useLocalStorageState<string[]>(`${preferenceKey}.sbomDocuments`, []);
     const [selectedSuppliers, setSelectedSuppliers] = useLocalStorageState<string[]>(`${preferenceKey}.suppliers`, []);
-    const [showOnlyOutdated, setShowOnlyOutdated] = useLocalStorageState(`${preferenceKey}.outdatedOnly`, false);
-    const [packagesWithOutdated, setPackagesWithOutdated] = useState<Package[] | null>(null);
-    const [outdatedLoading, setOutdatedLoading] = useState(false);
-    const [outdatedLoadError, setOutdatedLoadError] = useState('');
     const [matchCondition, setMatchCondition] = useLocalStorageState(`${preferenceKey}.matchCondition`, '');
     const [appliedMatchCondition, setAppliedMatchCondition] = useLocalStorageState(`${preferenceKey}.appliedMatchCondition`, '');
     const [matchingVulnerabilityIds, setMatchingVulnerabilityIds] = useState<string[] | null>(null);
@@ -229,20 +223,20 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         return () => { cancelled = true; };
     }, [showDependencyColumn, variantId, projectId, variantIdsKey, compareVariantId, operation, dataRevision]);
 
-    const matchingVulnerabilityCounts = useMemo(() => {
+    const matchedFindingCount = useMemo(() => {
         const counts = new Map<string, number>();
-        if (matchingVulnerabilityIds === null) return counts;
-
-        const matchingIds = new Set(matchingVulnerabilityIds);
+        const matchingIds = new Set(matchingVulnerabilityIds ?? []);
         vulnerabilities
             .filter(vulnerability => matchingIds.has(vulnerability.id))
             .forEach(vulnerability => {
-                vulnerability.packages_current.forEach(packageId => {
+                (includeOutdated ? vulnerability.packages : vulnerability.packages_current).forEach(packageId => {
                     counts.set(packageId, (counts.get(packageId) ?? 0) + 1);
                 });
             });
-        return counts;
-    }, [matchingVulnerabilityIds, vulnerabilities]);
+        return (pkg: Package) => pkg.inventoryVariantIds
+            ? (pkg.findingVulnerabilityIds ?? []).filter(id => matchingIds.has(id)).length
+            : counts.get(pkg.id) ?? 0;
+    }, [matchingVulnerabilityIds, vulnerabilities, includeOutdated]);
 
     const sbom_docs_list = useMemo(() => packages.reduce((acc: string[], pkg) => {
         for (const doc of pkg.sbom_documents) {
@@ -278,31 +272,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         return () => { cancelled = true; };
     }, [appliedMatchCondition, vulnerabilities]);
 
-    // Discard historical rows from the previous project/variant scope so an
-    // enabled outdated filter immediately fetches the new scope.
-    useEffect(() => {
-        setPackagesWithOutdated(null);
-        setOutdatedLoadError('');
-    }, [outdatedScopeKey]);
-
-    useEffect(() => {
-        if (!showOnlyOutdated || packagesWithOutdated !== null || !onLoadOutdatedPackages) return;
-        let cancelled = false;
-        setOutdatedLoading(true);
-        setOutdatedLoadError('');
-        onLoadOutdatedPackages()
-            .then(loaded => {
-                if (!cancelled) setPackagesWithOutdated(loaded);
-            })
-            .catch(() => {
-                if (!cancelled) setOutdatedLoadError('Unable to load outdated findings');
-            })
-            .finally(() => {
-                if (!cancelled) setOutdatedLoading(false);
-            });
-        return () => { cancelled = true; };
-    }, [showOnlyOutdated, packagesWithOutdated, onLoadOutdatedPackages, outdatedScopeKey]);
-
     const applyMatchCondition = () => {
         const condition = matchCondition.trim();
         setMatchConditionError('');
@@ -319,7 +288,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
         setAppliedMatchCondition('');
         setMatchingVulnerabilityIds(null);
         setMatchConditionError('');
-        setShowOnlyOutdated(false);
         setVisibleColumns(defaultVisibleColumns);
     }
 
@@ -539,7 +507,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 header: () => <div className="flex items-center justify-center">Vulnerabilities</div>,
                 cell: info => {
                 const value = info.getValue();
-                const matchedCount = matchingVulnerabilityCounts.get(info.row.original.id);
+                const matchedCount = matchedFindingCount(info.row.original);
                 return (
                     <div className="flex items-center justify-center gap-1 h-full text-center">
                     {matchingVulnerabilityIds !== null ? (
@@ -631,15 +599,8 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                         <button
                             className="bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg"
                             onClick={() => {
-                                const packageRow = info.getValue();
-                                const packageId = packageRow.id;
-                                if (matchingVulnerabilityIds) {
-                                    onShowVulns?.(packageId, matchingVulnerabilityIds);
-                                } else if (packageRow.findingVulnerabilityIds?.length) {
-                                    onShowVulns?.(packageId, packageRow.findingVulnerabilityIds);
-                                } else {
-                                    onShowVulns?.(packageId);
-                                }
+                                const { id, inventoryVariantIds } = info.getValue();
+                                onShowVulns?.(id, matchConditionError ? undefined : appliedMatchCondition || undefined, inventoryVariantIds);
                             }}
                             >
                             Show Vulnerabilities
@@ -650,7 +611,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 size: 200
             })
         ]
-    }, [onShowVulns, matchingVulnerabilityIds, matchingVulnerabilityCounts, dependencyError, compilerError, compilerDocuments]);
+    }, [onShowVulns, appliedMatchCondition, matchConditionError, matchingVulnerabilityIds, matchedFindingCount, dependencyError, compilerError, compilerDocuments]);
 
     const columns = useMemo(() => {
         return allColumns.filter(col => {
@@ -662,19 +623,8 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
     }, [allColumns, visibleColumns, columnDisplayNames]);
 
     const filteredPackages = useMemo(() => {
-        const availablePackages = showOnlyOutdated
-            ? (packagesWithOutdated ?? packages)
-            : packages;
-        let matchedPackageIds: Set<string> | null = null;
-        if (matchingVulnerabilityIds !== null) {
-            const matchingIds = new Set(matchingVulnerabilityIds);
-            matchedPackageIds = new Set(vulnerabilities
-                .filter(vulnerability => matchingIds.has(vulnerability.id))
-                .flatMap(vulnerability => vulnerability.packages_current));
-        }
-        return availablePackages.filter((el) => {
-            if (showOnlyOutdated ? !el.outdated : el.outdated) return false;
-            if (matchedPackageIds && !matchedPackageIds.has(el.id)) return false;
+        return packages.filter((el) => {
+            if (matchingVulnerabilityIds !== null && matchedFindingCount(el) === 0) return false;
             if (selectedSources.length && !selectedSources.some(src => el.source.includes(src))) {
                 return false;
             }
@@ -686,7 +636,7 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
             }
             return true;
         });
-    }, [packages, packagesWithOutdated, vulnerabilities, showOnlyOutdated, matchingVulnerabilityIds, selectedSources, selectedSbomDocs, selectedSuppliers]);
+    }, [packages, matchingVulnerabilityIds, matchedFindingCount, selectedSources, selectedSbomDocs, selectedSuppliers]);
 
     // Counts live in the row data so an active sort re-runs when they arrive.
     const tableRows = useMemo<PackageRow[]>(() => {
@@ -718,14 +668,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 compareVariantId={compareVariantId} operation={operation} dataRevision={dataRevision}
                 packageId={selectedDependencyPackage} onClose={() => setSelectedDependencyPackage(null)} />
         </Suspense>}
-        {showOnlyOutdated && outdatedLoading && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40" role="status" aria-live="polite">
-                <div className="flex flex-col items-center gap-3 text-white">
-                    <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin" aria-hidden="true"></div>
-                    <span className="text-sm font-semibold">Loading outdated packages…</span>
-                </div>
-            </div>
-        )}
         {matchConditionError && (
             <MessageBanner
                 type="error"
@@ -734,14 +676,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 onClose={() => setMatchConditionError('')}
             />
         )}
-                {outdatedLoadError && (
-                    <MessageBanner
-                        type="error"
-                        message={outdatedLoadError}
-                        isVisible={true}
-                        onClose={() => setOutdatedLoadError('')}
-                    />
-                )}
         <div className="rounded-md mb-4 p-2 bg-sky-800 text-white w-full flex flex-row items-center gap-2 flex-wrap">
             <ExplicitSearchInput
                 id="package-search"
@@ -867,12 +801,6 @@ function TablePackages({ packages, vulnerabilities = emptyVulnerabilities, onSho
                 options={sbom_docs_list}
                 selected={selectedSbomDocs}
                 setSelected={setSelectedSbomDocs}
-            />
-
-            <ToggleSwitch
-                enabled={showOnlyOutdated}
-                setEnabled={setShowOnlyOutdated}
-                label="Outdated"
             />
 
             <div className="ml-auto flex items-center gap-2 relative">

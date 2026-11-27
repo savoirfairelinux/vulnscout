@@ -14,19 +14,27 @@ type VariantContextData = {
 type VariantContext = VariantContextData & {
     variant_id: string;
     files?: ContextFile[];
-    codebase_directory?: Pick<CodebaseDirectory, 'file_id' | 'path'> | null;
     editor: VariantEditorData;
 };
 
-type CodebaseDirectory = {
-    file_id: 'directory';
-    path: string | null;
-    status: 'not_created' | 'ready' | 'missing' | 'unreadable' | 'unavailable';
-    message: string;
-    file_count: number | null;
-    directory_count: number | null;
-};
 type Rating = 'low' | 'medium' | 'high' | null;
+
+/** A host folder attached read-only to a variant; agents browse it with `file_id`. */
+type HostMount = {
+    attachment_id: string;
+    approval_revision: string;
+    alias: string;
+    file_id: string;
+    host_path: string;
+    created_at: string | null;
+    status: 'available' | 'unavailable';
+    message: string;
+};
+
+type HostMountList = {
+    helper: { available: boolean; message: string | null };
+    mounts: HostMount[];
+};
 
 type StrideComponent = { id: string; name: string; description: string; trust_zone: string };
 
@@ -121,6 +129,7 @@ type MergedContext = ProjectContext & VariantContext;
 /** One variant's context, as used by the import/export file format. */
 type VariantEntry = {
     variant_name: string;
+    context_configured?: boolean;
     variant_description: string | null;
     environment: string | null;
     other_info: string | null;
@@ -175,7 +184,7 @@ export type {
     AiDraftConflict,
     AiContextDraft,
     ImportSource,
-    CodebaseDirectory,
+    HostMountList,
 };
 
 /** Rejected variant save; `fields` maps field paths to validation messages. */
@@ -275,12 +284,23 @@ class Context {
         return jsonOrThrow<MergedContext>(res, 'Failed to load context');
     }
 
-    static async getDirectory(variantId: string, create = false): Promise<CodebaseDirectory> {
+    static async listMounts(variantId: string): Promise<HostMountList> {
         const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/directory`,
-            { mode: 'cors', method: create ? 'POST' : 'GET' }
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/mounts`,
+            { mode: 'cors' }
         );
-        return jsonOrThrow<CodebaseDirectory>(res, 'Failed to load codebase directory');
+        return jsonOrThrow<HostMountList>(res, 'Failed to load attached folders');
+    }
+
+    /** Detaches a folder; resolves to the helper cleanup warning, if any. */
+    static async detachMount(variantId: string, alias: string, revision: string): Promise<string | null> {
+        const res = await fetch(
+            `${import.meta.env.VITE_API_URL}/api/variants/${encodeURIComponent(variantId)}/context/mounts/${encodeURIComponent(alias)}`
+                + `?approval_revision=${encodeURIComponent(revision)}`,
+            { mode: 'cors', method: 'DELETE' }
+        );
+        const body = await jsonOrThrow<{ warning?: string | null }>(res, 'Failed to detach folder');
+        return body.warning ?? null;
     }
 
     static async getProject(projectId: string): Promise<ProjectContext> {

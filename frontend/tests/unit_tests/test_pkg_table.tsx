@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import "@testing-library/jest-dom";
 import { describe, test, expect, jest } from '@jest/globals';
@@ -7,7 +7,7 @@ expect.extend(matchers);
 
 import Packages, { type Package } from "../../src/handlers/packages";
 import TablePackages from '../../src/pages/TablePackages';
-import Vulnerabilities from '../../src/handlers/vulnerabilities';
+import Vulnerabilities, { type Vulnerability } from '../../src/handlers/vulnerabilities';
 
 beforeAll(() => {
     global.ResizeObserver = class implements ResizeObserver {
@@ -173,6 +173,27 @@ describe('Packages Table', () => {
         }
     });
 
+    test.each([false, true])('renders nullable package versions without merging IDs (Outdated: %s)', async (outdated) => {
+        const fetch = jest.spyOn(global, 'fetch').mockResolvedValue({
+            json: async () => [
+                { id: 'unversioned@None', name: 'unversioned', version: null, outdated },
+                { id: 'unversioned@', name: 'unversioned', version: '', outdated },
+            ],
+        } as Response);
+        try {
+            const result = await Packages.list(undefined, 'project', undefined, undefined, undefined, undefined, outdated);
+            expect(result.map(pkg => pkg.id)).toEqual(['unversioned@None', 'unversioned@']);
+            render(<TablePackages packages={result} includeOutdated={outdated} />);
+            const names = await screen.findAllByRole('cell', { name: outdated ? 'unversioned Outdated' : 'unversioned' });
+            expect(names).toHaveLength(2);
+            for (const name of names) {
+                expect(within(name.closest('tr')!).getAllByRole('cell')[1].textContent).toBe('—');
+            }
+        } finally {
+            fetch.mockRestore();
+        }
+    });
+
     test('render headers with empty array', async () => {
         // ARRANGE
         render(<TablePackages packages={[]} />);
@@ -235,7 +256,7 @@ describe('Packages Table', () => {
         expect(copy).not.toHaveBeenCalled();
         expect(screen.queryByText('Copied')).toBeNull();
         await user.click(row.getByRole('button', { name: 'Show Vulnerabilities' }));
-        expect(showVulns).toHaveBeenCalledWith(pkg.id);
+        expect(showVulns).toHaveBeenCalledWith(pkg.id, undefined, undefined);
         copy.mockRestore();
     });
 
@@ -374,75 +395,15 @@ describe('Packages Table', () => {
         expect(screen.queryByRole('button', {name: /severity/i})).toBeNull();
     })
 
-    test('outdated toggle is off by default and loads historical finding rows', async () => {
-        const activePackages = packages.map(pkg => pkg.id === 'aaabbbccc@1.0.0'
-            ? {...pkg, variants: ['Variant A']}
-            : pkg);
-        const outdatedPackage: Package = {
-            ...packages[0],
-            id: 'aaabbbccc@0.9.0',
-            version: '0.9.0',
-            variants: ['Variant A'],
-            outdated: true,
-            findingIds: ['finding-old'],
-            findingVulnerabilityIds: ['CVE-2026-0001'],
-        };
-        let finishLoading: (packages: Package[]) => void = () => undefined;
-        const loadOutdatedPackages = jest.fn<() => Promise<Package[]>>().mockImplementation(() =>
-            new Promise(resolve => { finishLoading = resolve; })
-        );
-        render(<TablePackages packages={activePackages} onLoadOutdatedPackages={loadOutdatedPackages} />);
-
-        const user = userEvent.setup();
-        const outdatedToggle = screen.getByRole('button', {name: 'Show Outdated'});
-        expect(outdatedToggle.getAttribute('aria-pressed')).toBe('false');
-        expect(screen.queryByRole('cell', {name: /^0\.9\.0$/})).toBeNull();
-
-        await user.click(outdatedToggle);
-
-        expect((await screen.findByRole('status')).textContent).toContain('Loading outdated packages…');
-        finishLoading([...activePackages, outdatedPackage]);
-
-        await waitFor(() => {
-            expect(loadOutdatedPackages).toHaveBeenCalledTimes(1);
-            expect(screen.queryByRole('status')).toBeNull();
-            expect(screen.getByRole('cell', {name: /^0\.9\.0$/})).toBeTruthy();
-            expect(screen.getAllByText('Outdated').length).toBeGreaterThanOrEqual(2);
-            expect(screen.queryByRole('cell', {name: /^1\.0\.0$/})).toBeNull();
-            expect(screen.queryByRole('cell', {name: /^2\.0\.0$/})).toBeNull();
-        });
-    })
-
-    test('reloads outdated rows when the project or variant scope changes', async () => {
-        const user = userEvent.setup();
-        const firstOutdated = {...packages[0], id: 'old-a@1', name: 'old-a', outdated: true};
-        const secondOutdated = {...packages[0], id: 'old-b@1', name: 'old-b', outdated: true};
-        const firstLoader = jest.fn<() => Promise<Package[]>>().mockResolvedValue([firstOutdated]);
-        const secondLoader = jest.fn<() => Promise<Package[]>>().mockResolvedValue([secondOutdated]);
-        const view = render(
-            <TablePackages
-                packages={packages}
-                onLoadOutdatedPackages={firstLoader}
-                outdatedScopeKey="variant-a"
-            />
-        );
-
-        await user.click(screen.getByRole('button', {name: 'Show Outdated'}));
-        expect(await screen.findByText('old-a')).toBeTruthy();
-
-        view.rerender(
-            <TablePackages
-                packages={packages}
-                onLoadOutdatedPackages={secondLoader}
-                outdatedScopeKey="variant-b"
-            />
-        );
-
-        expect(await screen.findByText('old-b')).toBeTruthy();
-        await waitFor(() => expect(screen.queryByText('old-a')).toBeNull());
-        expect(firstLoader).toHaveBeenCalledTimes(1);
-        expect(secondLoader).toHaveBeenCalledTimes(1);
-    })
+    test('shared historical mode displays both current and superseded SBOM rows', () => {
+        const outdated: Package = { ...packages[0], id: 'old@0.9.0', name: 'old', version: '0.9.0', outdated: true };
+        const view = render(<TablePackages packages={packages} />);
+        expect(screen.queryByText('old')).toBeNull();
+        view.rerender(<TablePackages packages={[...packages, outdated]} includeOutdated />);
+        expect(screen.getByText('old')).toBeTruthy();
+        expect(screen.getByText('Outdated')).toBeTruthy();
+        expect(screen.getAllByRole('cell', { name: /^2\.0\.0$/ }).length).toBeGreaterThan(0);
+    });
 
     test('sorting by name', async () => {
         // ARRANGE
@@ -617,8 +578,6 @@ describe('Packages Table', () => {
         const cveFinderCheckbox = await screen.getByRole('checkbox', { name: /cve-finder/i });
         await user.click(cveFinderCheckbox);
 
-        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
-
         // ACT: Click reset filters
         const resetBtn = await screen.getByRole('button', { name: /reset filters/i });
         await user.click(resetBtn);
@@ -626,7 +585,6 @@ describe('Packages Table', () => {
         // ASSERT: All packages should be visible again
         await waitFor(() => {
             expect(screen.getAllByRole('cell', { name: /aaabbbccc/ }).length).toBeGreaterThan(0);
-            expect(screen.getByRole('button', { name: 'Show Outdated' }).getAttribute('aria-pressed')).toBe('false');
         });
     })
 
@@ -647,20 +605,45 @@ describe('Packages Table', () => {
         expect(cpeId).toBeTruthy();
     })
 
-    test('show vulnerabilities button calls onShowVulns', async () => {
-        // ARRANGE
-        const mockOnShowVulns = jest.fn();
-        render(<TablePackages packages={packages} onShowVulns={mockOnShowVulns} />);
-
+    test('package drill-down passes the match condition separately from package findings', async () => {
+        const onShowVulns = jest.fn();
+        const matchCondition = jest.spyOn(Vulnerabilities, 'matchCondition').mockResolvedValue(['CVE-1']);
+        const pkg = { ...packages[0], inventoryVariantIds: ['variant'], findingVulnerabilityIds: ['CVE-1'] };
+        const vulnerabilities = [{ id: 'CVE-1', packages_current: [pkg.id] } as Vulnerability];
+        render(<TablePackages packages={[pkg]} vulnerabilities={vulnerabilities} onShowVulns={onShowVulns} />);
         const user = userEvent.setup();
 
-        // ACT: Click show vulnerabilities button
-        const showVulnsButtons = await screen.getAllByRole('button', { name: /show vulnerabilities/i });
-        await user.click(showVulnsButtons[0]);
+        const showVulns = () => screen.getByRole('button', { name: /show vulnerabilities/i });
+        await user.click(showVulns());
+        expect(onShowVulns).toHaveBeenLastCalledWith(pkg.id, undefined, ['variant']);
 
-        // ASSERT
-        expect(mockOnShowVulns).toHaveBeenCalledWith('aaabbbccc@1.0.0');
+        fireEvent.change(screen.getByLabelText('Match condition'), { target: { value: 'cvss >= 7' } });
+        await user.click(screen.getByRole('button', { name: 'Search match condition' }));
+        await waitFor(() => expect(matchCondition).toHaveBeenCalledWith('cvss >= 7', vulnerabilities));
+        await user.click(showVulns());
+        expect(onShowVulns).toHaveBeenLastCalledWith(pkg.id, 'cvss >= 7', ['variant']);
+        matchCondition.mockRestore();
     })
+
+    test('counts historical matches separately for rows sharing a package ID', async () => {
+        const current = { ...packages[0], inventoryVariantIds: ['v1'], findingVulnerabilityIds: ['CVE-1'] };
+        const historical = { ...current, outdated: true, inventoryVariantIds: ['v2'], findingVulnerabilityIds: ['CVE-2', 'CVE-3'] };
+        const vulnerabilities = [
+            { id: 'CVE-1', packages: [current.id], packages_current: [current.id] },
+            { id: 'CVE-2', packages: [current.id], packages_current: [] },
+            { id: 'CVE-3', packages: [current.id], packages_current: [] },
+        ] as Vulnerability[];
+        const matchCondition = jest.spyOn(Vulnerabilities, 'matchCondition').mockResolvedValue(['CVE-1', 'CVE-2', 'CVE-3']);
+        try {
+            render(<TablePackages packages={[current, historical]} vulnerabilities={vulnerabilities} includeOutdated />);
+            fireEvent.change(screen.getByLabelText('Match condition'), { target: { value: 'cvss >= 7' } });
+            fireEvent.click(screen.getByRole('button', { name: 'Search match condition' }));
+            expect(await screen.findByLabelText('1 vulnerabilities match this condition')).toBeTruthy();
+            expect(screen.getByLabelText('2 vulnerabilities match this condition')).toBeTruthy();
+        } finally {
+            matchCondition.mockRestore();
+        }
+    });
 
     const mockDependencyFetch = () => jest.spyOn(global, 'fetch').mockImplementation(async input => {
         const url = new URL(String(input));
@@ -1049,9 +1032,8 @@ describe('Packages Table', () => {
             view.unmount();
 
             const outdatedPackage: Package = { ...packages[1], id: 'xxxyyyzzz@1.0.0', version: '1.0.0', outdated: true };
-            window.localStorage.setItem('vulnscout.tables.packages.dependency-states.outdatedOnly', 'true');
-            render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1" packages={packages}
-                onLoadOutdatedPackages={async () => [...packages, outdatedPackage]} />);
+            render(<TablePackages preferenceScopeKey="dependency-states" variantId="v1"
+                packages={[outdatedPackage]} includeOutdated />);
             expect(await screen.findByTitle('Dependencies are only available for packages of active scans')).toBeTruthy();
             expect(screen.queryByRole('button', { name: /Explore dependencies for/ })).toBeNull();
         } finally {

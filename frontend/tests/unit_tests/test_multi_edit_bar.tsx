@@ -18,7 +18,9 @@ describe('MultiEditBar', () => {
             found_by: ['test'],
             datasource: 'test',
             packages: ['pkg1'],
-            packages_current: [],
+            packages_current: ['pkg1'],
+            assessment_targets_by_variant: { v1: ['pkg1'] },
+            effort_variant_ids: ['variant-1'],
             urls: [],
             texts: [],
             severity: {
@@ -51,7 +53,9 @@ describe('MultiEditBar', () => {
             found_by: ['test'],
             datasource: 'test',
             packages: ['pkg2'],
-            packages_current: [],
+            packages_current: ['pkg2'],
+            assessment_targets_by_variant: { v1: ['pkg2'] },
+            effort_variant_ids: ['variant-1'],
             urls: [],
             texts: [],
             severity: {
@@ -301,12 +305,11 @@ describe('MultiEditBar', () => {
         expect(true).toBe(true);
     });
 
-    test('addAssessment success path: processes assessments and triggers success banner', async () => {
+    test('bulk status submits only exact current targets in the selected variants', async () => {
         const mockTriggerBanner = jest.fn();
         const mockAppendAssessment = jest.fn();
         const mockPatchVuln = jest.fn();
         const mockResetVulns = jest.fn();
-        fetchMock.mockResponseOnce(JSON.stringify([])); // Variants.listByVuln for vuln-1
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessments: [{
@@ -323,6 +326,13 @@ describe('MultiEditBar', () => {
 
         const props = {
             ...mockProps,
+            vulnerabilities: [{
+                ...mockVulnerabilities[0],
+                packages: ['pkg@1', 'pkg@2', 'pkg@3'],
+                packages_current_by_variant: { first: ['pkg@2', 'pkg@2::Supplier'], second: ['pkg@3'] },
+                assessment_targets_by_variant: { first: ['pkg@2'], second: ['pkg@3'], sibling: ['pkg@1'] },
+            }],
+            variantIds: ['first', 'second'],
             selectedVulns: ['vuln-1'],
             triggerBanner: mockTriggerBanner,
             appendAssessment: mockAppendAssessment,
@@ -346,21 +356,37 @@ describe('MultiEditBar', () => {
             );
         });
         expect(mockAppendAssessment).toHaveBeenCalled();
-        expect(mockPatchVuln).toHaveBeenCalled();
+        expect(mockPatchVuln).not.toHaveBeenCalled();
         expect(mockResetVulns).toHaveBeenCalledTimes(1);
+        const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+        expect(body.current_only).toBe(true);
+        expect(body.assessments[0].targets).toEqual([
+            { variant_id: 'first', package: 'pkg@2' },
+            { variant_id: 'second', package: 'pkg@3' },
+        ]);
+    });
+
+    test('bulk status rejects a historical-only row before writing assessments', async () => {
+        const triggerBanner = jest.fn();
+        const { getByText } = render(<MultiEditBar
+            {...mockProps}
+            vulnerabilities={[{ ...mockVulnerabilities[0], packages_current: [], assessment_targets_by_variant: {} }]}
+            selectedVulns={['vuln-1']}
+            triggerBanner={triggerBanner}
+        />);
+        await act(async () => { getByText('Change status').click(); });
+        const select = document.querySelector('[name="new_assessment_status"]') as HTMLSelectElement;
+        fireEvent.change(select, { target: { value: 'affected' } });
+        await act(async () => { getByText('Add assessment').click(); });
+
+        expect(triggerBanner).toHaveBeenCalledWith('No current package targets for: vuln-1', 'error');
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 
     test('saveTimeEstimation success path: updates vulns and triggers success banner', async () => {
         const mockTriggerBanner = jest.fn();
         const mockPatchVuln = jest.fn();
         const mockResetVulns = jest.fn();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            {
-                id: 'variant-1',
-                name: 'variant-a',
-                project_id: 'project-1'
-            }
-        ]));
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             vulnerabilities: [{
@@ -399,7 +425,74 @@ describe('MultiEditBar', () => {
             );
         });
         expect(mockPatchVuln).toHaveBeenCalled();
+        const [id, applyEffort] = mockPatchVuln.mock.calls[0];
+        const refreshed = { ...mockVulnerabilities[0], assessments: [{ id: 'from-refresh' }] };
+        const patched = applyEffort(refreshed);
+        expect(id).toBe(refreshed.id);
+        expect(patched.assessments).toEqual(refreshed.assessments);
+        expect(patched.effort.optimistic.formatAsIso8601()).toBe('PT1H');
         expect(mockResetVulns).toHaveBeenCalledTimes(1);
+    });
+
+    test.each([
+        ['union', ['first', 'third']],
+        ['difference', ['first']],
+    ])('bulk effort in %s updates only the historical row’s evidence variants', async (operation, evidence) => {
+        const estimates = { first: 'PT1H', second: 'PT1H', third: 'PT1H', sibling: 'PT1H' };
+        fetchMock.mockResponse(async request => {
+            if (request.method !== 'PATCH') {
+                return JSON.stringify(Object.keys(estimates).map(id => ({ id, name: id, project_id: 'p1' })));
+            }
+            const { vulnerabilities } = await request.json() as {
+                vulnerabilities: { variant_id: keyof typeof estimates; effort: { likely: string } }[];
+            };
+            for (const { variant_id, effort } of vulnerabilities) estimates[variant_id] = effort.likely;
+            return JSON.stringify({ status: 'success', vulnerabilities: [], count: vulnerabilities.length });
+        });
+        const triggerBanner = jest.fn();
+        const { getByText, getByPlaceholderText } = render(<MultiEditBar
+            {...mockProps}
+            vulnerabilities={[{
+                ...mockVulnerabilities[0],
+                packages_current_by_variant: {},
+                packages_status_by_variant: { first: ['old@1'], third: ['older@1'] },
+                effort_variant_ids: evidence,
+            }]}
+            selectedVulns={['vuln-1']}
+            projectId="p1"
+            variantIds={['first', 'second', 'third']}
+            multiOperation={operation}
+            triggerBanner={triggerBanner}
+        />);
+        await act(async () => { getByText('Change time estimate').click(); });
+        fireEvent.input(getByPlaceholderText(/shortest estimate/), { target: { value: '1h' } });
+        fireEvent.input(getByPlaceholderText(/balanced estimate/), { target: { value: '2h' } });
+        fireEvent.input(getByPlaceholderText(/longest estimate/), { target: { value: '3h' } });
+        await act(async () => { getByText('Save estimation').click(); });
+
+        expect(triggerBanner).toHaveBeenCalledWith(expect.stringContaining('Successfully updated'), 'success');
+        expect(estimates).toEqual({
+            first: 'PT2H', second: 'PT1H', third: operation === 'union' ? 'PT2H' : 'PT1H', sibling: 'PT1H',
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    test('bulk effort rejects a mixed selection before sending any writes', async () => {
+        const triggerBanner = jest.fn();
+        const { getByText, getByPlaceholderText } = render(<MultiEditBar
+            {...mockProps}
+            vulnerabilities={[mockVulnerabilities[0], { ...mockVulnerabilities[1], effort_variant_ids: [] }]}
+            selectedVulns={['vuln-1', 'vuln-2']}
+            triggerBanner={triggerBanner}
+        />);
+        await act(async () => { getByText('Change time estimate').click(); });
+        fireEvent.input(getByPlaceholderText(/shortest estimate/), { target: { value: '1h' } });
+        fireEvent.input(getByPlaceholderText(/balanced estimate/), { target: { value: '2h' } });
+        fireEvent.input(getByPlaceholderText(/longest estimate/), { target: { value: '3h' } });
+        await act(async () => { getByText('Save estimation').click(); });
+
+        expect(triggerBanner).toHaveBeenCalledWith('No time estimate targets for: vuln-2', 'error');
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 
     test('addAssessment error path: triggers error banner with error details', async () => {
@@ -491,13 +584,6 @@ describe('MultiEditBar', () => {
 
     test('saveTimeEstimation error path: triggers error banner with error details', async () => {
         const mockTriggerBanner = jest.fn();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            {
-                id: 'variant-1',
-                name: 'variant-a',
-                project_id: 'project-1'
-            }
-        ]));
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'error',
             errors: [{ error: 'invalid duration' }]
@@ -529,13 +615,6 @@ describe('MultiEditBar', () => {
 
     test('saveTimeEstimation error path: triggers error banner with HTTP status when no errors array', async () => {
         const mockTriggerBanner = jest.fn();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            {
-                id: 'variant-1',
-                name: 'variant-a',
-                project_id: 'project-1'
-            }
-        ]));
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'fail'
         }), { status: 500 });
@@ -566,13 +645,6 @@ describe('MultiEditBar', () => {
 
     test('saveTimeEstimation catch: triggers error banner on network failure', async () => {
         const mockTriggerBanner = jest.fn();
-        fetchMock.mockResponseOnce(JSON.stringify([
-            {
-                id: 'variant-1',
-                name: 'variant-a',
-                project_id: 'project-1'
-            }
-        ]));
         fetchMock.mockRejectOnce(new Error('Network error'));
 
         const props = {
@@ -668,11 +740,10 @@ describe('MultiEditBar', () => {
         });
     });
 
-    test('addAssessment with variantId sends correct batch without listByVuln call', async () => {
+    test('addAssessment sends only the selected variant target', async () => {
         const mockTriggerBanner = jest.fn();
         const mockAppendAssessment = jest.fn();
         const mockPatchVuln = jest.fn();
-        // Only 1 fetch: the batch POST (no listByVuln)
         fetchMock.mockResponseOnce(JSON.stringify([
             { id: 'v-abc', name: 'machine-image', project_id: 'p1' }
         ])); // Variants.listAll for panel display
@@ -693,6 +764,10 @@ describe('MultiEditBar', () => {
 
         const props = {
             ...mockProps,
+            vulnerabilities: [{
+                ...mockVulnerabilities[0],
+                assessment_targets_by_variant: { v1: ['pkg1'], 'v-abc': ['pkg1'] },
+            }],
             selectedVulns: ['vuln-1'],
             variantId: 'v-abc',
             triggerBanner: mockTriggerBanner,
@@ -718,15 +793,10 @@ describe('MultiEditBar', () => {
         });
     });
 
-    test('addAssessment sends variant_ids when listByVuln returns results', async () => {
+    test('addAssessment uses the current target from the project-scoped row', async () => {
         const mockTriggerBanner = jest.fn();
         const mockAppendAssessment = jest.fn();
         const mockPatchVuln = jest.fn();
-        // listByVuln returns one variant → one item with variant_ids
-        fetchMock.mockResponseOnce(JSON.stringify([
-            { id: 'v1', name: 'default', project_id: 'p1' },
-            { id: 'foreign-v', name: 'foreign', project_id: 'p2' },
-        ])); // Variants.listByVuln for vuln-1
         fetchMock.mockResponseOnce(JSON.stringify({
             status: 'success',
             assessments: [{
@@ -766,13 +836,12 @@ describe('MultiEditBar', () => {
                 'success'
             );
         });
-        // The batch request body should include the complete variant set.
         const batchCall = fetchMock.mock.calls.find((c: any[]) =>
             typeof c[0] === 'string' && c[0].includes('/api/assessments/batch')
         ) as any[];
         expect(batchCall).toBeDefined();
         const body = JSON.parse(batchCall[1].body);
-        expect(body.assessments[0].variant_ids).toEqual(['v1']);
+        expect(body.assessments[0].targets).toEqual([{ variant_id: 'v1', package: 'pkg1' }]);
     });
 
     test('addAssessment intersection mode creates one item for both variants', async () => {
@@ -799,6 +868,11 @@ describe('MultiEditBar', () => {
 
         const props = {
             ...mockProps,
+            vulnerabilities: [{
+                ...mockVulnerabilities[0],
+                packages_current: ['pkg1', 'pkg2'],
+                assessment_targets_by_variant: { 'v-cmp': ['pkg1'], 'v-base': ['pkg2'] },
+            }],
             selectedVulns: ['vuln-1'],
             variantId: 'v-cmp',
             baseVariantId: 'v-base',
@@ -829,10 +903,13 @@ describe('MultiEditBar', () => {
         expect(batchCall).toBeDefined();
         const body = JSON.parse(batchCall[1].body);
         expect(body.assessments).toHaveLength(1);
-        expect(body.assessments[0].variant_ids).toEqual(['v-cmp', 'v-base']);
+        expect(body.assessments[0].targets).toEqual([
+            { variant_id: 'v-cmp', package: 'pkg1' },
+            { variant_id: 'v-base', package: 'pkg2' },
+        ]);
     });
 
-    // ---- addAssessment: errors array and catch paths (using variantId to bypass listByVuln) ----
+    // ---- addAssessment: errors array and catch paths with a selected variant ----
 
     test('addAssessment error path: shows errors array message when batch returns errors (variantId set)', async () => {
         const mockTriggerBanner = jest.fn();

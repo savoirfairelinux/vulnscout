@@ -28,12 +28,15 @@ jest.mock('ae-cvss-calculator', () => {
 });
 
 import Vulnerabilities, {
+  type ComparisonScope,
   buildStatusSummary,
+  patchAssessments,
   getTopStatusSummaryLabel,
   isVulnerabilityActive,
   getStatusSortIndex,
   isActiveStatus,
 } from '../../src/handlers/vulnerabilities';
+import type { Assessment } from '../../src/handlers/assessments';
 
 // Utility to build raw vulnerability JSON objects returned by backend
 const rawVuln = (overrides: any = {}) => ({
@@ -70,6 +73,28 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     fetchMock.resetMocks();
   });
 
+  test('match status uses the newest assessment within the selected evidence', async () => {
+    const assessments = [
+      { id: '1', status: 'affected', timestamp: '2026-01-01', variant_id: 'selected',
+        packages: ['pkg@2'], targets: [{ variant_id: 'selected', package: 'pkg@2' }] },
+      { id: '2', status: 'fixed', timestamp: '2026-02-01', variant_id: 'selected',
+        packages: ['pkg@1'], targets: [{ variant_id: 'selected', package: 'pkg@1' }] },
+      { id: '3', status: 'not_affected', timestamp: '2026-03-01', variant_id: null,
+        variant_ids: ['other-project', 'selected'], packages: ['pkg@2', 'other@1'],
+        targets: [{ variant_id: 'other-project', package: 'pkg@2' }, { variant_id: 'selected', package: 'other@1' }] },
+    ] as Assessment[];
+    fetchMock.mockResponseOnce(JSON.stringify([rawVuln({ packages_current_by_variant: { selected: ['pkg@2'] } })]));
+    const [current] = await Vulnerabilities.list('selected');
+    fetchMock.mockResponse(JSON.stringify({ matching_ids: [] }));
+    await Vulnerabilities.matchCondition('fixed', [{ ...current, assessments }]);
+    await Vulnerabilities.matchCondition('fixed', [{
+      ...current, assessments, packages_status_by_variant: { selected: ['pkg@1', 'pkg@2'] },
+    }]);
+    const facts = fetchMock.mock.calls.slice(1).map(([, request]) => JSON.parse(request?.body as string).items[0].data);
+    expect(facts[0]).toMatchObject({ affected: true, fixed: false, ignored: false });
+    expect(facts[1]).toMatchObject({ affected: false, fixed: true, ignored: false });
+  });
+
   test('list with compareVariantId and operation sets compare query params', async () => {
     fetchMock.mockResponseOnce(JSON.stringify([rawVuln()]));
     const vulns = await Vulnerabilities.list('variant-1', undefined, 'variant-2', 'difference');
@@ -79,6 +104,30 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     expect(calledUrl.searchParams.get('compare_variant_id')).toBe('variant-2');
     expect(calledUrl.searchParams.get('operation')).toBe('difference');
     expect(calledUrl.searchParams.get('format')).toBe('compact');
+  });
+
+  test('list opts into outdated vulnerabilities without changing the default query', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify([rawVuln({
+      packages_status_by_variant: { 'variant-1': ['pkg@1.0.0', 'pkg@2.0.0'] },
+      assessment_targets_by_variant: { 'variant-1': ['pkg@2.0.0'] },
+      effort_variant_ids: ['variant-1'],
+    })]));
+    const [vuln] = await Vulnerabilities.list(
+      'variant-1', undefined, undefined, undefined, undefined, undefined, undefined, true,
+    );
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.searchParams.get('include_outdated')).toBe('true');
+    expect(vuln.packages_status_by_variant).toEqual({
+      'variant-1': ['pkg@1.0.0', 'pkg@2.0.0'],
+    });
+    expect(vuln.assessment_targets_by_variant).toEqual({ 'variant-1': ['pkg@2.0.0'] });
+    expect(vuln.effort_variant_ids).toEqual(['variant-1']);
+
+    fetchMock.resetMocks();
+    fetchMock.mockResponseOnce(JSON.stringify([rawVuln()]));
+    await Vulnerabilities.list('variant-1');
+    const defaultUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(defaultUrl.searchParams.has('include_outdated')).toBe(false);
   });
 
   test('parses compact records and preserves explicit attack vectors', async () => {
@@ -99,6 +148,33 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     expect(vuln.texts).toEqual([]);
     expect(vuln.urls).toEqual([]);
     expect(vuln.severity.cvss[0].attack_vector).toBe('ADJACENT');
+  });
+
+  test.each<[ComparisonScope, Record<string, string>]>([
+    [{ baseVariantId: 'base-1', operation: 'intersection' }, {
+      variant_id: 'base-1', compare_variant_id: 'compare-1', operation: 'intersection', project_id: 'project-1',
+    }],
+    [{ variantIds: ['v1', 'v2', 'v3'], multiOperation: 'union' }, {
+      variant_ids: 'v1,v2,v3', project_id: 'project-1', operation: 'union',
+    }],
+  ])('historical list, search and details use the same comparison scope', async (comparison, params) => {
+    fetchMock.mockResponseOnce(JSON.stringify({ matches: {} }));
+    fetchMock.mockResponseOnce(JSON.stringify(rawVuln()));
+    fetchMock.mockResponseOnce(JSON.stringify([]));
+    const compareId = 'baseVariantId' in comparison ? 'compare-1' : undefined;
+    await Vulnerabilities.searchDescriptionTerms(
+      ['CVE-TEST-1'], ['historical'], compareId, 'project-1', undefined, true, comparison,
+    );
+    await Vulnerabilities.getDetails('CVE-TEST-1', compareId, 'project-1', undefined, comparison, true);
+    await Vulnerabilities.list(
+      comparison.baseVariantId, 'project-1', compareId, comparison.operation,
+      comparison.variantIds, comparison.multiOperation, undefined, true,
+    );
+    for (const [request] of fetchMock.mock.calls) {
+      const url = new URL(request as string);
+      url.searchParams.delete('format');
+      expect(Object.fromEntries(url.searchParams)).toEqual({ include_outdated: 'true', ...params });
+    }
   });
 
   test('preserves unscored CVSS metadata in compact records', async () => {
@@ -144,16 +220,21 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     expect(details?.severity.cvss[0].attack_vector).toBe('LOCAL');
   });
 
-  test('getDetails requests a scoped full vulnerability', async () => {
+  test.each([false, true])('list and details keep the selected project and variant (historical: %s)', async (historical) => {
     fetchMock.mockResponseOnce(JSON.stringify(rawVuln()));
+    fetchMock.mockResponseOnce(JSON.stringify([]));
 
-    const details = await Vulnerabilities.getDetails('CVE-TEST-1', 'variant-1', 'project-1');
+    const details = await Vulnerabilities.getDetails('CVE-TEST-1', 'variant-1', 'project-1', undefined, undefined, historical);
+    await Vulnerabilities.list('variant-1', 'project-1', undefined, undefined, undefined, undefined, undefined, historical);
 
     expect(details?.details_loaded).toBe(true);
-    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
-    expect(calledUrl.pathname).toContain('/api/vulnerabilities/CVE-TEST-1');
-    expect(calledUrl.searchParams.get('variant_id')).toBe('variant-1');
-    expect(calledUrl.searchParams.has('project_id')).toBe(false);
+    const urls = fetchMock.mock.calls.map(([url]) => new URL(url as string));
+    expect(urls.map(url => url.pathname)).toEqual(['/api/vulnerabilities/CVE-TEST-1', '/api/vulnerabilities']);
+    for (const { searchParams } of urls) {
+      expect(searchParams.get('variant_id')).toBe('variant-1');
+      expect(searchParams.get('project_id')).toBe('project-1');
+      expect(searchParams.get('include_outdated')).toBe(historical ? 'true' : null);
+    }
   });
 
   test('getDetails rejects non-success responses with the status', async () => {
@@ -164,13 +245,13 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     );
   });
 
-  test('searchDescriptionTerms posts IDs and terms in variant scope', async () => {
+  test.each([false, true])('searchDescriptionTerms preserves the variant and project (historical: %s)', async (historical) => {
     fetchMock.mockResponseOnce(JSON.stringify({
       matches: { kernel: ['CVE-TEST-1', 42], overflow: [] },
     }));
 
     const matches = await Vulnerabilities.searchDescriptionTerms(
-      ['CVE-TEST-1'], ['kernel', 'overflow'], 'variant-1', 'project-1',
+      ['CVE-TEST-1'], ['kernel', 'overflow'], 'variant-1', 'project-1', undefined, historical,
     );
 
     expect(matches).toEqual({ kernel: ['CVE-TEST-1'], overflow: [] });
@@ -178,7 +259,8 @@ describe('Vulnerabilities parsing CVSS branches', () => {
     const calledUrl = new URL(requestUrl as string);
     expect(calledUrl.pathname).toContain('/api/vulnerabilities/search-descriptions');
     expect(calledUrl.searchParams.get('variant_id')).toBe('variant-1');
-    expect(calledUrl.searchParams.has('project_id')).toBe(false);
+    expect(calledUrl.searchParams.get('include_outdated')).toBe(historical ? 'true' : null);
+    expect(calledUrl.searchParams.get('project_id')).toBe('project-1');
     expect(request?.method).toBe('POST');
     expect(JSON.parse(request?.body as string)).toEqual({
       vulnerability_ids: ['CVE-TEST-1'],
@@ -377,6 +459,7 @@ describe('append_assessment', () => {
     ];
 
     const assessment = {
+      id: 'assessment-1',
       vuln_id: 'CVE-2021-1',
       status: 'investigating',
       simplified_status: 'open',
@@ -389,6 +472,7 @@ describe('append_assessment', () => {
     const cve1 = result.find((v: any) => v.id === 'CVE-2021-1');
     expect(cve1?.simplified_status).toBe('open');
     expect(cve1?.assessments).toHaveLength(1);
+    expect(Vulnerabilities.append_assessment(result, assessment)).toEqual(result);
 
     const cve2 = result.find((v: any) => v.id === 'CVE-2021-2');
     expect(cve2?.simplified_status).toBe('unknown');
@@ -635,6 +719,48 @@ describe('buildStatusSummary helpers', () => {
     const summary = buildStatusSummary(assessments, ['linux-yocto@6.6.129']);
     expect(summary.dominant_status).toBe('Pending Assessment');
     expect(summary.counts['Not affected']).toBeUndefined();
+  });
+
+  test('includes deprecated package statuses only when an expanded status scope is supplied', () => {
+    const assessments = [
+      makePkgAssessment('Pending Assessment', '2024-01-01T00:00:00', 'v1', ['linux-yocto@6.6.129']),
+      makePkgAssessment('Fixed', '2024-02-01T00:00:00', 'v1', ['linux-yocto@6.6.122']),
+    ];
+    const currentOnly = buildStatusSummary(
+      assessments,
+      ['linux-yocto@6.6.129'],
+      { v1: ['linux-yocto@6.6.129'] },
+    );
+    expect(currentOnly.counts).toEqual({ 'Pending Assessment': 1 });
+
+    const withOutdated = buildStatusSummary(
+      assessments,
+      ['linux-yocto@6.6.129'],
+      { v1: ['linux-yocto@6.6.129'] },
+      { v1: ['linux-yocto@6.6.122', 'linux-yocto@6.6.129'] },
+    );
+    expect(withOutdated.counts).toEqual({ 'Pending Assessment': 1, Fixed: 1 });
+  });
+
+  test('an assessment edit updates each row’s own package status summary', async () => {
+    const currentPackages = ['pkg@2'];
+    const oldAssessment = makePkgAssessment('Fixed', '2024-01-01T00:00:00', 'v1', ['pkg@1']);
+    const currentAssessment = makePkgAssessment('Pending Assessment', '2024-02-01T00:00:00', 'v1', ['pkg@2']);
+    currentAssessment.id = 'current-assessment';
+    fetchMock.mockResponseOnce(JSON.stringify([rawVuln({
+      packages: currentPackages, packages_current: currentPackages, packages_current_by_variant: { v1: currentPackages },
+    })]));
+    const [row] = await Vulnerabilities.list('v1');
+    const current = { ...row, assessments: [oldAssessment] };
+    const historical = {
+      ...current, packages: ['pkg@1', ...currentPackages], packages_status_by_variant: { v1: ['pkg@1', 'pkg@2'] },
+    };
+    const mutate = patchAssessments([], [currentAssessment]);
+    expect(mutate(current)).toMatchObject({
+      packages: ['pkg@2'], status_summary: { counts: { 'Pending Assessment': 1 } },
+    });
+    expect(mutate(current).status_summary?.counts.Fixed).toBeUndefined();
+    expect(mutate(historical).status_summary?.counts).toEqual({ 'Pending Assessment': 1, Fixed: 1 });
   });
 
   test('keeps assessments without packages when current packages given', () => {

@@ -196,6 +196,25 @@ describe('Packages', () => {
         expect(enriched[0].variants).toEqual(['VariantA']);
     });
 
+    test('package counts and drill-down IDs use the finding evidence for the row’s variants', async () => {
+        const id = 'retained@1';
+        fetchMock.mockResponseOnce(JSON.stringify([
+            { name: 'retained', version: '1', inventory_variant_ids: ['board-a'] },
+            { name: 'retained', version: '1', inventory_variant_ids: ['board-b'], outdated: true },
+        ]));
+        const packages = await Packages.list(undefined, 'project-1', undefined, undefined, undefined, undefined, true);
+        fetchMock.mockResponseOnce(JSON.stringify([{
+            ...VULNERABILITIES[0], id: 'CVE-SYNTH', packages: [id], packages_current: [],
+            packages_current_by_variant: {}, packages_status_by_variant: { 'board-b': [id] },
+        }]));
+        const findings = await Vulnerabilities.list();
+        const [stillInstalled, historical] = Packages.enrich_with_vulns(packages, findings);
+        expect(stillInstalled.vulnerabilities).toEqual({});
+        expect(stillInstalled.findingVulnerabilityIds).toEqual([]);
+        expect(historical.findingVulnerabilityIds).toEqual(['CVE-SYNTH']);
+        expect(historical.vulnerabilities.unknown).toBe(1);
+    });
+
     test('asPackage parses supplier field', async () => {
         fetchMock.mockImplementationOnce(() =>
             Promise.resolve({

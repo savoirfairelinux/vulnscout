@@ -1,7 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
-// @ts-expect-error TS6133
-import React from 'react';
+import type { ComponentProps } from 'react';
 import { MemoryRouter, Link, Routes, Route, useLocation } from 'react-router-dom';
 
 import Explorer from '../../src/pages/Explorer';
@@ -10,16 +9,19 @@ import type { TabKey } from '../../src/routes';
 import Config from '../../src/handlers/config';
 import Projects from '../../src/handlers/project';
 import Variants from '../../src/handlers/variant';
-import Packages from '../../src/handlers/packages';
-import Vulnerabilities from '../../src/handlers/vulnerabilities';
+import Packages, { type Package } from '../../src/handlers/packages';
+import Vulnerabilities, { type Vulnerability } from '../../src/handlers/vulnerabilities';
 import Assessments from '../../src/handlers/assessments';
 import { __reset, __setEventSourceFactory } from '../../src/handlers/operationStore';
 import type { Operation } from '../../src/types/operation';
 import { UnsavedGuardProvider, useUnsavedGuard } from '../../src/hooks/useUnsavedGuard';
 import RefreshRuns from '../../src/handlers/refreshRuns';
+import type { RefreshRunMetadata } from '../../src/handlers/refreshRuns';
 import Operations from '../../src/handlers/operations';
 import VulnerabilityHistory from '../../src/handlers/vulnerabilityHistory';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
+import { AGENT_WRITE_EVENT } from '../../src/types/agent';
+import NavigationBar from '../../src/components/NavigationBar';
 
 class TestEventSource {
     static current: TestEventSource;
@@ -72,6 +74,7 @@ jest.mock('../../src/handlers/vulnerabilities', () => ({
     default: {
         list: jest.fn(),
         enrich_with_assessments: jest.fn(() => []),
+        matchCondition: jest.fn(),
         calculate_cvss_from_vector: jest.fn(() => ({ score: 7.5 })),
         append_assessment: jest.fn((vulnerabilities) => vulnerabilities),
         append_cvss: jest.fn((vulnerabilities) => vulnerabilities),
@@ -90,25 +93,19 @@ jest.mock('../../src/handlers/refreshRuns', () => ({
     default: {
         latest: jest.fn(() => Promise.resolve(null)),
         detail: jest.fn(() => Promise.resolve(null)),
+        metadata: jest.fn(() => Promise.resolve(null)),
         list: jest.fn(() => Promise.resolve({ runs: [], total: 0, limit: 20, offset: 0 })),
     },
 }));
 
 jest.mock('../../src/components/NavigationBar', () => ({
     __esModule: true,
-    default: ({ defaultProject, defaultScope, onApply, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: {
-        defaultProject?: { id: string } | null;
-        defaultScope?: { project_id: string } | null;
-        onApply: (...args: [string, string, string, string, string[], string]) => void | Promise<boolean | void> | boolean;
-        onOpenOperationQueue: () => void;
-        trackedScanCount: number;
-        finishedScanCount: number;
-        activeScanCount: number;
-    }) => (
+    default: jest.fn(({ defaultProject, defaultScope, onApply, onOpenOperationQueue, trackedScanCount, finishedScanCount, activeScanCount }: ComponentProps<typeof NavigationBar>) => (
         <div>
-            <button onClick={() => { void Promise.resolve(onApply('p2', 'v9', '', '', [], '')).then(result => {
+            <button onClick={() => { void Promise.resolve(onApply('p2', 'v9', '', '', [], '', false, false)).then(result => {
                 document.body.dataset.applyResult = String(result);
             }); }}>apply other scope</button>
+            <button onClick={() => { void onApply('p2', 'v9', 'v10', 'difference', [], '', false, false); }}>apply compare scope</button>
             <span data-testid="default-project">{defaultProject?.id ?? ''}</span>
             <span data-testid="frontend-scope">{defaultScope?.project_id ?? ''}</span>
             <span data-testid="operation-counts">{`${finishedScanCount}/${trackedScanCount}/${activeScanCount}`}</span>
@@ -117,7 +114,7 @@ jest.mock('../../src/components/NavigationBar', () => ({
             ))}
             <button onClick={onOpenOperationQueue}>progress</button>
         </div>
-    ),
+    )),
 }));
 
 jest.mock('../../src/components/MessageBanner', () => ({
@@ -133,32 +130,48 @@ jest.mock('../../src/components/OperationQueueModal', () => ({
 }));
 jest.mock('../../src/pages/Metrics', () => ({
     __esModule: true,
-    default: ({ goToVulnsTabWithFilter }: { goToVulnsTabWithFilter: (type: 'Severity', value: string) => void }) => (
-        <button onClick={() => goToVulnsTabWithFilter('Severity', 'high')}>filter vulnerabilities</button>
+    default: ({ goToVulnsTabWithFilter, includeOutdated }: {
+        goToVulnsTabWithFilter: (type: 'Severity', value: string) => void; includeOutdated: boolean;
+    }) => (
+        <div>
+            <span data-testid="metrics-evidence-mode">{includeOutdated ? 'historical' : 'current'}</span>
+            <button onClick={() => goToVulnsTabWithFilter('Severity', 'high')}>filter vulnerabilities</button>
+        </div>
     ),
 }));
 jest.mock('../../src/pages/TablePackages', () => ({
     __esModule: true,
-    default: ({ onShowVulns }: { onShowVulns: (packageId: string, ids: string[]) => void }) => (
-        <button onClick={() => onShowVulns('pkg-1', ['CVE-1'])}>show package vulnerabilities</button>
+    default: ({ onShowVulns, includeOutdated }: {
+        onShowVulns: (packageId: string, condition?: string, packageVariantIds?: string[]) => void; includeOutdated: boolean;
+    }) => (
+        <div>
+            <span data-testid="package-evidence-mode">{includeOutdated ? 'historical' : 'current'}</span>
+            <button onClick={() => onShowVulns('pkg-1')}>show package vulnerabilities</button>
+            <button onClick={() => onShowVulns('pkg-1', 'cvss >= 7')}>show package matches</button>
+            <button onClick={() => onShowVulns('pkg-1', undefined, ['v10'])}>show variant package</button>
+        </div>
     ),
 }));
 // The real table writes the filter props it sees on mount into persisted
 // (localStorage-backed) selections, so what matters is the filter present on
 // the *first* render of each mount, not only the latest props. `mountFilters`
 // records that, letting tests assert a stale filter is never applied.
+const mockSaveAssessment = jest.fn<Promise<{ id: string }>, []>();
 jest.mock('../../src/pages/TableVulnerabilities', () => {
     const { useEffect } = jest.requireActual<typeof import('react')>('react');
     const mountFilters: Array<{ label?: string; value?: string }> = [];
     return {
         __esModule: true,
         mountFilters,
-        default: ({ appendAssessment, appendCVSS, patchVuln, filterLabel, filterValue }: {
+        default: ({ appendAssessment, appendCVSS, patchVuln, filterLabel, filterValue, filterVulnerabilityIds, vulnerabilities, includeOutdated }: {
             appendAssessment: (assessment: { id: string }) => void;
             appendCVSS: (id: string, vector: string) => void;
             patchVuln: (id: string, vulnerability: { id: string }) => void;
             filterLabel?: string;
             filterValue?: string;
+            filterVulnerabilityIds?: string[];
+            vulnerabilities: Array<{ id: string }>;
+            includeOutdated: boolean;
         }) => {
             useEffect(() => {
                 mountFilters.push({ label: filterLabel, value: filterValue });
@@ -167,7 +180,12 @@ jest.mock('../../src/pages/TableVulnerabilities', () => {
             return <div>
                 <span data-testid="vuln-filter-label">{filterLabel ?? ''}</span>
                 <span data-testid="vuln-filter-value">{filterValue ?? ''}</span>
+                <span data-testid="drilled-finding-ids">{filterVulnerabilityIds?.join(',')}</span>
+                <span data-testid="vulnerability-ids">{vulnerabilities.map(v => v.id).join(',')}</span>
+                <span data-testid="vulnerability-evidence-mode">{includeOutdated ? 'historical' : 'current'}</span>
                 <button onClick={() => appendAssessment({ id: 'assessment-1' })}>append assessment</button>
+                <button onClick={() => void mockSaveAssessment().then(appendAssessment)}>save assessment</button>
+                <button onClick={() => void mockSaveAssessment().then(row => patchVuln(row.id, row))}>save full row</button>
                 <button onClick={() => appendCVSS('CVE-1', 'CVSS:3.1/test')}>append cvss</button>
                 <button onClick={() => patchVuln('CVE-1', { id: 'CVE-1' })}>patch vulnerability</button>
             </div>;
@@ -229,6 +247,28 @@ jest.mock('../../src/pages/AIContext', () => {
 const { default: RealNavigationBar } = jest.requireActual<typeof import('../../src/components/NavigationBar')>(
     '../../src/components/NavigationBar',
 );
+const mockNavigationBar = jest.mocked(NavigationBar);
+const originalNavigationMock = mockNavigationBar.getMockImplementation()!;
+
+function renderExplorerWithSelector(path: string) {
+    mockNavigationBar.mockImplementation(props => <RealNavigationBar {...props} />);
+    return render(<MemoryRouter initialEntries={[path]}><UnsavedGuardProvider><Explorer /></UnsavedGuardProvider></MemoryRouter>);
+}
+
+function openScopeSelector(name = 'Default Project') {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${name} `) }));
+}
+
+function evidenceButton(name: 'Current' | 'Ever observed') {
+    return within(screen.getByRole('group', { name: 'Evidence mode' })).getByRole('button', { name });
+}
+
+async function applySelection() {
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    await waitFor(() => expect(apply).toBeEnabled());
+    fireEvent.click(apply);
+    await waitFor(() => expect(apply).not.toBeInTheDocument());
+}
 
 const mockConfigGet = Config.get as jest.MockedFunction<typeof Config.get>;
 const mockGetFrontendScope = Config.getFrontendScope as jest.MockedFunction<typeof Config.getFrontendScope>;
@@ -249,6 +289,7 @@ const SERVER_CONFIG = {
     contact_email: '',
     grype_memlimit: '',
 };
+const defaultVariants = [{ id: 'default-variant', name: 'Default Variant', project_id: 'default-project' }];
 
 const savedScope = (projectId: string, variantIds: string[]) => ({
     project_id: projectId,
@@ -280,6 +321,7 @@ describe('Explorer saved-scope validation', () => {
     });
 
     afterEach(() => {
+        mockNavigationBar.mockImplementation(originalNavigationMock);
         __reset();
         restoreStream();
         jest.restoreAllMocks();
@@ -372,7 +414,7 @@ describe('Explorer saved-scope validation', () => {
         await waitFor(() => {
             expect(screen.getByTestId('default-project')).toHaveTextContent('default-project');
             expect(screen.getByTestId('frontend-scope')).toBeEmptyDOMElement();
-            expect(mockPackagesList).toHaveBeenCalledWith('default-variant', undefined, undefined, undefined, undefined, undefined);
+            expect(mockPackagesList).toHaveBeenCalledWith('default-variant', undefined, undefined, undefined, undefined, undefined, false, expect.any(AbortSignal));
         });
         expect(mockClearFrontendScope).not.toHaveBeenCalled();
     });
@@ -389,6 +431,275 @@ describe('Explorer saved-scope validation', () => {
             op_id: 'scan:grype:variant-1', kind: 'scan', status: 'done',
         });
         await waitFor(() => expect(mockVulnerabilitiesList.mock.calls.length).toBeGreaterThan(initialCalls));
+    });
+
+    test('keeps the explicit project for a restored single variant in both evidence modes', async () => {
+        mockGetFrontendScope.mockReturnValue(savedScope('saved-project', ['saved-variant']));
+        mockProjectsList.mockResolvedValue([{ id: 'saved-project', name: 'Saved Project' }]);
+        mockVariantsList.mockResolvedValue([
+            { id: 'saved-variant', name: 'Saved Variant', project_id: 'saved-project' },
+            { id: 'other-variant', name: 'Other Variant', project_id: 'saved-project' },
+        ]);
+        renderExplorerWithSelector(ROUTES.vulnerabilities);
+
+        const scope = ['saved-variant', 'saved-project', undefined, undefined, undefined, undefined];
+        await waitFor(() => expect(mockPackagesList).toHaveBeenLastCalledWith(...scope, false, expect.any(AbortSignal)));
+        expect(mockVulnerabilitiesList).toHaveBeenLastCalledWith(...scope, expect.any(AbortSignal));
+
+        expect(screen.queryByRole('group', { name: 'Evidence mode' })).not.toBeInTheDocument();
+        openScopeSelector('Saved Project');
+        const draftVariant = await screen.findByRole('checkbox', { name: 'Other Variant' });
+        const historical = evidenceButton('Ever observed');
+        expect(draftVariant.compareDocumentPosition(historical)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+        expect(historical.compareDocumentPosition(screen.getByRole('button', { name: 'Apply' })))
+            .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+        const readsBeforeDraft = mockPackagesList.mock.calls.length;
+        fireEvent.click(draftVariant);
+        fireEvent.click(historical);
+        expect(historical).toHaveAttribute('aria-pressed', 'true');
+        expect(mockPackagesList).toHaveBeenCalledTimes(readsBeforeDraft);
+        expect(screen.getByTestId('vulnerability-evidence-mode')).toHaveTextContent('current');
+        expect(draftVariant).toBeChecked();
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+        expect(screen.queryByRole('group', { name: 'Evidence mode' })).not.toBeInTheDocument();
+        openScopeSelector('Saved Project');
+        expect(screen.getByRole('checkbox', { name: 'Other Variant' })).not.toBeChecked();
+        expect(evidenceButton('Current')).toHaveAttribute('aria-pressed', 'true');
+        fireEvent.click(evidenceButton('Ever observed'));
+        await applySelection();
+        expect(mockPackagesList).toHaveBeenLastCalledWith(...scope, true, expect.any(AbortSignal));
+        expect(mockVulnerabilitiesList).toHaveBeenLastCalledWith(...scope, expect.any(AbortSignal), true);
+        expect(Config.setFrontendScope).not.toHaveBeenCalled();
+        expect(screen.getByTestId('vulnerability-evidence-mode')).toHaveTextContent('historical');
+        openScopeSelector('Saved Project');
+        expect(evidenceButton('Ever observed')).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    test('applies comparison and evidence together from Scans and carries them across evidence tabs', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([{ id: 'p2', name: 'Compared Project' }]);
+        const variants = [
+            { id: 'v9', name: 'Base variant', project_id: 'p2' },
+            { id: 'v10', name: 'Compared variant', project_id: 'p2' },
+        ];
+        mockVariantsList.mockImplementation(async projectId => projectId === 'p2' ? variants : []);
+        mockVariantsListAll.mockResolvedValue(variants);
+        renderExplorerWithSelector(ROUTES.scans);
+        const current = () => evidenceButton('Current');
+        const everObserved = () => evidenceButton('Ever observed');
+        await screen.findByRole('button', { name: /^Default Project / });
+        openScopeSelector();
+        expect(current()).toHaveAttribute('aria-pressed', 'true');
+        expect(everObserved()).toHaveAttribute('aria-pressed', 'false');
+        await screen.findByRole('option', { name: 'Compared Project' });
+        fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p2' } });
+        fireEvent.click(screen.getByRole('radio', { name: 'Compare variants' }));
+        const swap = screen.getByRole('button', { name: 'Swap variants' });
+        expect(swap.compareDocumentPosition(everObserved())).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+        const readsBeforeDraft = mockPackagesList.mock.calls.length;
+        fireEvent.click(everObserved());
+        expect(mockPackagesList).toHaveBeenCalledTimes(readsBeforeDraft);
+        const apply = screen.getByRole('button', { name: 'Apply' });
+        await waitFor(() => expect(apply).toBeEnabled());
+        let finishFirstLoad!: (packages: Package[]) => void;
+        mockPackagesList.mockImplementationOnce(() => new Promise(resolve => { finishFirstLoad = resolve; }));
+        fireEvent.click(apply);
+        const firstLoad = mockPackagesList.mock.calls.at(-1)!;
+        expect(firstLoad).toEqual(['v9', 'p2', 'v10', 'difference', undefined, undefined, true, expect.any(AbortSignal)]);
+        fireEvent.click(screen.getByRole('button', { name: 'scan complete' }));
+        expect(firstLoad[7]?.aborted).toBe(true);
+        await waitFor(() => expect(apply).not.toBeInTheDocument());
+        await act(async () => finishFirstLoad([]));
+        expect(mockPackagesList).toHaveBeenCalledTimes(readsBeforeDraft + 2);
+        expect(mockVulnerabilitiesList).toHaveBeenLastCalledWith(
+            'v9', 'p2', 'v10', 'difference', undefined, undefined, expect.any(AbortSignal), true,
+        );
+        expect(mockPackagesList).toHaveBeenLastCalledWith(
+            'v9', 'p2', 'v10', 'difference', undefined, undefined, true, expect.any(AbortSignal),
+        );
+        fireEvent.click(screen.getByRole('link', { name: 'SBOM' }));
+        expect(screen.getByTestId('package-evidence-mode')).toHaveTextContent('historical');
+        openScopeSelector('Compared Project');
+        expect(everObserved()).toHaveAttribute('aria-pressed', 'true');
+        fireEvent.keyDown(document, { key: 'Escape' });
+        fireEvent.click(screen.getByRole('link', { name: /VulnScout/ }));
+        expect(screen.getByTestId('metrics-evidence-mode')).toHaveTextContent('historical');
+        fireEvent.click(screen.getByRole('button', { name: 'filter vulnerabilities' }));
+        expect(screen.getByTestId('vuln-filter-label')).toHaveTextContent('Severity');
+        expect(screen.getByTestId('vulnerability-evidence-mode')).toHaveTextContent('historical');
+        openScopeSelector('Compared Project');
+        expect(everObserved()).toHaveAttribute('aria-pressed', 'true');
+        fireEvent.click(current());
+        expect(screen.getByTestId('vulnerability-evidence-mode')).toHaveTextContent('historical');
+        await applySelection();
+        expect(screen.getByTestId('vulnerability-evidence-mode')).toHaveTextContent('current');
+        expect(screen.getByTestId('vuln-filter-label')).toHaveTextContent('Severity');
+    });
+
+    test('keeps the previous scope and evidence if a combined Apply fails to load', async () => {
+        jest.spyOn(console, 'error').mockImplementation(() => {});
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([
+            SERVER_CONFIG.project, { id: 'p2', name: 'Other Project' },
+        ]);
+        mockVariantsList.mockImplementation(async projectId => projectId === 'p2'
+            ? [{ id: 'v9', name: 'Other Variant', project_id: 'p2' }]
+            : defaultVariants);
+        renderExplorerWithSelector(ROUTES.vulnerabilities);
+        await screen.findByRole('button', { name: /^Default Project / });
+        openScopeSelector();
+        fireEvent.change(screen.getByRole('combobox'), { target: { value: 'p2' } });
+        await screen.findByRole('checkbox', { name: 'Other Variant' });
+        fireEvent.click(evidenceButton('Ever observed'));
+
+        let rejectPackages!: (error: Error) => void;
+        mockPackagesList.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectPackages = reject; }));
+        const apply = screen.getByRole('button', { name: 'Apply' });
+        await waitFor(() => expect(apply).toBeEnabled());
+        fireEvent.click(apply);
+        expect(apply).toBeDisabled();
+        expect(Config.setFrontendScope).not.toHaveBeenCalled();
+        expect(screen.getByTestId('vulnerability-evidence-mode')).toHaveTextContent('current');
+        expect(screen.getByRole('button', { name: /^Default Project / })).toBeVisible();
+        await act(async () => rejectPackages(new Error('Unavailable')));
+        expect(screen.getByRole('alert')).toHaveTextContent('Failed to load historical evidence');
+        expect(apply).toBeEnabled();
+        expect(evidenceButton('Ever observed')).toHaveAttribute('aria-pressed', 'true');
+        expect(screen.getByTestId('vulnerability-evidence-mode')).toHaveTextContent('current');
+        expect(Config.setFrontendScope).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+        openScopeSelector();
+        expect(evidenceButton('Current')).toHaveAttribute('aria-pressed', 'true');
+        expect(screen.getByRole('combobox')).toHaveValue('default-project');
+        await screen.findByRole('checkbox', { name: 'Default Variant' });
+    });
+
+    test('retains the evidence draft when the unsaved-changes guard rejects Apply', async () => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([SERVER_CONFIG.project]);
+        mockVariantsList.mockResolvedValue(defaultVariants);
+        renderExplorerWithSelector(ROUTES.ai);
+        await screen.findByRole('button', { name: /^Default Project / });
+        fireEvent.click(screen.getByRole('button', { name: 'make dirty' }));
+        openScopeSelector();
+        fireEvent.click(evidenceButton('Ever observed'));
+        const apply = screen.getByRole('button', { name: 'Apply' });
+        await waitFor(() => expect(apply).toBeEnabled());
+        const readsBeforeDraft = mockPackagesList.mock.calls.length;
+        fireEvent.click(apply);
+        fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(apply).toBeEnabled());
+        expect(evidenceButton('Ever observed')).toHaveAttribute('aria-pressed', 'true');
+        expect(mockPackagesList).toHaveBeenCalledTimes(readsBeforeDraft);
+        expect(aiScope()).toEqual({ projectId: 'default-project', revision: 0 });
+
+        fireEvent.keyDown(document, { key: 'Escape' });
+        openScopeSelector();
+        expect(evidenceButton('Current')).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    test.each(['scans', 'refresh', 'review', 'ai', 'exports', 'settings'] as const)(
+        'shows evidence mode in the same selector position on %s',
+        async tab => {
+            mockGetFrontendScope.mockReturnValue(null);
+            renderExplorerWithSelector(ROUTES[tab]);
+            await screen.findByRole('button', { name: /^Default Project / });
+            openScopeSelector();
+            const variants = screen.getByRole('radio', { name: 'Select Variants' });
+            const current = evidenceButton('Current');
+            expect(current).toBeVisible();
+            expect(current).toHaveAttribute('aria-pressed', 'true');
+            expect(variants.compareDocumentPosition(current)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+            expect(current.compareDocumentPosition(screen.getByRole('button', { name: 'Apply' })))
+                .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+        },
+    );
+
+    test.each([
+        ['show package vulnerabilities', 'CVE-1,CVE-2', 'CVE-1,CVE-2,CVE-3,CVE-4'],
+        ['show package matches', 'CVE-1', 'CVE-1,CVE-3'],
+    ])('recomputes %s when the evidence mode changes', async (button, currentIds, historicalIds) => {
+        mockGetFrontendScope.mockReturnValue(null);
+        mockVariantsList.mockResolvedValue(defaultVariants);
+        mockPackagesList.mockImplementation(async (...args) => [{
+            id: 'pkg-1',
+            findingVulnerabilityIds: args[6] ? ['CVE-1', 'CVE-2', 'CVE-3', 'CVE-4'] : ['CVE-1', 'CVE-2'],
+        } as Package]);
+        const evidence = [['CVE-1', 8], ['CVE-2', 5], ['CVE-3', 9], ['CVE-4', 6], ['CVE-5', 9]]
+            .map(([id, score]) => ({ id, severity: { max_score: score } } as Vulnerability));
+        mockVulnerabilitiesList.mockImplementation(async (...args) => args[7] ? evidence : evidence.slice(0, 2));
+        const vulnerabilityEnrichment = jest.mocked(Vulnerabilities.enrich_with_assessments)
+            .mockImplementation(rows => rows);
+        const evaluate = jest.mocked(Vulnerabilities.matchCondition).mockImplementation(async (condition, rows) => {
+            expect(condition).toBe('cvss >= 7');
+            return rows.filter(row => row.severity.max_score >= 7).map(row => row.id);
+        });
+        const enrichment = jest.spyOn(Packages, 'enrich_with_vulns').mockImplementation(rows => rows);
+        try {
+            renderExplorerWithSelector(ROUTES.packages);
+            await screen.findByRole('button', { name: /^Default Project / });
+            fireEvent.click(screen.getByRole('button', { name: button }));
+            expect(screen.getByTestId('vuln-filter-value')).toHaveTextContent('pkg-1');
+            const ids = () => screen.getByTestId('drilled-finding-ids').textContent;
+            await waitFor(() => expect(ids()).toBe(currentIds));
+            openScopeSelector();
+            fireEvent.click(evidenceButton('Ever observed'));
+            await applySelection();
+            await waitFor(() => expect(ids()).toBe(historicalIds));
+            openScopeSelector();
+            fireEvent.click(evidenceButton('Current'));
+            await applySelection();
+            await waitFor(() => expect(ids()).toBe(currentIds));
+            if (button === 'show package matches') {
+                expect(evaluate.mock.calls.map(([, rows]) => rows.map(row => row.id))).toEqual([
+                    ['CVE-1', 'CVE-2'],
+                    ['CVE-1', 'CVE-2', 'CVE-3', 'CVE-4'],
+                    ['CVE-1', 'CVE-2'],
+                ]);
+            } else {
+                expect(evaluate).not.toHaveBeenCalled();
+            }
+        } finally {
+            enrichment.mockImplementation(() => []);
+            vulnerabilityEnrichment.mockImplementation(() => []);
+        }
+    });
+
+    test('keeps the clicked package membership when identical rows share a package ID', async () => {
+        const packages = [
+            { id: 'pkg-1', inventoryVariantIds: ['v9'], findingVulnerabilityIds: ['CVE-1'] },
+            { id: 'pkg-1', inventoryVariantIds: ['v10'], findingVulnerabilityIds: ['CVE-2'], outdated: true },
+        ] as Package[];
+        const evidence = [
+            { id: 'CVE-1', packages_current_by_variant: { v9: ['pkg-1'] } },
+            { id: 'CVE-2', packages_status_by_variant: { v10: ['pkg-1'] } },
+        ] as unknown as Vulnerability[];
+        mockPackagesList.mockImplementation(async (...args) => args[6] ? packages : packages.slice(0, 1));
+        mockVulnerabilitiesList.mockImplementation(async (...args) => args[7] ? evidence : evidence.slice(0, 1));
+        const pkgEnrichment = jest.mocked(Packages.enrich_with_vulns).mockImplementation(rows => rows);
+        const vulnEnrichment = jest.mocked(Vulnerabilities.enrich_with_assessments).mockImplementation(rows => rows);
+        try {
+            mockGetFrontendScope.mockReturnValue(null);
+            mockVariantsList.mockResolvedValue(defaultVariants);
+            renderExplorerWithSelector(ROUTES.packages);
+            await screen.findByRole('button', { name: /^Default Project / });
+            openScopeSelector();
+            const historical = evidenceButton('Ever observed');
+            fireEvent.click(historical);
+            await applySelection();
+            fireEvent.click(screen.getByRole('button', { name: 'show variant package' }));
+            expect(screen.getByTestId('drilled-finding-ids')).toHaveTextContent(/^CVE-2$/);
+            openScopeSelector();
+            const current = evidenceButton('Current');
+            fireEvent.click(current);
+            await applySelection();
+            expect(screen.getByTestId('drilled-finding-ids')).toBeEmptyDOMElement();
+        } finally {
+            pkgEnrichment.mockImplementation(() => []);
+            vulnEnrichment.mockImplementation(() => []);
+        }
     });
 
     test.each(['done', 'error', 'cancelled'] as const)(
@@ -455,6 +766,14 @@ describe('Explorer saved-scope validation', () => {
         const summary = jest.spyOn(VulnerabilityHistory, 'changesSince').mockResolvedValue({
             since: epss.created_at, total: 0, vulnerabilities: 0, fields: {},
         });
+        const run: RefreshRunMetadata = {
+            run_id: 'refresh-batch', scope: { project_id: null, variant_id: null },
+            sources: ['epss', 'euvd'], source_status: { epss: 'complete', euvd: 'complete' },
+            status: 'complete', started_at: epss.created_at, finished_at: epss.created_at,
+            summary: { refreshed_vulnerabilities: 1, no_record_vulnerabilities: 0,
+                total_changes: 0, changed_vulnerabilities: 0, first_enrichments: 0 },
+        };
+        jest.mocked(RefreshRuns.metadata).mockResolvedValueOnce(run);
         render(<MemoryRouter initialEntries={['/refresh']}><Explorer /></MemoryRouter>);
         await screen.findByText(/No refresh has been recorded/);
         await waitFor(() => expect(screen.getByTestId('refresh-dropdown-toggle')).toBeEnabled());
@@ -472,9 +791,12 @@ describe('Explorer saved-scope validation', () => {
         await act(async () => TestEventSource.current.send('operation', { ...epss, status: 'done' }));
         handlers.forEach((handler, index) => expect(handler).toHaveBeenCalledTimes(initialCalls[index]));
         expect(summary).not.toHaveBeenCalled();
+        expect(RefreshRuns.metadata).not.toHaveBeenCalled();
 
         TestEventSource.current.send('operation', { ...euvd, status: 'done' });
         await waitFor(() => expect(summary).toHaveBeenCalledTimes(1));
+        expect(RefreshRuns.metadata).toHaveBeenCalledTimes(1);
+        expect(RefreshRuns.metadata).toHaveBeenCalledWith(run.run_id, expect.any(Object));
         await waitFor(() => handlers.forEach((handler, index) =>
             expect(handler).toHaveBeenCalledTimes(initialCalls[index] + 1)));
     });
@@ -624,7 +946,7 @@ describe('Explorer saved-scope validation', () => {
 
         render(<Explorer />, { wrapper: MemoryRouter });
         await waitFor(() => expect(mockPackagesList).toHaveBeenCalledWith(
-            undefined, 'saved-project', undefined, undefined, ['v1', 'v2'], 'union',
+            undefined, 'saved-project', undefined, undefined, ['v1', 'v2'], 'union', false, expect.any(AbortSignal),
         ));
         fireEvent.click(screen.getByRole('link', {name: 'scans'}));
 
@@ -917,5 +1239,260 @@ describe('Explorer refresh run identity', () => {
         expect(screen.getByTestId('location')).toHaveTextContent(`${ROUTES.refresh}?run=A`);
         expect(RefreshRuns.latest).not.toHaveBeenCalled();
         await waitFor(() => expect(screen.getByText(/Requested refresh run is unavailable in this scope/)).toBeInTheDocument());
+    });
+});
+
+describe('Explorer agent write reloads', () => {
+    let restoreStream: () => void;
+    beforeEach(() => {
+        restoreStream = __setEventSourceFactory(() => new TestEventSource() as unknown as EventSource);
+        mockConfigGet.mockResolvedValue(SERVER_CONFIG);
+        mockGetFrontendScope.mockReturnValue(null);
+        mockProjectsList.mockResolvedValue([{ id: 'default-project', name: 'Default Project' }]);
+        mockVariantsListAll.mockResolvedValue([{ id: 'default-variant', project_id: 'default-project', name: 'Default Variant' }]);
+        mockPackagesList.mockResolvedValue([]);
+        mockVulnerabilitiesList.mockResolvedValue([]);
+        mockAssessmentsList.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        __reset();
+        restoreStream();
+        jest.clearAllMocks();
+    });
+
+    const announceWrite = () => act(() => {
+        window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: 'write_assessment', tools: ['write_assessment'] } }));
+    });
+    const abortable = (signals: AbortSignal[]) => (...args: Parameters<typeof Vulnerabilities.list>) => {
+        const signal = args[6]!;
+        signals.push(signal);
+        return new Promise<never>((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))));
+    };
+
+    test('an agent write arriving during a reload is deferred into one rerun instead of an overlapping reload', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+
+        announceWrite();
+        announceWrite();
+        announceWrite();
+        expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(2);
+        expect(mockVulnerabilitiesList.mock.calls[1][6]!.aborted).toBe(false);
+
+        await act(async () => finish([]));
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3));
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(3));
+        expect(mockVulnerabilitiesList.mock.calls[1][6]!.aborted).toBe(false);
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    test('a queued write still refreshes its scope after a local edit retry fails', async () => {
+        render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish!: (value: []) => void;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        mockVulnerabilitiesList.mockRejectedValueOnce(new Error('retry failed'));
+        mockVulnerabilitiesList.mockResolvedValueOnce([{ id: 'CVE-recovered' }] as Awaited<ReturnType<typeof Vulnerabilities.list>>);
+        (Vulnerabilities.enrich_with_assessments as jest.Mock).mockImplementationOnce(rows => rows);
+        const reportError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+            announceWrite();
+            announceWrite();
+            fireEvent.click(screen.getByRole('button', { name: 'append assessment' }));
+            await act(async () => finish([]));
+            await waitFor(() => expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-recovered'));
+            expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(4);
+        } finally {
+            reportError.mockRestore();
+        }
+    });
+
+    test('agent writes refresh without blocking navigation or vulnerability work and install the new data', async () => {
+        render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        type ListedVulnerabilities = Awaited<ReturnType<typeof Vulnerabilities.list>>;
+        let finish: (value: ListedVulnerabilities) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        (Vulnerabilities.enrich_with_assessments as jest.Mock).mockImplementationOnce(vulnerabilities => vulnerabilities);
+
+        announceWrite();
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'append assessment' }));
+        fireEvent.click(screen.getByRole('link', { name: 'packages' }));
+        expect(screen.getByRole('button', { name: 'show package vulnerabilities' })).toBeInTheDocument();
+
+        // The edit invalidates the first snapshot; the retry supplies fresh data.
+        mockVulnerabilitiesList.mockResolvedValueOnce([{ id: 'CVE-fresh' }] as ListedVulnerabilities);
+        await act(async () => finish([{ id: 'CVE-stale' }] as ListedVulnerabilities));
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3));
+        fireEvent.click(screen.getByRole('link', { name: 'vulnerabilities' }));
+        await waitFor(() => expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-fresh'));
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+    });
+
+    test.each([false, true])('a pending save uses refreshed data only in its original scope (switch: %s)', async switchScope => {
+        render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish!: (value: { id: string }) => void;
+        mockSaveAssessment.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        fireEvent.click(screen.getByRole('button', { name: 'save assessment' }));
+        expect(mockSaveAssessment).toHaveBeenCalledTimes(1);
+        type ListedVulnerabilities = Awaited<ReturnType<typeof Vulnerabilities.list>>;
+        mockVulnerabilitiesList.mockResolvedValueOnce([{ id: 'CVE-fresh' }] as ListedVulnerabilities);
+        (Vulnerabilities.enrich_with_assessments as jest.Mock).mockImplementationOnce(rows => rows);
+        if (switchScope) fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        else announceWrite();
+        await waitFor(() => expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-fresh'));
+
+        await act(async () => finish({ id: 'local-assessment' }));
+        if (switchScope) expect(Vulnerabilities.append_assessment).not.toHaveBeenCalled();
+        else expect(Vulnerabilities.append_assessment).toHaveBeenCalledWith([{ id: 'CVE-fresh' }], { id: 'local-assessment' });
+        expect(screen.getByTestId('vulnerability-ids')).toHaveTextContent('CVE-fresh');
+    });
+
+    test('a full row saved across a refresh reloads the scope instead of replacing the fresh row', async () => {
+        render(<MemoryRouter initialEntries={[ROUTES.vulnerabilities]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish!: (row: { id: string }) => void;
+        mockSaveAssessment.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        fireEvent.click(screen.getByRole('button', { name: 'save full row' }));
+        announceWrite();
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(2));
+        await act(async () => finish({ id: 'CVE-1' }));
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(3));
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+    });
+
+    test('scope changes still block until their data is loaded after a background refresh', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const signals: AbortSignal[] = [];
+        mockVulnerabilitiesList.mockImplementationOnce(abortable(signals));
+        let finish: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+
+        announceWrite();
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        expect(signals[0].aborted).toBe(true);
+        expect(screen.getByText('Loading data...')).toBeInTheDocument();
+        await act(async () => finish([]));
+        await waitFor(() => expect(screen.queryByText('Loading data...')).not.toBeInTheDocument());
+    });
+
+    test('an agent write does not unblock an initial foreground load prematurely', async () => {
+        let finishInitial: (value: []) => void = () => undefined;
+        let finishRefresh: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finishInitial = resolve; }));
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve; }));
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(1));
+
+        announceWrite();
+        await act(async () => finishInitial([]));
+        expect(screen.getByText('Loading data...')).toBeInTheDocument();
+        await act(async () => finishRefresh([]));
+        await waitFor(() => expect(screen.queryByText('Loading data...')).not.toBeInTheDocument());
+    });
+
+    test.each([
+        [ROUTES.vulnerabilities, 'append cvss'],
+        [ROUTES.vulnerabilities, 'patch vulnerability'],
+        [ROUTES.review, 'assessment changed'],
+    ])('retries a background snapshot after a local %s / %s mutation', async (route, button) => {
+        render(<MemoryRouter initialEntries={[route]}><Explorer /></MemoryRouter>);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        let finish: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+
+        announceWrite();
+        fireEvent.click(screen.getByRole('button', { name: button }));
+        await act(async () => finish([]));
+        await waitFor(() => expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3));
+        expect(screen.queryByText('Loading data...')).not.toBeInTheDocument();
+    });
+
+    test('a scope change aborts the agent reload in flight without reporting a load failure', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const signals: AbortSignal[] = [];
+        mockVulnerabilitiesList.mockImplementationOnce(abortable(signals));
+
+        announceWrite();
+        expect(signals).toHaveLength(1);
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+
+        expect(signals[0].aborted).toBe(true);
+        expect(mockPackagesList.mock.calls[1][7]!.aborted).toBe(true);
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledWith('v9', 'p2', expect.any(AbortSignal)));
+        await act(async () => { await Promise.resolve(); });
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        // The aborted agent reload does not queue another one.
+        expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(3);
+    });
+
+    test.each([false, true])('a queued write only replaces a scope load if announced after it starts (%s)', async (writeAfterScopeChange) => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const signals: AbortSignal[] = [];
+        let finishScopeLoad: (value: []) => void = () => undefined;
+        mockVulnerabilitiesList.mockImplementationOnce(abortable(signals));
+        mockVulnerabilitiesList.mockImplementationOnce(() => new Promise(resolve => { finishScopeLoad = resolve; }));
+
+        announceWrite();
+        announceWrite();
+        fireEvent.click(screen.getByRole('button', { name: 'apply other scope' }));
+        if (writeAfterScopeChange) announceWrite();
+        await act(async () => { await Promise.resolve(); });
+
+        expect(mockVulnerabilitiesList).toHaveBeenCalledTimes(writeAfterScopeChange ? 4 : 3);
+        expect(mockVulnerabilitiesList.mock.calls[2][6]!.aborted).toBe(writeAfterScopeChange);
+        await act(async () => finishScopeLoad([]));
+    });
+
+    test('an assessment load failure aborts sibling requests and reports the failure', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const reportError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        const siblingAborted = jest.fn();
+        mockAssessmentsList.mockRejectedValueOnce(new Error('assessment request failed'));
+        mockAssessmentsList.mockImplementationOnce((_variant, _project, signal) => new Promise((_, reject) => {
+            signal!.addEventListener('abort', () => {
+                siblingAborted();
+                reject(new DOMException('Aborted', 'AbortError'));
+            });
+        }));
+
+        fireEvent.click(screen.getByRole('button', { name: 'apply compare scope' }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load data');
+        expect(siblingAborted).toHaveBeenCalledTimes(1);
+        reportError.mockRestore();
+    });
+
+    test('a failed reload still reports the failure', async () => {
+        render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        mockVulnerabilitiesList.mockRejectedValueOnce(new Error('server error'));
+        jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+        announceWrite();
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load data');
+    });
+
+    test('unmounting aborts the reload in flight', async () => {
+        const { unmount } = render(<Explorer />, { wrapper: MemoryRouter });
+        await waitFor(() => expect(mockAssessmentsList).toHaveBeenCalledTimes(1));
+        const signals: AbortSignal[] = [];
+        mockVulnerabilitiesList.mockImplementationOnce(abortable(signals));
+        announceWrite();
+
+        unmount();
+
+        expect(signals[0].aborted).toBe(true);
     });
 });

@@ -10,22 +10,21 @@ import time
 import urllib.error
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
-from flask import Flask
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import event, text
 
 from src.bin.webapp import create_app
 from src.controllers.job_context import CancelledError, JobContext
-from src.controllers.refresh_jobs import run_epss_refresh
+from src.controllers.refresh_jobs import run_epss_refresh, run_nvd_refresh
 from src.extensions import db
 from src.helpers.refresh_runs import capture_source, create_run, finish_source, source_statuses, target_result
 from src.models import (
     Finding, Observation, Package, Project, Scan, SBOMDocument, SBOMObservation, SBOMPackage, Variant, Vulnerability,
 )
 from src.models.metrics import Metrics
-from src.models.refresh_run import RefreshChange, RefreshRun
+from src.models.refresh_run import RefreshChange, RefreshRun, RefreshRunSource
 from src.models.time_estimate import TimeEstimate
 from src.models.vulnerability_history import VulnerabilityHistory
 from sqlalchemy.orm import Session
@@ -58,33 +57,6 @@ def _change(run_id, score, *, source="epss"):
         record.epss_score = score
         target_result(source, CVE)
         db.session.commit()
-
-
-@pytest.fixture()
-def postgres_app(postgres_uri):
-    engine = create_engine(postgres_uri)
-    schema = f"vulnscout_refresh_{uuid.uuid4().hex}"
-    with engine.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    application = Flask(__name__)
-    application.config.update(
-        SQLALCHEMY_DATABASE_URI=postgres_uri,
-        SQLALCHEMY_ENGINE_OPTIONS={
-            "connect_args": {"options": f"-csearch_path={schema} -cstatement_timeout=10000"},
-        },
-    )
-    db.init_app(application)
-    try:
-        with application.app_context():
-            db.create_all()
-        yield application
-    finally:
-        with application.app_context():
-            db.session.remove()
-            db.engine.dispose()
-        with engine.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        engine.dispose()
 
 
 @pytest.mark.parametrize("length", [39, 128])
@@ -352,6 +324,8 @@ def test_shared_cve_visibility_is_captured_and_package_links_are_scope_filtered(
     listed = client.get("/api/refresh-runs", query_string={"project_id": other_id}).get_json()["runs"]
     assert [item["run_id"] for item in listed] == [run]
     assert client.get(f"/api/refresh-runs/{scoped}", query_string={"project_id": other_id}).status_code == 404
+    assert client.get(f"/api/refresh-runs/{scoped}/metadata",
+                      query_string={"project_id": other_id}).status_code == 404
     listed = client.get("/api/refresh-runs", query_string={"project_id": PROJECT}).get_json()["runs"]
     assert {item["run_id"] for item in listed} == {run, scoped}
 
@@ -445,7 +419,137 @@ def test_first_enrichment_cvss_identity_and_pagination_filters(app, client):
     assert len(data["coverage"]) == 2
 
 
-def test_partial_provider_response_is_incomplete_not_removal(app, client):
+def _add_refresh_scope_ids(app, identifiers):
+    with app.app_context():
+        original = db.session.scalar(db.select(Finding).where(Finding.vulnerability_id == CVE))
+        observation = db.session.scalar(db.select(Observation).where(Observation.finding_id == original.id))
+        package_id, scan_id = original.package_id, observation.scan_id
+        for identifier in identifiers:
+            Vulnerability.create_record(id=identifier)
+            finding = Finding.get_or_create(package_id, identifier)
+            db.session.add(Observation(finding_id=finding.id, scan_id=scan_id))
+        db.session.commit()
+
+
+@pytest.mark.parametrize("scenario", ["mixed", "missing", "missing-and-failed", "unsupported-only", "deferred"])
+def test_queued_provider_applicability_keeps_skips_and_real_gaps(app, client, monkeypatch, request, scenario):
+    from src.controllers import refresh_jobs as jobs
+    from src.controllers.operation_queue import _Job, queue
+    from src.controllers.operation_registry import registry
+
+    registry.clear()
+    request.addfinalizer(registry.clear)
+    unsupported = "GHSA-ABCD-1234-5678"
+    baseline = "GHSA-ABCD-1234-9999"
+    missing = ["CVE-2099-1111", "CVE-2099-1112", "CVE-2099-1113"]
+    has_missing = scenario in ("missing", "missing-and-failed")
+    applicable = missing if has_missing else ([] if scenario == "unsupported-only" else [CVE])
+    _add_refresh_scope_ids(app, [unsupported, baseline, *(missing if has_missing else [])])
+
+    submitted = []
+    monkeypatch.setattr(type(queue), "submit", lambda self, **kwargs: submitted.append(_Job(**kwargs)))
+    scope = {"project_id": PROJECT, "variant_id": VARIANT}
+    if scenario == "deferred":
+        targets = {"variant_ids": [VARIANT], "exclude_ids": [baseline.lower()]}
+    else:
+        targets = {"ids": [*applicable, unsupported]}
+    payload = [{"kind": "refresh", "source": source, **targets, "options": scope} for source in ("nvd", "epss")]
+    if has_missing:
+        payload.append({"kind": "refresh", "source": "euvd", "ids": applicable, "options": scope})
+    response = client.post("/api/operations", json={"jobs": payload})
+    assert response.status_code == 202
+    run = response.get_json()["queue_id"]
+    url = f"/api/refresh-runs/{run}"
+    queued = client.get(url, query_string=scope).get_json()
+    assert queued["status"] == "running"
+    expected_queued_ids = set() if scenario == "deferred" else {*applicable, unsupported}
+    for source in ("nvd", "epss"):
+        assert {row["vuln_id"] for row in queued["coverage"] if row["source"] == source} == expected_queued_ids
+
+    with patch.object(jobs, "_get_scc_engine") as engine, \
+            patch.object(jobs, "_refresh_nvd_record", side_effect=lambda cve, *_: cve == CVE) as nvd, \
+            patch.object(jobs, "EPSS_DB") as epss, patch.object(jobs, "EUVD_DB") as euvd:
+        epss.return_value.api_get_epss_batch.return_value = {CVE: {"score": 0.8}} if CVE in applicable else {}
+        if scenario == "missing-and-failed":
+            monkeypatch.setattr(jobs, "EPSS_BATCH_SIZE", 2)
+            epss.return_value.api_get_epss_batch.side_effect = [{}, OSError("DNS lookup failed")]
+        euvd.return_value.get_full_mapping.return_value = {CVE: "EUVD-2099-1111"}
+        euvd.return_value.get_mapping.return_value = {}
+        for job in submitted:
+            queue._run_body(job)
+            assert registry.get(job.op_id)["status"] == "done"
+        assert [call.args[0] for call in nvd.call_args_list] == applicable
+        if scenario == "missing-and-failed":
+            assert [call.args[0] for call in epss.return_value.api_get_epss_batch.call_args_list] == [
+                missing[:2], missing[2:],
+            ]
+        elif applicable:
+            epss.return_value.api_get_epss_batch.assert_called_once_with(applicable, check_cancelled=ANY)
+        else:
+            engine.assert_not_called()
+            epss.assert_not_called()
+
+    data = client.get(url, query_string=scope).get_json()
+    status = "incomplete" if scenario == "missing-and-failed" else "complete"
+    assert data["status"] == status
+    expected_sources = {"nvd": "complete", "epss": status}
+    if has_missing:
+        expected_sources["euvd"] = "complete"
+        assert {row["vuln_id"] for row in data["coverage"] if row["source"] == "euvd"
+                and row["status"] == "complete"} == set(missing)
+        assert data["summary"]["total_changes"] == 0
+    assert data["source_status"] == expected_sources
+    assert data["summary"]["refreshed_vulnerabilities"] == len(applicable)
+    assert data["summary"]["no_record_vulnerabilities"] == (len(missing) if has_missing else 0)
+    with patch("src.routes.refresh_runs.artifact", side_effect=AssertionError("Artifact must not be loaded")):
+        metadata = client.get(f"{url}/metadata", query_string=scope)
+    assert metadata.status_code == 200
+    assert metadata.get_json() == {
+        key: value for key, value in data.items() if key not in {"coverage", "changes", "total", "limit", "offset"}
+    }
+    for source in ("nvd", "epss"):
+        outcomes = {(row["vuln_id"], row["status"], row["error"])
+                    for row in data["coverage"] if row["source"] == source}
+        expected = {(unsupported, "skipped", "Provider requires a CVE identifier")}
+        if has_missing:
+            expected.update((identifier, "no_record", None) for identifier in missing)
+            if source == "epss" and scenario == "missing-and-failed":
+                expected.remove((missing[-1], "no_record", None))
+                expected.add((missing[-1], "failed", "DNS lookup failed"))
+        elif applicable:
+            expected.add((CVE, "complete", None))
+        assert outcomes == expected
+
+
+@pytest.mark.parametrize("other_outcome", [
+    "legacy-summary", "legacy-unavailable", "unknown-skip", "source-interruption",
+])
+def test_only_explicit_inapplicability_can_correct_coverage(app, client, other_outcome):
+    unsupported = "GHSA-ABCD-1234-5678"
+    with app.app_context():
+        run = create_run({"nvd": [CVE, unsupported]})
+        with capture_source(run, "nvd"):
+            target_result("nvd", unsupported, "skipped", "Provider requires a CVE identifier")
+            if other_outcome == "legacy-unavailable":
+                target_result("nvd", CVE, "skipped", "Provider record unavailable")
+            else:
+                target_result("nvd", CVE, "skipped" if other_outcome == "unknown-skip" else "complete")
+        finish_source(run, "nvd", error="Source refresh failed" if other_outcome == "source-interruption" else None)
+        if other_outcome == "legacy-summary":
+            db.session.get(RefreshRunSource, (run, "nvd")).status = "incomplete"
+            db.session.commit()
+
+    status = "complete" if other_outcome == "legacy-summary" else "incomplete"
+    listing = client.get("/api/refresh-runs").get_json()["runs"][0]
+    assert listing["status"] == status
+    assert listing["source_status"] == {"nvd": status}
+    export = client.get(f"/api/refresh-runs/{run}/export?format=json").get_json()
+    assert export["status"] == status
+    assert export["coverage"][1]["status"] == "skipped"
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_partial_epss_responses_distinguish_omission_from_invalid_payload(app, client, valid):
     missing = "CVE-2099-1111"
     with app.app_context():
         Vulnerability.create_record(id=missing, epss_score=0.1)
@@ -454,16 +558,37 @@ def test_partial_provider_response_is_incomplete_not_removal(app, client):
             response = request.return_value.__enter__.return_value
             response.status = 200
             response.read.return_value = json.dumps({
+                "status": "OK" if valid else "ERROR",
                 "data": [{"cve": CVE, "epss": "0.8", "percentile": "0.9"}],
             }).encode()
             run_epss_refresh(JobContext("test", {"ids": [CVE, missing]}, run))
     data = client.get(f"/api/refresh-runs/{run}").get_json()
+    assert data["status"] == ("complete" if valid else "incomplete")
+    assert [entry["status"] for entry in data["coverage"]] == (["complete", "no_record"] if valid else ["failed"] * 2)
+    assert [row["vuln_id"] for row in data["changes"]] == ([CVE] if valid else [])
+    with app.app_context():
+        assert float(db.session.get(Vulnerability, missing).epss_score) == 0.1
+
+
+@pytest.mark.parametrize("error_response", [(503, {}), (200, {})])
+def test_nvd_error_is_incomplete_even_with_successful_omission(app, client, error_response):
+    missing = "CVE-2099-1111"
+    with app.app_context():
+        Vulnerability.create_record(id=missing, description="Stored NVD description")
+        run = create_run({"nvd": [missing, CVE]})
+        with patch("src.controllers.refresh_jobs.NVD_DB") as api, patch("src.controllers.refresh_jobs.time.sleep"):
+            api.return_value.api_get_cve.side_effect = [(200, {"vulnerabilities": [], "totalResults": 0}), error_response]
+            run_nvd_refresh(JobContext("test", {"ids": [missing, CVE], "mode": "api"}, run))
+        assert db.session.get(Vulnerability, missing).description == "Stored NVD description"
+
+    data = client.get(f"/api/refresh-runs/{run}").get_json()
     assert data["status"] == "incomplete"
-    assert [entry["status"] for entry in data["coverage"]] == ["complete", "skipped"]
-    assert [row["vuln_id"] for row in data["changes"]] == [CVE]
+    assert data["source_status"] == {"nvd": "incomplete"}
+    assert {row["vuln_id"]: row["status"] for row in data["coverage"]} == {missing: "no_record", CVE: "failed"}
+    assert data["changes"] == []
 
 
-def test_provider_completion_preserves_one_pending_batch_and_its_coverage_gaps(app, client):
+def test_provider_completion_preserves_one_pending_batch_and_no_record_outcomes(app, client):
     missing = "CVE-2099-1111"
     with app.app_context():
         Vulnerability.create_record(id=missing, epss_score=0.1)
@@ -474,7 +599,7 @@ def test_provider_completion_preserves_one_pending_batch_and_its_coverage_gaps(a
     partial = client.get(f"/api/refresh-runs/{run}").get_json()
     assert partial["status"] == "running"
     assert partial["finished_at"] is None
-    assert partial["source_status"] == {"epss": "incomplete", "euvd": "pending"}
+    assert partial["source_status"] == {"epss": "complete", "euvd": "pending"}
     assert client.get("/api/refresh-runs").get_json()["total"] == 1
 
     with app.app_context():
@@ -483,10 +608,10 @@ def test_provider_completion_preserves_one_pending_batch_and_its_coverage_gaps(a
             target_result("euvd", missing)
         finish_source(run, "euvd")
     finished = client.get(f"/api/refresh-runs/{run}").get_json()
-    assert finished["status"] == "incomplete"
+    assert finished["status"] == "complete"
     assert finished["finished_at"] is not None
-    assert finished["source_status"] == {"epss": "incomplete", "euvd": "complete"}
-    assert any(row["source"] == "epss" and row["status"] == "skipped" for row in finished["coverage"])
+    assert finished["source_status"] == {"epss": "complete", "euvd": "complete"}
+    assert any(row["source"] == "epss" and row["status"] == "no_record" for row in finished["coverage"])
     listing = client.get("/api/refresh-runs").get_json()
     assert listing["total"] == 1
     assert listing["runs"][0]["run_id"] == run
@@ -565,6 +690,7 @@ def test_expired_exact_run_never_substitutes_latest_and_can_be_pruned(app, clien
         create_run({"epss": [CVE]}, run_id="newest")
     assert client.get("/api/refresh-runs/expired").status_code == 404
     assert client.get("/api/refresh-runs/expired/export").status_code == 404
+    assert client.get("/api/refresh-runs/expired/metadata").status_code == 404
     result = app.test_cli_runner().invoke(args=["export-refresh-changes", "--run-id", expired])
     assert result.exit_code != 0 and "expired" in result.output
     result = app.test_cli_runner().invoke(args=["prune-refresh-runs"])
@@ -617,6 +743,39 @@ def test_single_refresh_exposes_exact_identity_and_scope_rejects_outside(app, cl
     assert client.post(f"/api/vulnerabilities/{CVE}/epss-refresh?project_id={uuid.uuid4()}").status_code == 404
 
 
+def test_individual_no_record_preserves_stored_enrichment(app, client):
+    with app.app_context():
+        record = db.session.get(Vulnerability, CVE)
+        record.description = "Stored NVD description"
+        record.epss_score = 0.1
+        db.session.commit()
+
+    with patch("src.routes.vulnerabilities.NVD_DB") as nvd, \
+         patch("src.routes.vulnerabilities.EPSS_DB") as epss, \
+         patch("src.routes.vulnerabilities.EUVD_DB") as euvd:
+        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [], "totalResults": 0})
+        epss.return_value.api_get_epss.return_value = None
+        euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
+        euvd.return_value.get_mapping.return_value = {"dummy": {}}
+        response = client.post(f"/api/vulnerabilities/{CVE}/refresh", json={"mode": "api"})
+        epss.return_value.api_get_epss.assert_called_once_with(CVE, strict=True)
+
+    run = client.get(f"/api/refresh-runs/{response.headers['X-Refresh-Run-ID']}").get_json()
+    assert run["status"] == "complete"
+    for source in ("nvd", "epss"):
+        assert response.get_json()["results"][source] == {
+            "status": 200, "body": {"vulnerabilities": [], "outcome": "no_record"},
+        }
+    assert {row["source"]: row["status"] for row in run["coverage"]} == {
+        "nvd": "no_record", "epss": "no_record", "euvd": "complete",
+    }
+    assert not [change for change in run["changes"] if change["source"] in ("nvd", "epss")]
+    with app.app_context():
+        record = db.session.get(Vulnerability, CVE)
+        assert record.description == "Stored NVD description"
+        assert float(record.epss_score) == 0.1
+
+
 @pytest.mark.parametrize("changed", [False, True])
 def test_individual_refresh_groups_sources_and_exports_history(app, client, changed):
     with app.app_context():
@@ -637,7 +796,7 @@ def test_individual_refresh_groups_sources_and_exports_history(app, client, chan
          patch("src.routes.vulnerabilities.EUVD_DB") as euvd, \
          patch("src.routes.vulnerabilities.apply_nvd_update", side_effect=nvd_update), \
          patch("src.routes.vulnerabilities._apply_euvd", side_effect=euvd_update):
-        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {}}]})
+        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {"id": CVE}}]})
         nvd.extract_cve_details.return_value = {}
         epss.return_value.api_get_epss.return_value = {"score": 0.5 if changed else 0.1}
         euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
@@ -718,7 +877,7 @@ def test_individual_refresh_payloads_exclude_other_scopes(app, client, identifie
          patch("src.routes.vulnerabilities._apply_euvd"), \
          patch("src.routes.vulnerabilities.VulnerabilitiesController._fetch_ghsa_published",
                return_value="2025-01-01T00:00:00Z"):
-        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {}}]})
+        nvd.return_value.api_get_cve.return_value = (200, {"vulnerabilities": [{"cve": {"id": identifier}}]})
         nvd.extract_cve_details.return_value = {}
         epss.return_value.api_get_epss.return_value = {"score": 0.5, "percentile": 0.9}
         euvd.return_value.get_full_mapping.return_value = {"dummy": {}}
@@ -920,13 +1079,157 @@ def test_grouped_queue_keeps_exact_run_and_initiating_scope(app, client, monkeyp
     registry.clear()
 
 
-def test_queued_refresh_rejects_targets_outside_initiating_scope(client):
-    response = client.post("/api/operations", json={"jobs": [
-        {"kind": "refresh", "source": "nvd", "ids": ["CVE-2099-9999"],
-         "options": {"project_id": PROJECT}},
-    ]})
+@pytest.mark.parametrize("source", ["nvd", "epss"])
+@pytest.mark.parametrize("scope, location", [
+    ({"project_id": PROJECT}, "absent"),
+    ({"project_id": PROJECT}, "other-project"),
+    ({"variant_id": VARIANT}, "absent"),
+    ({"variant_id": VARIANT}, "other-variant"),
+    ({"variant_id": VARIANT}, "older-scan"),
+])
+def test_queued_refresh_requires_active_findings_in_scope(app, client, source, scope, location):
+    identifier = "GHSA-ABCD-1234-5678"
+    if location != "absent":
+        with app.app_context():
+            variant_id = uuid.UUID(VARIANT)
+            if location != "older-scan":
+                variant_id = uuid.uuid4()
+                project_id = uuid.UUID(PROJECT)
+                if location == "other-project":
+                    project_id = uuid.uuid4()
+                    db.session.add(Project(id=project_id, name="other"))
+                db.session.add(Variant(id=variant_id, name="other", project_id=project_id))
+            scan = Scan(id=uuid.uuid4(), variant_id=variant_id, scan_type="sbom",
+                        timestamp=datetime(2000, 1, 1, tzinfo=timezone.utc))
+            db.session.add(scan)
+            db.session.flush()
+            Vulnerability.create_record(id=identifier)
+            package_id = db.session.scalar(db.select(Finding.package_id).where(Finding.vulnerability_id == CVE))
+            finding = Finding.get_or_create(package_id, identifier)
+            db.session.add(Observation(finding_id=finding.id, scan_id=scan.id))
+            db.session.commit()
+    with patch("src.routes.operations.known_vulnerability_ids") as global_lookup, \
+            patch("src.routes.operations._enqueue") as enqueue:
+        response = client.post("/api/operations", json={"jobs": [
+            {"kind": "refresh", "source": source, "ids": [CVE, identifier], "options": scope},
+        ]})
+    global_lookup.assert_not_called()
+    enqueue.assert_not_called()
     assert response.status_code == 400
-    assert "outside" in response.get_json()["error"]
+    assert response.get_json() == {"error": "Refresh identifiers are outside the selected scope"}
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("over_limit", [False, True])
+def test_nvd_api_target_limit_counts_only_applicable_cves(app, client, monkeypatch, request, deferred, over_limit):
+    from src.controllers import refresh_jobs as jobs
+    from src.controllers.operation_queue import _Job, queue
+    from src.controllers.operation_registry import registry
+    from src.routes import operations
+
+    unsupported = "GHSA-ABCD-1234-5678"
+    extra_cves = ["CVE-2099-1112"] if over_limit else []
+    _add_refresh_scope_ids(app, [unsupported, *extra_cves])
+    registry.clear()
+    request.addfinalizer(registry.clear)
+    submitted = []
+    monkeypatch.setattr(type(queue), "submit", lambda self, **kwargs: submitted.append(_Job(**kwargs)))
+    monkeypatch.setattr(jobs, "MAX_CVE_IDS", 1)
+    monkeypatch.setattr(operations, "MAX_CVE_IDS", 1)
+    targets = {"variant_ids": [VARIANT]} if deferred else {"ids": [CVE, unsupported, *extra_cves]}
+    scope = {"mode": "api", "project_id": PROJECT, "variant_id": VARIANT}
+    response = client.post("/api/operations", json={"jobs": [
+        {"kind": "refresh", "source": "nvd", **targets, "options": scope},
+    ]})
+    if over_limit and not deferred:
+        assert response.status_code == 400
+        assert "at most 1 CVE identifiers" in response.get_json()["error"]
+        assert not submitted
+        return
+    assert response.status_code == 202
+    job, = submitted
+    with patch.object(jobs, "NVD_DB") as provider:
+        lookup = provider.return_value.api_get_cve
+        lookup.return_value = (200, {"vulnerabilities": [], "totalResults": 0})
+        queue._run_body(job)
+    operation = registry.get(job.op_id)
+    run_id = response.get_json()["queue_id"]
+    run = client.get(f"/api/refresh-runs/{run_id}").get_json()
+    if over_limit:
+        assert operation["status"] == "error"
+        assert "at most 1 CVE identifiers" in operation["error"]
+        assert run["status"] == "incomplete"
+        lookup.assert_not_called()
+    else:
+        assert operation["status"] == "done"
+        assert run["status"] == "complete"
+        assert {(row["vuln_id"], row["status"]) for row in run["coverage"]} == {
+            (CVE, "no_record"), (unsupported, "skipped"),
+        }
+        lookup.assert_called_once_with(CVE, max_retries=2)
+
+
+@pytest.mark.parametrize("source", ["nvd", "epss"])
+@pytest.mark.parametrize("cancel_after_batch", [True, False])
+def test_cancel_unsupported_refresh_keeps_committed_skip_batch(
+    app, client, monkeypatch, request, source, cancel_after_batch,
+):
+    from src.controllers import refresh_jobs as jobs
+    from src.controllers.operation_queue import _Job, queue
+    from src.controllers.operation_registry import registry
+
+    ids = ["OSV-SYNTHETIC-1", "OSV-SYNTHETIC-2"]
+    if cancel_after_batch:
+        ids.append("OSV-SYNTHETIC-3")
+    _add_refresh_scope_ids(app, ids)
+    registry.clear()
+    request.addfinalizer(registry.clear)
+    submitted = []
+    monkeypatch.setattr(type(queue), "submit", lambda self, **kwargs: submitted.append(_Job(**kwargs)))
+    monkeypatch.setattr(jobs, "SKIP_BATCH_SIZE", 2)
+    response = client.post("/api/operations", json={"jobs": [{
+        "kind": "refresh", "source": source, "ids": ids, "options": {"variant_id": VARIANT},
+    }]})
+    assert response.status_code == 202
+    job, = submitted
+    updates = []
+
+    def record_skip_update(_conn, _cursor, statement, parameters, _context, _executemany):
+        if statement.startswith("UPDATE refresh_run_targets") and parameters[:1] == ("skipped",):
+            updates.append(statement)
+
+    if cancel_after_batch:
+        commit = jobs._safe_commit
+
+        def commit_then_cancel(label):
+            commit(label)
+            job.ctx.request_cancel()
+
+        monkeypatch.setattr(jobs, "_safe_commit", commit_then_cancel)
+    else:
+        monkeypatch.setattr(job.ctx, "report", lambda *_: job.ctx.request_cancel())
+
+    with app.app_context():
+        engine = db.engine
+    event.listen(engine, "before_cursor_execute", record_skip_update)
+    try:
+        with patch.object(jobs, "_get_scc_engine") as nvd, patch.object(jobs, "EPSS_DB") as epss:
+            queue._run_body(job)
+        nvd.assert_not_called()
+        epss.assert_not_called()
+    finally:
+        event.remove(engine, "before_cursor_execute", record_skip_update)
+
+    assert len(updates) == 1
+    assert registry.get(job.op_id)["status"] == "cancelled"
+    run_id = response.get_json()["queue_id"]
+    run = client.get(f"/api/refresh-runs/{run_id}").get_json()
+    assert run["status"] == "incomplete"
+    assert run["source_status"] == {source: "incomplete"}
+    assert run["summary"]["refreshed_vulnerabilities"] == 0
+    assert {row["vuln_id"]: row["status"] for row in run["coverage"]} == {
+        identifier: "skipped" if index < 2 else "cancelled" for index, identifier in enumerate(ids)
+    }
 
 
 def test_dead_owner_is_incomplete_but_concurrent_live_owner_is_not(app, client):
@@ -1053,6 +1356,7 @@ def test_run_list_is_paginated_in_the_database_without_loading_change_bodies(app
     assert all("coverage" not in item and "changes" not in item for item in data["runs"])
     assert data["runs"][0]["summary"] == {
         "total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0, "refreshed_vulnerabilities": 1,
+        "no_record_vulnerabilities": 0,
     }
     assert data["runs"][0]["status"] == "complete"
     assert not [statement for statement in statements if "snapshot" in statement]

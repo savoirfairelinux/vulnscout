@@ -1,5 +1,17 @@
 from typing import Optional
+from typing_extensions import NotRequired, TypedDict
 from vulnscout_mcp.client import VulnScoutClient, VulnScoutError
+
+
+class RiskReference(TypedDict):
+    risk_id: str
+    threat_id: NotRequired[str]
+
+
+class WriteTarget(TypedDict):
+    package: str
+    variant_id: str
+    risk_links: NotRequired[list[RiskReference]]
 
 
 def _write_assessment_impl(
@@ -9,7 +21,7 @@ def _write_assessment_impl(
     packages: Optional[list] = None,
     variant_id: Optional[str] = None,
     variant_ids: Optional[list] = None,
-    targets: Optional[list] = None,
+    targets: Optional[list[WriteTarget]] = None,
     justification: Optional[str] = None,
     status_notes: Optional[str] = None,
     impact_statement: Optional[str] = None,
@@ -167,7 +179,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
         packages: Optional[list] = None,
         variant_id: Optional[str] = None,
         variant_ids: Optional[list] = None,
-        targets: Optional[list] = None,
+        targets: Optional[list[WriteTarget]] = None,
         justification: Optional[str] = None,
         status_notes: Optional[str] = None,
         impact_statement: Optional[str] = None,
@@ -196,7 +208,7 @@ def register_tools(server, client: VulnScoutClient) -> None:
           and rejects any that was never observed, rather than filling in
           extra pairs from a cross-product.
 
-        The call is rejected (and nothing written) only if a package or
+        The call is rejected (and nothing written) if a package or
         variant does not exist, the variants belong to different projects, or
         a target pair was never observed. Compare the "N target(s)" count in
         the result with the expected pair count to detect skipped pairs.
@@ -210,8 +222,8 @@ def register_tools(server, client: VulnScoutClient) -> None:
 
         Returns a success summary when the API response includes an `assessment`
         object, followed by "; replaced: <id> (<deleted|trimmed>, <variant ids>)"
-        for each pending AI assessment the write replaced. If the response does not include `assessment`, the call is treated
-        as failed and the raw response payload is returned instead. Client errors
+        for each pending AI assessment the write replaced. If the response does not include `assessment`,
+        the call is treated as failed and the raw response payload is returned instead. Client errors
         are returned as an `Error: ...` string.
 
         Args:
@@ -230,7 +242,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     pairs. Use this instead of `packages`/`variant_id`/`variant_ids`
                     for a multi-variant group whose members do not all share the
                     same affected package set. Takes precedence over
-                    `packages`/`variant_id`/`variant_ids` when given.
+                    `packages`/`variant_id`/`variant_ids` when given. For non-AI assessments,
+                    a target may include risk_links: [{"risk_id": "R1", "threat_id": "T2"}]. Use only IDs from that
+                    variant's saved STRIDE records; the optional threat must belong to the risk.
+                    Omitted or [] means no modeled risk linked, not absence of risk.
             justification: Required when status is 'not_affected'. OpenVEX values:
                     component_not_present, vulnerable_code_not_present,
                     vulnerable_code_not_in_execute_path,
@@ -239,7 +254,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     code_not_reachable, requires_configuration, requires_dependency,
                     requires_environment, protected_by_compiler, protected_at_runtime,
                     protected_at_perimeter, protected_by_mitigating_control.
-            status_notes: Free-text notes about the assessment.
+            status_notes: Free-text notes shared across all targets. For AI assessments, cite
+                    evidence-backed saved risk and threat IDs only here. Include citations and
+                    supporting details only if independently applicable to every exact package/variant
+                    target. Matching IDs alone are not enough. Omit them if scope is ambiguous.
             impact_statement: Free-text description of impact.
             workaround: Workaround description.
             responses: CycloneDX response tags. Valid values: can_not_fix, will_not_fix,
@@ -349,7 +367,10 @@ def register_tools(server, client: VulnScoutClient) -> None:
                     not_affected, affected, fixed. CycloneDX VEX values: in_triage,
                     false_positive, not_affected, exploitable, resolved,
                     resolved_with_pedigree.
-            status_notes: Free-text notes about the assessment.
+            status_notes: Free-text notes shared across all targets. Cite evidence-backed saved
+                    risk and threat IDs only here. Include citations and supporting details only
+                    if independently applicable to every exact package/variant target. Omit them
+                    if scope is ambiguous.
             justification: Required by the server when status is 'not_affected'.
                     OpenVEX values: component_not_present, vulnerable_code_not_present,
                     vulnerable_code_not_in_execute_path,

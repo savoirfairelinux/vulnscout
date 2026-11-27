@@ -111,12 +111,18 @@ it was queued. Unsaved form text and API keys are not sent automatically.
 All requests go to one **AI queue** kept by the VulnScout server and shared by
 every browser tab and by `./vulnscout assess`/`review` (see
 [Assess from the CLI or CI](#assess-from-the-cli-or-ci)). Every tab shows the
-same requests and their live progress. The queue has two lanes: assess and
-review actions run one at a time in submission order, while chat messages run
+same requests and their live progress. Assessments, reviews and context imports
+share five concurrent slots. Actions with conflicting targets wait. Chat messages run
 in their own lane and never wait behind an action. The requests of one
 conversation always run in order. A failed request does not block the queue:
 later requests keep running, and the failed one stays listed until you retry or
 remove it.
+Agent writes refresh the current data in the background, so you can keep
+working with vulnerabilities and reviews while assessments are queued or
+running. The displayed data may briefly lag behind a write. If a Review
+verdict refresh fails, the previous verdicts stay visible. The refresh warning
+clears after a successful refresh without dismissing messages about your own
+edits. Switching scope still waits for the new scope's data to load.
 The person button in the header switches to **Conversations**: the main
 conversation first, then action conversations grouped into **Needs attention**,
 **Running**, **Waiting**, and **Finished**. Each shows its origin, queue position,
@@ -205,9 +211,11 @@ Assess and review actions follow the repository's `cve-assessment` and
 `assessment-review` skills, so the built-in Agent and external clients use the
 same methodology. The Agent can read VulnScout data, uploaded source references
 and the skill files, and fetch public advisory pages such as NVD and GHSA
-(disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no shell or host
-filesystem access**; provision a **Codebase directory** as described below
-to expose source through the bounded MCP tools. Missing evidence remains an uncertainty, never proof that the
+(disable with `VULNSCOUT_AGENT_WEB_ACCESS=off`). It has **no direct host
+filesystem access**. Explicitly approve and attach host folders
+as described below to expose host source through the bounded MCP tools. Only attached
+host folders support the isolated read-only shell described in [AI Agent Development](agent-chat.md).
+Missing evidence remains an uncertainty, never proof that the
 product is safe.
 
 Submitted AI assessments remain pending until a human approves them.
@@ -319,14 +327,14 @@ opens its page; there is one **Save changes** button per page and no auto-save.
 Leaving a page with unsaved changes asks to Save, Discard or Cancel.
 
 A variant page has four tabs, **Context**, **System**, **Threat model** and
-**Risks**. Edits are kept when you switch tabs. **Copy from...** replaces the
+**Risks**. You can save **Context** or **System** on its own and add threats and
+risks later. Edits are kept when you switch tabs. **Copy from...** replaces the
 whole draft with another variant's context (any project); nothing is saved until
 you save. Uploaded references are never copied.
 
-**Context** holds the variant description, the server codebase directory,
-environment and other information. Directory access is the only codebase method
-shown on this page; legacy uploaded references and external paths remain stored
-for API compatibility. The other tabs edit a STRIDE model:
+**Context** holds the variant description, the attached host folders, environment
+and other information. Existing uploaded references remain available through
+the API. The other tabs edit a STRIDE model:
 system text fields with Components and Interactions tables (System), a Threats
 table (Threat model) and a Risks table where each risk (`R#`) groups one or
 more threats with an optional description, a likelihood, impact, mitigation and
@@ -338,19 +346,18 @@ cell; it opens the tab and explains each missing value next to its cell.
 Agents receive `threat_model` and `risks` as a plain-text rendering of these
 tables, with the `C#`, `I#`, `T#` and `R#` IDs kept; risks that have no rating,
 mitigation or residual decision are left out of `risks`.
-`get_merged_context` exposes `codebase_directory` with its
-server path and `file_id="directory"`, used with the same MCP browsing tools.
+`get_merged_context` lists approved host folders as `mounts` with their scoped
+`file_id="mount:<alias>"`, not filesystem paths.
 Merged context responses are limited to 12 KiB of UTF-8 content per tool call
 to avoid Copilot's large-tool-output file offloading. Continue with the returned
 `next_offset` until it is `null`, concatenating pages in order before analyzing
 or assessing a variant. Offsets count characters, not bytes.
 The MCP `update_variant_context` tool cannot change the
-threat model, risks or directory. `get_merged_context` with
+threat model, risks or host attachments. `get_merged_context` with
 `include_model=true` and `update_variant_threat_model` read and edit the System
 text and STRIDE tables as structured rows; an update given `expected_updated_at`
 is rejected, without changes, when the variant's context was saved after that
-read. A provisioned directory is exposed automatically without deleting legacy
-uploads or paths, even when an older saved context still selected references or paths.
+read.
 
 The assessment skills and the embedded Agent use the STRIDE model per variant.
 They map the affected component to Components and Interactions, check
@@ -429,12 +436,11 @@ extraction or execution. Only UTF-8 text can be read as source; binary files
 may be stored/listed but cannot provide text evidence. Other archive formats
 are not unpacked.
 
-There is no external source-path setting. Administrators populate or mount the
-variant's provisioned directory; the embedded Agent has no shell or arbitrary
-filesystem access.
+There is no external source-path setting. The embedded Agent has no direct
+host filesystem access.
 Both embedded and external agents can inspect uploaded references through
 `get_merged_context` (which supplies reference IDs), then `list_codebase_files`,
-`search_codebase` and `read_codebase_file`. The embedded Agent and external
+`read_codebase_file` and `read_codebase_files`. The embedded Agent and external
 assessment skills use each variant's own uploads as additional evidence and
 cite IDs, archive member paths and line numbers.
 
@@ -451,131 +457,206 @@ content is untrusted evidence, not agent instructions. Partial uploads,
 unreadable files, conflicting versions or truncated searches must be reported
 as evidence gaps, not used to claim a component is absent.
 
-### Administrator-provided codebase directories
+### Attached host folders
 
-CI pipelines can create or mount `context-<sanitized-project>-<sanitized-variant>`
-directly under `VULNSCOUT_CACHE_DIR` and populate it with reviewed source.
-Merged-context, directory-status and directory-source lookups automatically
-register an existing readable directory and expose it to assessments and reviews.
-No web interaction, provisioning request or editor save is required. These reads
-never create filesystem paths. Automatic discovery rejects ambiguous names shared
-by unregistered variants: use distinct names or explicitly provision the intended
-owner instead of allowing an arbitrary reader to claim the source.
+Attach several named folders from the **container host** to a variant, for
+example the application source as `src` and a Yocto build tree as `build`,
+without copying files, uploading archives or restarting the container. Agents
+browse, read and search each one read-only with `file_id="mount:<alias>"`, so a
+search of `src` never scans `build`. `get_merged_context` lists them under
+`mounts` (`alias`, `file_id`). Existing cache folders are not discovered or
+modified by the context feature; approve and attach an appropriate host folder
+explicitly if its contents are still needed as evidence.
 
-Alternatively, open the variant's **Context** tab and click **Create codebase
-directory** to create a missing directory. Initial registration, whether automatic
-or explicit, marks older pending assessments outdated without saving other
-context fields. The page displays the **container path** and whether the directory
-is available, empty, missing or unreadable.
-**Refresh directory status** checks files or mounts added by an administrator;
-it does not change the context draft. **Save changes** is not required for
-directory discovery or source access.
+**Image prerequisite:** The default `v0.26` image includes the host helper and
+the container-side attach command. If you have overridden `VULNSCOUT_IMAGE`,
+use an image with host-folder support before starting the container.
+`--dev` alone does not supply the host helper.
 
-Status includes **Files** and **Directories** counts after a complete scan,
-including on refresh. Files count eligible regular files (even if binary or too
-large to read); directories count eligible subdirectories, including empty ones,
-but exclude the root. Hidden/sensitive names and linked entries are excluded.
-Empty trees report zero files. Missing/unreadable directories and incomplete or
-over-budget scans do not report counts; failed refreshes clear previous totals.
-
-Directories live directly under `VULNSCOUT_CACHE_DIR` (normally
-`/cache/vulnscout`), named
-`context-<sanitized-project>-<sanitized-variant>`, without database IDs. Only ASCII
-letters, digits, underscores and hyphens are used; each name segment is truncated
-to 48 characters, with `unnamed` for an empty segment. If another variant already
-owns the resulting name (including collisions from sanitization, truncation or
-hyphen placement), creation returns HTTP 409 instead of sharing its files.
-Choose distinct project/variant names in that case. The name is saved at first
-provisioning: project/variant renames do **not** move it or break mounts. Existing
-UUID-suffixed directories retain their saved paths; they are not automatically
-renamed.
-Deleting a variant/project revokes access through its IDs but **retains this
-directory and its contents**, unlike uploaded references. An administrator must
-unmount and remove retained directories manually. Recreating the same names
-reuses the portable directory and its contents; remove or replace retained files
-before recreating a variant if that evidence should not be reused.
-
-To transport a source snapshot to another instance, use the same project/variant
-names and place or mount the snapshot under the displayed cache directory.
-For an older UUID-suffixed snapshot, use the destination's displayed directory
-name rather than carrying over its old UUID suffix.
-
-For the standard wrapper's cache volume, the displayed
-`/cache/vulnscout/<directory-name>` maps to
-`$VULNSCOUT_CACHE_DIR/<directory-name>` on the **server host** (by default
-`.vulnscout/cache/<directory-name>`). Copy a reviewed, secret-free source snapshot
-into the provisioned host directory, for example:
+**From the CLI** (use an existing project and variant; both default to `default`):
 
 ```bash
-cp -R /srv/reviewed-source/. /srv/vulnscout-cache/<directory-name>/
+./vulnscout ai-context attach -p demo -v x86 src=/work/app build=/work/build/tmp/work
+./vulnscout ai-context list -p demo -v x86          # alias, availability, host path
+./vulnscout ai-context detach -p demo -v x86 build
+./vulnscout ai-context helper status                # check helper reachability
 ```
 
-Replace both example paths and `<directory-name>` with your deployment's values.
-Do not copy an entire home directory. The server process needs read permission on
-files and read/search permission on every directory. Provisioning uses mode
-`0750`, owned by the API process; copy files as that owner or grant its group
-read access (typically `0640` files, `0750` directories). With the standard
-wrapper, check `USER_UID`/`USER_GID` in `config.env`; rootless Podman uses the
-wrapper's keep-id mapping. Do not solve permission errors with world-writable
-permissions. VulnScout does not recursively change ownership inside these
-administrator-managed directories.
+`attach` approves exactly the named folder for that variant and alias. No
+per-folder `config set` is required. The parent directory is not approved.
+Relative paths are resolved on the host. Aliases are 1-32 lowercase letters,
+digits, `_` or `-`, starting with a letter or digit, unique per variant;
+re-attaching the same folder under the same alias is a no-op, and a different
+folder needs `detach` first. A variant can have at most 32 attached folders.
 
-Alternatively, add a read-only bind mount to your existing container deployment.
-For example, add this volume alongside its normal writable cache volume in
-Compose, using the **exact displayed container path** as the target:
+Host-folder reads return whole lines within a 64 KiB JSON response. If even
+one line cannot fit, `partial_line: true` marks its content as a prefix only;
+`next_line`, when present, continues with the following line.
 
-```yaml
-services:
-  vulnscout:
-    volumes:
-      - /srv/vulnscout-cache:/cache/vulnscout
-      - /srv/reviewed-source:/cache/vulnscout/<directory-name>:ro
-```
+**From the web UI.** The variant's **Context** tab shows the host command to run,
+each attached folder's availability, and actions to refresh status or detach.
+Open the help beside **Attached host folders** for attach instructions, or the
+help beside an **Unavailable** status for that folder's diagnostic. Above
+**Refresh folder status**, the page offers a helper command only when the
+diagnostic recommends starting or restarting it. When the helper is reachable,
+restore missing folders at their listed paths and refresh. Other unavailable
+folders have individual reapproval commands, so one folder cannot block the
+others. Verify each path on the container host before reapproving it.
+Neither the browser nor the REST API can authorize a new host path. Folders
+attached by a previous version without a host CLI approval must be approved
+with the host command before they can be read. Attaching or detaching marks
+older pending AI assessments outdated, like other source changes.
 
-The equivalent Docker/Podman volume argument is
-`--volume /srv/reviewed-source:/cache/vulnscout/<directory-name>:ro`.
-Provision first, then recreate the container with the added mount. The wrapper
-does not add arbitrary mounts from the Context form: customize your deployment
-configuration for this option. On SELinux systems provide an appropriate
-container-readable label (for example `:ro,Z` only when private relabeling is
-appropriate), and account for rootless UID mapping. Keep the parent cache
-writable for VulnScout's database and metadata; only the source mount is read-only.
-**Remote workstation paths are not automatically accessible**: copy the snapshot
-to the server or mount storage available to that server.
+Open the UI on localhost and use its same-origin API. Host-folder endpoints
+require a loopback peer (or the local container forwarder on a wrapper-created,
+loopback-only publication), a localhost Host header and, when present, a matching
+Origin. Do not expose the local service through an external reverse proxy.
+On upgrade, use an updated backend image and run `./vulnscout restart` with the
+updated wrapper to recreate the container: `serve` alone does not replace an
+existing public port mapping or mark it as loopback-only.
+If you set the wrapper's `VULNSCOUT_BIND_ADDRESS` to a LAN address or `0.0.0.0`,
+ordinary UI/API access remains available, but the Agent and host-folder endpoints do not
+trust container-forwarded requests. Use `./vulnscout ai-context` on the host
+to manage attachments.
 
-The embedded Agent still has no shell or arbitrary filesystem access. Merged
-context returns `codebase_directory.file_id="directory"` for a provisioned
-directory, and `list_codebase_files`, `read_codebase_file` and
-`search_codebase` accept that ID within the variant's existing scope. Directory
-availability takes precedence over uploads and external paths in merged source
-evidence without deleting their stored data. An empty `files` list means there
-are no active uploaded references, not that the directory is empty. Text context
-exports/imports preserve the effective source, not
-directory names, mounts or contents; provision the destination variant's own
-directory separately. **Copy from...** does not copy server-side source.
+**How it works and security model.**
 
-Browsing rejects symbolic links (including the root and any replaced path
-component), hard-linked files and special files. It excludes all hidden
-files/directories and names matching `*secret*`, `*credential*`, `*password*`,
-`*token*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `id_rsa*`,
-`id_ed25519*`, `id_dsa*`, `id_ecdsa*`, `kubeconfig`, `*.kdbx`, `*.sqlite*`,
-`*.db`, `*~` and `*.bak`
-(case-insensitive). This is a filename safeguard, **not secret detection**;
-administrators must remove sensitive content from otherwise eligible files.
-Only UTF-8 source is readable. There is no aggregate directory/upload-size cap,
-but each operation visits at most **500,000 entries** (excluded directories are not
-traversed), each read is limited to **10 MiB/file**, listings/reads/searches to
-**64 KiB of serialized response**, pages to **200 files/lines**, and searches to
-**100 MiB of candidate files**, **100 matches**, **500 characters/snippet** and
-**200 query characters**. Oversized responses fail explicitly; reduce the page
-size, line count or match count. Narrow the source snapshot or search pattern
-when a budget is exceeded. Excluded/binary/oversized files and partial inventories
-cannot establish absence of vulnerable code.
+- The wrapper starts or reuses an **unprivileged helper process on the host, as
+  the invoking user** (never root; it refuses to run as root). It needs `python3`
+  3.9 or newer on the host and uses only its standard library. Even in dev mode
+  the wrapper extracts the helper from the trusted configured image into host-only
+  state, once per image ID; rebuild the image to test helper changes. `vulnscout stop`
+  and `ai-context helper stop` stop it.
+- It listens on a **private Unix socket** `host-helper/helper.sock` inside
+  `VULNSCOUT_CACHE_DIR`, which the container already mounts at
+  `/cache/vulnscout`: the directory is `0700`, the socket `0600`, both owned by
+  the invoking user, and the helper also checks the peer's credentials (the same
+  user, or root for rootful engines). Attaching folders later therefore needs no
+  container restart, and no container ID, mount or engine option changes. Docker
+  (rootful or rootless) and rootless Podman (with the wrapper's keep-id mapping)
+  can open an owner-only socket under Unix permissions because the container's
+  root maps to the invoking user or to host root. On SELinux hosts the wrapper
+  reads the container's process label (including its MCS categories). The host
+  helper uses `libselinux` to apply that label to its listening socket only.
+  A recreated container with a different label gets a freshly bound socket.
+  The launcher uses the host Python's `fcntl.flock` on a persistent file in
+  the private host state directory so concurrent commands cannot stop or
+  overwrite each other's replacement helper. No `flock` executable is needed.
+  This requires matching launcher and image versions, not a host policy
+  change, `--privileged`, or disabling SELinux.
+- The **backend database is the source of truth** (variant, alias, host path,
+  creation time) for the UI, API, CLI and agents; every request is checked
+  against it before reaching the helper, so a detached alias is refused at once.
+  The **helper is the enforcement point**: it keeps its own alias registry in the
+  host-only `VULNSCOUT_HOST_HELPER_STATE_DIR` (default `.vulnscout/host-helper`,
+  outside the cache mount). Before a database write, the helper checks the folder
+  and signs a CLI approval for its attachment ID, variant, alias, path and the
+  opened directory's identity. On Linux kernels and filesystems supporting
+  exportable file handles and unique mount IDs (Linux 6.12+), that identity
+  includes the directory generation. Approval survives a helper restart on
+  the same mount within the same boot.
+- A **host reboot** changes the boot ID; mount IDs from the previous boot
+  no longer identify the current mounts. New approvals
+  can survive it when the folder and the private approval key are on the host's
+  **same ext4 root mount** and the kernel supplies its filesystem UUID and a
+  generation-bearing directory handle. The helper verifies the filesystem UUID,
+  key-file handle, directory handle, and membership in the *current* root mount;
+  even a bind mount of the original directory is not interchangeable. Separate
+  data mounts, bind mounts, and other filesystems do not get this guarantee.
+  The trusted host and its private key must be preserved; these checks do not
+  authenticate a host restored wholesale from a disk image.
+- If only boot-scoped handles are available, run the host attach command again
+  after a host reboot. Without suitable handles the helper holds the approved
+  directory open: run the attach command again after a helper restart. At most
+  128 session-only directory descriptors are kept; unactivated approvals
+  expire after five minutes and detaching releases an active descriptor.
+  Replacing the root directory requires fresh approval even if its inode is
+  reused; editing files inside it does not. Older path-only or device/inode
+  approvals require a fresh attach after upgrade. Older signed boot-scoped
+  approvals still work where their exact identity matches, but cannot be upgraded
+  from a path or refreshed automatically after reboot. Verify the host directories,
+  then repeat the original host `ai-context attach` with the same project, variant,
+  aliases and paths; there is no need to detach first. Use a matching wrapper
+  and image: unconsumed permits from old helpers are not valid.
+- **Rolling back the wrapper and image:** the previous helper reports the same
+  protocol version but cannot read the new boot-scoped (`b`) or reboot-persistent
+  (`d`) proofs. This affects folders first attached **or reapproved** with those
+  proofs, even if the host has not rebooted. Check the directories and rerun
+  `ai-context attach` with the rolled-back launcher and the original project,
+  variant, aliases and paths. You do not need to detach first.
+- The database saves the proof so activation can retry. If the CLI reports
+  `activation pending`, the attachment
+  was saved. Run `ai-context list` to retry and check availability. Keep the
+  private helper state: if its signing key is
+  lost, repeat the host command. An offline detach is recorded for retry and
+  cannot revoke a later attachment using the same alias. Host-source reads use
+  the exact path returned by the database lookup and validate/open it in the same
+  helper request, rather than resolving the alias a second time.
+- Requests are scoped by **variant ID and alias**. Paths are relative to the
+  attached folder; absolute paths, `..`, empty components and hidden or sensitive
+  names (except a single-link regular `.config` file) are rejected, and every path
+  component, including each ancestor of the attached folder, is opened relative to a
+  verified directory descriptor without following symbolic links, so links
+  (including a directory swapped for a link) cannot escape. Hard-linked regular
+  files inside the folder are readable with the legacy read operation, but are not
+  returned by shallow navigation, searched by single-file search or copied into shell snapshots.
+- The helper is **read-only**: it can check status, stage
+  and activate approvals, update its private registry, list or read source
+  files, and run commands against a filtered snapshot in an isolated worker.
+  No operation creates, writes or deletes
+  anything under an attached folder.
+- Bounds: recursive listings visit at most **500,000 entries** or **10 s**, return pages of
+  200 files and report `truncated=true` (with `total` as a lower bound) when a
+  budget stops them; reads are limited to **10 MiB/file**, 200 lines and
+  **64 KiB**. File patterns are limited to 512 characters
+  and **16** `*`/`?` wildcards, because a glob match cannot be interrupted by the
+  time limits. At most 8 requests run at once.
+- Large trees (for example a Yocto build directory):
+  - Read known paths directly. An alias identifies an attachment, not its layout.
+    From the target SBOM/build metadata, choose the nearest known folder and use
+    `list_codebase_children` to discover immediate directories and files. It
+    neither walks descendants nor creates a shell snapshot. An empty page with
+    `next_cursor` is incomplete. Follow relevant branches, not a recursive root sample.
+  - Attach the narrowest useful folder. `list_codebase_files` accepts `folder`, a sub-folder of the
+    attachment. For the CLI example above, `build` is already rooted at the Yocto
+    work directory: use `<tuple>/<recipe>` from discovered paths, not
+    `build/tmp/work/<tuple>/<recipe>`. On an enclosing mount, retain the observed
+    prefix instead. The walk starts at `folder`;
+    `pattern` is relative to `folder`, while returned paths stay relative to the
+    attached folder, so they can be passed to `read_codebase_file` unchanged.
+    `folder` must be a plain relative path: `..`, absolute paths, hidden or
+    sensitive names and links are rejected, and every component is opened without
+    following links. This option is available for attached host folders.
+  - Without `folder`, start `pattern` with a literal path
+    from metadata or the listing instead of `*curl*`: folders that cannot match the
+    literal prefix are never opened and non-matching files are never stat'ed.
+  - Listing uses a bounded Python walk (`engine="python"`).
+    `visited_entries` includes nonmatching and excluded entries encountered during
+    traversal.
+  - A budget limit, I/O error or skipped path sets `truncated=true` with a message.
+    `skipped_paths` counts files whose paths cannot be used in a read request.
+    Narrow `folder` or `pattern` for a budget limit; check access and retry for an
+    I/O error. An incomplete listing cannot establish absence.
 
-Directory contents are live, not immutable evidence. Administrator edits and
-mount changes outside VulnScout do **not** automatically mark pending assessments
-outdated. Prefer versioned, read-only snapshots, identify their revision in the
-context, and re-review assessments after source changes.
+**Unavailability is explicit.** When the helper is not running, the AI Context
+page shows **Host folder helper unavailable** and each folder as
+**Unavailable**. CLI attach fails if the helper cannot start. HTTP source reads
+return 503 if the helper cannot be reached. A 504 instead means the helper response timed out;
+that lookup is incomplete, not proof the helper is stopped or evidence absent. Restart a stopped helper
+with `./vulnscout ai-context helper start` (or any `vulnscout` command). Its log
+is `helper.log` in the state directory.
+
+Limitations: the helper runs on the host that runs the container, so folders on
+a remote workstation are not accessible. The socket is shared through a bind
+mount, which requires a Linux container host (not Docker Desktop's VM), and an
+engine that maps container root to the invoking user or to host root: setups
+that remap it to another unprivileged UID (for example Docker `userns-remap`)
+cannot connect. Approve only roots whose content you may
+share with the selected AI provider; the filename exclusions are a safeguard,
+not secret detection. On SELinux-enforcing hosts, policy may deny the container
+from connecting to a socket created by a host process; check the audit log if
+folders stay unavailable while the helper runs. Context exports, imports and
+**Copy from...** do not carry attached folders.
 
 ## Review AI Assessments
 
@@ -587,17 +668,43 @@ Pending AI assessments must be reviewed by a human before they become official.
    the same details as a normal assessment (status, justification, impact
    statement, notes, packages, and variant).
 3. Click **Edit** on the vulnerability modal to enter editing mode — the
-   **Approve** / **Reject** buttons only appear on the panel once editing mode
-   is active.
+   **Approve** / **Edit** / **Reject** buttons only appear on the panel once
+   editing mode is active.
 4. Use the panel's action buttons:
    - **Approve** — promotes the assessment to an official (`custom`)
      assessment. It now affects the vulnerability's status and is included in
      the OpenVEX export.
+   - **Edit** — lets you amend the suggestion's notes, justification, impact
+     statement and workaround before approving it. Its status, packages and
+     variants are read-only. If the verdict is wrong, reject the suggestion
+     rather than approving it with different wording. In edit mode the actions
+     become:
+     - **Confirm and approve** — saves your changes and approves the
+       assessment in a single step, exactly like **Approve** but with the
+       edited content. The message (notes, or the impact statement for
+       *Not applicable* / *False positive*) cannot be empty. For *Not applicable*,
+       the editor shows an inline error if both justification and impact
+       statement are missing. If the save fails,
+       the editor stays open with your changes and shows the error. While
+       approval is in progress, the vulnerability modal cannot be closed
+       or used to navigate to another vulnerability.
+       When Notes displays an imported impact statement, editing it moves the
+       corrected message to notes and clears the old impact statement so both
+       OpenVEX and CycloneDX include the correction exactly once.
+       If someone changed the suggestion while you were editing, reload and
+       review their changes before approving.
+       If a refresh removes the suggestion from the vulnerability modal, your
+       draft stays visible for copying or cancellation and cannot be approved.
+     - **Cancel changes** — discards your changes and restores the
+       **Approve** / **Edit** / **Reject** buttons.
    - **Reject** — deletes the pending AI assessment.
 
 Until it is approved, a pending AI assessment has no effect on the
 vulnerability's status, on scan history/diffs, or on any exported VEX.
-You can also inspect pending suggestions in **Review → AI Assessments**.
+You can also inspect pending suggestions in **Review → AI Assessments**, where
+each row offers the same **Approve**, **Edit** and **Reject** actions.
+In that editor, pressing **Escape** or the close button asks before discarding
+unsaved changes. **Cancel changes** discards the draft immediately.
 
 ## AI Review of Custom Assessments
 
@@ -606,7 +713,7 @@ an independent second opinion on an existing **user-authored** assessment
 (`origin = "custom"`), not a scan-imported assessment or pending AI suggestion.
 Use **Review with AI** on a custom assessment in the vulnerability
 modal, or select assessments on the **Review** page and click **Review selected
-with AI**. Requests run one at a time with the other actions of the AI queue,
+with AI**. Up to five independent reviews can run at once,
 one complete assessment per conversation; every target is reviewed even when the table is scoped
 to one variant. You can close and reopen the chat while it works, inspect errors,
 stop the running review, and remove queued requests without altering your selection.
@@ -655,8 +762,8 @@ support and vendor/distribution backports are separate questions.
   access, then select an available model in the toolbar.
 - **A local model cannot be reached** — the container's loopback is not the
   host's loopback. See [Connect an AI Provider](#connect-an-ai-provider).
-- **The agent cannot read a host source directory** — provision a **Codebase directory**
-  and have an administrator copy or mount source there.
+- **The agent cannot read a host source folder** — check that it is explicitly
+  approved and attached to the right variant, and that the host helper is running.
 - **A request failed** — inspect the error and **Activity** before retrying.
   For queued work, use **Retry failed action** in its conversation, or remove the
   failed action; other requests keep running meanwhile. Check for a saved

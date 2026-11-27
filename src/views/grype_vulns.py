@@ -20,6 +20,8 @@ class GrypeVulns:
     Support only reading and parsing from JSON format.
     """
 
+    SBOM_NAME = "vulnscout:sbom-name"
+
     def __init__(self, controllers: ControllersCache):
         self.packagesCtrl: PackagesController = controllers.packages
         self.vulnerabilitiesCtrl: VulnerabilitiesController = controllers.vulnerabilities
@@ -90,12 +92,14 @@ class GrypeVulns:
         self.packagesCtrl.add(package)
         return package
 
-    def parse_artifact_section(self, artifact: dict) -> Optional[str]:
+    def parse_artifact_section(self, artifact: dict, *, scoped: bool = False) -> Optional[str]:
         """Parse the `artifact` part of grype JSON output."""
         if "name" in artifact and "version" in artifact:
             raw_name = artifact["name"]
             purl_str = artifact.get("purl")
-            name = self._normalize_artifact_name(raw_name, purl_str)
+            name = artifact.get(self.SBOM_NAME) if scoped else None
+            if not isinstance(name, str) or not name.strip():
+                name = self._normalize_artifact_name(raw_name, purl_str)
 
             package = self._build_package(
                 name, artifact["version"],
@@ -152,7 +156,7 @@ class GrypeVulns:
         vuln_data.severity_without_cvss(vulnerability.get("severity", "unknown").lower(), None, False)
         return vuln_data
 
-    def load_from_dict(self, data: dict):
+    def load_from_dict(self, data: dict, *, scoped: bool = False):
         """Load the GrypeVulns object from a dictionary."""
         matches = data.get("matches", [])
 
@@ -166,7 +170,7 @@ class GrypeVulns:
             packages: list[str] = []
 
             if "artifact" in match:
-                pkg_id = self.parse_artifact_section(match["artifact"])
+                pkg_id = self.parse_artifact_section(match["artifact"], scoped=scoped)
                 if pkg_id is not None:
                     packages.append(pkg_id)
                     if pkg_id not in seen_pkg_ids:

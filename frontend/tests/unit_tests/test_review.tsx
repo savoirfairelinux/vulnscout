@@ -95,7 +95,7 @@ jest.mock('../../src/components/TableGeneric', () => {
     const ReactMock = require('react');
     return {
         __esModule: true,
-        default: ({ data, columns, search, onFilteredDataChange, selected, updateSelected }: any) => {
+        default: ({ data, columns, search, onFilteredDataChange, selected, updateSelected, hoverField }: any) => {
             const val = (row: any, col: any) => (col.accessorKey ? row[col.accessorKey] : undefined);
             // Simulate TableGeneric emitting its filtered+sorted rows in display
             // order. The real component applies the text search internally; here
@@ -148,7 +148,8 @@ jest.mock('../../src/components/TableGeneric', () => {
                     </thead>
                     <tbody>
                         {data.map((row: any, i: number) => (
-                            <tr key={i} data-testid="mock-table-row">
+                            <tr key={i} data-testid="mock-table-row"
+                                title={row[hoverField]?.map((text: { content: string }) => text.content).join('\n')}>
                                 {columns.map((col: any, ci: number) => (
                                     <td key={ci}>
                                         {col.cell ? col.cell({ row: rowFor(row), getValue: () => val(row, col) }) : null}
@@ -203,7 +204,7 @@ jest.mock('../../src/helpers/exportJson', () => ({
 
 import Review from '../../src/pages/Review';
 import { downloadJson } from '../../src/helpers/exportJson';
-import { STATUS_VEX_TO_GRAPH } from '../../src/handlers/assessments';
+import Assessments, { STATUS_VEX_TO_GRAPH } from '../../src/handlers/assessments';
 import { AGENT_WRITE_EVENT } from '../../src/types/agent';
 
 const mockedDownloadJson = downloadJson as jest.MockedFunction<typeof downloadJson>;
@@ -232,6 +233,7 @@ function toAssessments(list: any[], vulnTextsMap: Record<string, unknown[]>): an
         }));
         return {
             id: a.id,
+            approval_fingerprint: a.approval_fingerprint,
             vuln_id: a.vuln_id,
             status: a.status,
             simplified_status: STATUS_VEX_TO_GRAPH[a.status] ?? `[invalid status] ${a.status}`,
@@ -372,12 +374,14 @@ type NetworkOpts = {
     allVariantsGate?: Promise<void>;
     variantsOk?: boolean;
     mutationOk?: boolean;
+    approvalError?: string;
     exportOk?: boolean;
     importResult?: Record<string, unknown>;
     vulnDetail?: unknown;
     vulnOk?: boolean;
     /** Keyed by assessment id — served from the AI-review-verdict endpoint. */
     reviews?: Record<string, unknown>;
+    reviewsOk?: boolean;
     assessmentDetails?: Record<string, unknown>;
 };
 
@@ -428,7 +432,9 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
                     ? JSON.stringify({ '@context': 'https://openvex.dev/ns/v0.2.0', statements: [] })
                     : { status: 500, body: JSON.stringify({}) };
             }
-            if (url.includes('/api/assessment-reviews')) return JSON.stringify(reviews);
+            if (url.includes('/api/assessment-reviews')) {
+                return opts.reviewsOk === false ? { status: 503, body: '' } : JSON.stringify(reviews);
+            }
             if (url.includes('/api/assessments/review/ai')) return JSON.stringify(aiReviewList);
             if (url.includes('/api/assessments/review')) return JSON.stringify(reviewList);
             const assessmentId = /\/api\/assessments\/([^/]+)$/.exec(url)?.[1];
@@ -467,6 +473,9 @@ function mockNetwork(reviewList: unknown[] = [], opts: NetworkOpts = {}): void {
         if (url.includes('/api/assessments/review/import-custom-data')) return JSON.stringify(importResult);
         if (url.includes('/api/assessments/review/import')) return JSON.stringify({ status: 'success' });
         if (url.includes('/api/assessments/review/export-update')) return JSON.stringify({ version: 1, assessments: [] });
+        if (url.endsWith('/approve') && opts.approvalError) {
+            return { status: 400, body: JSON.stringify({ error: opts.approvalError }) };
+        }
         if (!mutationOk) return { status: 500, body: JSON.stringify({ status: 'error' }) };
         return JSON.stringify({ status: 'success' });
     });
@@ -706,6 +715,75 @@ describe('Review — bulk AI reviews', () => {
         expect(screen.getByText('Delete selected (1)')).toBeInTheDocument();
     });
 
+    test('waits for all Review reads before replaying a queued write after an assessment list fails', async () => {
+        network([makeAssessment('a1', 'v1')]);
+        queueError = 'Queue is unavailable.';
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click((await screen.findAllByTitle('Select'))[0]);
+        await user.click(screen.getByRole('button', { name: 'Review selected with AI (1)' }));
+        const mutationMessage = await screen.findByText(/Unable to queue AI reviews: Error: Queue is unavailable/);
+
+        let releaseAiList!: () => void;
+        let releaseReviews!: () => void;
+        const aiList = new Promise<void>(resolve => { releaseAiList = resolve; });
+        const reviews = new Promise<void>(resolve => { releaseReviews = resolve; });
+        const respond = async (request: Request) => {
+            const url = new URL(request.url);
+            if (url.pathname === '/api/assessment-reviews') {
+                await reviews;
+                return '{}';
+            }
+            if (url.searchParams.get('origin') === 'ai') {
+                await aiList;
+                return '[]';
+            }
+            return { status: 500, body: 'Assessment list unavailable' };
+        };
+        fetchMock.mockResponseOnce(respond).mockResponseOnce(respond).mockResponseOnce(respond);
+        const requestsBefore = fetchMock.mock.calls.length;
+        const announce = () => window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT, { detail: { tool: 'write_assessment_review' } }));
+        await act(async () => { announce(); announce(); });
+        expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 3);
+
+        await act(async () => { releaseAiList(); });
+        expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 3);
+
+        let finishRecovery!: () => void;
+        const recovery = new Promise<void>(resolve => { finishRecovery = resolve; });
+        fetchMock.mockResponseOnce(async () => { await recovery; return '[]'; });
+        await act(async () => { releaseReviews(); });
+        const warning = await screen.findByText('Failed to refresh review data after an AI write.');
+        expect(screen.getByText('Delete selected (1)')).toBeInTheDocument();
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(requestsBefore + 6));
+        await act(async () => { finishRecovery(); });
+        expect(warning).not.toBeInTheDocument();
+        expect(mutationMessage).toBeInTheDocument();
+    });
+
+    test('refreshes a new variant without waiting for or applying old variant reads', async () => {
+        network([makeAssessment('a1', 'v1')]);
+        const { rerender } = render(<Review variantId="v1" />);
+        await screen.findAllByTitle('Select');
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        const stale = async (request: Request) => {
+            await pending;
+            return request.url.includes('/assessment-reviews') ? '{}' : '[]';
+        };
+        fetchMock.mockResponseOnce(stale).mockResponseOnce(stale).mockResponseOnce(stale);
+        const announce = () => window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT));
+        await act(async () => { announce(); announce(); });
+        rerender(<Review variantId="v2" />);
+        await screen.findAllByTitle('Select');
+        const before = fetchMock.mock.calls.length;
+        await act(async () => { announce(); });
+        expect(fetchMock).toHaveBeenCalledTimes(before + 3);
+        await act(async () => { release(); });
+        expect(screen.getAllByTitle('Select')).not.toHaveLength(0);
+        expect(fetchMock).toHaveBeenCalledTimes(before + 3);
+    });
+
     test('the agent chat follows the backend queue: running, failed elsewhere, retry, and paused', async () => {
         mockNetwork([makeAssessment('a1', 'v1'), makeAssessment('a2', 'v1'), makeAssessment('a3', 'v1')]);
         serveAgentQueue(path => path.endsWith('/models') ? { models: [{ id: 'auto', name: 'Auto' }] } : {
@@ -761,10 +839,13 @@ describe('Review — editing "Apply to variants"', () => {
         expect(screen.getByText('Apply to exact targets:')).toBeInTheDocument();
     });
 
-    test('checking a new variant reconciles the complete target set once', async () => {
-        mockNetwork([makeAssessment('a1', 'v1')]);
+    test('adding a variant waits for confirmation of the shared Notes and saves the reviewed draft once', async () => {
+        const originalNotes = 'Only Variant Alpha: the update path relates to R1 and T2.';
+        const revisedNotes = '  The update path was verified on both targets.  ';
+        mockNetwork([{ ...makeAssessment('a1', 'v1'), status_notes: originalNotes }]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
+        const confirmationName = 'Do these Notes apply to the new targets?';
 
         await openEditor(user);
 
@@ -774,12 +855,34 @@ describe('Review — editing "Apply to variants"', () => {
 
         await user.click(variantCheckbox('Variant Beta'));
         await user.click(screen.getByText('Save Changes'));
+        const dialog = screen.getByRole('dialog', { name: confirmationName });
+        const editor = screen.getByPlaceholderText(/Free text notes/).closest('[role="dialog"]');
+        expect(editor?.closest('[inert]')).not.toBeNull();
+        expect(dialog).toHaveFocus();
+        await user.tab({ shift: true });
+        expect(within(dialog).getByRole('button', { name: 'Back to edit' })).toHaveFocus();
+        expect(reconcileCalls()).toHaveLength(0);
 
-        await waitFor(() => {
-            expect(reconcileCalls()).toHaveLength(1);
-        });
+        await user.keyboard('{Enter}');
+        expect(screen.queryByRole('dialog', { name: confirmationName })).not.toBeInTheDocument();
+        expect(editor?.closest('[inert]')).toBeNull();
+        expect(screen.getByText('Save Changes')).toHaveFocus();
+        expect(reconcileCalls()).toHaveLength(0);
+        expect(variantCheckbox('Variant Beta')).toBeChecked();
+        const notes = screen.getByPlaceholderText(/Free text notes/);
+        expect(notes).toHaveValue(originalNotes);
+        await user.clear(notes);
+        await user.type(notes, revisedNotes);
+
+        await user.click(screen.getByText('Save Changes'));
+        const confirmation = screen.getByRole('dialog', { name: confirmationName });
+        expect(reconcileCalls()).toHaveLength(0);
+        await user.dblClick(within(confirmation).getByRole('button', { name: 'Confirm and save' }));
+        await screen.findByText('Assessment updated successfully!');
+        expect(reconcileCalls()).toHaveLength(1);
 
         const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.status_notes).toBe(revisedNotes);
         expect(body.variant_ids).toEqual(['v1', 'v2']);
         expect(body.packages).toEqual(['pkgA@1.0.0']);
         expect(body.targets).toEqual([
@@ -790,6 +893,52 @@ describe('Review — editing "Apply to variants"', () => {
         expect(body.timestamp).toBe('2024-01-01T00:00:00Z');
         expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
+    });
+
+    test('adding a package to an existing variant also requires confirmation without filling other pairs', async () => {
+        mockNetwork([
+            makeMultiTargetAssessment('a1', 'CVE-2020-1111', [
+                { variantId: 'v1', pkg: 'pkgA@1.0.0' },
+                { variantId: 'v2', pkg: 'pkgB@2.0.0' },
+            ]),
+        ], {
+            packagesByVariant: {
+                v1: [{ name: 'pkgA', version: '1.0.0' }, { name: 'pkgB', version: '2.0.0' }],
+                v2: [{ name: 'pkgA', version: '1.0.0' }, { name: 'pkgB', version: '2.0.0' }],
+            },
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        await user.click(screen.getByRole('checkbox', { name: 'Variant Alpha / pkgB@2.0.0' }));
+        await user.click(screen.getByText('Save Changes'));
+        const confirmation = screen.getByRole('dialog', { name: 'Do these Notes apply to the new targets?' });
+        expect(reconcileCalls()).toHaveLength(0);
+        await user.click(within(confirmation).getByRole('button', { name: 'Confirm and save' }));
+        await screen.findByText('Assessment updated successfully!');
+
+        expect(reconcileCalls()).toHaveLength(1);
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.targets).toEqual([
+            { variant_id: 'v1', package: 'pkgA@1.0.0' },
+            { variant_id: 'v1', package: 'pkgB@2.0.0' },
+            { variant_id: 'v2', package: 'pkgB@2.0.0' },
+        ]);
+    });
+
+    test('adding a target with whitespace-only Notes saves without confirmation', async () => {
+        mockNetwork([{ ...makeAssessment('a1', 'v1'), status_notes: '  \n  ' }]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await openEditor(user);
+        await user.click(variantCheckbox('Variant Beta'));
+        await user.click(screen.getByText('Save Changes'));
+        await screen.findByText('Assessment updated successfully!');
+
+        expect(reconcileCalls()).toHaveLength(1);
+        expect(screen.queryByRole('dialog', { name: 'Do these Notes apply to the new targets?' })).not.toBeInTheDocument();
     });
 
     test('unchecking one target of a multi-target assessment reconciles without deleting its row', async () => {
@@ -822,18 +971,21 @@ describe('Review — editing "Apply to variants"', () => {
         expect(deleteCalls()).toHaveLength(0);
     });
 
-    test('editing without changing variants reconciles exactly once', async () => {
+    test('editing only the Notes reconciles exactly once without confirmation', async () => {
         mockNetwork([makeAssessment('a1', 'v1')]);
         render(<Review projectId="proj1" />);
         const user = userEvent.setup();
 
         await openEditor(user);
+        await user.type(screen.getByPlaceholderText(/Free text notes/), ' revised');
         await user.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
             expect(reconcileCalls()).toHaveLength(1);
         });
 
+        const body = JSON.parse((reconcileCalls()[0][1] as any).body);
+        expect(body.status_notes).toBe('shared note revised');
         expect(putCalls()).toHaveLength(0);
         expect(deleteCalls()).toHaveLength(0);
     });
@@ -1179,13 +1331,13 @@ describe('Review — AI Assessments tab', () => {
 
         await screen.findByTitle('Edit assessment');
         expect(screen.getByRole('button', { name: /AI review/ })).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: 'Outdated' })).toHaveDisplayValue('All');
 
         await user.click(screen.getByText('AI Assessments'));
         await screen.findByTitle('Approve AI suggestion');
 
         expect(screen.queryByRole('button', { name: /AI review/ })).not.toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Show Outdated' })).toBeInTheDocument();
+        expect(screen.getByRole('combobox', { name: 'Outdated' })).toHaveDisplayValue('All');
     });
 
     test('shows the AI assessments empty state when there are none pending', async () => {
@@ -1210,6 +1362,257 @@ describe('Review — AI Assessments tab', () => {
 
         await screen.findByText('AI assessment approved!');
         expect(postCalls().some(c => String(c[0]).includes('/api/assessments/ai1/approve'))).toBe(true);
+    });
+
+    test('editing a pending AI row shows Notes but leaves stored risk links untouched', async () => {
+        const comment = 'For v1 / pkgA@1.0.0, the update path relates to risk R1 and threat T2.';
+        mockNetwork([makeAssessment('a1', 'v1')], {
+            aiReviewList: [{
+                ...makeAssessment('ai1', 'v1'), origin: 'ai', approval_fingerprint: 'original',
+                status_notes: comment,
+                targets: [{
+                    variant_id: 'v1', package: 'pkgA@1.0.0',
+                    risk_links: [{ risk_id: 'R1', threat_id: 'T2', risk_description: 'Saved risk description' }],
+                }],
+            }],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        expect(await screen.findByText(comment)).toBeVisible();
+        expect(screen.queryByRole('columnheader', { name: /Modeled risk links/i })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Saved risk description/)).not.toBeInTheDocument();
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+
+        const notes = await screen.findByPlaceholderText(/Free text notes/);
+        expect(notes).toHaveValue(comment);
+        expect(within(screen.getByRole('dialog')).queryByText('Modeled risk links by target')).not.toBeInTheDocument();
+        const editor = within(notes.closest('fieldset')!);
+        expect(editor.getByText('affected')).toBeVisible();
+        expect(editor.queryByRole('combobox')).not.toBeInTheDocument();
+        await user.type(notes, ' Reviewed.');
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+
+        await screen.findByText('AI assessment approved!');
+        const approveCalls = postCalls().filter(c => String(c[0]).includes('/api/assessments/ai1/approve'));
+        expect(approveCalls).toHaveLength(1);
+        expect(JSON.parse(String((approveCalls[0][1] as RequestInit).body))).toEqual({
+            status_notes: `${comment} Reviewed.`,
+            expected_fingerprint: 'original',
+        });
+        expect(screen.queryByRole('button', { name: 'Confirm and approve' })).not.toBeInTheDocument();
+    });
+
+    test('explains how to recover when a hidden stale risk link blocks approval', async () => {
+        mockNetwork([], {
+            aiReviewList: [makeAssessment('ai1', 'v1')],
+            approvalError: 'Stale modeled risk link for pkgA@1.0.0 (v1): correct or remove it before approval',
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+
+        const editor = within(screen.getByRole('dialog'));
+        expect(await editor.findByText(/rerun the AI assessment with the current threat model/i)).toBeVisible();
+        expect(editor.getByText(/otherwise, review and correct the saved link through the assessment API/i)).toBeVisible();
+        expect(editor.getByPlaceholderText(/Free text notes/)).toHaveValue('shared note');
+    });
+
+    test('shows missing rationale inside the AI editor until the reviewer corrects it', async () => {
+        mockNetwork([], { aiReviewList: [{
+            ...makeAssessment('ai1', 'v1'), status: 'not_affected',
+            justification: 'code_not_reachable', impact_statement: 'Original reason',
+        }] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const editor = within(screen.getByRole('dialog'));
+        const justification = editor.getByRole('combobox');
+        await user.selectOptions(justification, 'none');
+        const impact = editor.getByPlaceholderText(/Why this vulnerability is not exploitable/i);
+        await user.clear(impact);
+        await user.type(impact, '   ');
+        await user.click(editor.getByRole('button', { name: 'Confirm and approve' }));
+
+        expect(editor.getByRole('alert')).toHaveTextContent(/provide a justification or an impact statement/i);
+        expect(postCalls().some(c => String(c[0]).includes('/approve'))).toBe(false);
+        await user.selectOptions(justification, 'code_not_reachable');
+        expect(editor.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    test('a failed refresh and an older response cannot restore approved row actions', async () => {
+        const pending = { ...makeAssessment('ai1', 'v1'), simplified_status: 'Exploitable' };
+        mockNetwork([], { aiReviewList: [pending] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const list = jest.spyOn(Assessments, 'listForReview')
+            .mockResolvedValueOnce([])
+            .mockImplementationOnce(async () => { await gate; return [pending]; })
+            .mockRejectedValue(new Error('refresh failed'));
+        try {
+            await act(async () => { window.dispatchEvent(new Event(AGENT_WRITE_EVENT)); });
+            await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+            await screen.findByText('AI assessment approved!');
+            expect(screen.queryByTitle('Approve AI suggestion')).not.toBeInTheDocument();
+            await act(async () => finish());
+            expect(screen.queryByTitle('Edit AI suggestion')).not.toBeInTheDocument();
+            expect(screen.queryByTitle('Reject AI suggestion')).not.toBeInTheDocument();
+        } finally {
+            finish();
+            list.mockRestore();
+        }
+    });
+
+    test.each(['project', 'variant'])('late approval refresh cannot replace the next %s list', async change => {
+        mockNetwork([], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        const { rerender } = render(<Review projectId="proj1" variantId="v1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const old = { ...makeAssessment('old', 'v1'), simplified_status: 'Exploitable', vuln_id: 'CVE-OLD' };
+        const next = { ...old, id: 'next', vuln_id: 'CVE-NEXT' };
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const list = jest.spyOn(Assessments, 'listForReview').mockImplementation(async (variant, project, origin) => {
+            if (variant === 'v1' && project === 'proj1') {
+                await gate;
+                return origin === 'ai' ? [old] : [];
+            }
+            return origin === 'ai' ? [next] : [];
+        });
+        try {
+            await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+            await waitFor(() => expect(list).toHaveBeenCalledWith('v1', 'proj1', 'ai'));
+            rerender(<Review projectId={change === 'project' ? 'proj2' : 'proj1'}
+                variantId={change === 'variant' ? 'v2' : 'v1'} />);
+            await screen.findByText('CVE-NEXT');
+            await act(async () => finish());
+            expect(screen.getByText('CVE-NEXT')).toBeInTheDocument();
+            expect(screen.queryByText('CVE-OLD')).not.toBeInTheDocument();
+            expect(screen.queryByText('AI assessment approved!')).not.toBeInTheDocument();
+        } finally {
+            list.mockRestore();
+        }
+    });
+
+    test('a refresh that wins the new scope load uses its own tooltip for a shared CVE', async () => {
+        const row = (id: string, content: string) => ({
+            ...makeAssessment(id, 'v1'), simplified_status: 'Exploitable',
+            vuln_texts: [{ title: 'observation', content }],
+        });
+        mockNetwork([], { aiReviewList: [row('a', 'Project A observation')] });
+        const { rerender } = render(<Review projectId="proj1" />);
+        await userEvent.setup().click(await screen.findByText('AI Assessments'));
+        await screen.findByTitle('Project A observation');
+
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const list = jest.spyOn(Assessments, 'listForReview')
+            .mockResolvedValueOnce([])
+            .mockImplementationOnce(async () => { await gate; return [row('b', 'Initial B observation')]; })
+            .mockResolvedValueOnce([])
+            .mockResolvedValueOnce([row('b', 'Refreshed B observation')]);
+        try {
+            rerender(<Review projectId="proj2" />);
+            await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+            await act(async () => { window.dispatchEvent(new Event(AGENT_WRITE_EVENT)); });
+            expect(list).toHaveBeenCalledTimes(4);
+            await act(async () => finish());
+            expect(await screen.findByTitle('Refreshed B observation')).toBeInTheDocument();
+            expect(screen.queryByTitle('Project A observation')).not.toBeInTheDocument();
+        } finally {
+            finish();
+            list.mockRestore();
+        }
+    });
+
+    test('a failed background refresh does not supersede the initial load of the next scope', async () => {
+        mockNetwork([], { aiReviewList: [{ ...makeAssessment('old', 'v1'), vuln_id: 'CVE-OLD' }] });
+        const { rerender } = render(<Review projectId="proj1" />);
+        await userEvent.setup().click(await screen.findByText('AI Assessments'));
+        await screen.findByText('CVE-OLD');
+
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => { finish = resolve; });
+        const next = { ...makeAssessment('next', 'v2'), vuln_id: 'CVE-NEXT', simplified_status: 'Exploitable' };
+        const list = jest.spyOn(Assessments, 'listForReview')
+            .mockResolvedValueOnce([])
+            .mockImplementationOnce(async () => { await gate; return [next]; })
+            .mockRejectedValue(new Error('refresh failed'));
+        try {
+            rerender(<Review projectId="proj2" />);
+            await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+            await act(async () => { window.dispatchEvent(new Event(AGENT_WRITE_EVENT)); });
+            expect(list).toHaveBeenCalledTimes(4);
+            await act(async () => finish());
+            expect(await screen.findByText('CVE-NEXT')).toBeInTheDocument();
+            expect(screen.queryByText('CVE-OLD')).not.toBeInTheDocument();
+        } finally {
+            list.mockRestore();
+        }
+    });
+
+    test('cancelling a pending AI row edit discards it without approving', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        await user.type(await screen.findByPlaceholderText(/Free text notes/), ' changed');
+        await user.click(screen.getByRole('button', { name: 'Cancel changes' }));
+
+        expect(screen.queryByPlaceholderText(/Free text notes/)).not.toBeInTheDocument();
+        expect(screen.getByTitle('Approve AI suggestion')).toBeInTheDocument();
+        expect(postCalls().some(c => String(c[0]).includes('/approve'))).toBe(false);
+    });
+
+    test('Escape and Close protect a dirty AI draft until discard is confirmed', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')] });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const notes = await screen.findByPlaceholderText(/Free text notes/);
+        await user.type(notes, ' changed');
+
+        await user.keyboard('{Escape}');
+        await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+        expect(notes).toHaveValue('shared note changed');
+
+        await user.click(screen.getByRole('button', { name: 'Close AI assessment editor' }));
+        await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+        expect(notes).not.toBeInTheDocument();
+        expect(postCalls().some(c => String(c[0]).includes('/approve'))).toBe(false);
+    });
+
+    test('a failed edited approval keeps the AI row editor open with the error', async () => {
+        mockNetwork([makeAssessment('a1', 'v1')], { aiReviewList: [makeAssessment('ai1', 'v1')], mutationOk: false });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByTitle('Edit assessment');
+        await user.click(screen.getByText('AI Assessments'));
+        await user.click(await screen.findByTitle('Edit AI suggestion'));
+        const notes = await screen.findByPlaceholderText(/Free text notes/);
+        await user.clear(notes);
+        await user.type(notes, 'Edited message');
+        await user.click(screen.getByRole('button', { name: 'Confirm and approve' }));
+
+        expect(await screen.findByText('Failed to approve AI assessment: HTTP 500')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(/Free text notes/)).toHaveValue('Edited message');
+        expect(screen.getByRole('button', { name: 'Confirm and approve' })).toBeEnabled();
     });
 
     test('rejecting a pending AI row calls the reject endpoint with its own id', async () => {
@@ -1860,9 +2263,10 @@ describe('Review — filters, search and keyboard', () => {
         expect(screen.queryByRole('button', { name: /^variants$/i })).toBeNull();
     });
 
-    test('the outdated toggle includes rows with mixed current and outdated assessments', async () => {
+    test('Outdated includes rows with mixed current and outdated assessments', async () => {
         const mixedRow = makeMultiTargetAssessment('mixed-1', 'CVE-2020-MIXED', [
             { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v1', pkg: 'pkgC@1.0.0', outdated: false },
             { variantId: 'v2', pkg: 'pkgB@1.0.0', outdated: false },
         ]);
         mockNetwork([mixedRow, makeAssessment('current', 'v1')]);
@@ -1870,15 +2274,17 @@ describe('Review — filters, search and keyboard', () => {
         const user = userEvent.setup();
 
         await screen.findByText('CVE-2020-MIXED');
-        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Outdated');
 
         await waitFor(() => {
             expect(screen.queryByText('CVE-2020-1111')).not.toBeInTheDocument();
         });
         expect(screen.getByText('CVE-2020-MIXED')).toBeInTheDocument();
+        expect(screen.getByText('Partly outdated')).toBeVisible();
+        expect(screen.queryByText(/^Outdated$/, { selector: 'span' })).not.toBeInTheDocument();
     });
 
-    test('the outdated toggle on the AI Assessments tab includes rows whose context is outdated', async () => {
+    test('Outdated on the AI Assessments tab includes rows whose context is outdated', async () => {
         mockNetwork([], {
             aiReviewList: [
                 { ...makeAssessment('ai1', 'v1'), vuln_id: 'CVE-CTX-OUTDATED', context_outdated: true },
@@ -1889,9 +2295,95 @@ describe('Review — filters, search and keyboard', () => {
 
         await user.click(await screen.findByText('AI Assessments'));
         await screen.findByText('CVE-CTX-OUTDATED');
-        await user.click(screen.getByRole('button', { name: 'Show Outdated' }));
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Outdated');
 
         expect(screen.getByText('CVE-CTX-OUTDATED')).toBeInTheDocument();
+    });
+
+    test('Not outdated hides rows with any outdated assessment', async () => {
+        const mixedRow = makeMultiTargetAssessment('mixed-1', 'CVE-2020-MIXED', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+            { variantId: 'v2', pkg: 'pkgB@1.0.0', outdated: false },
+        ]);
+        mockNetwork([mixedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-MIXED');
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Not outdated');
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-MIXED')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+    });
+
+    test('switching outdated modes updates the visible rows', async () => {
+        const outdatedRow = makeMultiTargetAssessment('old-1', 'CVE-2020-OLD', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+        ]);
+        mockNetwork([outdatedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-OLD');
+        const selector = screen.getByRole('combobox', { name: 'Outdated' });
+        expect(selector).toHaveClass('border-transparent');
+        await user.selectOptions(selector, 'Outdated');
+        expect(selector).toHaveClass('border-cyan-400');
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-1111')).not.toBeInTheDocument();
+        });
+
+        await user.selectOptions(selector, 'Not outdated');
+        expect(selector).toHaveClass('border-cyan-400');
+        await screen.findByText('CVE-2020-1111');
+        expect(screen.queryByText('CVE-2020-OLD')).not.toBeInTheDocument();
+
+        await user.selectOptions(selector, 'All');
+        expect(selector).toHaveClass('border-transparent');
+        await screen.findByText('CVE-2020-OLD');
+        expect(screen.getByText('CVE-2020-1111')).toBeInTheDocument();
+    });
+
+    test('Not outdated on the AI Assessments tab hides rows whose context is outdated', async () => {
+        mockNetwork([], {
+            aiReviewList: [
+                { ...makeAssessment('ai1', 'v1'), vuln_id: 'CVE-CTX-OUTDATED', context_outdated: true },
+                { ...makeAssessment('ai2', 'v1'), vuln_id: 'CVE-CTX-CURRENT' },
+            ],
+        });
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await user.click(await screen.findByText('AI Assessments'));
+        await screen.findByText('CVE-CTX-OUTDATED');
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Not outdated');
+
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-CTX-OUTDATED')).not.toBeInTheDocument();
+        });
+        expect(screen.getByText('CVE-CTX-CURRENT')).toBeInTheDocument();
+    });
+
+    test('reset filters restores the outdated selector to All', async () => {
+        const outdatedRow = makeMultiTargetAssessment('old-1', 'CVE-2020-OLD', [
+            { variantId: 'v1', pkg: 'pkgA@1.0.0', outdated: true },
+        ]);
+        mockNetwork([outdatedRow, makeAssessment('current', 'v1')]);
+        render(<Review projectId="proj1" />);
+        const user = userEvent.setup();
+
+        await screen.findByText('CVE-2020-OLD');
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Outdated' }), 'Not outdated');
+        await waitFor(() => {
+            expect(screen.queryByText('CVE-2020-OLD')).not.toBeInTheDocument();
+        });
+
+        await user.click(screen.getByText('Reset Filters'));
+        await screen.findByText('CVE-2020-OLD');
+        expect(screen.getByRole('combobox', { name: 'Outdated' })).toHaveDisplayValue('All');
     });
 
     test('filtering by status hides non-matching rows', async () => {
@@ -2567,6 +3059,24 @@ describe('Review page AI review column', () => {
 
         const flags = await screen.findByTitle('1 differ · 1 not reviewed');
         expect(flags.parentElement).toHaveClass('justify-center');
+    });
+
+    test('keeps verdicts when only their AI refresh fails and installs the recovered verdicts', async () => {
+        const opts: NetworkOpts = { reviews: { 'assess-1': [differsReview] } };
+        mockNetwork([multiTargetAssessment], opts);
+        render(<Review projectId="proj1" />);
+        await screen.findByTitle('1 differ · 1 not reviewed');
+
+        const announce = () => window.dispatchEvent(new CustomEvent(AGENT_WRITE_EVENT));
+        opts.reviewsOk = false;
+        await act(async () => { announce(); });
+        const warning = await screen.findByText('Failed to refresh review data after an AI write.');
+        expect(screen.getByTitle('1 differ · 1 not reviewed')).toBeInTheDocument();
+
+        mockNetwork([multiTargetAssessment], { reviews: { 'assess-1': [{ ...differsReview, verdict: 'agrees' }] } });
+        await act(async () => { announce(); });
+        expect(await screen.findByTitle('1 agree · 1 not reviewed')).toBeInTheDocument();
+        expect(warning).not.toBeInTheDocument();
     });
 
     test('renders a dash for assessments with no review', async () => {

@@ -12,7 +12,7 @@ from sqlalchemy import ColumnElement, case, exists, func, or_, select, true
 
 from ..extensions import db
 from ..helpers.datetime_utils import ensure_utc_iso
-from ..helpers.refresh_runs import source_statuses
+from ..helpers.refresh_runs import NO_PROVIDER_RECORD, source_statuses, target_has_coverage_gap
 from ..models.refresh_run import (
     RefreshChange, RefreshRun, RefreshRunScope, RefreshTarget, RefreshTargetLink,
 )
@@ -151,17 +151,19 @@ def metadata(run: RefreshRun, params: dict, scope_rows: list[RefreshRunScope] | 
                func.coalesce(func.sum(case((RefreshChange.kind == "first_enrichment", 1), else_=0)), 0))
         .where(*_change_filter(run.run_id, params))
     ).one()
-    refreshed = db.session.scalar(
-        select(func.count(RefreshTarget.vuln_id.distinct()))
-        .where(*_target_filter(run.run_id, params), RefreshTarget.status == "complete")
-    )
+    refreshed, no_record = db.session.execute(
+        select(
+            func.count(case((RefreshTarget.status == "complete", RefreshTarget.vuln_id)).distinct()),
+            func.count(case((RefreshTarget.status == NO_PROVIDER_RECORD, RefreshTarget.vuln_id)).distinct()),
+        ).where(*_target_filter(run.run_id, params), RefreshTarget.status.in_(("complete", NO_PROVIDER_RECORD)))
+    ).one()
     if run.finished_at is None:
         status = "running"
     else:
-        unchecked = db.session.scalar(select(exists().where(
-            *_target_filter(run.run_id, params), RefreshTarget.status != "complete",
+        gap = db.session.scalar(select(exists().where(
+            *_target_filter(run.run_id, params), target_has_coverage_gap(),
         )))
-        status = "complete" if not unchecked and all(
+        status = "complete" if not gap and all(
             value == "complete" for value in source_status.values()
         ) else "incomplete"
     return {
@@ -171,8 +173,8 @@ def metadata(run: RefreshRun, params: dict, scope_rows: list[RefreshRunScope] | 
         "source_status": source_status,
         "started_at": ensure_utc_iso(run.started_at), "finished_at": ensure_utc_iso(run.finished_at),
         "status": status,
-        "summary": {"refreshed_vulnerabilities": refreshed, "total_changes": total,
-                    "changed_vulnerabilities": changed, "first_enrichments": first},
+        "summary": {"refreshed_vulnerabilities": refreshed, "no_record_vulnerabilities": no_record,
+                    "total_changes": total, "changed_vulnerabilities": changed, "first_enrichments": first},
     }
 
 
@@ -264,6 +266,7 @@ def init_app(app):
 
     @app.get("/api/refresh-runs/latest", endpoint="get_latest_refresh_run")
     @app.get("/api/refresh-runs/<run_id>", endpoint="get_refresh_run")
+    @app.get("/api/refresh-runs/<run_id>/metadata", endpoint="get_refresh_run_metadata")
     @app.get("/api/refresh-runs/<run_id>/export", endpoint="export_refresh_run")
     def get_refresh_run(run_id=None):
         params = request.args.to_dict()
@@ -280,6 +283,8 @@ def init_app(app):
             if run_id is None:
                 return jsonify(None)
             abort(404, description="Refresh run unavailable, expired, or outside the selected scope")
+        if request.endpoint == "get_refresh_run_metadata":
+            return jsonify(metadata(run, params))
         data = artifact(run, params, paginate=not export)
         if export:
             return Response(export_artifact(data, format_),

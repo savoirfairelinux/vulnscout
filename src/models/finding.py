@@ -144,6 +144,8 @@ class Finding(Base):
         package_id: uuid.UUID | str,
         vulnerability_id: str,
         variant_id: uuid.UUID | str,
+        *,
+        published_only: bool = False,
     ) -> Optional["Finding"]:
         """Return a finding only when a scan observed it for *variant_id*.
 
@@ -157,7 +159,7 @@ class Finding(Base):
         package_id = Finding._resolve_package_id(package_id)
         if isinstance(variant_id, str):
             variant_id = uuid.UUID(variant_id)
-        return db.session.execute(
+        query = (
             db.select(Finding)
             .join(Observation, Observation.finding_id == Finding.id)
             .join(Scan, Scan.id == Observation.scan_id)
@@ -166,8 +168,10 @@ class Finding(Base):
                 Finding.vulnerability_id == vulnerability_id.upper(),
                 Scan.variant_id == variant_id,
             )
-            .distinct()
-        ).scalar_one_or_none()
+        )
+        if published_only:
+            query = query.where(Scan.in_progress.is_(False))
+        return db.session.execute(query.distinct()).scalar_one_or_none()
 
     @staticmethod
     def get_or_create(package_id: uuid.UUID | str, vulnerability_id: str) -> "Finding":

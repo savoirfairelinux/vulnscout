@@ -18,14 +18,36 @@ The columns include:
 - **Status**: the triage status (e.g. Not affected, Exploitable, Fixed).
 - **Justification**: the VEX justification reason, if one was provided (e.g. "component not present", "vulnerable code not reachable").
 - **Impact**: the impact statement describing how the vulnerability affects (or doesn't affect) the product.
-- **Notes**: free-text status notes attached to the assessment.
+- **Notes**: free-text status notes shared across the assessment's targets. AI suggestions should cite STRIDE threat or risk IDs and supporting details only when the evidence applies independently to every exact package/variant target. Variant filters do not hide parts of a note, and rerunning only some targets does not rewrite the original note.
 - **Workaround**: any documented workaround.
 - **Assessment Date**: the assessment record's timestamp.
 - **AI review**: a second opinion on each target of a user-authored assessment. A single target shows ✓ when the review agrees, ⚠ when it differs, ⚠ stale when the assessment was edited since the review, or — when it has not been reviewed. Multi-target rows show counts for each state; hover for a breakdown. Open the vulnerability detail modal to read each target's review and rationale.
 
 ## Search and Filters
 
-The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state. A **Reset Filters** button clears everything back to defaults. See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
+Structured modeled risk links are not shown or editable in Review. New AI
+assessments put threat and risk references in Notes instead. If a saved stale
+link blocks approval, rerun the AI assessment if the target is still active.
+For historical targets, use the [approval API](api.md#approve-an-ai-assessment)
+to review and correct the saved link without changing targets.
+
+When you add a package and variant pair to an assessment with Notes, Review
+and the vulnerability detail editor ask you to confirm that the shared Notes
+apply to the new targets. Go back to revise any citations or supporting
+evidence that do not apply.
+
+The toolbar mirrors the vulnerability table's search bar. Filters include **Status**, **Justification**, and **AI review** (agreed, differed, stale, or no AI review). A multi-target row matches when any target has the selected review state.
+
+On the **Assessments** and **AI Assessments** tabs, the **Outdated** selector defaults to **All**. Choose **Outdated** to show only rows with at least one target marked outdated or, for AI assessments, an outdated AI context. Choose **Not outdated** to exclude those rows. **Reset Filters** restores **All** and the other filter defaults.
+
+A custom assessment target is outdated when its exact finding was observed before
+but is absent from the variant's current published evidence. This includes a CVE
+that disappears while its package remains in the SBOM. A variant is marked
+**Partly outdated** when only some of its assessed findings are missing.
+These labels do not change the assessment or its history and do not depend on
+the selected Evidence mode.
+
+See the "AI review of custom assessments" section in [AI Assessments](ai-assessments.md) for how to request an AI review.
 
 Select rows in **Assessments**, then click **Review selected with AI** to queue
 an independent review of each selected custom assessment, each in its own
@@ -45,6 +67,8 @@ selector is above the chat. Leaving the Review page or changing project/variant
 does not cancel queued reviews; reviews already saved remain.
 
 ## Import and Export
+
+VulnScout JSON still preserves saved modeled risk links per assessment target.
 
 Two buttons in the toolbar handle review portability:
 

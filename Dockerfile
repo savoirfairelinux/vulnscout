@@ -28,14 +28,20 @@ WORKDIR /scan
 RUN apk add --no-cache \
     asciidoctor \
     bash \
+    binutils \
+    coreutils \
     curl \
+    file \
+    findutils \
     git \
+    grep \
     gcompat \
     icu \
     poppler-utils \
     python3 \
     py3-pip \
     ruby \
+    sed \
     shadow \
     sudo \
     unzip \
@@ -71,7 +77,7 @@ COPY --from=buildfront /src/static ./src/static
 
 RUN rm -rf /tmp/patches
 
-ARG VULNSCOUT_VERSION=v0.25.1
+ARG VULNSCOUT_VERSION=v0.26
 ENV VULNSCOUT_VERSION=${VULNSCOUT_VERSION}
 
 LABEL org.opencontainers.image.title="VulnScout"

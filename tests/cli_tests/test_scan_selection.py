@@ -97,8 +97,9 @@ def scanner_environment(tmp_path):
         "from pathlib import Path\n"
         "sbom = next(Path(arg[5:]) for arg in sys.argv[1:] if arg.startswith('sbom:'))\n"
         "assert json.loads(sbom.read_text())['components']\n"
+        "if os.environ.get('TEST_GRYPE_SBOM'): Path(os.environ['TEST_GRYPE_SBOM']).write_text(sbom.read_text())\n"
         "Path(os.environ['TEST_GRYPE_LOG']).write_text(json.dumps(sys.argv[1:]))\n"
-        "print(json.dumps({'matches': []}))\n"
+        "print(json.dumps({'matches': json.loads(os.environ.get('TEST_GRYPE_MATCHES', '[]'))}))\n"
     )
     grype.chmod(0o755)
 
@@ -301,6 +302,140 @@ def test_entrypoint_runs_selected_scanners_on_active_sbom(tmp_path, args, scanne
         assert result.stdout.index("Running OSV scan") < result.stdout.index("Running sbom-cve-check scan")
 
 
+@pytest.mark.parametrize(
+    ("project_settings", "expected"),
+    [
+        (None, {"curl", "gcc-native"}),
+        ({"exclude_native": True, "native_package_exceptions": ["MAKE-native"]}, {"curl", "make-native"}),
+        ({"exclude_native": True, "native_package_exceptions": []}, {"curl"}),
+        ({"exclude_native": False, "native_package_exceptions": []}, {"curl", "gcc-native", "make-native"}),
+    ],
+)
+def test_cli_scanners_honor_native_preferences(tmp_path, scanner_environment, project_settings, expected):
+    env, queries = scanner_environment
+    env.update({
+        "VULNSCOUT_CONFIG": str(tmp_path / "absent-config.env"),
+        "VULNSCOUT_BASE_DIR": str(ROOT),
+        "VULNSCOUT_INPUTS_DIR": str(tmp_path / "inputs"),
+        "VULNSCOUT_CACHE_DIR": str(tmp_path / "cache"),
+        "FLASK_SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'scan.db'}",
+        "TEST_GRYPE_SBOM": str(tmp_path / "grype-sbom.json"),
+    })
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "project-scan.json").write_text(json.dumps({
+        "global": {"exclude_native": True, "native_package_exceptions": ["gcc-native"]},
+        "projects": {} if project_settings is None else {"scan-selection": project_settings},
+    }))
+    sbom = json.loads((ROOT / "tests" / "end_to_end_tests" / "input_cdx.json").read_text())
+    for name in ("gcc-native", "make-native"):
+        sbom["components"].append({
+            "bom-ref": f"pkg:generic/{name}@1.0", "name": name, "version": "1.0",
+            "purl": f"pkg:generic/{name}@1.0", "type": "library",
+            "cpe": f"cpe:2.3:a:example:{name}:1.0:*:*:*:*:*:*:*",
+        })
+    sbom_path = tmp_path / "native.cdx.json"
+    sbom_path.write_text(json.dumps(sbom))
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "scan-selection", "--add-cdx", str(sbom_path),
+         "--perform-scans", "all"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    exported = json.loads(Path(env["TEST_GRYPE_SBOM"]).read_text())
+    assert {component["name"] for component in exported["components"]} == expected
+    queried = {query["package"]["purl"].split("/")[-1].split("@")[0] for query in queries}
+    assert queried == expected
+    assert f"Resolved {len(expected)} active packages" in result.stdout
+    nvd_output = result.stdout.split("Running NVD scan", 1)[1].split("Running OSV scan", 1)[0]
+    scc_output = result.stdout.split("Running sbom-cve-check scan", 1)[1]
+    for name in ("curl", "gcc-native", "make-native"):
+        assert (f"Scanning {name} " in nvd_output) == (name in expected)
+        assert (f"{name}@" in scc_output) == (name in expected)
+
+    matches_path = tmp_path / "matches.json"
+    matches_path.write_text(json.dumps({"matches": [
+        {"artifact": {"name": name, "version": version}}
+        for name, version in (("curl", "7.82.0"), ("gcc-native", "1.0"),
+                              ("make-native", "1.0"), ("outside", "1.0"))
+    ]}))
+    filtered = subprocess.run(
+        ["flask", "--app", "src.bin.webapp", "filter-grype-scan", "--project", "scan-selection",
+         "--variant", "default", "--stage", "matches", "--scanned-sbom", env["TEST_GRYPE_SBOM"], str(matches_path)],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert filtered.returncode == 0, filtered.stderr
+    assert {match["artifact"]["name"] for match in json.loads(matches_path.read_text())["matches"]} == expected
+
+
+def test_grype_findings_keep_scoped_sbom_names_and_kernel_rpms(tmp_path, scanner_environment):
+    env, _ = scanner_environment
+    name, purl = "@scope/widget", "pkg:npm/%40scope/widget@1.0.0"
+    kernel_purl = "pkg:rpm/fedora/kernel-core@1.0"
+    sbom = json.loads((ROOT / "tests/end_to_end_tests/input_cdx.json").read_text())
+    sbom.pop("vulnerabilities")
+    cpe = "cpe:2.3:a:example:widget:1.0.0:*:*:*:*:*:*:*"
+    sbom["components"] = [
+        {"type": "library", "name": name, "version": "1.0.0", "bom-ref": purl, "purl": purl, "cpe": cpe},
+        {"type": "library", "name": "kernel-core", "version": "1.0", "bom-ref": kernel_purl, "purl": kernel_purl},
+    ]
+    path = tmp_path / "scoped.cdx.json"
+    path.write_text(json.dumps(sbom))
+    env.update({
+        "VULNSCOUT_CONFIG": str(tmp_path / "absent.env"), "VULNSCOUT_BASE_DIR": str(ROOT),
+        "VULNSCOUT_INPUTS_DIR": str(tmp_path / "inputs"), "VULNSCOUT_CACHE_DIR": str(tmp_path / "cache"),
+        "FLASK_SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'scan.db'}",
+        "TEST_GRYPE_SBOM": str(tmp_path / "grype-sbom.json"),
+        "TEST_GRYPE_MATCHES": json.dumps([{
+            "artifact": {"name": "widget", "purl": purl, "version": "1.0.0"},
+            "matchDetails": [{"searchedBy": {"Package": {"name": "widget", "version": "1.0.0"}}}],
+            "vulnerability": {"id": "CVE-2026-1001"},
+        }, {
+            "artifact": {"name": name, "purl": "pkg:npm/%40outside/widget@1.0.0", "version": "1.0.0"},
+            "vulnerability": {"id": "CVE-2026-1002"},
+        }, {
+            "artifact": {"name": "other", "purl": "pkg:npm/other@1.0.0", "version": "1.0.0", "cpes": [cpe]},
+            "vulnerability": {"id": "CVE-2026-1003"},
+        }, {
+            "artifact": {"name": "kernel-core", "purl": kernel_purl, "version": "1.0"},
+            "vulnerability": {"id": "CVE-2026-1004"},
+        }]),
+    })
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "scoped", "--add-cdx", str(path), "--perform-scans", "grype"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    exported = json.loads(Path(env["TEST_GRYPE_SBOM"]).read_text())
+    assert {component["purl"] for component in exported["components"]} == {purl, kernel_purl}
+    with closing(sqlite3.connect(tmp_path / "scan.db")) as connection:
+        assert set(connection.execute(
+            "SELECT p.name, f.vulnerability_id FROM packages p JOIN findings f ON p.id = f.package_id"
+        )) == {(name, "CVE-2026-1001"), ("kernel-core", "CVE-2026-1004")}
+
+
+def test_cli_scan_rejects_invalid_native_preferences(tmp_path, scanner_environment):
+    env, _ = scanner_environment
+    env.update({
+        "VULNSCOUT_CONFIG": str(tmp_path / "absent-config.env"),
+        "VULNSCOUT_BASE_DIR": str(ROOT),
+        "VULNSCOUT_INPUTS_DIR": str(tmp_path / "inputs"),
+        "VULNSCOUT_CACHE_DIR": str(tmp_path / "cache"),
+        "FLASK_SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'scan.db'}",
+    })
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "project-scan.json").write_text('{"scan-selection": {"exclude_native": "yes"}}')
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT), "--project", "scan-selection", "--add-cdx",
+         str(ROOT / "tests" / "end_to_end_tests" / "input_cdx.json"), "--perform-scans", "grype"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode != 0
+    assert "Unable to read scan configuration" in result.stderr
+    assert not Path(env["TEST_GRYPE_LOG"]).exists()
+
+
 def test_failed_nvd_scan_still_runs_osv_and_processes_inputs(tmp_path):
     env = os.environ.copy()
     env["VULNSCOUT_CONFIG"] = str(tmp_path / "absent-config.env")
@@ -424,7 +559,7 @@ def test_new_inputs_are_processed_before_scanners(tmp_path, scan_types):
     assert result.returncode == 0, result.stdout + result.stderr
     expected = ["db", "new-scan-run-id", "merge", "process"]
     if scan_types in ("all", "grype"):
-        expected.extend(["export", "merge", "process"])
+        expected.extend(["export", "filter-grype-scan", "filter-grype-scan", "merge", "process"])
     if scan_types != "grype":
         expected.extend(["nvd-scan", "osv-scan", "sbom-cve-check-scan"])
     expected.append("process")

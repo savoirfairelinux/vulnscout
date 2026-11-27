@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import subprocess
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, call
@@ -20,6 +21,73 @@ import pytest
 
 from sbom_cve_check.vuln.comp_id import CompId
 from sbom_cve_check.vuln.vex import VexStatus
+
+
+def test_nvd_snapshot_requires_usable_checkout_and_reads_local_records(monkeypatch, tmp_path):
+    from src.controllers import scc_engine
+
+    snapshot = MagicMock(spec=scc_engine.NvdFkieVulnDatabase)
+    snapshot.git_database = MagicMock()
+    snapshot.export_repro_config.return_value = {"path": str(tmp_path)}
+    engine = object.__new__(scc_engine.SccEngine)
+    monkeypatch.setattr(engine, "_managed_databases", lambda: {"nvd": [snapshot]})
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
+
+    def commit(message: str) -> None:
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+            "-c", "core.hooksPath=/dev/null", "commit", "--no-gpg-sign", "-m", message)
+
+    git("init")
+    folder = tmp_path / "CVE-2099" / "CVE-2099-12xx"
+    folder.mkdir(parents=True)
+
+    snapshot.git_database.get_date_last_commit.return_value = None
+    with pytest.raises(RuntimeError, match="No usable local NVD snapshot"):
+        engine.nvd_snapshot_lookup()
+
+    snapshot.git_database.get_date_last_commit.return_value = object()
+    with pytest.raises(RuntimeError, match="No usable local NVD snapshot"):
+        engine.nvd_snapshot_lookup()
+
+    identifier = "CVE-2099-1234"
+    record = folder / f"{identifier}.json"
+    record.write_text('{"id":"CVE-2099-1234"}')
+    (folder / "CVE-2099-1200.json").write_text('{"id":"CVE-2099-1200"}')
+    git("add", ".")
+    commit("Create synthetic snapshot")
+    lookup = engine.nvd_snapshot_lookup()
+    absent = "CVE-2099-1235"
+    assert lookup(absent) is None
+    assert lookup(identifier) == {"id": identifier}
+    record.write_text("not JSON")
+    with pytest.raises(ValueError):
+        lookup(identifier)
+    record.unlink()
+    with pytest.raises(FileNotFoundError):
+        lookup(identifier)
+    record.mkdir()
+    with pytest.raises(IsADirectoryError):
+        lookup(identifier)
+
+    added = folder / f"{absent}.json"
+    added.write_text('{"id":"CVE-2099-1235"}')
+    git("add", str(added))
+    commit("Add record in a later snapshot")
+    newer_lookup = engine.nvd_snapshot_lookup()
+    added.unlink()
+    assert lookup(absent) is None
+
+    git_dir = tmp_path / ".git"
+    moved_git = git_dir.rename(tmp_path / "moved-git")
+    git_dir.mkdir()
+    with pytest.raises(RuntimeError, match="Could not verify paths"):
+        newer_lookup(absent)
+    git_dir.rmdir()
+    moved_git.rename(git_dir)
+    with pytest.raises(FileNotFoundError, match="Tracked CVE record is missing"):
+        engine.nvd_snapshot_lookup()(absent)
 
 
 # ---------------------------------------------------------------------------

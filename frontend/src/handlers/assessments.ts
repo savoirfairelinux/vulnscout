@@ -18,12 +18,38 @@ type VulnText = {
 /** One (variant, package) pair an assessment actually applies to.
  *
  *  ``outdated`` is only populated by endpoints that annotate staleness
- *  per-target (the single-assessment and vulnerability-scoped listings);
+ *  per-target (Review, single-assessment and vulnerability-scoped listings);
  *  it is absent right after a create/update response. */
 type AssessmentTargetPair = {
     variant_id: string | null;
     package: string;
     outdated?: boolean;
+    risk_links?: ModeledRiskLink[];
+    risk_links_out_of_scope?: boolean;
+};
+
+export type RiskReference = { risk_id: string; threat_id?: string };
+type ThreatTargets = {
+    threat_target_ids?: string[];
+    interaction_endpoints?: Record<string, { source_id: string; destination_id: string }>;
+};
+export function displayModelId(id: string): string {
+    return JSON.stringify(id).slice(1, -1);
+}
+export function describeThreatTargets({ threat_target_ids, interaction_endpoints }: ThreatTargets): string {
+    return threat_target_ids?.map(id => {
+        if (!id.startsWith('I')) return displayModelId(id);
+        const ends = interaction_endpoints?.[id];
+        const path = ends ? `${displayModelId(ends.source_id)} → ${displayModelId(ends.destination_id)}` : 'endpoints not recorded';
+        return `${displayModelId(id)} (${path})`;
+    }).join(', ') ?? 'not recorded';
+}
+export type ModeledRiskLink = RiskReference & ThreatTargets & {
+    risk_description?: string; threat_description?: string; stale?: boolean;
+};
+export type RiskLinkPreview = ThreatTargets & {risk_description: string; threat_description?: string; revision: string};
+export type TargetRiskEdit = {
+    variant_id: string; package: string; risk_links: (RiskReference & {confirmed_revision?: string})[];
 };
 
 type Assessment = {
@@ -53,6 +79,7 @@ type Assessment = {
     outdated?: boolean;
     /** Pending AI assessments only: the variant context changed after it was written. */
     context_outdated?: boolean;
+    approval_fingerprint?: string;
     superseded_by?: string[];
     stale_packages?: string[];
     superseded_map?: Record<string, string[]>;
@@ -170,6 +197,33 @@ type BatchResult = {
 export type { BatchAssessmentItem, BatchResult };
 export { reconcileTargetPairs };
 
+export function sharesNotesWithNewTargets(
+    notes: string | undefined, existing: AssessmentTargetPair[], desired: AssessmentTargetPair[],
+): boolean {
+    if (!notes?.trim()) return false;
+    const pairKey = ({ variant_id, package: pkg }: AssessmentTargetPair) => JSON.stringify([variant_id, pkg]);
+    const existingPairs = new Set(existing.map(pairKey));
+    return desired.some(target => !existingPairs.has(pairKey(target)));
+}
+
+/** Some imports store notes in the impact field for non-impact statuses. */
+export function initialStatusNotes(assessment: Assessment) {
+    const hasImpactField = ['not_affected', 'false_positive'].includes(assessment.status);
+    return assessment.status_notes || (!hasImpactField ? assessment.impact_statement || "" : "");
+}
+
+/** Content edits applied to a pending AI assessment as it is approved. */
+type AiAssessmentEdits = {
+    target_risk_links?: TargetRiskEdit[];
+    expected_fingerprint?: string;
+    justification?: string;
+    impact_statement?: string;
+    status_notes?: string;
+    workaround?: string;
+};
+
+export type { AiAssessmentEdits };
+
 type ReviewTimeEstimate = {
     id: string;
     vuln_id: string;
@@ -210,6 +264,18 @@ const asTargetPairs = (data: any[]): AssessmentTargetPair[] =>
         .map((item: any) => ({
             variant_id: item.variant_id,
             package: item.package,
+            ...(item.risk_links_out_of_scope === true && { risk_links_out_of_scope: true }),
+            ...(Array.isArray(item.risk_links) ? { risk_links: item.risk_links
+                .filter((link: any) => typeof link?.risk_id === 'string')
+                .map((link: any) => ({
+                    risk_id: link.risk_id,
+                    ...(typeof link.threat_id === 'string' && { threat_id: link.threat_id }),
+                    ...(typeof link.risk_description === 'string' && { risk_description: link.risk_description }),
+                    ...(typeof link.threat_description === 'string' && { threat_description: link.threat_description }),
+                    ...(Array.isArray(link.threat_target_ids) && { threat_target_ids: link.threat_target_ids }),
+                    ...(link.interaction_endpoints && { interaction_endpoints: link.interaction_endpoints }),
+                    stale: link.stale === true,
+                })) } : {}),
             ...(typeof item.outdated === "boolean" ? { outdated: item.outdated } : {}),
         }));
 
@@ -269,6 +335,7 @@ const asAssessment = (data: any): Assessment | [] => {
     if (Array.isArray(data?.vuln_texts)) item.vuln_texts = data.vuln_texts;
     if (data?.outdated === true) item.outdated = true;
     if (data?.context_outdated === true) item.context_outdated = true;
+    if (typeof data?.approval_fingerprint === "string") item.approval_fingerprint = data.approval_fingerprint;
     if (Array.isArray(data?.superseded_by)) item.superseded_by = data.superseded_by.filter((s: any) => typeof s === "string");
     if (Array.isArray(data?.stale_packages)) item.stale_packages = data.stale_packages.filter((s: any) => typeof s === "string");
     if (data?.superseded_map && typeof data.superseded_map === "object" && !Array.isArray(data.superseded_map)) {
@@ -311,11 +378,20 @@ const removeDuplicateAssessments = (assessments: Assessment[]): Assessment[] => 
 const isMultiTarget = (targets: AssessmentTargetPair[]): boolean => targets.length > 1;
 
 class Assessments {
+    static async previewRiskLink(id: string, variant: string, pkg: string, link: RiskReference): Promise<RiskLinkPreview> {
+        const params = new URLSearchParams({ variant_id: variant, package: pkg, risk_id: link.risk_id });
+        if (link.threat_id) params.set('threat_id', link.threat_id);
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/assessments/${encodeURIComponent(id)}/risk-link-preview?${params}`);
+        if (!response.ok) throw new Error(response.status === 404
+            ? 'This link is no longer available; correct or remove it.' : 'Could not load current description.');
+        return response.json();
+    }
+
     /**
      * Fetch server API to list all packages
      * @returns {Promise<Assessment[]>} A promise that resolves to a list of packages
      */
-    static async list(variantId?: string, projectId?: string): Promise<Assessment[]> {
+    static async list(variantId?: string, projectId?: string, signal?: AbortSignal): Promise<Assessment[]> {
         const url = new URL(import.meta.env.VITE_API_URL + "/api/assessments", window.location.href);
         // Initial Explorer rendering only needs status, timestamp, package and
         // variant scope. Full notes/responses are fetched for one vulnerability
@@ -325,6 +401,7 @@ class Assessments {
         else if (projectId) url.searchParams.set('project_id', projectId);
         const response = await fetch(url.toString(), {
             mode: "cors",
+            signal,
         });
         const data = await response.json();
         const assessments = data.flatMap(asAssessment);
@@ -449,15 +526,27 @@ class Assessments {
         if (!response.ok) throw new Error(`Failed to delete assessment: ${response.status}`);
     }
 
-    /** Approve a pending AI-origin assessment. */
-    static async approveAi(assessmentId: string): Promise<Assessment[]> {
+    /** Approve a pending AI-origin assessment. When `edits` is given, the
+     *  edited content is saved and approved in one atomic request. */
+    static async approveAi(assessmentId: string, edits?: AiAssessmentEdits): Promise<Assessment[]> {
         const url = new URL(
             import.meta.env.VITE_API_URL + `/api/assessments/${encodeURIComponent(assessmentId)}/approve`,
             window.location.href
         );
-        const response = await fetch(url.toString(), { method: 'POST', mode: 'cors' });
+        const init: RequestInit = { method: 'POST', mode: 'cors' };
+        if (edits) {
+            init.headers = { 'Content-Type': 'application/json' };
+            const { expected_fingerprint, justification, impact_statement, status_notes, workaround, target_risk_links } = edits;
+            init.body = JSON.stringify({
+                expected_fingerprint, justification, impact_statement, status_notes, workaround, target_risk_links,
+            });
+        }
+        const response = await fetch(url.toString(), init);
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
+            if (response.status === 400 && typeof err.error === 'string' && err.error.startsWith('Stale modeled risk link for ')) {
+                throw new Error('A threat or risk reference has changed. Rerun the AI assessment with the current threat model if the target is still active. Otherwise, review and correct the saved link through the assessment API before approving.');
+            }
             throw new Error(err.error || `HTTP ${response.status}`);
         }
         const data = await response.json();

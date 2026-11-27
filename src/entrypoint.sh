@@ -210,6 +210,12 @@ Commands without --project or --variant:
         --export-context                Export AI assessment context
         --import-context <path>         Import AI assessment context
 
+        Host folders attached to a variant's AI context (use the remaining arguments):
+        --ai-context-attach <alias>=<host path>...
+                                        Wrapper-only: requires approval from the host's ai-context attach command
+        --ai-context-list [--json]      List attached folders and their availability
+        --ai-context-detach <alias>...  Detach folders
+
 Options used by the host wrapper's subcommands:
         --dry-run                       Preview the --delete-* flag that follows without deleting anything
         --clear-vulnerability-history   Also clear refresh history with the --delete-outdated flag that follows
@@ -309,7 +315,7 @@ setup_user() {
         # Source trees under /scan may be bind-mounted from the host in dev mode.
         chown -f "$uid:$gid" /scan
         chown -Rf "$uid:$gid" /builder /scan/inputs /scan/tmp /scan/outputs
-        # Administrator source directories may be read-only mounts; never traverse or chown them.
+        # Leave old user-owned context trees untouched; context-files holds managed uploads.
         local cache_dir="${VULNSCOUT_CACHE_DIR:-/cache/vulnscout}"
         cache_dir="${cache_dir%/}"
         find /cache -type d -path "$cache_dir/context-*" ! -path "$cache_dir/context-*/*" \
@@ -600,6 +606,11 @@ cmd_scan() {
             }
             local exported_cdx="$grype_tmp/sbom_cyclonedx_v1_6.cdx.json"
             if [[ -f "$exported_cdx" ]]; then
+                (cd "$BASE_DIR" && flask --app src.bin.webapp filter-grype-scan \
+                    --project "$PROJECT_NAME" --variant "${VARIANT_NAME:-default}" \
+                    --stage sbom "$exported_cdx") || {
+                    rm -rf "$grype_tmp"; return 1
+                }
                 local grype_out="$grype_tmp/grype_from_db.grype.json"
                 console_out info "Grype scan: $exported_cdx -> $grype_out"
                 local _grype_gomemlimit
@@ -614,10 +625,15 @@ cmd_scan() {
                         rm -rf "$grype_tmp"; return 1
                     }
                 fi
+                (cd "$BASE_DIR" && flask --app src.bin.webapp filter-grype-scan \
+                    --project "$PROJECT_NAME" --variant "${VARIANT_NAME:-default}" \
+                    --stage matches --scanned-sbom "$exported_cdx" "$grype_out") || {
+                    rm -rf "$grype_tmp"; return 1
+                }
                 console_out info "Merging Grype results..."
                 (cd "$BASE_DIR" && flask --app src.bin.webapp merge \
                     --project "$PROJECT_NAME" --variant "$VARIANT_NAME" \
-                    --run-id "$scan_run_id" --grype "$grype_out") || {
+                    --run-id "$scan_run_id" --scoped-grype "$grype_out") || {
                     rm -rf "$grype_tmp"; return 1
                 }
                 # A later scanner creates a newer scan; ingest Grype while it is latest.
@@ -1091,6 +1107,10 @@ while [[ $# -gt 0 ]]; do
             shift; ai_exit=0; cmd_ai_command ai-assess "$@" || ai_exit=$?; exit "$ai_exit" ;;
         --ai-review)
             shift; ai_exit=0; cmd_ai_command ai-review "$@" || ai_exit=$?; exit "$ai_exit" ;;
+        --ai-context-attach|--ai-context-list|--ai-context-detach)
+            # Consumes the remaining arguments: alias=path pairs, aliases, or --json.
+            context_command="${1#--}"; shift; ai_exit=0
+            cmd_ai_command "$context_command" "$@" || ai_exit=$?; exit "$ai_exit" ;;
         --export-vulnerability-history)
             shift
             history_scope=()

@@ -30,7 +30,7 @@ from ..models.project import Project
 from ..models.scan import Scan
 from ..models.sbom_document import SBOMDocument
 from ..models.sbom_package import PackageType, SBOMPackage
-from ..models.variant import Variant
+from ..models.variant import Variant, lock_scan_membership
 from ..models.vulnerability import Vulnerability
 from ..extensions import db
 from ..helpers.assessment_io import duplicate_multitarget_assessment_exists
@@ -1090,6 +1090,7 @@ def _import_scan_exports(exports: Sequence[object]) -> tuple[list[_ImportSummary
             continue
         parsed.append(item)
 
+    lock_scan_membership(item.variant.id for item in parsed)
     try:
         return ([_persist_scan_import(item) for item in parsed], skipped_count)
     except LookupError as exc:

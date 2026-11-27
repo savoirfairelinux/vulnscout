@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from ..extensions import db, Base, write_lock
 from ..helpers.datetime_utils import ensure_utc_iso
-from .variant import Variant
+from .variant import Variant, lock_scan_membership
 
 from sqlalchemy import ForeignKey, Text, DateTime, false, or_
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -76,6 +76,7 @@ class Scan(Base):
                scan_source: str | None = None, run_id: str | None = None, *,
                in_progress: bool = False) -> "Scan":
         """Create a new scan with the given *description* under *variant_id*, persist it and return it."""
+        lock_scan_membership([variant_id])
         scan = Scan(description=description, variant_id=variant_id,
                     scan_type=scan_type, scan_source=scan_source, run_id=run_id, in_progress=in_progress)
         db.session.add(scan)
@@ -143,6 +144,7 @@ class Scan(Base):
         from .observation import Observation
 
         with write_lock():
+            lock_scan_membership([self.variant_id])
             # Explicit history deletion preserves assessments, including those
             # established by this scan while another producer is still running.
             observed = db.select(Observation.finding_id).where(Observation.scan_id == self.id)

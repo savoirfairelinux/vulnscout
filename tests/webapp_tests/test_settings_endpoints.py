@@ -2940,6 +2940,16 @@ class TestCopyAssessmentsMatchModes:
 
 class TestSBOMUploadEdgeCases:
 
+    def test_upload_cannot_select_internal_grype_format(self, queued_import, client):
+        pid = _get_project_id(client)
+        data = {
+            "project_id": pid, "variant_id": _get_variant_id(client, pid), "format": "scoped_grype",
+            "files": (io.BytesIO(b'{"matches":[]}'), "report.json"),
+        }
+        resp = client.post("/api/sbom/upload", data=data, content_type="multipart/form-data")
+        assert resp.status_code == 400
+        assert queued_import["calls"] == []
+
     @pytest.mark.parametrize("suffix", [".tar", ".tar.xz"])
     def test_upload_corrupt_archive_returns_400(self, upload_temp_files, client, suffix):
         """An invalid tar archive triggers a 400."""
@@ -3049,6 +3059,31 @@ class TestProcessSBOMBackgroundEpss:
 # ---------------------------------------------------------------------------
 
 class TestProcessSBOMBackgroundRefreshIsolation:
+
+    def test_explicit_no_refresh_preserves_latest_run(self, app, client, monkeypatch):
+        from src.extensions import db
+        from src.helpers.refresh_runs import create_run, finish_source
+        from src.models import Project, Scan, Variant
+        from src.models.refresh_run import RefreshRun
+        from src.routes.settings import _process_sbom_background
+
+        monkeypatch.setattr("src.bin.cmd_process.read_inputs", lambda *a, **k: None)
+        monkeypatch.setattr("src.bin.cmd_process.populate_observations", lambda *a, **k: None)
+
+        with app.app_context():
+            project = Project.create("NoRefreshProject")
+            variant = Variant.create("NoRefreshVariant", project.id)
+            scan = Scan.create("", variant.id)
+            previous = create_run({"epss": ["CVE-2020-35492"]})
+            finish_source(previous, "epss")
+            run_count = db.session.query(RefreshRun).count()
+
+            ctx = _register_upload_operation("upload:no-refresh")
+            _process_sbom_background(ctx, [], scan.id, variant.id, set())
+            ctx.flush()
+
+            assert db.session.query(RefreshRun).count() == run_count
+        assert client.get("/api/refresh-runs/latest").get_json()["run_id"] == previous
 
     def test_provider_reported_failure_reaches_the_operation(self, app, monkeypatch):
         """A provider that swallows a lookup failure still marks its refresh incomplete."""

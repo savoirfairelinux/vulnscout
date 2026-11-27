@@ -386,7 +386,7 @@ class TestImportContext:
             {"project_name": "ProjectA", "variant_name": "NoSuchVariant",
              "description": "d", **_tm("t")},
             {"project_name": "ProjectB", "variant_name": "VariantB1",
-             "description": "d", **_tm("")},  # empty threat model
+             "description": "d", "stride_model": {"risks": [{"id": "R1", "threat_ids": []}]}},
         ]).data)
         assert len(body["imported"]) == 1
         assert len(body["ignored"]) == 1
@@ -433,6 +433,85 @@ def _post_json(client, payload):
 
 
 class TestExportImportStructuredContext:
+
+    def test_unknown_system_key_cannot_clear_model(self, app_with_data):
+        app, data = app_with_data
+        _make_stride(app, data["variant_a1_id"])
+        client = app.test_client()
+        before = _export_variants(client)
+        result = _post_json(client, [{"project_name": "ProjectA", "project_description": "Do not overwrite",
+                                     "variants": [{"variant_name": "VariantA1", "context_configured": True,
+                                                   "system": {"trust_boundary": "Between services"},
+                                                   "stride_model": {}}]}]).get_json()
+        assert result["failed"][0]["reason"] == "system.trust_boundary: unknown field in empty replacement"
+        assert _export_variants(client) == before
+
+    @pytest.mark.parametrize("marker,reason", [
+        ({}, "context: blank imports require context_configured: true"),
+        *[({"context_configured": value}, "context_configured must be a boolean")
+          for value in ("false", 0, None)],
+    ])
+    def test_ambiguous_blank_import_preserves_destination(self, app_with_data, marker, reason):
+        app, data = app_with_data
+        _make_stride(app, data["variant_a1_id"])
+        client = app.test_client()
+        before = _export_variants(client)
+        # Shape written by the previous 3.0 exporter for an untouched variant.
+        variant = {"variant_name": "VariantA1", "variant_description": None, "environment": None,
+                   "other_info": None, "system": dict.fromkeys(("scope", "actors", "entry_points", "trust_boundaries")),
+                   "stride_model": {"components": [], "interactions": [], "threats": [], "risks": []},
+                   "files": [], **marker}
+        result = _post_json(client, {"version": "3.0", "projects": [{
+            "project_name": "ProjectA", "project_description": "Do not overwrite", "variants": [variant],
+        }]}).get_json()
+        assert result == {"imported": [], "ignored": [], "failed": [
+            {"project_name": "ProjectA", "variant_name": "VariantA1", "reason": reason},
+        ]}
+        assert _export_variants(client) == before
+
+    @pytest.mark.parametrize("source", ["untouched", "metadata_only", "text_only", "editor_text", "explicit_clear"])
+    def test_bulk_round_trip_distinguishes_unsaved_and_cleared_context(self, app_with_data, source):
+        import uuid
+        from src.helpers.stride_model import empty_stride_model
+        from src.models.variant import Variant
+        from src.models.variant_context import VariantContext
+
+        app, data = app_with_data
+        with app.app_context():
+            variant_id = Variant.create("Gateway", uuid.UUID(data["project_a_id"])).id
+            if source != "untouched":
+                VariantContext.get_or_create(variant_id)
+        client = app.test_client()
+        url = f"/api/variants/{variant_id}/context"
+        if source in ("text_only", "editor_text", "explicit_clear"):
+            payload = {} if source == "text_only" else {"stride": {}}
+            if source != "explicit_clear":
+                payload["environment"] = "Lab"
+            assert client.put(url, json=payload).status_code == 200
+        exported = client.get("/api/context/export").get_json()
+        saved = client.put(url, json={
+            "variant_description": "Destination", "system": {"scope": "Firmware"}, "stride": _STRIDE_MODEL,
+        })
+        assert saved.status_code == 200
+        load_url = f"/api/context?project_id={data['project_a_id']}&variant_id={variant_id}"
+        before = client.get(load_url).get_json()
+        result = _post_json(client, exported).get_json()
+        assert result["failed"] == []
+        after = client.get(load_url).get_json()
+        if source in ("explicit_clear", "editor_text", "text_only"):
+            assert {"project_name": "ProjectA", "variant_name": "Gateway"} in result["imported"]
+            assert after["variant_description"] is None
+            assert after["environment"] == (None if source == "explicit_clear" else "Lab")
+            if source == "text_only":
+                assert after["editor"]["system"] == before["editor"]["system"]
+                assert after["editor"]["stride"] == before["editor"]["stride"]
+            else:
+                assert not any(after["editor"]["system"].values())
+                assert after["editor"]["stride"] == empty_stride_model()
+        else:
+            assert result["ignored"] == [{"project_name": "ProjectA", "variant_name": "Gateway",
+                                          "reason": "Source variant has no saved context"}]
+            assert after == before
 
     def test_export_v3_contains_editor_fields_without_legacy_codebase_settings(self, app_with_data):
         app, data = app_with_data
@@ -507,36 +586,54 @@ class TestExportImportStructuredContext:
                           "threat_model": "legacy tm", "risks": "r"}],
         }]}).data)
         assert result["imported"] == []
-        assert result["failed"][0]["reason"].endswith("A threat model is required.")
+        assert result["failed"][0]["reason"] == "model: must be an object"
         entry = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
         assert entry["stride_model"]["components"][0]["name"] == "A1 threat model"
         assert entry["description"] == "ProjectA description"
 
-    def test_import_v2_invalid_model_fails_entry(self, client_and_data):
+    @pytest.mark.parametrize("stride,reason", [
+        (None, "model: must be an object"),
+        ({"components": "nope"}, "components: must be a list"),
+        ({"threats": None}, "threats: must be a list"),
+        ({"threat": [{"id": "T1"}]}, "model: expected at least one of: components, interactions, threats, risks"),
+        ({"components": [], "threat": [{"id": "T1"}]}, "model: cannot clear tables with unknown table names"),
+    ])
+    def test_import_v2_invalid_model_fails_entry(self, client_and_data, stride, reason):
         client, _ = client_and_data
+        before = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
         result = json.loads(_post_json(client, [{
             "project_name": "ProjectA", "project_description": "d",
             "variants": [
                 {"variant_name": "VariantA1",
-                 "stride_model": {"components": "nope"}},
+                 "stride_model": stride},
                 {"variant_name": "VariantA2", **_tm("ok")},
             ],
         }]).data)
         failed = {f["variant_name"]: f["reason"] for f in result["failed"]}
-        assert "VariantA1" in failed and failed["VariantA1"]
+        assert failed["VariantA1"] == reason
         assert "VariantA2" not in failed
         assert result["imported"] == [{"project_name": "ProjectA", "variant_name": "VariantA2"}]
-        # The session stays usable: the follow-up export still works.
-        assert client.get("/api/context/export").status_code == 200
+        after = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
+        # A sibling entry updates the shared project description, not this variant.
+        assert {**after, "description": before["description"]} == before
 
-    def test_import_v2_empty_threat_model_fails_entry(self, client_and_data):
-        client, _ = client_and_data
-        result = json.loads(_post_json(client, [{
+    def test_unmarked_v3_text_only_import_preserves_system_and_stride(self, app_with_data):
+        app, data = app_with_data
+        _make_stride(app, data["variant_a1_id"])
+        client = app.test_client()
+        result = _post_json(client, {"version": "3.0", "projects": [{
             "project_name": "ProjectA", "project_description": "d",
-            "variants": [{"variant_name": "VariantA1", **_tm("")}],
-        }]).data)
-        assert result["failed"][0]["reason"] .endswith("A threat model is required.")
-        assert result["imported"] == []
+            "variants": [{"variant_name": "VariantA1", "environment": "Lab", "variant_description": None,
+                          "other_info": None, "files": [],
+                          "system": dict.fromkeys(("scope", "actors", "entry_points", "trust_boundaries")),
+                          "stride_model": {"components": [], "interactions": [], "threats": [], "risks": []}}],
+        }]}).get_json()
+        assert result["failed"] == []
+        entry = next(e for e in _export_variants(client) if e["variant_name"] == "VariantA1")
+        assert entry["environment"] == "Lab"
+        assert entry["variant_description"] is None
+        assert entry["system"]["scope"] == "Firmware"
+        assert entry["stride_model"] == _STRIDE_MODEL
 
     def test_import_v2_0_legacy_risks_are_upgraded(self, client_and_data):
         client, _ = client_and_data

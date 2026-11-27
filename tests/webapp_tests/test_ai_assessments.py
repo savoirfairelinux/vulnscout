@@ -6,9 +6,15 @@
 import json
 import os
 import uuid
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
+from threading import Event
 
 import pytest
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 from src.bin.webapp import create_app
 from src.extensions import db
@@ -328,6 +334,318 @@ def test_ai_post_trims_only_the_overlapping_package(client, app):
         assert [t.finding.package.string_id for t in kept.target_rows] == [PKG]
 
 
+def test_edited_approval_conflicts_after_partial_replacement(client, app):
+    other_variant = "22222222-2222-2222-2222-222222222223"
+    _add_variant(app, other_variant)
+    first = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
+        "packages": [PKG], "status": "affected", "ai_generated": True,
+        "variant_ids": [str(VARIANT_UUID), other_variant],
+    }).json["assessment"]
+    url = "/api/assessments/" + first["id"]
+    assert _post_ai(client).json["replaced"][0]["action"] == "trimmed"
+
+    assert client.post(url + "/approve", json={
+        "expected_fingerprint": first["approval_fingerprint"], "status_notes": "Reviewed on A",
+    }).status_code == 409
+    current = client.get(url).json
+    assert current["origin"] == "ai"
+    assert current["variant_ids"] == [other_variant]
+    assert current["status_notes"] == first["status_notes"]
+    assert client.post(url + "/approve", json={
+        "expected_fingerprint": current["approval_fingerprint"],
+    }).status_code == 200
+
+
+def _risk_model(app, variant, description, extra_risks=(), target_ids=("C1",), endpoints=("C1", "C2")):
+    from src.models.variant_context import VariantContext
+
+    with app.app_context():
+        context = VariantContext.get_or_create(uuid.UUID(variant))
+        context.stride_model = {
+            "interactions": [{"id": "I1", "source_id": endpoints[0], "destination_id": endpoints[1]}],
+            "risks": [{"id": "R1", "description": description, "threat_ids": ["T1"]}, *extra_risks],
+            "threats": [{"id": "T1", "description": f"{description} threat", "target_ids": list(target_ids)},
+                        {"id": "T2", "description": "Unrelated threat"}],
+        }
+        db.session.commit()
+
+
+def _legacy_suggestion(client, app, targets):
+    response = _post_ai(client, ai_generated=False, targets=targets)
+    assert response.status_code == 200
+    assessment_id = response.json["assessment"]["id"]
+    with app.app_context():
+        row = DBAssessment.get_by_id(assessment_id)
+        assert row is not None
+        row.origin = "ai"
+        db.session.commit()
+    return client.get(f"/api/assessments/{assessment_id}").json
+
+
+def test_risk_links_are_scoped_to_exact_targets_and_reviewed_atomically(client, app):
+    first, second = str(VARIANT_UUID), str(uuid.uuid4())
+    _add_variant(app, second)
+    _risk_model(app, first, "First model", [{"id": "R2", "description": "First variant only", "threat_ids": []}])
+    _risk_model(app, second, "Second model")
+    ref = {"risk_id": "R1", "threat_id": "T1"}
+    a, b = {"variant_id": first, "package": PKG}, {"variant_id": second, "package": PKG2}
+    row = _legacy_suggestion(client, app, [{**a, "risk_links": [ref]}, {**b, "risk_links": [ref]}])
+    url = f"/api/assessments/{row['id']}"
+    reviewed = client.get("/api/reviews/assessments?origin=ai").json[0]
+    links = {t["variant_id"]: t["risk_links"][0] for t in reviewed["targets"]}
+    assert links[first] == {**ref, "risk_description": "First model", "threat_description": "First model threat",
+                            "threat_target_ids": ["C1"], "stale": False}
+    assert links[second]["risk_description"] == "Second model"
+    for path in (f"/api/reviews/assessments?origin=ai&variant_id={first}",
+                 f"/api/reviews/assessments?origin=ai&variant_id={first}&project_id={PROJECT_UUID}",
+                 f"/api/assessments/review/ai?variant_id={first}"):
+        scoped = client.get(path).json[0]
+        pairs = {t["variant_id"]: t for t in scoped["targets"]}
+        assert pairs[first]["risk_links"] == [links[first]]
+        assert pairs[second]["risk_links_out_of_scope"] and "risk_links" not in pairs[second]
+        assert "Second model" not in json.dumps(scoped)
+    for invalid in ({**a, "package": PKG2, "risk_links": []},
+                    {**b, "risk_links": [{"risk_id": "R1", "threat_id": "T2"}]},
+                    {**b, "risk_links": [{"risk_id": "R2"}]}):
+        response = client.post(url + "/approve", json={
+            "target_risk_links": [{**a, "risk_links": []}, invalid], "status_notes": "Should not persist",
+        })
+        assert response.status_code == 400
+        assert client.get(url).json["approval_fingerprint"] == row["approval_fingerprint"]
+
+    _risk_model(app, first, "Repurposed ID")
+    assert client.post(url + "/approve").status_code == 400
+    assert client.post(url + "/approve", json={
+        "target_risk_links": [{**a, "risk_links": [ref, {"risk_id": "R1"}]}],
+    }).status_code == 400
+    stale = next(t for t in client.get(url).json["targets"] if t["variant_id"] == first)
+    assert stale["risk_links"] == [{**links[first], "stale": True}]
+    response = client.post(url + "/approve", json={
+        "target_risk_links": [{**a, "risk_links": []}, {**b, "risk_links": [{"risk_id": "R1"}]}],
+        "expected_fingerprint": row["approval_fingerprint"],
+    })
+    assert response.status_code == 200
+    approved = client.get(url).json
+    assert (approved["origin"], approved["status"]) == ("custom", row["status"])
+    assert {t["variant_id"]: t.get("risk_links", []) for t in approved["targets"]} == {
+        first: [], second: [{"risk_id": "R1", "risk_description": "Second model", "stale": False}]}
+    listing = client.get("/api/assessments?format=list").json
+    listed = next(a for a in listing if a["id"] == row["id"])
+    assert next(t for t in listed["targets"] if t["variant_id"] == second)["risk_links"][0]["risk_id"] == "R1"
+
+
+def test_approve_historical_target_by_projecting_retained_links(client, app):
+    from src.controllers.ai_actions import resolve_assess_targets
+    from src.models.scan import Scan
+
+    variant = str(VARIANT_UUID)
+    historical = {"variant_id": variant, "package": PKG}
+    omitted = {"variant_id": variant, "package": PKG2}
+    retained = {"risk_id": "R1", "threat_id": "T1"}
+    _risk_model(app, variant, "Still applies", [{"id": "R2", "description": "Obsolete", "threat_ids": []}])
+    row = _legacy_suggestion(client, app, [
+        {**historical, "risk_links": [retained, {"risk_id": "R2"}]},
+        {**omitted, "risk_links": [{"risk_id": "R1"}]},
+    ])
+    with app.app_context():
+        assert resolve_assess_targets(VULN_ID, [historical], {VARIANT_UUID})
+        Scan.create("Replacement SBOM without the old package", VARIANT_UUID)
+        with pytest.raises(ValueError, match="not an active target"):
+            resolve_assess_targets(VULN_ID, [historical], {VARIANT_UUID})
+    _risk_model(app, variant, "Still applies")
+
+    url = f"/api/assessments/{row['id']}"
+    pending = client.get(url).json
+    targets = {t["package"]: t for t in pending["targets"]}
+    saved, stale = targets[PKG]["risk_links"]
+    assert stale["risk_id"] == "R2" and stale["stale"]
+    assert client.post(url + "/approve").status_code == 400
+    payload = {"expected_fingerprint": pending["approval_fingerprint"], "target_risk_links": [
+        {**historical, "risk_links": [saved]},
+    ]}
+    response = client.post(url + "/approve", json=payload)
+    assert response.status_code == 400
+    assert "Expected risk_id and optional threat_id" in response.json["error"]
+    assert client.get(url).json["approval_fingerprint"] == pending["approval_fingerprint"]
+
+    payload["target_risk_links"][0]["risk_links"] = [retained]
+    response = client.post(url + "/approve", json=payload)
+    assert response.status_code == 200
+    approved = client.get(url).json
+    assert approved["origin"] == "custom"
+    assert approved["status"] == pending["status"]
+    assert {t["package"]: t for t in approved["targets"]} == {
+        PKG: {**targets[PKG], "risk_links": [saved]},
+        PKG2: targets[PKG2],
+    }
+
+
+def test_reconfirm_requires_the_description_current_at_approval(client, app):
+    variant = str(VARIANT_UUID)
+    _risk_model(app, variant, "Saved")
+    ref = {"risk_id": "R1", "threat_id": "T1"}
+    target = {"variant_id": variant, "package": PKG}
+    row = _legacy_suggestion(client, app, [{**target, "risk_links": [ref]}])
+    url = f"/api/assessments/{row['id']}"
+
+    def confirmation(description):
+        current = client.get(url + "/risk-link-preview", query_string={**target, **ref}).json
+        assert current["risk_description"] == description and current["threat_description"] == f"{description} threat"
+        return {"target_risk_links": [{**target, "risk_links": [{**ref, "confirmed_revision": current["revision"]}]}]}
+
+    _risk_model(app, variant, "First revision")
+    assert client.get(url + "/risk-link-preview", query_string={
+        **target, **ref, "package": PKG2,
+    }).status_code == 404
+    reviewed = confirmation("First revision")
+    _risk_model(app, variant, "Another revision")
+    assert client.post(url + "/approve", json=reviewed).status_code == 400
+    assert client.get(url).json["approval_fingerprint"] == row["approval_fingerprint"]
+    result = client.post(url + "/approve", json=confirmation("Another revision")).json["assessments"][0]
+    assert (result["origin"], result["status"]) == ("custom", row["status"])
+    assert result["targets"][0]["risk_links"] == [{
+        **ref, "risk_description": "Another revision", "threat_description": "Another revision threat",
+        "threat_target_ids": ["C1"], "stale": False,
+    }]
+
+
+@pytest.mark.parametrize("new_targets,endpoints", [
+    (["C2"], ("C1", "C2")), (["C1", "I1"], ("C3", "C2")), (["C1", "I1"], ("C1", "C3")),
+])
+def test_retargeted_threat_requires_confirmation_even_when_descriptions_match(client, app, new_targets, endpoints):
+    variant = str(VARIANT_UUID)
+    _risk_model(app, variant, "Unchanged", target_ids=["I1", "C1"])
+    ref = {"risk_id": "R1", "threat_id": "T1"}
+    target = {"variant_id": variant, "package": PKG}
+    row = _legacy_suggestion(client, app, [{**target, "risk_links": [ref]}])
+    url = f"/api/assessments/{row['id']}"
+
+    def preview():
+        return client.get(url + "/risk-link-preview", query_string={**target, **ref}).json
+
+    def approve(revision):
+        return client.post(url + "/approve", json={"target_risk_links": [
+            {**target, "risk_links": [{**ref, "confirmed_revision": revision}]},
+        ]})
+
+    first = preview()
+    _risk_model(app, variant, "Unchanged", target_ids=["C1", "I1"])
+    assert preview() == first
+    _risk_model(app, variant, "Unchanged", target_ids=new_targets, endpoints=endpoints)
+    stored = client.get(url).json["targets"][0]["risk_links"][0]
+    assert stored["stale"] and stored["threat_target_ids"] == ["C1", "I1"]
+    assert stored["interaction_endpoints"] == {"I1": {"source_id": "C1", "destination_id": "C2"}}
+    assert client.post(url + "/approve").status_code == 400
+    assert approve(first["revision"]).status_code == 400
+    current = preview()
+    assert current["threat_target_ids"] == new_targets
+    if "I1" in new_targets:
+        assert current["interaction_endpoints"] == {"I1": {"source_id": endpoints[0], "destination_id": endpoints[1]}}
+    else:
+        assert "interaction_endpoints" not in current
+    approved = approve(current["revision"]).json["assessments"][0]
+    assert approved["status"] == row["status"]
+    assert approved["targets"][0]["risk_links"] == [{k: v for k, v in current.items() if k != "revision"}
+                                                    | {"stale": False}]
+
+
+def test_listings_index_each_referenced_section_once_per_variant(client, app, monkeypatch):
+    from src.helpers import assessment_risk_links
+
+    first, second = str(VARIANT_UUID), str(uuid.uuid4())
+    _add_variant(app, second)
+    for variant in (first, second):
+        _risk_model(app, variant, variant, target_ids=["I1"])
+    for package in (PKG, PKG2):
+        response = _post_ai(client, ai_generated=False, targets=[
+            {"package": package, "variant_id": first, "risk_links": [{"risk_id": "R1", "threat_id": "T1"}]},
+            {"package": package, "variant_id": second, "risk_links": [{"risk_id": "R1"}]},
+        ])
+        assert response.status_code == 200
+
+    scans = Counter()
+    records = assessment_risk_links._records
+
+    def count(model, section):
+        scans[model["risks"][0]["description"], section] += 1
+        return records(model, section)
+
+    monkeypatch.setattr(assessment_risk_links, "_records", count)
+    for path in ("/api/assessments?format=list", "/api/reviews/assessments?origin=custom", "/api/assessments/review"):
+        scans.clear()
+        rows = client.get(path).json
+        links = [(t["variant_id"], t["risk_links"][0]) for row in rows for t in row["targets"] if t.get("risk_links")]
+        assert len(links) == 4
+        assert all(not link["stale"] and link["risk_description"] == variant for variant, link in links)
+        assert scans == {(first, "risks"): 1, (first, "threats"): 1, (first, "interactions"): 1, (second, "risks"): 1}
+
+
+def test_compare_preserves_exact_saved_endpoint_ids(client, app):
+    from src.models.variant_context import VariantContext
+
+    model = {
+        "components": [{"id": i, "name": i} for i in ("C1", "C1\n")],
+        "interactions": [{"id": "I1", "source_id": "C1\n", "destination_id": "C1"}],
+        "threats": [{"id": "T1", "category": "spoofing", "target_ids": ["I1"]}],
+        "risks": [{"id": "R1", "threat_ids": ["T1"]}],
+    }
+    with app.app_context():
+        VariantContext.save_editor(VARIANT_UUID, {"stride": model})
+    ref = {"risk_id": "R1", "threat_id": "T1"}
+    target = {"variant_id": str(VARIANT_UUID), "package": PKG}
+    row = _legacy_suggestion(client, app, [{**target, "risk_links": [ref]}])
+    url = f"/api/assessments/{row['id']}"
+    preview = client.get(url + "/risk-link-preview", query_string={**target, **ref}).json
+    assert preview["interaction_endpoints"] == {"I1": {"source_id": "C1\n", "destination_id": "C1"}}
+    model["interactions"][0].update(source_id="C1", destination_id="C1\n")
+    with app.app_context():
+        VariantContext.save_editor(VARIANT_UUID, {"stride": model})
+    current = client.get(url + "/risk-link-preview", query_string={**target, **ref}).json
+    assert current["revision"] != preview["revision"]
+    assert client.get(url).json["targets"][0]["risk_links"][0]["stale"]
+
+
+def test_link_limits_reject_expanded_edits_and_replacements_atomically(app, client):
+    variant = str(VARIANT_UUID)
+    # Each target fits individually; together their repeated descriptions exceed the byte budget.
+    desc = "x" * 20000
+    refs = [{"risk_id": f"R{i}"} for i in range(1, 9)]
+    _risk_model(app, variant, desc, [{"id": r["risk_id"], "description": desc} for r in refs[1:]])
+    targets = [{"variant_id": variant, "package": pkg} for pkg in (PKG, PKG2)]
+    row = _legacy_suggestion(client, app, [{**targets[0], "risk_links": refs}, targets[1]])
+    url = f"/api/assessments/{row['id']}"
+    edit = {**targets[1], "risk_links": refs}
+    for edits in ([edit], [{**targets[0], "risk_links": [refs[0]] * 17}]):
+        assert client.post(url + "/approve", json={"target_risk_links": edits}).status_code == 400
+    assert _post_ai(client, ai_generated=False, targets=[{**t, "risk_links": refs} for t in targets]).status_code == 400
+    assert client.get(url).json["approval_fingerprint"] == row["approval_fingerprint"]
+
+
+def test_bad_replacement_preserves_links_and_valid_replacement_trims_only_its_target(client, app):
+    v = str(VARIANT_UUID)
+    _risk_model(app, v, "Existing risk")
+    a = {"variant_id": v, "package": PKG, "risk_links": [{"risk_id": "R1"}]}
+    b = {**a, "package": PKG2}
+    row = _legacy_suggestion(client, app, [a, b])
+    url = f"/api/assessments/{row['id']}"
+    for invalid in (a["risk_links"], None, {"risk_id": "R1"}, [{"risk_id": []}], [{"threat_id": "T1"}],
+                    [{"risk_id": "R1", "threat_id": "T9"}]):
+        rejected = _post_ai(client, targets=[{**a, "risk_links": invalid}])
+        assert rejected.status_code == 400
+        assert "status_notes" in rejected.json["error"]
+        assert client.get(url).json["approval_fingerprint"] == row["approval_fingerprint"]
+    notes = "On this variant, cairo relates to modeled risk R1."
+    replacement = _post_ai(client, targets=[{**a, "risk_links": []}], status_notes=notes)
+    assert replacement.status_code == 200
+    assert replacement.json["assessment"]["status_notes"] == notes
+    assert "risk_links" not in replacement.json["assessment"]["targets"][0]
+    preserved = client.get(url).json["targets"]
+    assert len(preserved) == 1 and preserved[0]["package"] == PKG2
+    assert preserved[0]["risk_links"][0]["risk_id"] == "R1"
+    assert client.post(url + "/approve").status_code == 200
+    assert client.get(url).json["targets"] == preserved
+
+
 def test_ai_post_without_pending_reports_nothing_replaced(client):
     body = json.loads(_post_ai(client).data)
     assert "replaced" not in body
@@ -433,6 +751,87 @@ _approve_id = _approve
 
 def _reject(client, assessment_id):
     return client.post(f"/api/assessments/{assessment_id}/reject")
+
+
+def test_postgresql_rejection_locks_parent_before_deleting_targets(postgres_app, monkeypatch):
+    from src.routes import assessments as routes
+
+    routes.init_app(postgres_app)
+    setup_demo_db(postgres_app)
+    client = postgres_app.test_client()
+    pending = _post_ai(client).get_json()["assessment"]
+    aid = pending["id"]
+    validated, rejected = Event(), Event()
+    validate = routes._validate_content_edit
+
+    def pause_after_validation(*args, **kwargs):
+        result = validate(*args, **kwargs)
+        validated.set()
+        assert rejected.wait(10)
+        return result
+
+    def check_parent_lock(session, flush_context, instances):
+        if not any(isinstance(row, DBAssessment) for row in session.deleted):
+            return
+        with db.engine.connect() as observer:
+            query = db.select(DBAssessment.id).where(DBAssessment.id == uuid.UUID(aid))
+            assert observer.scalar(query) == uuid.UUID(aid)
+            assert observer.scalar(query.with_for_update(skip_locked=True)) is None
+
+    monkeypatch.setattr(routes, "_validate_content_edit", pause_after_validation)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        approval = pool.submit(postgres_app.test_client().post, f"/api/assessments/{aid}/approve", json={
+            "expected_fingerprint": pending["approval_fingerprint"], "status_notes": "Reviewed",
+        })
+        event.listen(Session, "before_flush", check_parent_lock)
+        try:
+            assert validated.wait(10)
+            assert _reject(client, aid).status_code == 200
+        finally:
+            event.remove(Session, "before_flush", check_parent_lock)
+            rejected.set()
+        assert approval.result(timeout=10).status_code == 409
+
+
+def test_patch_reloads_parent_after_concurrent_approval(postgres_app, monkeypatch):
+    from src.routes import assessments as routes
+
+    routes.init_app(postgres_app)
+    setup_demo_db(postgres_app)
+    client = postgres_app.test_client()
+    reason = "vulnerable_code_not_in_execute_path"
+    pending = _post_ai(client, status="not_affected", justification=reason,
+                       impact_statement="The code is isolated").json["assessment"]
+    url = f"/api/assessments/{pending['id']}"
+
+    with postgres_app.app_context(), ThreadPoolExecutor(max_workers=1) as pool:
+        # Retain the ordinary edit's original ORM snapshot while a second
+        # request commits approval using only the impact statement as reason.
+        snapshot = DBAssessment.get_by_id(pending["id"])
+        assert snapshot.justification == reason
+        approval = pool.submit(postgres_app.test_client().post, url + "/approve", json={
+            "expected_fingerprint": pending["approval_fingerprint"], "justification": "",
+        }).result(timeout=10)
+        assert approval.status_code == 200
+        assert snapshot.origin == "ai"
+        validate = routes._validate_content_edit
+
+        def validate_locked(row, payload):
+            # Reloading without a lock would just move the race to validation.
+            with db.engine.connect() as observer:
+                query = db.select(DBAssessment.id).where(DBAssessment.id == row.id)
+                assert observer.scalar(query.with_for_update(skip_locked=True)) is None
+            return validate(row, payload)
+
+        monkeypatch.setattr(routes, "_validate_content_edit", validate_locked)
+        response = client.patch(url, json={"justification": reason, "impact_statement": ""})
+        assert response.status_code == 200
+
+    with postgres_app.app_context():
+        row = DBAssessment.get_by_id(pending["id"])
+        assert row.origin == "custom"
+        assert row.impact_statement == ""
+        assert row.to_openvex_dict()["justification"] == reason
 
 
 def test_approve_promotes_group_to_custom(client):
@@ -582,6 +981,18 @@ def test_patch_ai_row_updates_and_keeps_ai_origin(client):
     assert all(a["id"] != aid for a in listed)
 
 
+@pytest.mark.parametrize("method", ["PUT", "PATCH"])
+def test_edit_not_affected_requires_justification_key_not_value(client, method):
+    row = _post_ai(client, status="not_affected", justification="component_not_present",
+                   impact_statement="Component is absent").json["assessment"]
+    url = f"/api/assessments/{row['id']}"
+    assert client.open(url, method=method, json={"status_notes": "Reviewed"}).status_code == 400
+    response = client.open(url, method=method, json={"justification": ""})
+    assert response.status_code == 200
+    assert response.json["assessment"]["justification"] == ""
+    assert response.json["assessment"]["impact_statement"] == "Component is absent"
+
+
 def test_patch_ai_row_then_approve_promotes_to_custom(client):
     aid = _get_first_ai_id(client)
     patch_resp = client.patch(
@@ -603,6 +1014,390 @@ def test_patch_ai_row_then_approve_promotes_to_custom(client):
     assert listed_row["origin"] == "custom"
     assert listed_row["status"] == "not_affected"
     assert listed_row["justification"] == "component_not_present"
+
+
+def _stored(app, assessment_id):
+    with app.app_context():
+        row = DBAssessment.get_by_id(assessment_id)
+        assert row is not None
+        return {
+            "origin": row.origin,
+            "status": row.status,
+            "simplified_status": row.simplified_status,
+            "status_notes": row.status_notes,
+            "justification": row.justification,
+            "impact_statement": row.impact_statement,
+            "workaround": row.workaround,
+        }
+
+
+def test_approve_with_edits_applies_content_and_promotes_atomically(client, app):
+    aid = _post_ai(client, status="not_affected", justification="vulnerable_code_not_present",
+                   status_notes="AI rationale").json["assessment"]["id"]
+
+    resp = client.post(f"/api/assessments/{aid}/approve", json={
+        "justification": "code_not_reachable",
+        "impact_statement": "Edited impact",
+        "status_notes": "Edited message",
+        "workaround": "Edited workaround",
+    })
+
+    assert resp.status_code == 200
+    approved = json.loads(resp.data)["assessments"]
+    assert [a["id"] for a in approved] == [aid]
+    assert approved[0]["origin"] == "custom"
+    assert approved[0]["status"] == "not_affected"
+    assert approved[0]["status_notes"] == "Edited message"
+    assert _stored(app, aid) == {
+        "origin": "custom",
+        "status": "not_affected",
+        "simplified_status": "Not affected",
+        "status_notes": "Edited message",
+        "justification": "code_not_reachable",
+        "impact_statement": "Edited impact",
+        "workaround": "Edited workaround",
+    }
+    listed = json.loads(client.get("/api/assessments?format=list").data)
+    assert any(a["id"] == aid and a["status_notes"] == "Edited message" for a in listed)
+
+
+@pytest.mark.parametrize("original,edited,exported", [
+    ("code_not_reachable", "component_not_present", "not_affected"),
+    ("component_not_present", "code_not_reachable", "false_positive"),
+])
+def test_approve_preserves_exported_verdict(client, app, original, edited, exported):
+    pending = _post_ai(client, status="not_affected", justification=original).json["assessment"]
+    aid = pending["id"]
+    before = _stored(app, aid)
+    response = client.post(f"/api/assessments/{aid}/approve", json={
+        "justification": edited, "status_notes": "Revised", "expected_fingerprint": pending["approval_fingerprint"],
+    })
+    assert response.status_code == 400
+    assert "CycloneDX verdict" in response.json["error"]
+    assert _stored(app, aid) == before
+    assert client.post(f"/api/assessments/{aid}/approve", json={"status_notes": "Revised"}).status_code == 200
+    with app.app_context():
+        approved = DBAssessment.get_by_id(aid)
+        assert approved.to_cdx_vex_dict()["analysis"]["state"] == exported
+
+
+def test_approve_with_partial_edit_keeps_other_fields(client, app):
+    aid = json.loads(_post_ai(
+        client, status_notes="AI rationale", workaround="AI workaround",
+        impact_statement="Original impact",
+    ).data)["assessment"]["id"]
+
+    resp = client.post(f"/api/assessments/{aid}/approve", json={"status_notes": "Edited message"})
+
+    assert resp.status_code == 200
+    stored = _stored(app, aid)
+    assert stored["origin"] == "custom"
+    assert stored["status"] == "affected"
+    assert stored["impact_statement"] == "Original impact"
+    assert stored["status_notes"] == "Edited message"
+    assert stored["workaround"] == "AI workaround"
+
+
+def test_approve_replaced_imported_message_exports_only_corrected_detail(client, app):
+    pending = _post_ai(client, impact_statement="Original impact", status_notes="").json["assessment"]
+    resp = client.post(f"/api/assessments/{pending['id']}/approve", json={
+        "expected_fingerprint": pending["approval_fingerprint"],
+        "status_notes": "Corrected message", "impact_statement": "",
+    })
+    assert resp.status_code == 200
+    with app.app_context():
+        approved = DBAssessment.get_by_id(pending["id"])
+        assert approved.to_openvex_dict()["status_notes"] == "Corrected message"
+        assert approved.to_cdx_vex_dict()["analysis"]["detail"] == "Corrected message"
+
+
+def test_approve_partial_edit_keeps_existing_required_justification(client, app):
+    aid = json.loads(_post_ai(
+        client,
+        status="not_affected",
+        justification="component_not_present",
+        impact_statement="The component is absent.",
+    ).data)["assessment"]["id"]
+
+    resp = client.post(
+        f"/api/assessments/{aid}/approve", json={"status_notes": "Reviewed"},
+    )
+
+    assert resp.status_code == 200
+    stored = _stored(app, aid)
+    assert stored["origin"] == "custom"
+    assert stored["justification"] == "component_not_present"
+    assert stored["status_notes"] == "Reviewed"
+
+
+def test_approve_notes_edit_after_clearing_justification_keeps_impact(client, app):
+    row = _post_ai(client, status="not_affected", justification="component_not_present",
+                   impact_statement="Component is absent").json["assessment"]
+    url = f"/api/assessments/{row['id']}"
+    assert client.patch(url, json={"justification": ""}).status_code == 200
+
+    assert client.post(url + "/approve", json={"status_notes": "Reviewed"}).status_code == 200
+    stored = _stored(app, row["id"])
+    assert (stored["origin"], stored["status_notes"]) == ("custom", "Reviewed")
+    assert (stored["justification"], stored["impact_statement"]) == ("", "Component is absent")
+
+
+@pytest.mark.parametrize("status", ["affected", "not_affected", None])
+def test_approve_rejects_supplied_status_without_applying_edits(client, app, status):
+    row = _post_ai(client, impact_statement="The vulnerable path is reachable").json["assessment"]
+    before = _stored(app, row["id"])
+    response = client.post(f"/api/assessments/{row['id']}/approve", json={
+        "status": status, "justification": "component_not_present", "status_notes": "Edited",
+        "expected_fingerprint": row["approval_fingerprint"],
+    })
+    assert response.status_code == 400
+    assert _stored(app, row["id"]) == before
+
+
+@pytest.mark.parametrize("impact", ["", " \t "])
+def test_approve_rejects_empty_merged_required_justification(client, app, impact):
+    aid = json.loads(_post_ai(
+        client,
+        status="not_affected",
+        justification="component_not_present",
+        impact_statement="The component is absent.",
+    ).data)["assessment"]["id"]
+    before = _stored(app, aid)
+
+    resp = client.post(f"/api/assessments/{aid}/approve", json={
+        "justification": "",
+        "impact_statement": impact,
+    })
+
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["error"] == "Justification required"
+    assert _stored(app, aid) == before
+
+
+@pytest.mark.parametrize("payload, error", [
+    ({"simplified_status": "Fixed"},
+     "Approval accepts only rationale fields, target_risk_links and expected_fingerprint"),
+    ({"justification": "bogus"}, "Invalid justification"),
+    *[({field: "reviewed\x00text"}, f"{field} must not contain NUL characters")
+      for field in ("status_notes", "impact_statement", "workaround", "justification")],
+])
+def test_approve_with_invalid_edits_leaves_suggestion_pending(client, app, payload, error):
+    aid = json.loads(_post_ai(client, status_notes="AI rationale").data)["assessment"]["id"]
+    before = _stored(app, aid)
+
+    resp = client.post(f"/api/assessments/{aid}/approve", json=payload)
+
+    assert resp.status_code == 400
+    assert json.loads(resp.data)["error"] == error
+    assert _stored(app, aid) == before
+    assert before["origin"] == "ai"
+
+
+@pytest.mark.parametrize("field", [
+    "expected_fingerprint", "status_notes", "justification", "impact_statement", "workaround",
+])
+def test_approve_rejects_non_string_override_fields(client, app, field):
+    aid = _get_first_ai_id(client)
+    before = _stored(app, aid)
+
+    resp = client.post(
+        f"/api/assessments/{aid}/approve", json={field: None},
+    )
+
+    assert resp.status_code == 400
+    assert _stored(app, aid) == before
+    assert before["origin"] == "ai"
+
+
+def test_approve_returns_conflict_if_row_was_already_approved(client, app, monkeypatch):
+    aid = _get_first_ai_id(client)
+    from src.routes import assessments as assessment_routes
+
+    resolve_pending = assessment_routes._resolve_pending_ai_row
+
+    def resolve_then_approve(assessment_id):
+        row, error = resolve_pending(assessment_id)
+        assert row is not None and error is None
+        row.update(origin="custom", status_notes="First reviewer")
+        return row, error
+
+    monkeypatch.setattr(
+        assessment_routes, "_resolve_pending_ai_row", resolve_then_approve,
+    )
+    resp = client.post(
+        f"/api/assessments/{aid}/approve", json={"status_notes": "Stale edit"},
+    )
+
+    assert resp.status_code == 409
+    assert _stored(app, aid)["origin"] == "custom"
+    assert _stored(app, aid)["status_notes"] == "First reviewer"
+
+
+@pytest.mark.parametrize("edits", [{}, {"status_notes": "Reviewed as affected"}])
+def test_confirm_requires_the_content_seen_by_the_editor(client, app, edits):
+    aid = _get_first_ai_id(client)
+    url = f"/api/assessments/{aid}"
+    original = next(a for a in client.get("/api/reviews/assessments?origin=ai").json if a["id"] == aid)
+    assert client.patch(url, json={"status": "fixed"}).status_code == 200
+    before = _stored(app, aid)
+
+    assert client.post(url + "/approve", json={
+        "expected_fingerprint": original["approval_fingerprint"], **edits,
+    }).status_code == 409
+    assert _stored(app, aid) == before
+    latest = client.get(url).json
+    assert client.post(url + "/approve", json={
+        "expected_fingerprint": latest["approval_fingerprint"], **edits,
+    }).status_code == 200
+
+
+def test_approval_conflicts_after_response_only_reconcile(client):
+    pending = _post_ai(client, responses=["update"]).json["assessment"]
+    url = f"/api/assessments/{pending['id']}"
+    reconciled = client.post(url + "/reconcile", json={
+        "vuln_id": VULN_ID, "packages": [PKG], "variant_ids": [str(VARIANT_UUID)],
+        "status": pending["status"], "responses": ["will_not_fix"],
+    })
+    assert reconciled.status_code == 200
+    stale = client.post(url + "/approve", json={"expected_fingerprint": pending["approval_fingerprint"]})
+    assert stale.status_code == 409
+    current = client.get(url).json
+    assert (current["origin"], current["responses"]) == ("ai", ["will_not_fix"])
+    refreshed = client.post(url + "/approve", json={"expected_fingerprint": current["approval_fingerprint"]})
+    assert refreshed.status_code == 200
+
+
+def test_approval_rechecks_responses_at_promotion(client, monkeypatch):
+    from src.routes import assessments as routes
+
+    pending = _post_ai(client, responses=["update"]).json["assessment"]
+    validate = routes._validate_content_edit
+
+    def validate_then_change(row, *args, **kwargs):
+        result = validate(row, *args, **kwargs)
+        with db.engine.begin() as connection:
+            connection.execute(db.update(DBAssessment).where(DBAssessment.id == row.id)
+                               .values(responses=["will_not_fix"]))
+        assert row.responses == ["update"]
+        return result
+
+    monkeypatch.setattr(routes, "_validate_content_edit", validate_then_change)
+    url = f"/api/assessments/{pending['id']}"
+    response = client.post(url + "/approve", json={
+        "expected_fingerprint": pending["approval_fingerprint"], "status_notes": "Edited",
+    })
+    assert response.status_code == 409
+    current = client.get(url).json
+    assert (current["origin"], current["responses"], current["status_notes"]) == (
+        "ai", ["will_not_fix"], pending["status_notes"],
+    )
+
+
+def test_edited_approval_rechecks_targets_at_promotion(client, app, monkeypatch):
+    from src.routes import assessments as routes
+
+    original = _post_ai(client, packages=[PKG, PKG2]).json["assessment"]
+    validate = routes._validate_content_edit
+
+    def validate_then_trim(row, *args, **kwargs):
+        result = validate(row, *args, **kwargs)
+        row.target_rows.pop()
+        db.session.commit()
+        return result
+
+    monkeypatch.setattr(routes, "_validate_content_edit", validate_then_trim)
+    response = client.post(f"/api/assessments/{original['id']}/approve", json={
+        "expected_fingerprint": original["approval_fingerprint"], "status_notes": "Reviewed both",
+    })
+    assert response.status_code == 409
+    assert _stored(app, original["id"])["origin"] == "ai"
+
+
+def test_edited_approval_conflicts_with_concurrent_content_change(client, app, monkeypatch):
+    from src.routes import assessments as routes
+
+    aid = json.loads(_post_ai(
+        client, status="not_affected", justification="component_not_present",
+    ).data)["assessment"]["id"]
+    validate = routes._validate_content_edit
+
+    def validate_then_change(row, *args, **kwargs):
+        result = validate(row, *args, **kwargs)
+        # Interleave the state written by a PATCH before the approval's UPDATE.
+        row.update(status="affected")
+        return result
+
+    monkeypatch.setattr(routes, "_validate_content_edit", validate_then_change)
+    resp = client.post(f"/api/assessments/{aid}/approve", json={"status_notes": "Stale edit"})
+
+    assert resp.status_code == 409
+    stored = _stored(app, aid)
+    assert (stored["origin"], stored["status"]) == ("ai", "affected")
+
+
+def test_approve_rejects_non_object_or_malformed_body(client, app):
+    aid = _get_first_ai_id(client)
+
+    assert client.post(f"/api/assessments/{aid}/approve", json=["status"]).status_code == 400
+    malformed = client.post(
+        f"/api/assessments/{aid}/approve", data="{", content_type="application/json",
+    )
+    assert malformed.status_code == 400
+    assert _stored(app, aid)["origin"] == "ai"
+
+
+@pytest.mark.parametrize("without_length", [False, True])
+@pytest.mark.parametrize("extra_byte", [False, True])
+def test_approve_request_body_limit(client, app, without_length, extra_byte):
+    aid = _get_first_ai_id(client)
+    payload = b"{}".ljust(64 * 1024 + int(extra_byte))
+    url = f"/api/assessments/{aid}/approve"
+    if without_length:
+        req = app.test_request_context(url, method="POST", content_type="application/json").request
+        req.environ.pop("CONTENT_LENGTH", None)
+        req.environ.update({"wsgi.input": BytesIO(payload), "wsgi.input_terminated": True})
+        resp = client.open(req)
+        assert resp.request.content_length is None
+    else:
+        resp = client.post(url, data=payload, content_type="application/json")
+
+    assert resp.status_code == (413 if extra_byte else 200)
+    assert _stored(app, aid)["origin"] == ("ai" if extra_byte else "custom")
+
+
+def test_approve_ignores_non_json_body(client, app):
+    aid = json.loads(_post_ai(client, status_notes="AI rationale").data)["assessment"]["id"]
+
+    resp = client.post(f"/api/assessments/{aid}/approve", data="status_notes=x", content_type="text/plain")
+
+    assert resp.status_code == 200
+    stored = _stored(app, aid)
+    assert stored["origin"] == "custom"
+    assert stored["status_notes"] == "AI rationale"
+
+
+def test_approve_with_empty_object_approves_unchanged(client, app):
+    aid = json.loads(_post_ai(client, status_notes="AI rationale").data)["assessment"]["id"]
+
+    resp = client.post(f"/api/assessments/{aid}/approve", json={})
+
+    assert resp.status_code == 200
+    stored = _stored(app, aid)
+    assert stored["origin"] == "custom"
+    assert stored["status_notes"] == "AI rationale"
+
+
+def test_approve_with_edits_on_non_ai_returns_400_without_changes(client, app):
+    r = client.post(f"/api/vulnerabilities/{VULN_ID}/assessments", json={
+        "packages": [PKG], "status": "affected", "variant_id": str(VARIANT_UUID),
+        "status_notes": "Human notes",
+    })
+    custom_id = json.loads(r.data)["assessment"]["id"]
+
+    resp = client.post(f"/api/assessments/{custom_id}/approve", json={"status_notes": "Changed"})
+
+    assert resp.status_code == 400
+    assert _stored(app, custom_id)["status_notes"] == "Human notes"
 
 
 def test_delete_ai_row_returns_400(client):

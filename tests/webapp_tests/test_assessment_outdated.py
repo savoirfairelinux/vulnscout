@@ -179,6 +179,119 @@ def _build_outdated_db(app, *, include_v2_finding: bool = True, include_v2_in_ac
         return assess_id
 
 
+def test_review_marks_missing_exact_finding_with_retained_package(app_factory):
+    app = app_factory()
+    assessment_id = _build_outdated_db(app, include_v2_finding=False, include_unchanged_second_pkg=True)
+    with app.app_context():
+        firefox = Package.get_by_string_id("firefox@1.0")
+        chrome = Package.get_by_string_id("chrome@1.0")
+        old_finding = Finding.get_or_create(firefox.id, CVE_ID)
+        current_finding = Finding.get_or_create(chrome.id, CVE_ID)
+        document = _db.session.scalar(_db.select(SBOMDocument).where(SBOMDocument.scan_id == SCAN_V2_ID))
+        latest = _db.session.get(Scan, SCAN_V2_ID)
+        latest.in_progress = True
+        sibling = Variant.create("tool-only", PROJECT_ID)
+        tool = Scan(variant_id=sibling.id, scan_type="tool", scan_source="nvd")
+        _db.session.add_all([
+            SBOMPackage(sbom_document_id=document.id, package_id=firefox.id),
+            Observation(finding_id=current_finding.id, scan_id=latest.id),
+            tool,
+        ])
+        _db.session.flush()
+        _db.session.add(Observation(finding_id=old_finding.id, scan_id=tool.id))
+        _db.session.add_all([
+            AssessmentTarget(assessment_id=assessment_id, variant_id=VARIANT_ID, finding_id=current_finding.id),
+            AssessmentTarget(assessment_id=assessment_id, variant_id=sibling.id, finding_id=old_finding.id),
+        ])
+        _db.session.commit()
+        sibling_id, old_finding_id = sibling.id, old_finding.id
+
+    client = app.test_client()
+    url = f"/api/reviews/assessments?project_id={PROJECT_ID}&origin=custom"
+
+    def review():
+        response = client.get(url)
+        assert response.status_code == 200
+        row, = response.json
+        assert row["id"] == str(assessment_id)
+        return row
+
+    assert review()["outdated"] is False
+    with app.app_context():
+        _db.session.get(Scan, SCAN_V2_ID).in_progress = False
+        _db.session.commit()
+
+    row = review()
+    assert row["outdated"] is True
+    assert {(t["variant_id"], t["package"]): t["outdated"] for t in row["targets"]} == {
+        (str(VARIANT_ID), "firefox@1.0"): True,
+        (str(VARIANT_ID), "chrome@1.0"): False,
+        (str(sibling_id), "firefox@1.0"): False,
+    }
+    assert row["status_notes"] == "No network access on this build"
+    assert row["superseded_by"] == []
+
+    with app.app_context():
+        tool = Scan(variant_id=VARIANT_ID, scan_type="tool", scan_source="osv")
+        _db.session.add(tool)
+        _db.session.flush()
+        _db.session.add(Observation(finding_id=old_finding_id, scan_id=tool.id))
+        _db.session.commit()
+    assert review()["outdated"] is False
+
+
+def test_historical_assessment_trend_selects_published_exact_targets(app_factory):
+    app = app_factory()
+    initial_id = _build_outdated_db(app, include_v2_finding=False)
+    with app.app_context():
+        sibling = Variant.create("sibling", PROJECT_ID)
+        empty_base = Variant.create("empty-base", PROJECT_ID)
+        sibling_scan = Scan(variant_id=sibling.id, scan_type="tool", scan_source="nvd")
+        pending = Scan(variant_id=VARIANT_ID, scan_type="tool", scan_source="nvd", in_progress=True)
+        _db.session.add_all([sibling_scan, pending])
+        _db.session.flush()
+        old_finding = Finding.get_or_create(Package.get_by_string_id("firefox@1.0").id, CVE_ID)
+        other_finding = Finding.get_or_create(Package.get_by_string_id("firefox@2.0").id, CVE_ID)
+        _db.session.add_all([
+            Observation(scan_id=sibling_scan.id, finding_id=other_finding.id),
+            Observation(scan_id=pending.id, finding_id=other_finding.id),
+        ])
+        followup = Assessment.create(
+            status="affected", source="analyst", origin="custom",
+            targets=[(VARIANT_ID, old_finding.id), (sibling.id, other_finding.id)],
+        )
+        excluded = Assessment.create(
+            status="not_affected", source="analyst", origin="custom", targets=[(VARIANT_ID, other_finding.id)],
+        )
+        pending_ai = Assessment.create(
+            status="fixed", source="agent", origin="ai", targets=[(VARIANT_ID, old_finding.id)],
+        )
+        _db.session.commit()
+        sibling_id, empty_base_id = sibling.id, empty_base.id
+        followup_id, excluded_id, ai_id = str(followup.id), str(excluded.id), str(pending_ai.id)
+
+    client = app.test_client()
+    url = "/api/vulnerabilities/assessment-trend"
+
+    def trend(params):
+        response = client.get(url, query_string=params)
+        assert response.status_code == 200
+        assert all(row[0] not in {excluded_id, ai_id} for row in response.json)
+        return [(aid, vuln_id, package, variant) for aid, vuln_id, package, variant, *_ in response.json]
+
+    left = [
+        (str(initial_id), CVE_ID, "firefox@1.0", str(VARIANT_ID)),
+        (followup_id, CVE_ID, "firefox@1.0", str(VARIANT_ID)),
+    ]
+    right = (followup_id, CVE_ID, "firefox@2.0", str(sibling_id))
+    assert client.get("/api/vulnerabilities", query_string={"variant_id": VARIANT_ID}).json == []
+    assert trend({"variant_id": VARIANT_ID, "project_id": PROJECT_ID}) == left
+    assert set(trend({"project_id": PROJECT_ID})) == {*left, right}
+    assert trend({"variant_id": sibling_id, "compare_variant_id": VARIANT_ID, "operation": "difference"}) == []
+    assert trend({"variant_id": empty_base_id, "compare_variant_id": VARIANT_ID, "operation": "difference"}) == left
+    assert set(trend({"variant_ids": f"{VARIANT_ID},{sibling_id}", "operation": "intersection"})) == {*left, right}
+
+
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------

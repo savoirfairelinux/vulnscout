@@ -204,6 +204,11 @@ def test_openapi_spec_documents_context_and_vulnerability_helpers(client):
     assert context_parameters["project_id"]["required"] is True
     assert context_parameters["variant_id"]["required"] is True
 
+    schemas = data["components"]["schemas"]
+    assert "mounts" in schemas["MergedContext"]["properties"]
+    assert "codebase_directory" not in schemas["MergedContext"]["properties"]
+    assert "/api/variants/{variant_id}/context/directory" not in data["paths"]
+
     context_import = data["paths"]["/api/context/import"]["post"]
     assert context_import["requestBody"]["required"] is True
 
@@ -212,8 +217,21 @@ def test_openapi_spec_documents_context_and_vulnerability_helpers(client):
     assert "400" in match_condition["responses"]
 
     description_search = data["paths"]["/api/vulnerabilities/search-descriptions"]["post"]
-    parameter_names = {parameter["name"] for parameter in description_search["parameters"]}
-    assert parameter_names == {"project_id", "variant_id"}
+    parameters = {parameter["name"]: parameter for parameter in description_search["parameters"]}
+    assert set(parameters) == {
+        "project_id", "variant_id", "compare_variant_id", "variant_ids", "operation", "include_outdated",
+    }
+    assert parameters["include_outdated"]["required"] is False
+    assert parameters["include_outdated"]["schema"]["type"] == "boolean"
+    details = data["paths"]["/api/vulnerabilities/{id}"]["get"]
+    detail_parameters = {parameter["name"]: parameter for parameter in details["parameters"]}
+    for name in ("variant_ids", "compare_variant_id", "operation", "include_outdated"):
+        assert detail_parameters[name]["schema"] == parameters[name]["schema"]
+        assert detail_parameters[name]["required"] is False
+    batch = schemas["AssessmentBatch"]
+    assert "current_only" not in batch["required"]
+    assert batch["properties"]["current_only"]["type"] == "boolean"
+    assert batch["properties"]["current_only"]["default"] is False
 
 
 def test_complete_spec_validates_against_openapi_30(client):
@@ -329,6 +347,22 @@ def test_agent_contract_models_local_access_without_session_or_scan_gate(client)
 
 def _assert_payload_matches(spec, schema, payload):
     OAS30Validator({"allOf": [schema], "components": spec["components"]}).validate(payload)
+
+
+def test_approval_body_accepts_rationale_but_not_status(client):
+    spec = client.get("/api/openapi").get_json()
+    schema = spec["paths"]["/api/assessments/{assessment_id}/approve"]["post"][
+        "requestBody"
+    ]["content"]["application/json"]["schema"]
+    _assert_payload_matches(spec, schema, {"status_notes": "Reviewed", "expected_fingerprint": "abc"})
+    target = {"package": "example@1", "variant_id": str(uuid4())}
+    _assert_payload_matches(spec, schema, {"target_risk_links": [
+        {**target, "risk_links": [{"risk_id": "R1", "threat_id": "T1"}]},
+    ]})
+    with pytest.raises(ValidationError, match="risk_id"):
+        _assert_payload_matches(spec, schema, {"target_risk_links": [{**target, "risk_links": [{"threat_id": "T1"}]}]})
+    with pytest.raises(ValidationError, match="status"):
+        _assert_payload_matches(spec, schema, {"status": "affected"})
 
 
 def test_review_body_requires_verdict_rationale_target_and_fingerprint(client):
@@ -657,7 +691,7 @@ def test_vulnerability_refresh_response_envelope_matches_runtime(client, app, co
 
     vuln_id = "CVE-2024-1234"
     if source == "nvd":
-        monkeypatch.setattr(vulnerabilities, "get_cve_json", lambda cve_id: {"id": cve_id})
+        monkeypatch.setattr(vulnerabilities, "get_cve_json", lambda cve_id, *, strict: {"id": cve_id})
         monkeypatch.setattr(vulnerabilities, "extract_cve_details", lambda cve: {"description": "Refreshed NVD data"})
     elif source == "epss":
         epss = Mock()

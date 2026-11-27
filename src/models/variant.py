@@ -3,19 +3,39 @@
 
 import uuid
 import typing
+from collections.abc import Iterable
 
 from ..extensions import db, Base
 
-from sqlalchemy import ForeignKey, UniqueConstraint, event
+from sqlalchemy import ForeignKey, UniqueConstraint, event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if typing.TYPE_CHECKING:
     from sqlalchemy.engine import Connection
-    from sqlalchemy.orm import Mapper
+    from sqlalchemy.orm import Mapper, Session
 
     from ..models import Project, Scan, TimeEstimate, Metrics
     from .variant_context import VariantContext
+    from .host_mount import HostMount
+
+
+def lock_scan_membership(
+    variant_ids: Iterable[uuid.UUID] | None = None, *, session: "Session | None" = None,
+) -> None:
+    """Lock selected variants (or all) against PostgreSQL scan membership changes until commit."""
+    session = session if session is not None else db.session()
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    query = select(Variant.id)
+    if variant_ids is not None:
+        ids = set(variant_ids)
+        if not ids:
+            return
+        query = query.where(Variant.id.in_(ids))
+    # Serialize membership before flushing dependent rows, while allowing FK references.
+    with session.no_autoflush:
+        session.execute(query.order_by(Variant.id).with_for_update(key_share=True)).all()
 
 
 class Variant(Base):
@@ -49,6 +69,10 @@ class Variant(Base):
         back_populates="variant",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+    host_mounts: Mapped[list["HostMount"]] = relationship(
+        back_populates="variant",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:
@@ -121,6 +145,7 @@ class Variant(Base):
 
     def delete(self) -> None:
         """Delete this variant (and its scans via cascade) from the database."""
+        lock_scan_membership([self.id])
         db.session.delete(self)
         db.session.commit()
 

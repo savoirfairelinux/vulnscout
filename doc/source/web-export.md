@@ -5,6 +5,13 @@ documents. To export vulnerability field history, use the **Refresh** page.
 To transfer analyst decisions instead, use
 [Review import and export](web-review.md#import-and-export).
 
+The wizard is independent of the Explorer's evidence mode, as is
+[`vulnscout export`](exports.md). Document exports use active SBOM package
+membership with format-specific rules for vulnerabilities and VEX. They do
+not guarantee an exact match with current Explorer findings or statuses. For
+example, a retained package can still have a superseded finding or assessment
+in an export even though that finding is not current in the Explorer.
+
 SPDX exports include the selected active scans' recorded file metadata and
 supported package/file associations, never file contents or invented hashes.
 See [Recorded files in SPDX exports](exports.md#recorded-files-in-spdx-exports)

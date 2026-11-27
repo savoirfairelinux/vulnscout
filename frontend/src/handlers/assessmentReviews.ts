@@ -86,6 +86,14 @@ class AssessmentReviews {
         projectId?: string,
         vulnerabilityId?: string,
     ): Promise<Record<string, AssessmentReview[]>> {
+        return AssessmentReviews.fetchForScopeStrict(variantId, projectId, vulnerabilityId).catch(() => ({}));
+    }
+
+    static async fetchForScopeStrict(
+        variantId?: string,
+        projectId?: string,
+        vulnerabilityId?: string,
+    ): Promise<Record<string, AssessmentReview[]>> {
         const url = new URL(
             import.meta.env.VITE_API_URL + "/api/assessment-reviews",
             window.location.href,
@@ -94,13 +102,9 @@ class AssessmentReviews {
         else if (projectId) url.searchParams.set("project_id", projectId);
         if (vulnerabilityId) url.searchParams.set("vulnerability_id", vulnerabilityId);
 
-        try {
-            const response = await fetch(url.toString(), { mode: "cors" });
-            if (!response.ok) return {};
-            return await response.json();
-        } catch {
-            return {};
-        }
+        const response = await fetch(url.toString(), { mode: "cors" });
+        if (!response.ok) throw new Error("Unable to refresh assessment reviews.");
+        return await response.json();
     }
 
     /** Discard the review attached to one target of an assessment. */

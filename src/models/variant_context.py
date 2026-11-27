@@ -8,7 +8,7 @@ import logging
 import typing
 from datetime import datetime, timezone
 
-from ..extensions import db, Base
+from ..extensions import db, Base, hold_write_lock
 from ..helpers.datetime_utils import ensure_utc_iso
 from ..helpers.stride_model import (
     SYSTEM_KEYS,
@@ -21,6 +21,7 @@ from ..helpers.stride_model import (
 )
 import sqlalchemy as sa
 from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, Text, event
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,8 +29,6 @@ if typing.TYPE_CHECKING:
     from .variant import Variant
 
 logger = logging.getLogger(__name__)
-
-THREAT_MODEL_REQUIRED = "A threat model is required."
 
 # Editor payload key -> column for the four system-description fields.
 _SYSTEM_COLUMNS: dict[str, str] = {key: f"system_{key}" for key in SYSTEM_KEYS}
@@ -67,6 +66,10 @@ def _validated(call: typing.Callable[[object], typing.Any], raw: object, errors:
         return None
 
 
+def _has_structured_context(values: dict[str, typing.Any]) -> bool:
+    return any(values[column] for column in _SYSTEM_COLUMNS.values()) or any(values["stride_model"].values())
+
+
 def _editor_values(payload: object) -> dict[str, typing.Any]:
     """Validate an editor-shape payload and return the column values to store."""
     if not isinstance(payload, dict):
@@ -75,14 +78,17 @@ def _editor_values(payload: object) -> dict[str, typing.Any]:
     values: dict[str, typing.Any] = {
         key: _optional_text(payload.get(key), key, errors) for key in _EDITOR_TEXT_KEYS
     }
-    system = _validated(normalize_system, payload.get("system"), errors) or {}
+    raw_system = payload.get("system")
+    system = _validated(normalize_system, raw_system, errors) or {}
     for key, column in _SYSTEM_COLUMNS.items():
         values[column] = _blank_to_none(system.get(key))
-    stride_raw = payload.get("stride")
-    stride = _validated(normalize_stride_model, empty_stride_model() if stride_raw is None else stride_raw, errors)
-    values["stride_model"] = stride
-    if not errors and not render_threat_model({k: values[c] for k, c in _SYSTEM_COLUMNS.items()}, stride):
-        errors["threat_model"] = THREAT_MODEL_REQUIRED
+    values["stride_model"] = _validated(normalize_stride_model, payload.get("stride"), errors)
+    if not errors and not _has_structured_context(values):
+        for key in payload.keys() - {*_EDITOR_TEXT_KEYS, "system", "stride"}:
+            errors[key] = "unknown field in empty replacement"
+        if isinstance(raw_system, dict):
+            for key in raw_system.keys() - _SYSTEM_COLUMNS.keys():
+                errors[f"system.{key}"] = "unknown field in empty replacement"
     if errors:
         raise StrideValidationError(errors)
     return values
@@ -170,7 +176,6 @@ class VariantContext(Base):
     __tablename__ = "variant_context"
     __table_args__ = (
         UniqueConstraint("variant_id", name="uq_variant_context_variant"),
-        sa.Index("uq_variant_context_codebase_directory", "codebase_directory", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -178,7 +183,6 @@ class VariantContext(Base):
         ForeignKey("variants.id", ondelete="CASCADE"), nullable=False
     )
     variant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    codebase_directory: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str | None] = mapped_column(Text, nullable=True)
     other_info: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Bumped only when a field's value actually changes; AI assessments older
@@ -214,7 +218,6 @@ class VariantContext(Base):
         return {
             "variant_id": str(self.variant_id),
             "variant_description": self.variant_description,
-            "codebase_directory": self.directory_metadata(),
             "environment": self.environment,
             "threat_model": self.agent_threat_model(),
             "risks": self.agent_risks(),
@@ -228,12 +231,6 @@ class VariantContext(Base):
                 "updated_at": updated_at,
             },
         }
-
-    def directory_metadata(self) -> dict | None:
-        if self.codebase_directory is None:
-            return None
-        from ..helpers.codebase_directory import directory_path
-        return {"file_id": "directory", "path": directory_path(_get_cache_dir(), self.codebase_directory)}
 
     # ------------------------------------------------------------------
     # CRUD helpers
@@ -310,18 +307,21 @@ class VariantContext(Base):
             self.updated_at = datetime.now(timezone.utc)
 
     @staticmethod
-    def save_editor(variant_id: uuid.UUID, payload: dict, commit: bool = True) -> "VariantContext":
+    def save_editor(variant_id: uuid.UUID, payload: dict, commit: bool = True, *,
+                    replace_empty_model: bool = True) -> "VariantContext":
         """Store an editor-shape payload; raises ``StrideValidationError``."""
         values = _editor_values(payload)
+        if not replace_empty_model and not _has_structured_context(values):
+            text = {key: values[key] for key in _EDITOR_TEXT_KEYS}
+            if not any(text.values()):
+                raise StrideValidationError({"context": "blank imports require context_configured: true"})
+            return VariantContext.upsert(variant_id, commit=commit, **text)
         existing = VariantContext.get_by_variant(variant_id)
         if existing is None:
             vc = VariantContext(variant_id=variant_id, updated_at=datetime.now(timezone.utc), **values)
             db.session.add(vc)
         else:
-            # A never-filled STRIDE model (NULL) equals the empty model.
-            stored = existing.stride_model if existing.stride_model is not None else empty_stride_model()
-            if stored == values["stride_model"]:
-                values = {k: v for k, v in values.items() if k != "stride_model"}
+            # Persist even an explicit empty model to distinguish it from a never-configured row on export.
             existing._apply(values)
             vc = existing
         if commit:
@@ -329,17 +329,25 @@ class VariantContext(Base):
         return vc
 
     @staticmethod
-    def touch(variant_id: uuid.UUID, commit: bool = True) -> "VariantContext | None":
-        """Mark an existing variant context as changed without altering its fields.
+    def touch(variant_id: uuid.UUID, commit: bool = True) -> "VariantContext":
+        """Mark a variant context as changed, creating its revision row if needed.
 
         Used by callers that mutate context outside the text-field set covered by
         `upsert` (e.g. supplemental context files), so `context_outdated` still
         reflects the change.
         """
-        existing = VariantContext.get_by_variant(variant_id)
-        if existing is None:
-            return None
-        existing.updated_at = datetime.now(timezone.utc)
+        is_sqlite = db.session.get_bind().dialect.name == "sqlite"
+        if is_sqlite:
+            hold_write_lock()
+        insert = (sqlite.insert if is_sqlite else postgresql.insert)(VariantContext)
+        # On PostgreSQL, sample the clock after any conflict wait, not at transaction start.
+        revision = datetime.now(timezone.utc) if is_sqlite else sa.func.clock_timestamp()
+        statement = insert.values(variant_id=variant_id, updated_at=revision).on_conflict_do_update(
+            index_elements=[VariantContext.variant_id], set_={"updated_at": revision},
+        )
+        existing = db.session.scalars(
+            statement.returning(VariantContext), execution_options={"populate_existing": True},
+        ).one()
         if commit:
             db.session.commit()
         return existing

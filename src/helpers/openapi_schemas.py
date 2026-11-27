@@ -9,6 +9,7 @@ Package string IDs and vulnerability identifiers are not database UUIDs.
 
 from typing import Any
 
+from .assessment_risk_links import MAX_LINKS_PER_TARGET
 from .stride_model import MAX_ROWS, RATINGS, STRIDE_CATEGORIES, SYSTEM_KEYS
 
 
@@ -41,6 +42,13 @@ _INT = {"type": "integer"}
 _COUNT = {"type": "integer", "minimum": 0}
 _NUMBER = {"type": "number", "nullable": True}
 _STRINGS = _array(_STRING)
+_RISK_IDS = {"risk_id": _STRING, "threat_id": _STRING}
+_RISK_SNAPSHOT = {**_RISK_IDS, "risk_description": _STRING, "threat_description": _STRING,
+                  "threat_target_ids": _array({"type": "string", "pattern": r"^[CI][1-9]\d*$"},
+                                              uniqueItems=True, maxItems=2 * MAX_ROWS),
+                  "interaction_endpoints": _map(_object(
+                      {k: {"type": "string", "pattern": r"^C[1-9]\d*$"} for k in ("source_id", "destination_id")},
+                      ("source_id", "destination_id"), additionalProperties=False), maxProperties=MAX_ROWS)}
 _UUIDS = _array(_UUID)
 _PACKAGE_ID = {
     "type": "string",
@@ -128,7 +136,7 @@ SCHEMAS: dict[str, Any] = {
             "source": {"type": "string", "enum": ["sbom", "purl", "cpe", "download"]},
         }, ("version", "identifier", "source"))),
         "variants": _STRINGS, "sources": _STRINGS, "sbom_documents": _STRINGS,
-        "outdated": _BOOL, "variant_id": _UUID, "finding_ids": _UUIDS,
+        "outdated": _BOOL, "variant_id": _UUID, "inventory_variant_ids": _UUIDS, "finding_ids": _UUIDS,
         "vulnerability_ids": _VULNS,
     }, ("id", "name", "version")),
     "PackageCollection": {
@@ -179,6 +187,9 @@ SCHEMAS: dict[str, Any] = {
         "effort": _ref("Effort"), "advisories": _STRINGS,
         "packages": _PACKAGES, "packages_current": _PACKAGES,
         "packages_current_by_variant": _map(_PACKAGES),
+        "packages_status_by_variant": _map(_PACKAGES),
+        "assessment_targets_by_variant": _map(_PACKAGES),
+        "effort_variant_ids": _array(_UUID),
         "published": _TEXT, "data_fetched_at": _DATE, "data_updated_at": _DATE,
         "nvd_fetched_at": _DATE, "ghsa_fetched_at": _DATE, "euvd_fetched_at": _DATE,
         "first_scan_date": _DATE, "texts": _array(_ref("VulnerabilityText")),
@@ -188,8 +199,18 @@ SCHEMAS: dict[str, Any] = {
         "description": "List (including compact Explorer rows) or format=dict keyed by vulnerability identifier.",
         "anyOf": [_array(_ref("Vulnerability")), _map(_ref("Vulnerability"))],
     },
+    "RiskReference": _object(_RISK_IDS, ("risk_id",), additionalProperties=False),
+    "RiskLinkPreview": _object({**_RISK_SNAPSHOT, "revision": _STRING}, ("risk_id", "risk_description", "revision")),
+    "LinkedAssessmentTarget": _object({
+        "variant_id": _UUID, "package": _PACKAGE_ID,
+        "risk_links": _array(_ref("RiskReference"), maxItems=MAX_LINKS_PER_TARGET),
+    }, ("variant_id", "package")),
     "AssessmentTarget": _object({
         "variant_id": _UUID, "package": _PACKAGE_ID, "project_id": _UUID, "outdated": _BOOL,
+        "risk_links_out_of_scope": _BOOL,
+        "risk_links": _array(_object({
+            **_RISK_SNAPSHOT, "stale": _BOOL,
+        }, ("risk_id",))),
     }, ("variant_id", "package"), description=(
         "One actual target pair. packages and variant_ids are projections of this sparse set, "
         "not an implicit Cartesian product."
@@ -201,7 +222,8 @@ SCHEMAS: dict[str, Any] = {
         "timestamp": _DATE, "last_update": _STRING,
         **{name: _STRING for name in ("status", "status_notes", "justification", "impact_statement", "workaround")},
         "responses": _STRINGS, "outdated": _BOOL, "context_outdated": _BOOL,
-        "assessment_fingerprint": _STRING, "project_id": _NULL_UUID, "has_review": _BOOL,
+        "assessment_fingerprint": _STRING, "approval_fingerprint": _STRING,
+        "project_id": _NULL_UUID, "has_review": _BOOL,
         "vuln_texts": _array(_ref("VulnerabilityText")),
         "reviews": _array(_ref("AssessmentReviewRecord")),
         "target_reviews": _array(_object({
@@ -243,7 +265,7 @@ SCHEMAS: dict[str, Any] = {
     "AssessmentCreate": _object({
         **_VEX_FIELDS, "vuln_id": _VULN_ID, "packages": _array(_PACKAGE_ID, minItems=1),
         "variant_id": _UUID, "variant_ids": _array(_UUID, minItems=1),
-        "targets": _array(_ref("AssessmentTarget"), minItems=1),
+        "targets": _array(_ref("LinkedAssessmentTarget"), minItems=1),
         "timestamp": _STRING, "ai_generated": _BOOL,
     }, ("status",), anyOf=[
         {"required": ["targets"]},
@@ -251,18 +273,39 @@ SCHEMAS: dict[str, Any] = {
         {"required": ["packages", "variant_id"]},
     ], description=(
         "Explicit targets preserve sparse pairs. Otherwise packages are crossed with the selected variants. "
-        "vuln_id defaults to the path identifier. not_affected requires justification."
+        "vuln_id defaults to the path identifier. not_affected requires justification. "
+        "For new AI assessments, cite modeled risks and threats only in status_notes and only when "
+        "the evidence applies independently to every exact target. Non-empty targets[].risk_links are rejected."
     )),
     "AssessmentUpdate": _object({
         **_VEX_FIELDS, "timestamp": _STRING, "update_timestamp": _BOOL,
         "allowed_variant_ids": _array(_UUID, minItems=1),
     }, description="Partial content update; targeting is changed through reconcile."),
+    "AssessmentApproval": _object({
+        "target_risk_links": _array(_object({
+            "variant_id": _UUID, "package": _PACKAGE_ID, "risk_links": _array(_object({
+                **_RISK_IDS, "confirmed_revision": _STRING,
+            }, ("risk_id",), additionalProperties=False), maxItems=MAX_LINKS_PER_TARGET),
+        }, ("variant_id", "package", "risk_links"), additionalProperties=False)),
+        **{name: _VEX_FIELDS[name]
+           for name in ("status_notes", "justification", "impact_statement", "workaround")},
+        "expected_fingerprint": _STRING,
+    }, additionalProperties=False, description=(
+        "Optional rationale and per-target risk link edits applied in the same transaction as approval. "
+        "An empty risk_links list clears only that target; omitted targets retain their links. "
+        "Status cannot be supplied, even if unchanged. Omit every field to approve unchanged."
+    )),
     "AssessmentBatch": _object({
+        "current_only": {"type": "boolean", "default": False, "description": "Require exact active targets."},
         "assessments": _array(_object({
             **_VEX_FIELDS, "vuln_id": _VULN_ID, "packages": _array(_PACKAGE_ID, minItems=1),
             "variant_id": _UUID, "variant_ids": _array(_UUID, minItems=1), "timestamp": _STRING,
-        }, ("vuln_id", "status", "packages"), anyOf=[
-            {"required": ["variant_id"]}, {"required": ["variant_ids"]},
+            "targets": _array(_object({
+                "variant_id": _UUID, "package": _PACKAGE_ID,
+            }, ("variant_id", "package")), minItems=1),
+        }, ("vuln_id", "status"), anyOf=[
+            {"required": ["targets"]}, {"required": ["packages", "variant_id"]},
+            {"required": ["packages", "variant_ids"]},
         ])),
     }, ("assessments",)),
     "AssessmentReconcile": _object({
@@ -421,16 +464,22 @@ SCHEMAS: dict[str, Any] = {
     "ContextFile": _object({
         "id": _UUID, "original_name": _STRING, "description": _TEXT,
     }, ("id", "original_name", "description")),
-    "CodebaseDirectory": _object({
-        "file_id": {"type": "string", "enum": ["directory"]},
-        "path": _TEXT,
-        "status": {"type": "string", "enum": [
-            "not_created", "ready", "missing", "unreadable", "unavailable",
-        ]},
+    "HostMount": _object({
+        "attachment_id": _UUID,
+        "approval_revision": _UUID,
+        "alias": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
+        "file_id": {"type": "string", "example": "mount:src"},
+        "host_path": _STRING, "created_at": _DATE,
+        "status": {"type": "string", "enum": ["available", "unavailable"]},
         "message": _STRING,
-        "file_count": {**_COUNT, "nullable": True},
-        "directory_count": {**_COUNT, "nullable": True},
-    }, ("file_id", "path", "status", "message", "file_count", "directory_count")),
+    }, ("attachment_id", "approval_revision", "alias", "file_id", "host_path", "created_at", "status", "message")),
+    "HostMountList": _object({
+        "helper": _object({"available": _BOOL, "message": _TEXT}, ("available", "message")),
+        "mounts": _array(_ref("HostMount")),
+    }, ("helper", "mounts")),
+    "HostMountDetached": _object({
+        "alias": _STRING, "detached": _BOOL, "warning": _TEXT,
+    }, ("alias", "detached", "warning")),
     "ProjectContext": _object({
         "project_id": _UUID, "description": _TEXT,
     }, ("project_id", "description")),
@@ -467,15 +516,17 @@ SCHEMAS: dict[str, Any] = {
     "VariantContext": _object({
         "variant_id": _UUID, **_CONTEXT_FIELDS, "updated_at": _DATE,
         "files": _array(_ref("ContextFile")), "editor": _ref("VariantContextEditor"),
-        "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
     }, ("variant_id", "files", "editor"),
         description="Top-level fields are what agents see: threat_model and risks are rendered from STRIDE."),
     "MergedContext": _object({
         "project_id": _UUID, "description": _TEXT, "variant_id": _UUID,
         **_CONTEXT_FIELDS, "files": _array(_ref("ContextFile")),
-        "codebase_directory": _object({"file_id": _STRING, "path": _STRING}, nullable=True),
+        "mounts": _array(_object({
+            "alias": _STRING, "file_id": _STRING,
+        }, ("alias", "file_id")),
+            description="Host folders attached read-only; browse them with file_id mount:<alias>."),
         "editor": _ref("VariantContextEditor"),
-    }, ("project_id", "variant_id", "description", "files")),
+    }, ("project_id", "variant_id", "description", "files", "mounts")),
     "ScanConfiguration": _object({
         "exclude_native": _BOOL,
         "native_package_exceptions": _array({"type": "string", "maxLength": 255, "example": "gcc-native"}),
@@ -711,6 +762,27 @@ SCHEMAS: dict[str, Any] = {
     "SourceReferenceResult": {
         "anyOf": [
             _object({
+                "file_id": _STRING, "original_name": _STRING, "complete": _BOOL,
+                "next_cursor": {**_STRING, "nullable": True}, "bytes_scanned": _COUNT,
+                "matches": _array(_object({"path": _STRING, "line": _INT, "text": _STRING, "position": _STRING},
+                                          ("path", "line", "text", "position"))),
+            }, ("file_id", "original_name", "complete", "next_cursor", "bytes_scanned", "matches")),
+            _object({
+                "file_id": _STRING, "original_name": _STRING, "path": _STRING, "content": _STRING,
+                "start_line": _INT, "end_line": _INT, "match_line": _INT,
+                "truncated_before": _BOOL, "truncated_after": _BOOL, "partial_first_line": _BOOL,
+                "partial_last_line": _BOOL,
+            }, ("file_id", "original_name", "path", "content", "start_line", "end_line", "match_line",
+                "truncated_before", "truncated_after", "partial_first_line", "partial_last_line")),
+            _object({
+                "file_id": _STRING, "original_name": _STRING,
+                "children": _array(_object({"path": _STRING, "type": {"type": "string", "enum": ["file", "directory"]}},
+                                           ("path", "type"))),
+                "complete": _BOOL, "next_cursor": {**_STRING, "nullable": True}, "visited_entries": _COUNT,
+                "entries_filtered": _BOOL,
+            }, ("file_id", "original_name", "children", "complete", "next_cursor",
+                "visited_entries", "entries_filtered")),
+            _object({
                 "file_id": _STRING, "original_name": _STRING,
                 "files": _array(_object({"path": _STRING, "size": _COUNT}, ("path", "size"))),
                 "total": _COUNT, "next_offset": {**_COUNT, "nullable": True},
@@ -719,6 +791,7 @@ SCHEMAS: dict[str, Any] = {
                 "file_id": _STRING, "original_name": _STRING, "path": _STRING, "content": _STRING,
                 "start_line": _INT, "end_line": _INT, "total_lines": _COUNT,
                 "next_line": {**_INT, "nullable": True},
+                "partial_line": _BOOL,
             }, ("file_id", "original_name", "path", "content", "start_line", "end_line", "total_lines", "next_line")),
             _object({
                 "file_id": _STRING, "original_name": _STRING, "truncated": _BOOL,
@@ -731,6 +804,11 @@ SCHEMAS: dict[str, Any] = {
         "project_name": _STRING, "project_description": _TEXT,
         "variants": _array(_object({
             "variant_name": _STRING, **_CONTEXT_TEXT_FIELDS,
+            "context_configured": {**_BOOL, "description": (
+                "False skips the variant. True permits an explicitly blank replacement. "
+                "If omitted, Context text alone replaces only the Context text fields. "
+                "System text or STRIDE rows request a full replacement; a completely blank entry fails."
+            )},
             "system": _ref("ContextSystem"), "stride_model": _ref("StrideModel"),
             "files": _array(
                 _object({"original_name": _STRING, "description": _TEXT}, ("original_name", "description")),
@@ -872,6 +950,8 @@ SCHEMAS: dict[str, Any] = {
         "timestamp": _DATE, "packages": _PACKAGES, "variant": _TEXT, "variant_id": _NULL_UUID,
         "targets": _array(_object({
             "variant": _TEXT, "package": _PACKAGE_ID,
+            "risk_links": _array(_object(_RISK_SNAPSHOT, ("risk_id", "risk_description"),
+                                         additionalProperties=False), maxItems=MAX_LINKS_PER_TARGET),
         }, ("variant", "package"))),
     }, ("vuln_id", "status", "packages"), description=(
         "Portable version-2 targets use variant names, not variant UUIDs, and preserve sparse package/variant pairs."
@@ -966,9 +1046,12 @@ SCHEMAS.update({
         **_CONTEXT_TEXT_FIELDS,
         "system": _ref("ContextSystem"), "stride": _ref("StrideModel"),
     }, description=(
-        "With stride, an editor save storing every field (the STRIDE "
-        "model must describe a threat model). Without stride, a full replacement of the text fields; "
-        "threat_model and risks are read-only. Source code is accessed through the variant's directory."
+        "With stride, replace all editable fields. An empty object clears all STRIDE rows; "
+        "omitted or empty tables clear their rows. Neither stride nor a table may be null. "
+        "Unknown table names are accepted only alongside populated, valid tables. "
+        "Unknown top-level or System fields cannot accompany an empty System and STRIDE replacement. "
+        "Without stride, a full replacement of the text fields; "
+        "threat_model and risks are read-only. Host folders are attached separately."
     )),
     "SbomUploadAccepted": _object({
         "op_id": _STRING, "scan_id": _UUID, "message": _STRING,
@@ -1099,6 +1182,7 @@ SCHEMAS.update({
     }),
     "VulnerabilityRefreshResponse": _object({
         "vulnerabilities": _array(_ref("Vulnerability")),
+        "outcome": {"type": "string", "enum": ["no_record", "skipped"]},
     }, ("vulnerabilities",)),
     "IndividualRefreshResponse": _object({
         "run_id": _STRING,
@@ -1137,6 +1221,7 @@ SCHEMAS.update({
             ("name", "revision", *[key for key in variant["required"] if key not in ("file_id", "original_name")]),
         )
         for variant in SCHEMAS["SourceReferenceResult"]["anyOf"]
+        if "next_cursor" not in variant["properties"] and "match_line" not in variant["properties"]
     ]},
     "ContextDraftUpdate": _object({
         "source": {"type": "string", "minLength": 1, "maxLength": 255},

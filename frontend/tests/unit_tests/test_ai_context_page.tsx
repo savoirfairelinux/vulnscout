@@ -43,8 +43,6 @@ type Backend = {
     holds?: { fragment: string; method: string; until: Promise<unknown> }[];
     drafts?: Record<string, unknown>;
     importRevisions?: Record<string, string>;
-    directoryPaths?: Record<string, string>;
-    directoryCounts?: Record<string, { files: number; directories: number }>;
 };
 
 function deferred() {
@@ -84,19 +82,6 @@ function respond(backend: Backend, url: string, method: string, body: string | n
         const variantId = new URL(url).searchParams.get('variant_id') ?? '';
         if (backend.contexts?.[variantId]) return backend.contexts[variantId];
         return variantContext(variantId, backend.threat, backend.files);
-    }
-    const directory = /^\/api\/variants\/([^/]+)\/context\/directory$/.exec(path);
-    if (directory) {
-        const id = directory[1];
-        const paths = backend.directoryPaths ?? (backend.directoryPaths = {});
-        if (method === 'POST') paths[id] = `/cache/vulnscout/context-project-${id}`;
-        return {
-            path: paths[id] ?? null, file_id: 'directory',
-            status: paths[id] ? 'unavailable' : 'not_created',
-            message: paths[id] ? 'Codebase directory is empty or contains no eligible source files.' : 'No codebase directory provisioned. Create it on demand.',
-            file_count: paths[id] ? backend.directoryCounts?.[id]?.files ?? 0 : null,
-            directory_count: paths[id] ? backend.directoryCounts?.[id]?.directories ?? 0 : null,
-        };
     }
     if (/^\/api\/variants\/[^/]+\/context\/files$/.test(path)) {
         const reference = { id: `f${backend.files.length + 1}`, original_name: 'source.zip', description: null };
@@ -406,6 +391,26 @@ describe('AIContext page', () => {
         expect(screen.queryByText(DIRTY_PROJECT_TEXT)).not.toBeInTheDocument();
     });
 
+    test.each(['update_variant_context', 'propose_variant_threat_model'])('queues an agent announcement while %s reads context', async tool => {
+        const backend = mockBackend();
+        renderPage({ projectId: 'p1' });
+        await openVariant1();
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(2));
+        const draftPath = '/api/variants/v1/context/draft';
+        const gate = deferred();
+        backend.holds = [{ fragment: 'variant_id=v1', method: 'GET', until: gate.promise }];
+
+        agentWrite(tool);
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1')).toHaveLength(3));
+        const draftLoads = requestsTo(backend, draftPath).length;
+        await act(async () => { agentWrite('propose_variant_threat_model'); });
+        expect(requestsTo(backend, draftPath)).toHaveLength(draftLoads);
+
+        await act(async () => { gate.resolve(); await gate.promise; });
+        await waitFor(() => expect(requestsTo(backend, 'variant_id=v1').length).toBeGreaterThan(3));
+        expect(requestsTo(backend, draftPath).length).toBeGreaterThan(draftLoads);
+    });
+
     test('scope change removing the selected variant falls back to the project description', async () => {
         mockBackend();
         const { setScope } = renderPage({ projectId: 'p1' });
@@ -549,7 +554,7 @@ describe('AIContext page', () => {
             expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
         });
 
-        test('only directory controls are shown and saving sends no legacy source settings', async () => {
+        test('legacy source controls are hidden and saving sends no legacy source settings', async () => {
             const original = variantContext('v1', 'TM', [{ id: 'f1', original_name: 'legacy.zip', description: null }]);
             const backend = mockBackend({ echoPut: true, contexts: { v1: original } });
             renderPage({ projectId: 'p1' });
@@ -557,86 +562,17 @@ describe('AIContext page', () => {
             expect(screen.queryByRole('radiogroup', { name: 'Codebase source' })).not.toBeInTheDocument();
             expect(screen.queryByRole('radio')).not.toBeInTheDocument();
             expect(screen.queryByRole('region', { name: 'Codebase references' })).not.toBeInTheDocument();
+            expect(screen.queryByRole('region', { name: 'Codebase directory' })).not.toBeInTheDocument();
+            expect(screen.getByRole('region', { name: 'Attached host folders' })).toBeVisible();
+            expect(requestsTo(backend, '/api/variants/v1/context/directory', 'GET')).toHaveLength(0);
             expect(screen.queryByRole('button', { name: 'Add path' })).not.toBeInTheDocument();
             expect(screen.queryByText('legacy.zip')).not.toBeInTheDocument();
-            expect(screen.getByRole('region', { name: 'Codebase directory' })).toBeVisible();
-            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Directory only' } });
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Mounts only' } });
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
             const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
             expect(body).not.toHaveProperty('codebase_source');
             expect(body).not.toHaveProperty('codebase_path');
-        });
-
-        test('directory is created on demand without losing unsaved text', async () => {
-            const backend = mockBackend({ echoPut: true });
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Keep my edits' } });
-            const create = await screen.findByRole('button', { name: 'Create codebase directory' });
-            await waitFor(() => expect(create).toBeEnabled());
-            expect(requestsTo(backend, '/context/directory', 'POST')).toHaveLength(0);
-            fireEvent.click(create);
-            expect(await screen.findByText('/cache/vulnscout/context-project-v1')).toBeVisible();
-            expect(screen.getByText('Codebase directory is empty or contains no eligible source files.')).toBeVisible();
-            expect(screen.getByLabelText('Environment')).toHaveValue('Keep my edits');
-            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
-            expect(screen.getByText('Files: 0 / Directories: 0')).toBeVisible();
-            fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-            await screen.findByText('Saved.');
-            expect(JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}')).toMatchObject({
-                environment: 'Keep my edits',
-            });
-        });
-
-        test('refresh updates eligible file and subdirectory counts without dirtying the context draft', async () => {
-            const backend = mockBackend({
-                directoryPaths: { v1: '/cache/vulnscout/context-project-v1' },
-                directoryCounts: { v1: { files: 3, directories: 2 } }, echoPut: true,
-            });
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            await screen.findByText('Files: 3 / Directories: 2');
-            expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-            backend.directoryCounts = { v1: { files: 7, directories: 4 } };
-            const refresh = screen.getByRole('button', { name: 'Refresh directory status' });
-            await waitFor(() => expect(refresh).toBeEnabled());
-            fireEvent.click(refresh);
-            expect(await screen.findByText('Files: 7 / Directories: 4')).toBeVisible();
-            expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
-        });
-
-        test('directory errors are explicit and status can be retried', async () => {
-            const backend = mockBackend({ failUrls: ['/context/directory'] });
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            expect(await screen.findByRole('alert')).toHaveTextContent('Server unavailable');
-            const refresh = screen.getByRole('button', { name: 'Refresh directory status' });
-            await waitFor(() => expect(refresh).toBeEnabled());
-            backend.failUrls = [];
-            fireEvent.click(refresh);
-            expect(await screen.findByText('No codebase directory provisioned. Create it on demand.')).toBeVisible();
-            expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-            backend.failUrls = ['/context/directory'];
-            fireEvent.click(screen.getByRole('button', { name: 'Create codebase directory' }));
-            expect(await screen.findByRole('alert')).toHaveTextContent('Server unavailable');
-        });
-
-        test('failed refresh removes previously displayed counts rather than reporting stale totals', async () => {
-            const backend = mockBackend({
-                directoryPaths: { v1: '/cache/vulnscout/context-project-v1' },
-                directoryCounts: { v1: { files: 3, directories: 2 } },
-            });
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            await screen.findByText('Files: 3 / Directories: 2');
-            backend.failUrls = ['/context/directory'];
-            const refresh = screen.getByRole('button', { name: 'Refresh directory status' });
-            await waitFor(() => expect(refresh).toBeEnabled());
-            fireEvent.click(refresh);
-            expect(await screen.findByRole('alert')).toHaveTextContent('Server unavailable');
-            expect(screen.queryByText(/Files: \d+ \/ Directories:/)).not.toBeInTheDocument();
         });
 
         test('Save changes disabled until the draft differs from saved', async () => {
@@ -653,8 +589,16 @@ describe('AIContext page', () => {
             expect(screen.queryByText('Unsaved changes in Variant 1')).not.toBeInTheDocument();
         });
 
-        test('variant save sends the editor shape through saveVariantEditor', async () => {
-            const backend = mockBackend();
+        test('editing Context sends the saved STRIDE rows unchanged', async () => {
+            const original = variantContext('v1', 'TM');
+            const stride = {
+                ...emptyStrideModel(),
+                components: [{ id: 'C1', name: 'Gateway', description: '', trust_zone: '' }],
+                threats: [{ id: 'T1', category: 'tampering', description: 'Modified firmware', target_ids: ['C1'] }],
+                risks: [{ id: 'R1', threat_ids: ['T1'], description: '', impact: 'high', likelihood: null,
+                    mitigation: '', residual: '' }],
+            };
+            const backend = mockBackend({ contexts: { v1: { ...original, editor: { ...original.editor, stride } } } });
             renderPage({ projectId: 'p1' });
             await openVariant1();
             fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Gateway' } });
@@ -668,21 +612,31 @@ describe('AIContext page', () => {
             expect(JSON.parse(puts[0].body ?? '{}')).toEqual({
                 variant_description: 'Gateway', environment: 'Lab', other_info: null,
                 system: { scope: 'TM', actors: null, entry_points: null, trust_boundaries: null },
-                stride: emptyStrideModel(),
+                stride,
             });
         });
 
-        test('a missing threat model blocks the save and opens the Threat model tab', async () => {
-            const backend = mockBackend({ threat: '' });
-            renderPage({ projectId: 'p1' });
+        test.each([
+            ['Context', 'Environment', 'Lab'],
+            ['System', 'System scope and assets', 'Gateway'],
+        ])('%s can be saved and reopened before adding any threats', async (tab, field, value) => {
+            const backend = mockBackend({ threat: '', echoPut: true });
+            const scope = { projectId: 'p1' };
+            const page = renderPage(scope);
             await openVariant1();
-            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Lab' } });
-
+            fireEvent.click(variantTab(tab));
+            fireEvent.change(screen.getByLabelText(field), { target: { value } });
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
-            expect(await screen.findByText('A threat model is required.')).toBeInTheDocument();
-            expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
-            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+            expect(await screen.findByText('Saved.')).toBeInTheDocument();
+            const [put] = requestsTo(backend, '/api/variants/v1/context', 'PUT');
+            expect(JSON.parse(put.body ?? '{}').stride).toEqual(emptyStrideModel());
+            page.unmount();
+            renderPage(scope);
+            await openVariant1();
+            fireEvent.click(variantTab(tab));
+            expect(screen.getByLabelText(field)).toHaveValue(value);
+            expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
         });
 
         test('save 400 marks the offending field and shows the error banner', async () => {
@@ -788,29 +742,6 @@ describe('AIContext page', () => {
             expect(screen.queryByText(DIRTY_PROJECT_TEXT)).not.toBeInTheDocument();
         });
 
-        test('directory provisioning keeps unsaved fields and status stays scoped when reopening', async () => {
-            const backend = mockBackend();
-            const user = userEvent.setup();
-            renderPage({ projectId: 'p1' });
-            await openVariant1();
-            fireEvent.change(screen.getByLabelText('Variant description'), { target: { value: 'Unsaved desc' } });
-            const create = await screen.findByRole('button', { name: 'Create codebase directory' });
-            await waitFor(() => expect(create).toBeEnabled());
-            fireEvent.click(create);
-            await screen.findByText('/cache/vulnscout/context-project-v1');
-            expect(screen.getByLabelText('Variant description')).toHaveValue('Unsaved desc');
-            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
-            expect(requestsTo(backend, '/api/variants/v1/context/directory', 'POST')).toHaveLength(1);
-
-            await user.click(sidebarItem('Variant 2'));
-            await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Discard' }));
-            await screen.findByRole('region', { name: 'Variant 2' });
-            expect(screen.queryByText('/cache/vulnscout/context-project-v1')).not.toBeInTheDocument();
-            await user.click(sidebarItem('Variant 1'));
-            await screen.findByRole('region', { name: 'Variant 1' });
-            await waitFor(() => expect(screen.getByLabelText('Variant description')).toHaveValue(''));
-            expect(await screen.findByText('/cache/vulnscout/context-project-v1')).toBeVisible();
-        });
     });
 
     describe('system tab', () => {
@@ -1188,11 +1119,13 @@ describe('AIContext page', () => {
             expect(screen.queryByLabelText('Risk R2 description')).not.toBeInTheDocument();
         });
 
-        test('a risk without a threat blocks the save and says so next to the cell', async () => {
-            const { backend } = await openStride();
+        test('saving Context still reports a risk entered without a threat', async () => {
+            const { backend } = await openStride({ threat: '' });
             addTargetedThreat();
             fireEvent.click(variantTab('Risks'));
             addRisk();
+            fireEvent.click(variantTab('Context'));
+            fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'Lab' } });
             fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
             expect(await screen.findByText('Select at least one threat.')).toBeInTheDocument();
@@ -1300,10 +1233,10 @@ describe('AIContext page', () => {
         });
 
         test('a threat_model 400 error opens the Threat model tab and shows the message', async () => {
-            await failWith({ threat_model: 'A threat model is required.' }, addTargetedThreat);
+            await failWith({ threat_model: 'Invalid threat model' }, addTargetedThreat);
 
             expect(variantTab('Threat model')).toHaveAttribute('aria-selected', 'true');
-            expect(within(screen.getByRole('tabpanel', { name: 'Threat model' })).getByText('A threat model is required.')).toBeVisible();
+            expect(within(screen.getByRole('tabpanel', { name: 'Threat model' })).getByText('Invalid threat model')).toBeVisible();
         });
 
         test('a top-level risks 400 error opens the Risks tab and shows the message', async () => {
@@ -1322,7 +1255,7 @@ describe('AIContext page', () => {
     });
 
     describe('copy from', () => {
-        const COPY_WARNING = "This replaces the context draft, but never copies codebase files or directory settings from another variant. Saving uses this variant's own codebase directory. Nothing is saved until you click Save changes.";
+        const COPY_WARNING = "This replaces the context draft, but never copies codebase files or attached host folders from another variant. Nothing is saved until you click Save changes.";
         const sourceContext = () => {
             const base = variantContext('v3', 'Source TM', [{ id: 'f9', original_name: 'other.zip', description: null }]);
             return {
@@ -1374,13 +1307,9 @@ describe('AIContext page', () => {
             expect(copy).toBeEnabled();
         });
 
-        test.each([false, true])('copy keeps the target directory (source provisioned: %s)', async provisioned => {
-            const source = {
-                ...sourceContext(),
-                codebase_directory: provisioned ? { file_id: 'directory', path: '/cache/source' } : null,
-            };
+        test('copy never carries over uploaded codebase references', async () => {
             const backend = twoProjects({
-                contexts: { v3: source },
+                contexts: { v3: sourceContext() },
                 files: [{ id: 'f1', original_name: 'source.zip', description: null }],
             });
             const user = userEvent.setup();
@@ -1393,7 +1322,6 @@ describe('AIContext page', () => {
             expect(banner.closest('[role="alert"]')).toHaveClass('bg-blue-800');
             expect(screen.getByLabelText('Variant description')).toHaveValue('Copied desc');
             expect(screen.getByLabelText('Environment')).toHaveValue('Plant');
-            expect(screen.getByRole('region', { name: 'Codebase directory' })).toBeVisible();
             expect(screen.queryByText('source.zip')).not.toBeInTheDocument();
             expect(screen.queryByText('other.zip')).not.toBeInTheDocument();
             expect(screen.getByText('Unsaved changes in Variant 1')).toBeInTheDocument();
@@ -1403,7 +1331,6 @@ describe('AIContext page', () => {
             await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(1));
             const body = JSON.parse(requestsTo(backend, '/api/variants/v1/context', 'PUT')[0].body ?? '{}');
             expect(body).toMatchObject({ other_info: 'Copied info', system: { scope: 'Source TM' } });
-            expect(body).not.toHaveProperty('codebase_directory');
         });
 
         test('copy clears the field errors of the replaced draft', async () => {
@@ -1432,12 +1359,15 @@ describe('AIContext page', () => {
             await copyFrom(user, 'Variant 2');
 
             expect(screen.getByLabelText('System scope and assets')).toHaveValue('');
-            expect(screen.getByRole('region', { name: 'Codebase directory' })).toBeVisible();
             ['Variant description', 'Environment', 'Other information']
                 .forEach(name => expect(screen.getByRole('textbox', { name })).toHaveValue(''));
             await user.click(screen.getByRole('button', { name: 'Save changes' }));
-            expect(await screen.findByText('A threat model is required.')).toBeInTheDocument();
-            expect(requestsTo(backend, '/api/variants/v1/context', 'PUT')).toHaveLength(0);
+            expect(await screen.findByText('Saved.')).toBeInTheDocument();
+            const [put] = requestsTo(backend, '/api/variants/v1/context', 'PUT');
+            expect(JSON.parse(put.body ?? '{}')).toEqual({
+                variant_description: null, environment: null, other_info: null,
+                system: NO_SYSTEM, stride: emptyStrideModel(),
+            });
         });
 
         test('a failed source load shows an error and keeps the draft', async () => {
@@ -1564,7 +1494,9 @@ describe('AIContext page', () => {
 
             expect(screen.queryByRole('tooltip')).toBeNull();
             fireEvent.click(screen.getByRole('button', { name: /import help/i }));
-            expect(await screen.findByRole('tooltip')).toHaveTextContent(/overwrites the existing context/i);
+            const tooltip = await screen.findByRole('tooltip');
+            expect(tooltip).toHaveTextContent(/replaces the project description shared by all its variants/i);
+            expect(tooltip).toHaveTextContent(/unmarked entries with only Context text.*preserve System and STRIDE/i);
         });
     });
 });
@@ -1710,7 +1642,6 @@ describe('AI threat-model drafts', () => {
         await act(async () => { deletion.resolve(); await deletion.promise; });
         await waitFor(() => expect(screen.queryByText(LOADED_TEXT)).not.toBeInTheDocument());
         expect(screen.getByLabelText('Environment')).toHaveValue('New local environment');
-        expect(screen.getByRole('region', { name: 'Codebase directory' })).toBeVisible();
         expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
         fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
         await screen.findByText('Saved.');
@@ -1739,10 +1670,9 @@ describe('AI threat-model drafts', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Variant 1' }));
         await waitFor(() => expect(requestsTo(backend, '/api/variants/v1/context/draft').length).toBeGreaterThan(0));
         fireEvent.click(sidebarItem('Variant 2'));
-        await waitFor(() => expect(requestsTo(backend, 'variant_id=v2')).toHaveLength(1));
-        await waitFor(() => expect(screen.getByLabelText('Variant description')).toBeInTheDocument());
-        await act(async () => { gate.resolve(); await gate.promise; });
+        await screen.findByRole('region', { name: 'Variant 2' });
         await waitFor(() => expect(requestsTo(backend, '/api/variants/v2/context/draft').length).toBeGreaterThan(0));
+        await act(async () => { gate.resolve(); await gate.promise; });
         expect(screen.queryByText(/Unsaved AI draft/)).not.toBeInTheDocument();
         expect(screen.queryByText('Unsaved changes in Variant 2')).not.toBeInTheDocument();
     });

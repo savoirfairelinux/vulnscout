@@ -6,14 +6,24 @@ of the **Refresh History** bar. Choose
 **Complete refresh** for every available provider or **Custom refresh** to choose
 providers, then **Start**. The action uses vulnerabilities in the selected scope,
 not table filters. Detailed progress is shown in the operation queue.
-Per-provider cancellation remains available in the refresh menu, and success
-or error banners appear above **Refresh History**.
+Per-provider cancellation remains available in the refresh menu, and status
+banners appear above **Refresh History**. The completion banner reports
+how many distinct CVEs had data changes, not how many were checked. If the run
+includes GitHub Advisory Database, it counts changed CVEs and advisories together
+as vulnerabilities. Open the refresh result to inspect individual field changes.
 Queued work continues after navigating away. Each launch records one refresh run
 containing all selected providers. Loaded data and run results update once after
 every step finishes, fails or is cancelled, not after individual providers.
 Accepted refreshes appear immediately as one operation-queue task with provider
 steps, without waiting for the first streamed progress update.
-Skipped provider responses remain incomplete coverage even when execution succeeds.
+Failed or deferred lookups leave coverage incomplete even when queued jobs
+finish. The banner names the affected providers when known and still reports
+observed changes. EPSS batches are retried up to twice for temporary DNS
+failures and network timeouts. A successful NVD or EPSS lookup that returns no
+record is reported as **No record**. Like an explicitly unsupported identifier, it
+does not leave a coverage gap, but it does not supply a comparison baseline
+or remove previously stored data. Older artifacts with an unverified
+**Provider record unavailable** reason retain their original classification.
 This view does not run scanners or duplicate the
 vulnerability's
 [Data history](web-vulnerability-details.md#data-history).
@@ -67,7 +77,7 @@ The page never silently substitutes another run.
 
 Run identifiers remain in shareable URLs; providers, start/end dates and status
 are displayed without internal IDs.
-**Reload results** retrieves those persisted records, including after a browser
+Opening a result retrieves the persisted records, including after a browser
 reload or server restart. It does not refresh provider data, acknowledge changes,
 or clear another user's indicators.
 
@@ -81,20 +91,28 @@ Exact-run JSON and CSV exports include the origin and these same summary counts.
 Older runs retain their recorded coverage and have an unknown origin; historical
 field-history exports continue to group changes by the shared refresh run ID.
 
-**Targeted**, **Checked**, **Changed**, **Skipped**, **Failed**, **Cancelled**
-and **Pending** count distinct CVEs, not source/CVE pairs. One CVE checked by
+The **Coverage** tab badge counts distinct targeted vulnerabilities in the selected
+scope across all providers. The tab still lists each provider's outcome separately.
+
+**Targeted**, **Checked**, **Changed**, **No record**, **Skipped**, **Failed**, **Cancelled**
+and **Pending** count distinct vulnerability IDs, not source/ID pairs. One ID checked by
 several providers is counted once in each applicable category. Categories can
 overlap: for example, NVD can succeed while EPSS fails for the same CVE.
+An unsupported identifier still counts as **Targeted** and **Skipped** for its
+provider, never as **Checked**.
 Open **Overview** for the distinct counts or **Coverage** for per-source totals
-and each CVE's outcome and error. Counts describe the whole selected run in the viewing scope,
-not just the current page or change filter.
+and each vulnerability's outcome and reason. Incomplete runs show unchecked
+targets first; use **Show all target outcomes** to include successful checks.
+Counts describe the whole selected run in the viewing scope, not just the
+displayed outcomes, current page or change filter.
 
 - **No refresh / no baseline** means no matching recorded run exists. Earlier
   values may predate run tracking; this does not establish that nothing changed.
   This is a normal empty state, not an API error.
 - **First enrichment** means a field had no previous recorded value. It is an
   addition without a baseline, not a modification to a known prior value.
-- **Zero changes** on a complete run is distinct from an absent run.
+- **Zero changes** on a complete run is distinct from an absent run. A
+  completed lookup without a record cannot establish that data is unchanged.
 - **Running** shows committed changes so far; reload to retrieve progress.
 - **Incomplete**, cancelled coverage and provider failures retain committed
   changes while exposing coverage gaps. They do not prove unchanged data.

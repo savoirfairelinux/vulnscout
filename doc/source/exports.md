@@ -2,6 +2,12 @@
 
 VulnScout can export the enriched project data as standard SBOM formats. Exported files are written to the outputs directory (default: `.vulnscout/outputs/`).
 
+CLI exports and the [web export wizard](web-export.md) are independent of
+the Explorer's evidence mode. Exports use active SBOM package membership
+and format-specific vulnerability and VEX rules, not the Explorer's exact
+current finding set. A finding or assessment for a retained package can still
+appear in an export after that finding stops being current in the Explorer.
+
 ```bash
 # Export as SPDX 3.0 SBOM
 ./vulnscout export -p demo spdx

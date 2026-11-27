@@ -193,6 +193,9 @@ class AssessGuard:
     def allow(self) -> Response | None:
         if request.method in SAFE_METHODS:
             return None
+        if (request.method == "POST" and request.endpoint == "run_codebase_shell" and self.current is not None
+                and (request.view_args or {}).get("variant_id") in {variant for variant, _ in self.current[1]}):
+            return None
         if request.endpoint == "add_assessment" and _turn_allows(
                 self.current, (request.view_args or {}).get("vuln_id"), request.get_json(silent=True)):
             return None
@@ -258,6 +261,9 @@ class ReviewTurn:
         if request.method in SAFE_METHODS:
             return None
         armed = self.armed
+        if (request.method == "POST" and request.endpoint == "run_codebase_shell" and armed is not None
+                and (request.view_args or {}).get("variant_id") in {str(target.variant_id) for target in armed[1]}):
+            return None
         if request.endpoint == "put_assessment_review" and armed is not None:
             selection, batch = armed
             body = request.get_json(silent=True)

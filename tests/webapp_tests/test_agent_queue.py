@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from queue import Queue
 from types import SimpleNamespace
 
 import pytest
@@ -187,14 +188,18 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
 
     monkeypatch.setattr(aq, "agent_queue", env.q)
     client = env.app.test_client()
-    action = {"kind": "context-import", "key": "import:x86", "text": "Read the uploaded document.",
+    prompt = (f' Fill the threat model of variant "x86" (variant_id {env.ids["x86"]}) in project '
+              f'"demo" (project_id {env.ids["demo"]}) from the document "report.pdf".\n'
+              "\tFollow the ai-context-import skill in embedded mode and read the import source.\n"
+              "Store a draft for the user to review. ")
+    action = {"kind": "context-import", "key": "import:x86", "text": prompt,
               "title": "x86 from report.pdf", "detail": "report.pdf", "import_revision": "uploaded-revision"}
     context = {"page": "ai", "view": {"selectedProjectId": env.ids["demo"],
                                      "selectedVariantId": env.ids["x86"]}}
     body = {"conversation": "per-action", "source": "AI Context x86", "actions": [action], "context": context,
             "model": "m"}
     response = client.post("/api/agent/queue", json=body)
-    assert response.status_code == 202
+    assert response.status_code == 202, response.get_json()
     [created] = response.get_json()["requests"]
     request = env.q.get_request(created["id"])
     assert request["lane"] == "action" and request["timeout"] == agent_skills.ACTION_TIMEOUT
@@ -207,7 +212,7 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
     assert call.profile is agent_skills.CONTEXT_IMPORT and call.turn is None
     assert json.loads(call.scope)["variant_ids"] == [env.ids["x86"]]
     assert json.loads(call.scope)["import_revisions"] == {env.ids["x86"]: "uploaded-revision"}
-    assert call.prompt.startswith(action["text"])
+    assert call.prompt.startswith(prompt)
     [follow], _ = env.q.enqueue(created["conversation_id"], "web", [_message("Why?")], model="m",
                                 context={"page": "vulnerabilities", "projectId": env.ids["demo"],
                                          "variantId": env.ids["arm"]})
@@ -219,9 +224,16 @@ def test_context_import_is_queued_with_its_profile_and_scoped_follow_ups(env, mo
 @pytest.mark.parametrize("change, error", [
     ({"context": {"page": "ai"}}, "Select one variant"),
     ({"text": ""}, "import prompt"),
+    ({"text": " " + "x" * (aq.MESSAGE_LIMIT - 1) + "\n"}, "import prompt"),
+    ({"text": "Fill\x00from document"}, "import prompt"),
+    ({"text": "Fill\r\nfrom document"}, "import prompt"),
+    ({"text": "Fill\x85from document"}, "import prompt"),
+    ({"key": "import:\tx86"}, "Invalid action key"),
     ({"title": ""}, "import title"),
+    ({"title": "Fill\nx86"}, "import title"),
     ({"detail": ""}, "import filename"),
     ({"import_revision": ""}, "import revision"),
+    ({"import_revision": "upload\nrevision"}, "import revision"),
     ({"import_revision": None}, "import revision"),
     ({"import_revision": 5}, "import revision"),
     ({"import_revision": "x" * 129}, "import revision"),
@@ -435,16 +447,249 @@ def test_messages_carry_their_browser_context(env):
     assert env.deleted == ["s-" + request["id"]]
 
 
-def test_a_request_that_is_no_longer_next_does_not_start(env, monkeypatch):
+def _observe_probe_peers(queue, monkeypatch, count):
+    joined = threading.Event()
+    peers = set()
+    wait_for = queue._cond.wait_for
+
+    def observe(predicate):
+        if not predicate():
+            peers.add(threading.current_thread())
+            if len(peers) == count:
+                joined.set()
+        return wait_for(predicate)
+
+    monkeypatch.setattr(queue._cond, "wait_for", observe)
+    return joined
+
+
+def test_workers_check_provider_once_for_the_same_candidate(env, monkeypatch):
+    from src.routes import agent
+
+    _config("AI_PROVIDER=local\nAI_BASE_URL=http://localhost:8080/v1\n")
+    probes = []
+    checking = threading.Event()
+    joined = _observe_probe_peers(env.q, monkeypatch, 1)
+
+    def models(connection, base_url):
+        probes.append(base_url)
+        assert len(probes) == 1, "second worker started a duplicate provider probe"
+        checking.set()
+        assert joined.wait(5)
+        return b'{"data":[{"id":"m"}]}'
+
+    monkeypatch.setattr(agent, "_fetch_provider_models", lambda *args: b'{"data":[{"id":"m"}]}')
+    [request], _ = env.q.enqueue("per-action", "web", [_assess()], model="m")
+    monkeypatch.setattr(agent, "_fetch_provider_models", models)
+    worker, result = _thread(env.q.run_once, "action")
+    try:
+        assert checking.wait(5)
+        other = env.q.run_once("action")
+        assert joined.is_set()
+    finally:
+        joined.set()
+        worker.join(5)
+    assert not worker.is_alive() and {result["value"], other} == {request["id"], None}
+    assert len(probes) == 1
+    assert env.q.paused is None
+
+
+@pytest.mark.parametrize("app", ["batch.sqlite"], indirect=True)
+def test_five_mixed_actions_share_one_successful_provider_probe(env, monkeypatch):
+    from src.routes import agent
+
+    _config("AI_PROVIDER=local\nAI_BASE_URL=http://localhost:8080/v1\n")
+    actions = [
+        _assess(targets=[{"variant_id": env.ids["x86"], "package": "openssl@3.0"}]),
+        _assess(vuln_id="CVE-2024-0004"),
+        {"kind": "review", "assessment_id": _custom(env, [("arm", "openssl")])},
+        {"kind": "review", "assessment_id": _custom(env, [("x86", "zlib")])},
+        {"kind": "context-import", "text": "Fill", "title": "arm", "detail": "report.md", "import_revision": "r",
+         "context": {"page": "ai", "view": {"selectedProjectId": env.ids["demo"],
+                                            "selectedVariantId": env.ids["arm"]}}},
+    ]
+    monkeypatch.setattr(agent, "_fetch_provider_models", lambda *args: b'{"data":[{"id":"m"}]}')
+    created, _ = env.q.enqueue("per-action", "web", actions, model="m")
+    joined = _observe_probe_peers(env.q, monkeypatch, 4)
+    probes = []
+
+    def models(connection, base_url):
+        probes.append(base_url)
+        assert joined.wait(5)
+        return b'{"data":[{"id":"m"}]}'
+
+    monkeypatch.setattr(agent, "_fetch_provider_models", models)
+    arrivals = Queue()
+    release = threading.Event()
+
+    async def hold(call):
+        arrivals.put(call.request.id)
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+        return await ok(call)
+
+    env.q._runner = hold
+    workers = [_thread(env.q.run_once, "action") for _ in created]
+    expected = {request["id"] for request in created}
+    try:
+        assert {arrivals.get(timeout=5) for _ in created} == expected
+        assert len(probes) == 1
+    finally:
+        release.set()
+        for worker, _ in workers:
+            worker.join(5)
+    assert {result["value"] for _, result in workers} == expected
+
+
+@pytest.mark.parametrize("app", ["imports.sqlite"], indirect=True)
+def test_context_imports_share_slots_but_not_a_variant(env):
+    def action(variant):
+        return {"kind": "context-import", "text": "Fill", "title": variant, "detail": "report.md",
+                "import_revision": "revision", "context": {"page": "ai", "view": {
+                    "selectedProjectId": env.ids["demo"], "selectedVariantId": env.ids[variant]}}}
+
+    (first, same, other), _ = env.q.enqueue("per-action", "web", [action("arm"), action("arm"), action("x86")],
+                                            model="m")
+    started, release = threading.Event(), threading.Event()
+    env.fake.script["context-import"].append(blocking(started, release))
+    worker, result = _thread(env.q.run_once, "action")
+    try:
+        assert started.wait(5)
+        assert env.q.run_once("action") == other["id"]
+        assert env.q.run_once("action") is None
+    finally:
+        release.set()
+        worker.join(5)
+    assert result["value"] == first["id"]
+    assert env.q.run_once("action") == same["id"]
+
+
+@pytest.mark.parametrize("old_probe_fails", [False, True])
+def test_strict_enqueue_replaces_inflight_worker_probe(env, monkeypatch, old_probe_fails):
+    [old], _ = env.q.enqueue("main", "web", [_message()], model="m")
+    load = env.q._load_credentials
+    checking, release = threading.Event(), threading.Event()
+
+    def check(strict=False):
+        result = load(strict)
+        if not strict and not checking.is_set():
+            checking.set()
+            assert release.wait(5)
+            if old_probe_fails:
+                return None, {"code": "invalid_config", "error": "timed out"}
+        return result
+
+    monkeypatch.setattr(env.q, "_load_credentials", check)
+    worker, result = _thread(env.q.run_once, "chat")
+    try:
+        assert checking.wait(5)
+        [new], _ = env.q.enqueue("per-action", "cli", [_assess()], model="m", require_ready=True)
+        assert env.q.run_once("action") == new["id"]
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive() and result["value"] is None
+    assert env.q.paused is None and _status(env, old["id"]) == "queued"
+    assert env.q.run_once("chat") == old["id"]
+
+
+def test_chat_does_not_wait_for_a_removed_actions_probe(env, monkeypatch):
+    checking, release = threading.Event(), threading.Event()
+    load = env.q._load_credentials
+
+    def check():
+        if not checking.is_set():
+            checking.set()
+            assert release.wait(30)
+            return None, {"code": "invalid_config", "error": "timed out"}
+        return load()
+
+    monkeypatch.setattr(env.q, "_load_credentials", check)
+    [old], _ = env.q.enqueue("per-action", "web", [_assess()], model="m")
+    env.q.start()
+    try:
+        assert checking.wait(5)
+        env.q.remove(old["id"])
+        [chat], _ = env.q.enqueue("main", "web", [_message()], model="m")
+        _wait(lambda: _status(env, chat["id"]) == "done", timeout=5)
+    finally:
+        release.set()
+        env.q.shutdown()
+    assert env.q.paused is None
+
+
+@pytest.mark.parametrize("app", ["replacement.sqlite"], indirect=True)
+def test_review_workers_detach_from_a_removed_reviews_probe(env, monkeypatch):
+    joined = _observe_probe_peers(env.q, monkeypatch, aq.ACTION_WORKERS - 1)
+    checking, release = threading.Event(), threading.Event()
+    load = env.q._load_credentials
+
+    def check():
+        if not checking.is_set():
+            checking.set()
+            assert release.wait(30)
+            return None, {"code": "invalid_config", "error": "timed out"}
+        return load()
+
+    monkeypatch.setattr(env.q, "_load_credentials", check)
+    actions = [{"kind": "review", "assessment_id": _custom(env, [("arm", "openssl")])} for _ in range(2)]
+    (old, new), _ = env.q.enqueue("per-action", "web", actions, model="m")
+    started = threading.Event()
+
+    async def run_replacement(call):
+        assert call.request.id == new["id"]
+        started.set()
+        return await ok(call)
+
+    env.q._runner = run_replacement
+    env.q.start()
+    try:
+        assert checking.wait(5) and joined.wait(5)
+        env.q.remove(old["id"])
+        assert started.wait(5)
+    finally:
+        release.set()
+        env.q.shutdown()
+    assert env.q.paused is None
+
+
+def test_resume_releases_workers_waiting_on_an_obsolete_probe(env, monkeypatch):
+    joined = _observe_probe_peers(env.q, monkeypatch, aq.ACTION_WORKERS - 1)
+    checking, release = threading.Event(), threading.Event()
+    load = env.q._load_credentials
+
+    def check(strict=False):
+        if not strict and not checking.is_set():
+            checking.set()
+            assert release.wait(30)
+        return load(strict)
+
+    monkeypatch.setattr(env.q, "_load_credentials", check)
+    [old], _ = env.q.enqueue("per-action", "web", [_assess()], model="m")
+    env.q.start()
+    try:
+        assert checking.wait(5)
+        assert joined.wait(5)
+        env.q.remove(old["id"])
+        [new], _ = env.q.enqueue("per-action", "cli", [_assess()], model="m", require_ready=True)
+        _wait(lambda: _status(env, new["id"]) == "done", timeout=5)
+    finally:
+        release.set()
+        env.q.shutdown()
+
+
+@pytest.mark.parametrize("failed_probe", [False, True])
+def test_a_request_that_is_no_longer_next_does_not_start_or_pause(env, monkeypatch, failed_probe):
     [request], _ = env.q.enqueue("main", "web", [_message()], model="m")
     load = env.q._load_credentials
 
     def remove_while_loading():
         env.q.remove(request["id"])
-        return load()
+        return (None, {"code": "invalid_config", "error": "rate limited"}) if failed_probe else load()
 
     monkeypatch.setattr(env.q, "_load_credentials", remove_while_loading)
     assert env.q.run_once("chat") is None and env.fake.calls == []
+    assert env.q.paused is None
 
 
 def test_credentials_loaded_before_a_connection_change_are_not_used(env, monkeypatch):
@@ -544,6 +789,58 @@ def test_remove_clear_and_retry(env):
     assert env.q.clear() == 2 and env.q.snapshot()["requests"] == []
     with pytest.raises(aq.QueueConflict):
         env.q.stop(a)
+
+
+def test_review_retry_waits_for_failed_attempt_cleanup(env, monkeypatch):
+    assessment_id = _custom(env, [("arm", "openssl")])
+    [request], _ = env.q.enqueue("per-action", "web", [{"kind": "review", "assessment_id": assessment_id}], model="m")
+    request_id = request["id"]
+    env.fake.script["review"].append(raising(RuntimeError("failed review")))
+    attempted = []
+
+    def retry_during_cleanup(sessions):
+        if sessions:
+            env.q.retry(request_id)
+            attempted.append(env.q.run_once("action"))
+        return False
+
+    with monkeypatch.context() as patch:
+        patch.setattr(env.q, "_delete_sessions", retry_during_cleanup)
+        assert env.q.run_once("action") == request_id
+    assert attempted == [None]
+    assert _status(env, request_id) == "queued"
+    assert env.q.run_once("action") == request_id
+
+
+@pytest.mark.parametrize(("first_kind", "next_kind"), [
+    ("assess", "assess"), ("assess", "review"), ("review", "assess"), ("review", "review"), ("review", "message"),
+])
+def test_conflicting_turn_waits_for_session_cleanup(env, monkeypatch, first_kind, next_kind):
+    review = {"kind": "review", "assessment_id": _custom(env, [("arm", "openssl")])}
+    first = _assess() if first_kind == "assess" else review
+    [active], _ = env.q.enqueue("per-action", "web", [first], model="m")
+    if next_kind == "message":
+        [waiting], _ = env.q.enqueue(active["conversation_id"], "web", [_message()], model="m")
+        lane = "chat"
+    else:
+        second = _assess("other", targets=[{"variant_id": env.ids["arm"], "package": "openssl@3.0"}]) \
+            if next_kind == "assess" else {**review, "key": "another-review"}
+        [waiting], _ = env.q.enqueue("per-action", "web", [second], model="m")
+        assert active["conversation_id"] != waiting["conversation_id"]
+        lane = "action"
+    env.fake.script[first_kind].append(raising(RuntimeError("failed turn")))
+    attempted = []
+
+    def schedule_during_cleanup(sessions):
+        if sessions:
+            attempted.append(env.q.run_once(lane))
+        return False
+
+    with monkeypatch.context() as patch:
+        patch.setattr(env.q, "_delete_sessions", schedule_during_cleanup)
+        assert env.q.run_once("action") == active["id"]
+    assert attempted == [None]
+    assert env.q.run_once(lane) == waiting["id"]
 
 
 def test_stop_cancels_a_running_turn_and_keeps_its_writes(env):
@@ -1143,7 +1440,7 @@ def test_the_default_runner_uses_reply_and_run_turn(env, monkeypatch):
     env.q.run_once("action")
     env.q.run_once("chat")
     (prompt, model, scope, kwargs), (text, _, follow_scope, follow_kwargs) = calls
-    assert model == "m" and kwargs["api_url"] == env.q._guarded.url and kwargs["ephemeral"] is False
+    assert model == "m" and kwargs["api_url"].startswith("http://127.0.0.1:") and kwargs["ephemeral"] is False
     assert text == "more" and follow_scope == scope and follow_kwargs["profile"].action == "assess"
     assert "api_url" not in follow_kwargs and follow_kwargs["timeout"] == action_timeout()
     [main], _ = env.q.enqueue("main", "web", [_message("plain")], model="m")
@@ -1156,6 +1453,48 @@ def action_timeout():
     from src.routes import agent_skills
 
     return agent_skills.ACTION_TIMEOUT
+
+
+@pytest.mark.parametrize("app", ["reviews.sqlite"], indirect=True)
+def test_five_reviews_run_with_isolated_guards_and_stop_independently(env, monkeypatch):
+    from src.models.assessment_review import AssessmentReview
+    from src.routes import agent
+    from ..cli_tests.test_cmd_ai_review import _put_review
+
+    arrivals = Queue()
+    release = threading.Event()
+
+    async def wait_for_release(conversation, message, path, model, scope, publish=None, **kwargs):
+        [target] = json.loads(scope)["review_targets"]
+        arrivals.put({"api_url": kwargs["api_url"], "message": message, "target": target})
+        while not release.is_set():
+            await asyncio.sleep(0.01)
+        return "done", dict(USAGE)
+
+    monkeypatch.setattr(agent, "_reply", wait_for_release)
+    env.q._runner = aq.default_runner
+    actions = [{"kind": "review", "assessment_id": _custom(env, [("arm", "openssl")])} for _ in range(6)]
+    created, _ = env.q.enqueue("per-action", "web", actions, model="m")
+    env.q.start()
+    try:
+        calls = [arrivals.get(timeout=10) for _ in range(5)]
+        assert len({call["api_url"] for call in calls}) == 5
+        assert [_status(env, r["id"]) for r in created] == ["running"] * 5 + ["queued"]
+        target = calls[0]["target"]
+        assert _put_review({**calls[0], "api_url": calls[1]["api_url"]}, target)[0] == 403
+        for call in calls:
+            assert _put_review(call, call["target"])[0] == 200
+        with env.app.app_context():
+            for call in calls:
+                [saved] = AssessmentReview.get_all_for_assessment(uuid.UUID(call["target"]["assessment_id"]))
+                assert saved.rationale == "Independent analysis."
+        env.q.stop(created[2]["id"])
+        assert arrivals.get(timeout=10)["target"]["assessment_id"] == actions[5]["assessment_id"]
+        assert _status(env, created[2]["id"]) == "cancelled" and _status(env, created[5]["id"]) == "running"
+        assert all(_status(env, created[i]["id"]) == "running" for i in (0, 1, 3, 4))
+    finally:
+        release.set()
+        env.q.shutdown()
 
 
 def test_workers_run_requests_in_threads_until_shutdown(app, env, monkeypatch):  # noqa: F811

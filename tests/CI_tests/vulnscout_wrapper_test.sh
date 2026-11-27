@@ -5,6 +5,29 @@ ROOT_DIR=$(readlink -f "$(dirname "$0")/../..")
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
+# A failed confined test must retain a possibly live helper's recovery files.
+cleanup_state="$TEST_DIR/confined-test"
+mkdir -p -- "$cleanup_state/host-helper"
+echo 123 > "$cleanup_state/host-helper/helper.pid"
+set +e
+(
+    # shellcheck source=/dev/null
+    source "$ROOT_DIR/tests/CI_tests/helper_selinux_podman_test.sh"
+    # shellcheck disable=SC2034
+    name=test-helper state="$cleanup_state" containers=(first second)
+    # shellcheck disable=SC2329
+    helper() { return 1; }
+    # shellcheck disable=SC2329
+    podman() { echo "$*" >> "$TEST_DIR/removals"; [[ "${*: -1}" != first ]]; }
+    trap cleanup EXIT
+    exit 42
+) 2>"$TEST_DIR/cleanup.log"
+cleanup_status=$?
+set -e
+[[ "$cleanup_status" == 42 && "$(< "$cleanup_state/host-helper/helper.pid")" == 123 ]]
+grep -Fq -- "$cleanup_state" "$TEST_DIR/cleanup.log"
+[[ "$(< "$TEST_DIR/removals")" == $'rm -ft 0 first\nrm -ft 0 second' ]]
+
 mkdir -p "$TEST_DIR/bin"
 cat > "$TEST_DIR/bin/podman" <<'EOF'
 #!/bin/bash
@@ -55,6 +78,28 @@ case "$1" in
             esac
         fi
         case " $* " in
+            *" --variant-id-only "*) echo "00000000-0000-4000-8000-000000000001" ;;
+            *" --ai-context-attach --host-permit "*)
+                while [[ "$1" != --host-permit ]]; do shift; done
+                python3 - "$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock" "${@:2}" <<'PY'
+import json, os, socket, sys, uuid
+os.chdir(os.path.dirname(sys.argv[1]))
+def call(op, **params):
+    with socket.socket(socket.AF_UNIX) as client:
+        client.connect(os.path.basename(sys.argv[1]))
+        client.sendall(json.dumps(dict(op=op, **params)).encode() + b"\n")
+        reply = json.loads(client.makefile("rb").readline())
+        assert reply["ok"], reply
+        return reply["result"]
+for mapping in sys.argv[3:]:
+    alias, path = mapping.split("=", 1)
+    binding = dict(variant_id="00000000-0000-4000-8000-000000000001", attachment_id=str(uuid.uuid4()),
+                   alias=alias, path=path)
+    staged = call("stage", **binding, host_permit=sys.argv[2])
+    assert staged["path"] == path and staged["approval_proof"]
+    call("activate", **binding, approval_proof=staged["approval_proof"])
+PY
+                ;;
             *" --ai-assess "*" --json "*|*" --ai-review "*" --json "*) echo '{"results": []}' ;;
         esac
         exit "${VULNSCOUT_TEST_EXEC_EXIT:-0}"
@@ -64,12 +109,25 @@ case "$1" in
         ;;
     run)
         log_call "$@"
+        if [[ "${3:-}" = --entrypoint && "${4:-}" = cat ]]; then
+            cat "$VULNSCOUT_TEST_IMAGE_HELPER"
+        fi
         # Like 'run -d': the new container's ID on stdout.
         [ "${2:-}" != -d ] || echo 0123456789ab
         ;;
     inspect)
         log_call "$@"
+        if [[ "${*: -1}" == '{{.ProcessLabel}}' ]]; then
+            echo "${VULNSCOUT_TEST_PROCESS_LABEL:-}"; exit 0
+        fi
+        if [[ "${*: -1}" == '{{.Image}}' && -n "${VULNSCOUT_TEST_RUNNING_IMAGE:-}" ]]; then
+            echo "$VULNSCOUT_TEST_RUNNING_IMAGE"; exit 0
+        fi
         echo "${VULNSCOUT_TEST_IMAGE_VERSION:-v0.24}"
+        ;;
+    image)
+        [[ "$2" = inspect ]] || exit 99
+        printf '%s%064d\n' "${VULNSCOUT_TEST_IMAGE_PREFIX:-}" "${VULNSCOUT_TEST_IMAGE_GENERATION:-1}"
         ;;
     *)
         echo "Unexpected podman command: $*" >&2
@@ -84,6 +142,7 @@ printf '{}\n' > "$SBOM"
 export PATH="$TEST_DIR/bin:/usr/bin:/bin"
 export VULNSCOUT_BUILD_DIR="$TEST_DIR/build"
 export VULNSCOUT_TEST_LOG="$TEST_DIR/container.log"
+export VULNSCOUT_TEST_IMAGE_HELPER="$ROOT_DIR/src/helpers/host_mount_helper.py"
 : > "$VULNSCOUT_TEST_LOG"
 
 reset_log() {
@@ -93,7 +152,10 @@ reset_log() {
 # run_ok <args...>: run the wrapper with stdin off any TTY; a non-zero exit aborts the test (set -e).
 run_ok() {
     reset_log
-    "$ROOT_DIR/vulnscout" "$@" < /dev/null > "$TEST_DIR/stdout" 2> "$TEST_DIR/stderr"
+    "$ROOT_DIR/vulnscout" "$@" < /dev/null > "$TEST_DIR/stdout" 2> "$TEST_DIR/stderr" || {
+        cat "$TEST_DIR/stderr" >&2
+        return 1
+    }
 }
 
 assert_log() {
@@ -703,5 +765,237 @@ expect_fail "usage: vulnscout config set <key> <value>" config set ONLY_KEY
 expect_fail "'config' does not accept --project or --variant." config list -p demo
 expect_fail "unknown config action 'show'." config show
 expect_fail "'config' needs get, set, unset, or list." config
+
+# --- ai-context: attached host folders ---
+# Neither executable lines nor launcher settings from the shared config are host input.
+app_config="$VULNSCOUT_BUILD_DIR/cache/config.env"
+printf 'exit 87\nVULNSCOUT_IMAGE=cache-image\nVULNSCOUT_OUTPUTS_DIR=/unapproved\nVULNSCOUT_BIND_ADDRESS=0.0.0.0\n' >> "$app_config"
+expect_fail "config key not set: VULNSCOUT_IMAGE" config get VULNSCOUT_IMAGE
+run_ok config set VULNSCOUT_IMAGE operator-image
+run_ok start
+assert_log "operator-image daemon"
+assert_log "-p 127.0.0.1:7275:7275 --tmpfs /run/vulnscout-loopback-published:ro"
+refute_log "-p 7275:7275"
+refute_log "/unapproved"
+refute_log "cache-image"
+refute_log "VULNSCOUT_BIND_ADDRESS="
+run_ok config set VULNSCOUT_BIND_ADDRESS 192.0.2.10
+assert_log "-p 192.0.2.10:7275:7275"
+refute_log "vulnscout-loopback-published"
+run_ok start
+assert_log "-p 192.0.2.10:7275:7275"
+refute_log "vulnscout-loopback-published"
+VULNSCOUT_BIND_ADDRESS=0.0.0.0 run_ok start
+assert_log "-p 0.0.0.0:7275:7275"
+refute_log "vulnscout-loopback-published"
+VULNSCOUT_BIND_ADDRESS=127.0.0.2 run_ok start
+assert_log "-p 127.0.0.2:7275:7275 --tmpfs /run/vulnscout-loopback-published:ro"
+for invalid in localhost ::1 127.0.0.1:8080 127.1 127.0.0.256 0127.0.0.1 127.00.0.1 ''; do
+    expect_fail "IPv4 address" config set VULNSCOUT_BIND_ADDRESS "$invalid"
+done
+run_ok config get VULNSCOUT_BIND_ADDRESS
+grep -Fxq '192.0.2.10' "$TEST_DIR/stdout"
+VULNSCOUT_BIND_ADDRESS=invalid expect_fail "IPv4 address" restart
+refute_log "rm -f"
+run_ok config unset VULNSCOUT_BIND_ADDRESS
+assert_log "-p 127.0.0.1:7275:7275 --tmpfs /run/vulnscout-loopback-published:ro"
+VULNSCOUT_IMAGE=exported-image run_ok version
+assert_log exported-image
+run_ok config set VULNSCOUT_HOST_HELPER_STATE_DIR "$TEST_DIR/with spaces"
+run_ok config get VULNSCOUT_HOST_HELPER_STATE_DIR
+grep -Fxq "$TEST_DIR/with spaces" "$TEST_DIR/stdout"
+run_ok config list
+assert_stdout "VULNSCOUT_HOST_HELPER_STATE_DIR=$TEST_DIR/with spaces"
+refute_stdout "/unapproved"
+if grep -Fq "$TEST_DIR/with spaces" "$app_config"; then exit 1; fi
+run_ok config unset VULNSCOUT_HOST_HELPER_STATE_DIR
+run_ok config unset VULNSCOUT_IMAGE
+ln -s "$TEST_DIR/other-cache" "$TEST_DIR/cache-alias"
+(cd "$TEST_DIR" && VULNSCOUT_BUILD_DIR=build run_ok config set VULNSCOUT_CACHE_DIR cache-alias)
+assert_log "-v $TEST_DIR/other-cache:/cache/vulnscout:Z"
+[[ -f "$TEST_DIR/other-cache/config.env" ]]
+assert_log "-v $VULNSCOUT_BUILD_DIR/outputs:/scan/outputs:Z"
+run_ok config get VULNSCOUT_CACHE_DIR
+grep -Fxq "$TEST_DIR/other-cache" "$TEST_DIR/stdout"
+run_ok config unset VULNSCOUT_CACHE_DIR
+assert_log "-v $VULNSCOUT_BUILD_DIR/cache:/cache/vulnscout:Z"
+ln -sfn "$VULNSCOUT_BUILD_DIR/cache" "$TEST_DIR/cache-alias"
+expect_fail "config key not set: VULNSCOUT_HOST_HELPER_STATE_DIR" config get VULNSCOUT_HOST_HELPER_STATE_DIR
+expect_fail "outside container mounts" config set VULNSCOUT_OUTPUTS_DIR "$VULNSCOUT_BUILD_DIR"
+# A substituted cache file must not turn the config command into a host-policy writer.
+mv "$app_config" "$app_config.saved"
+ln -s "$VULNSCOUT_BUILD_DIR/launcher.env" "$app_config"
+expect_fail "refusing unsafe application config" config set PLAIN_KEY bad
+mv -Tf "$app_config.saved" "$app_config"
+
+expect_fail "'ai-context' needs attach, list, detach, or helper." ai-context
+expect_fail "unknown ai-context action 'mount'." ai-context mount
+expect_fail "invalid alias 'Bad'" ai-context attach -p demo "Bad=$TEST_DIR"
+expect_fail "expected <alias>=<host path>, got 'src'." ai-context attach src
+expect_fail "host folder not found: $TEST_DIR/missing" ai-context attach "src=$TEST_DIR/missing"
+expect_fail "alias 'src' is given twice." ai-context attach "src=$TEST_DIR" "src=$TEST_DIR"
+expect_fail "cannot attach the host root directory" ai-context attach "src=/"
+expect_fail "'ai-context helper' does not accept --project or --variant." ai-context helper status -p demo
+expect_fail "invalid alias '../x'" ai-context detach ../x
+expect_fail "'ai-context list' does not accept option --all." ai-context list --all
+
+run_ok ai-context list -p demo -v x86 --json
+assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-list --json"
+run_ok ai-context detach -p demo src build
+assert_log "/scan/src/entrypoint.sh --project demo --ai-context-detach src build"
+
+# A host python3 older than 3.9 (here a stub failing the version check) cannot run the helper.
+mkdir -p "$TEST_DIR/oldpython"
+printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/oldpython/python3"
+chmod +x "$TEST_DIR/oldpython/python3"
+if [ "$(id -u)" -ne 0 ]; then
+    PATH="$TEST_DIR/oldpython:$PATH" \
+        expect_fail "host folders need python3 (3.9 or newer)" ai-context attach "src=$TEST_DIR"
+fi
+
+if command -v python3 > /dev/null && [ "$(id -u)" -ne 0 ]; then
+    roots="$TEST_DIR/roots"
+    mkdir -p "$roots/app" "$roots/build"
+    socket="$VULNSCOUT_BUILD_DIR/cache/host-helper/helper.sock"
+    state="$TEST_DIR/private-state"
+    expect_fail "positive integer" config set VULNSCOUT_SHELL_SNAPSHOT_MIB 0
+    run_ok config set VULNSCOUT_SHELL_SNAPSHOT_MIB 768
+    (cd "$TEST_DIR" && run_ok config set VULNSCOUT_HOST_HELPER_STATE_DIR private-state)
+    run_ok config get VULNSCOUT_HOST_HELPER_STATE_DIR
+    grep -Fxq "$state" "$TEST_DIR/stdout"
+    trap '"$ROOT_DIR/vulnscout" ai-context helper stop > /dev/null 2>&1 || true; rm -rf "$TEST_DIR"' EXIT
+
+    # Resolve the configured cache alias, but never resolve a link planted inside it.
+    mkdir -m 755 "$TEST_DIR/not-socket-state"
+    ln -s "$TEST_DIR/not-socket-state" "${socket%/*}"
+    VULNSCOUT_CACHE_DIR="$TEST_DIR/cache-alias" expect_fail "helper did not start" ai-context attach "src=$roots/app"
+    assert_log "/scan/src/helpers/host_mount_helper.py"
+    [[ "$(stat -c %a "$TEST_DIR/not-socket-state")" == 755 && ! -e "$TEST_DIR/not-socket-state/helper.sock" ]]
+    rm "${socket%/*}"
+    (cd "$TEST_DIR" && VULNSCOUT_BUILD_DIR=build VULNSCOUT_CACHE_DIR=cache-alias \
+        VULNSCOUT_HOST_HELPER_STATE_DIR=private-state \
+        run_ok ai-context attach -p demo -v x86 "src=$roots/app/../app" "build=$roots/build")
+    assert_log "/scan/src/entrypoint.sh --project demo --variant x86 --ai-context-attach --host-permit permit."
+    assert_log "src=$roots/app build=$roots/build"
+    assert_stdout "Host folder helper running as"
+    [[ -s "$state/helper.log" && -s "$state/helper.pid" ]]
+    if [ ! -S "$socket" ] || [ "$(stat -c %a "$socket")" != 600 ] ||
+        [ "$(stat -c %a "$(dirname "$socket")")" != 700 ]; then
+        echo "The helper socket must be owner-only inside a private directory." >&2
+        ls -la "$(dirname "$socket")" >&2
+        exit 1
+    fi
+
+    run_ok ai-context helper status
+    refute_stdout "$roots"
+
+    # An unchanged configuration reuses the running helper.
+    pid="$(cat "$state/helper.pid")"
+    grep -zFxq -- '768' "/proc/$pid/cmdline"
+    VULNSCOUT_TEST_IMAGE_PREFIX=sha256: run_ok ai-context helper status
+    VULNSCOUT_TEST_IMAGE_PREFIX=sha256: run_ok ai-context helper start
+    [[ "$(cat "$state/helper.pid")" == "$pid" ]]
+    run_ok config set VULNSCOUT_HOST_HELPER_STATE_DIR "$state/."
+    expect_fail "before changing the host helper state directory" config set VULNSCOUT_HOST_HELPER_STATE_DIR "$roots"
+    mv "$socket" "$socket.saved"
+    VULNSCOUT_HOST_HELPER_STATE_DIR="$roots" \
+        expect_fail "before changing the host helper state directory" config unset VULNSCOUT_HOST_HELPER_STATE_DIR
+    mv "$socket.saved" "$socket"
+    run_ok config get VULNSCOUT_HOST_HELPER_STATE_DIR
+    grep -Fxq "$state" "$TEST_DIR/stdout"
+    run_ok ai-context list
+    if [ "$(cat "$state/helper.pid")" != "$pid" ]; then
+        echo "The helper must not restart when its image is unchanged." >&2
+        exit 1
+    fi
+
+    (
+        # The sourced launcher calls the test overrides below.
+        # shellcheck source=/dev/null
+        source "$ROOT_DIR/vulnscout" --help >/dev/null
+        (
+            mkdir "$TEST_DIR/python-only"
+            ln -s "$(command -v python3)" "$TEST_DIR/python-only/python3"
+            # Probe with an independent open after the lock-taking child exits.
+            probe_lock() {
+                python3 -I -c 'import fcntl, sys
+with open(sys.argv[1], "r+") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        assert sys.argv[2] == "held"
+    else:
+        assert sys.argv[2] == "released"' "$state/lifecycle.lock" "$1"
+            }
+            # shellcheck disable=SC2329
+            stop_host_helper_locked() { probe_lock held; }
+            PATH="$TEST_DIR/python-only" stop_host_helper
+            probe_lock released
+        )
+        # shellcheck disable=SC2329
+        host_helper_socket_label() { echo test-label; }
+        # shellcheck disable=SC2329
+        python3() {
+            local -a args=()
+            # Model the NFS descriptor requirement on a local filesystem.
+            if [[ -e /proc/self/fd/9 ]]; then
+                command python3 -c 'import fcntl, os, stat
+assert stat.S_ISREG(os.fstat(9).st_mode)
+assert fcntl.fcntl(9, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDWR' || return 1
+            fi
+            while (( $# )); do
+                if [[ "$1" == --socket-label ]]; then
+                    [[ "$2" == test-label ]] || return 1
+                    echo launch >> "$state/launches"
+                    sleep 0.3   # Let the competing refresh reach the startup path.
+                    shift 2
+                else
+                    args+=("$1"); shift
+                fi
+            done
+            command python3 "${args[@]}"
+        }
+        lock_inode="$(stat -c %i "$state/lifecycle.lock")"
+        start_host_helper > "$state/refresh1" & first=$!
+        start_host_helper > "$state/refresh2" & second=$!
+        wait "$first"
+        wait "$second"
+        [[ "$(cat "$state/launches")" == launch && "$(cat "$state/helper.pid")" != "$pid" ]]
+        pid="$(cat "$state/helper.pid")"
+        ai_context_helper status
+        start_host_helper
+        [[ "$(cat "$state/helper.pid")" == "$pid" && "$(cat "$state/launches")" == launch ]]
+        ai_context_helper restart
+        [[ "$(cat "$state/helper.pid")" != "$pid" ]]
+        [[ "$(stat -c %i "$state/lifecycle.lock")" == "$lock_inode" ]]
+        ai_context_helper status
+    )
+    pid="$(cat "$state/helper.pid")"
+
+    # A rebuilt image needs a matching daemon.
+    export VULNSCOUT_TEST_IMAGE_GENERATION=2 VULNSCOUT_TEST_RUNNING_IMAGE=previous
+    run_ok update
+    assert_log "/scan/src/helpers/host_mount_helper.py"
+    [[ "$(cat "$state/helper.pid")" != "$pid" ]]
+    run_ok ai-context helper status
+
+    run_ok stop
+    if [ -S "$socket" ] || [ -f "$state/helper.pid" ]; then
+        echo "'vulnscout stop' must stop the host folder helper." >&2
+        exit 1
+    fi
+    expect_fail "" ai-context helper status
+    run_ok config unset VULNSCOUT_HOST_HELPER_STATE_DIR
+    # First stage created a key, but activation never wrote a registry.
+    # Relative state from a legacy private launcher.env must also survive daemonization.
+    cd "$TEST_DIR"
+    printf 'VULNSCOUT_HOST_HELPER_STATE_DIR=interrupted-stage\n' >> "$VULNSCOUT_BUILD_DIR/launcher.env"
+    mkdir -m 700 interrupted-stage
+    cp "$state/.approval.key" interrupted-stage/
+    run_ok start
+    run_ok ai-context helper status
+else
+    echo "python3 not found or running as root; skipping the host folder helper tests." >&2
+fi
 
 echo "Host wrapper scope tests passed."

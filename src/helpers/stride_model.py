@@ -10,7 +10,7 @@ mark all invalid cells at once. Inputs are never mutated.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any, Optional, TypeGuard
 
 STRIDE_CATEGORIES: tuple[str, ...] = (
     "spoofing",
@@ -36,11 +36,18 @@ MAX_TEXT = 20000
 MAX_MODEL_CHARS = 1_000_000
 MAX_EXPANDED_TARGET_CHARS = 200_000
 SYSTEM_KEYS: tuple[str, ...] = ("scope", "actors", "entry_points", "trust_boundaries")
+_STRIDE_TABLES = ("components", "interactions", "threats", "risks")
 
-_COMPONENT_ID = re.compile(r"^C[1-9]\d*$")
-_INTERACTION_ID = re.compile(r"^I[1-9]\d*$")
-_THREAT_ID = re.compile(r"^T[1-9]\d*$")
-_RISK_ID = re.compile(r"^R[1-9]\d*$")
+COMPONENT_ID = re.compile(r"^C[1-9]\d*$")
+INTERACTION_ID = re.compile(r"^I[1-9]\d*$")
+THREAT_ID = re.compile(r"^T[1-9]\d*$")
+RISK_ID = re.compile(r"^R[1-9]\d*$")
+
+
+def matches_model_id(value: object, *patterns: re.Pattern[str]) -> TypeGuard[str]:
+    # A final newline is accepted by the original save rules. Preserve it:
+    # stripping a stored identifier could point a reference at another row.
+    return isinstance(value, str) and any(pattern.match(value) for pattern in patterns)
 
 
 class StrideValidationError(ValueError):
@@ -52,12 +59,7 @@ class StrideValidationError(ValueError):
 
 
 def empty_stride_model() -> dict[str, Any]:
-    return {
-        "components": [],
-        "interactions": [],
-        "threats": [],
-        "risks": [],
-    }
+    return {table: [] for table in _STRIDE_TABLES}
 
 
 class _Errors:
@@ -90,8 +92,6 @@ def _text(value: object, path: str, errs: _Errors, required: bool = False) -> st
 
 def _rows(raw: object, key: str, errs: _Errors) -> list[dict[str, Any]]:
     """Return the rows of a list field, flagging non-list/oversized/non-object input."""
-    if raw is None:
-        return []
     if not isinstance(raw, list):
         errs.add(key, "must be a list")
         return []
@@ -110,7 +110,7 @@ def _rows(raw: object, key: str, errs: _Errors) -> list[dict[str, Any]]:
 
 def _row_id(row: dict[str, Any], path: str, pattern: re.Pattern[str], seen: set[str], errs: _Errors) -> str:
     value = row.get("id")
-    if not isinstance(value, str) or not pattern.match(value):
+    if not matches_model_id(value, pattern):
         errs.add(path, f"must match {pattern.pattern}")
         return ""
     if value in seen:
@@ -136,7 +136,7 @@ def _components(raw: object, errs: _Errors) -> tuple[list[dict[str, Any]], set[s
     for i, row in enumerate(_rows(raw, "components", errs)):
         p = f"components[{i}]"
         out.append({
-            "id": _row_id(row, f"{p}.id", _COMPONENT_ID, seen, errs),
+            "id": _row_id(row, f"{p}.id", COMPONENT_ID, seen, errs),
             "name": _text(row.get("name"), f"{p}.name", errs, required=True),
             "description": _text(row.get("description"), f"{p}.description", errs),
             "trust_zone": _text(row.get("trust_zone"), f"{p}.trust_zone", errs),
@@ -154,7 +154,7 @@ def _interactions(raw: object, component_ids: set[str], errs: _Errors) -> tuple[
         if source in component_ids and source == destination:
             errs.add(f"{p}.destination_id", "must differ from the source")
         out.append({
-            "id": _row_id(row, f"{p}.id", _INTERACTION_ID, seen, errs),
+            "id": _row_id(row, f"{p}.id", INTERACTION_ID, seen, errs),
             "name": _text(row.get("name"), f"{p}.name", errs),
             "source_id": source,
             "destination_id": destination,
@@ -190,7 +190,7 @@ def _threats(raw: object, target_pool: set[str], errs: _Errors) -> tuple[list[di
         elif category not in STRIDE_CATEGORIES:
             errs.add(f"{p}.category", f"must be one of {', '.join(STRIDE_CATEGORIES)}")
         out.append({
-            "id": _row_id(row, f"{p}.id", _THREAT_ID, seen, errs),
+            "id": _row_id(row, f"{p}.id", THREAT_ID, seen, errs),
             "category": category if isinstance(category, str) else "",
             "description": _text(row.get("description"), f"{p}.description", errs),
             "target_ids": _target_ids(row.get("target_ids"), f"{p}.target_ids", target_pool, errs),
@@ -213,7 +213,7 @@ def _risks(raw: object, threat_ids: set[str], errs: _Errors) -> list[dict[str, A
     for i, row in enumerate(_rows(raw, "risks", errs)):
         p = f"risks[{i}]"
         out.append({
-            "id": _row_id(row, f"{p}.id", _RISK_ID, seen, errs),
+            "id": _row_id(row, f"{p}.id", RISK_ID, seen, errs),
             "description": _text(row.get("description"), f"{p}.description", errs),
             "threat_ids": _target_ids(row.get("threat_ids"), f"{p}.threat_ids", threat_ids, errs),
             "likelihood": _rating(row.get("likelihood"), f"{p}.likelihood", errs),
@@ -228,18 +228,22 @@ def normalize_stride_model(raw: object) -> dict[str, Any]:
     """Return a canonical copy of ``raw`` or raise ``StrideValidationError``."""
     if not isinstance(raw, dict):
         raise StrideValidationError({"model": "must be an object"})
+    if raw and not any(table in raw for table in _STRIDE_TABLES):
+        raise StrideValidationError({"model": f"expected at least one of: {', '.join(_STRIDE_TABLES)}"})
     errs = _Errors()
-    components, component_ids = _components(raw.get("components"), errs)
-    interactions, interaction_ids = _interactions(raw.get("interactions"), component_ids, errs)
-    threats, threat_ids = _threats(raw.get("threats"), component_ids | interaction_ids, errs)
+    components, component_ids = _components(raw.get("components", []), errs)
+    interactions, interaction_ids = _interactions(raw.get("interactions", []), component_ids, errs)
+    threats, threat_ids = _threats(raw.get("threats", []), component_ids | interaction_ids, errs)
     model = {
         "components": components,
         "interactions": interactions,
         "threats": threats,
-        "risks": _risks(raw.get("risks"), threat_ids, errs),
+        "risks": _risks(raw.get("risks", []), threat_ids, errs),
     }
     _check_budgets(model, errs)
     errs.raise_if_any()
+    if not any(model.values()) and any(key not in _STRIDE_TABLES for key in raw):
+        raise StrideValidationError({"model": "cannot clear tables with unknown table names"})
     return model
 
 

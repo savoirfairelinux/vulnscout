@@ -206,17 +206,17 @@ def _process_sbom_background(
         def update_refresh_status(label: str, step: int, total: int) -> None:
             ctx.report(2, 3, f"Refreshing {label} data… ({step}/{total})")
 
-        failed_sources = refresh_vulnerability_sources(
-            controllers,
-            vulnCtrl._encountered_this_run,
-            refresh_sources,
-            update_refresh_status,
-        )
-
         done_message = "SBOM imported successfully."
-        if failed_sources:
-            unique_failed = list(dict.fromkeys(failed_sources))
-            done_message += f" ({', '.join(unique_failed)} refresh failed; check server logs.)"
+        if refresh_sources:
+            failed_sources = refresh_vulnerability_sources(
+                controllers,
+                vulnCtrl._encountered_this_run,
+                refresh_sources,
+                update_refresh_status,
+            )
+            if failed_sources:
+                unique_failed = list(dict.fromkeys(failed_sources))
+                done_message += f" ({', '.join(unique_failed)} refresh failed; check server logs.)"
 
         ctx.report(3, 3, done_message)
         ctx.log(done_message)
@@ -1217,11 +1217,15 @@ def init_app(app: Flask) -> None:
                 except OSError:
                     pass
 
+        fmt_override = request.form.get('format', '').strip() or None
+        if fmt_override and fmt_override not in {"spdx", "cdx", "openvex", "yocto_cve_check", "yocto_vex", "grype"}:
+            return jsonify({"error": f"Unsupported upload format: {fmt_override}."}), 400
+
         for uploaded in uploaded_files:
             if not uploaded.filename:
                 continue
             filename = uploaded.filename
-            fmt = request.form.get('format', '').strip() or None
+            fmt = fmt_override
 
             # Save the uploaded file to a temp location
             suffix = os.path.splitext(filename)[1] or '.json'

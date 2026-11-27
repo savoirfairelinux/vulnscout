@@ -70,12 +70,13 @@ chmod 600 .vulnscout-container/config/config.env
 
 docker run -d --name vulnscout \
   -p 127.0.0.1:7275:7275 \
+  --tmpfs /run/vulnscout-loopback-published:ro,size=4k \
   --env-file "$(pwd)/.vulnscout-container/config/config.env" \
   -v "$(pwd)/.vulnscout-container/cache:/cache/vulnscout:Z" \
   -v "$(pwd)/.vulnscout-container/outputs:/scan/outputs:Z" \
   -v "$(pwd)/.vulnscout-container/config:/etc/vulnscout:Z" \
   -v "$(pwd)/example:/imports:ro,Z" \
-  docker.io/sflinux/vulnscout:v0.25.1 daemon
+  docker.io/sflinux/vulnscout:v0.26 daemon
 
 docker exec vulnscout /scan/src/entrypoint.sh \
   --project demo --variant x86 \
@@ -93,7 +94,17 @@ commands to replace `config.env` while retaining persistence.
 The image alone does not configure Flask's bind address or port; both environment
 settings above are required for this published-port recipe. To use another host
 port, change only the host side, for example `-p 127.0.0.1:8080:7275`.
-The host wrapper instead publishes a fixed `7275:7275` mapping.
+The host wrapper defaults to `127.0.0.1:7275:7275`. To publish the UI and
+API on a LAN address instead, set the host-only
+[`VULNSCOUT_BIND_ADDRESS`](cli-configuration.md).
+
+The `--tmpfs` line explicitly opts this standalone container into local Agent
+access when Docker or Podman forwards the connection. It does **not** enforce
+the bind address. Use it only when the port is published exclusively on host
+loopback and no reverse proxy exposes it. Remove it for LAN or proxied
+deployments: without it, the Agent and host-folder endpoints reject forwarded
+requests even with a localhost Host header. On upgrade, recreate the container
+with the loopback mapping and marker if local Agent access returns `403`.
 
 For rootless Podman, replace `docker` with `podman` and add
 `--userns=keep-id:uid=0,gid=0 --user=0:0 -e VULNSCOUT_ROOTLESS_PODMAN=true`
@@ -166,6 +177,9 @@ The previous `--perform-grype-scan`, `--perform-nvd-scan`, `--perform-osv-scan`,
 | `--use-current-timestamps` | With either custom import, use the current system time |
 | `--match-condition <expr>` | Exit with code 2 if expression matches stored data for any in-scope vulnerability; it does not refresh EPSS. A project without a variant includes all its variants. Incompatible with `--serve` |
 | `--ai-assess <options>` | Run `flask ai-assess` with the remaining arguments (`--cve <id>`… or `--filter <expr>`, not both; `--variant <name>`… to select several variants, `--model`, `--timeout`, `--dry-run`, `--json`) on the `--project`/`--variant` scope. Must come after `--project`/`--variant`. Exits 1 unless every selected vulnerability is `assessed` or `planned`. With `VULNSCOUT_RUN_ID` set (by the host wrapper), it writes its PID to `$TMPDIR/vulnscout-ai-assess-<id>.pid` so that Ctrl-C can be forwarded to it |
+| `--ai-context-attach <alias>=<host path>...` | Run `flask ai-context-attach` on the `--project`/`--variant` scope (default `default`/`default`): validate each host folder with the host folder helper and store it as a read-only AI context attachment. Exits 1 if any folder is rejected or the helper is not running. Must come after `--project`/`--variant` |
+| `--ai-context-list [--json]` | Run `flask ai-context-list`: list the scope's attached host folders and whether each is available |
+| `--ai-context-detach <alias>...` | Run `flask ai-context-detach`: remove attachments; agents lose access immediately |
 | `--ai-review <options>` | Run `flask ai-review` with the remaining arguments (`--assessment-id <uuid>`… or `--cve <id>`…, not both; `--variant <name>`… with `--cve` only, `--re-review`, `--model`, `--timeout`, `--dry-run`, `--json`) on the `--project` scope, which is required. Must come after `--project`/`--variant`. Exits 1 on a resolution or usage error, when any target has a failing outcome (`changed`, `no_write`, `failed`, `timeout`, `interrupted`), or when the run is interrupted; exits 0 when every target is reviewed, skipped (fresh) or planned (`--dry-run`) and the run was not interrupted. Uses the same `VULNSCOUT_RUN_ID` PID file as `--ai-assess` |
 | `--export-context` | Export selected project/variant AI context to `/scan/outputs/context-export.json` |
 | `--import-context <path>` | Import context into existing scopes named in the file; use `--retarget-context` to override the destination |
@@ -202,7 +216,7 @@ confirmation; direct entrypoint calls do not.
 
 | Flag | Description |
 |------|-------------|
-| `--config <key> <value>` | Set a persistent config value in `/etc/vulnscout/config.env` |
+| `--config <key> <value>` | Set a persistent application setting in `$VULNSCOUT_CONFIG` (default `/etc/vulnscout/config.env`) |
 | `--config-list` | Show current configuration (sensitive values masked) |
 | `--config-clear <key>` | Remove a config key |
 
@@ -213,6 +227,16 @@ With the standalone setup, recreate the container after config changes so
 the host does not change a running container; use `docker run -e`/`--env-file` or
 the mounted config. Config values override same-named inherited environment
 values.
+
+### SQLite Write-Lock Timeout
+
+`VULNSCOUT_DB_WRITE_LOCK_TIMEOUT` sets the maximum time, in seconds, that a
+writer waits for the SQLite write lock. It defaults to `300`; a non-positive
+value disables the timeout. Set it in the **container environment**, for
+example in the mounted `config.env` file or with `docker run --env
+VULNSCOUT_DB_WRITE_LOCK_TIMEOUT=60`. A host-shell export alone does not update
+an existing container. Recreate the container and restart the web UI after
+changing this setting.
 
 ### Other Commands
 
@@ -284,7 +308,7 @@ The following paths inside the container are relevant:
 | `/cache/vulnscout/templates/` | Custom report templates (user-installed, persisted via cache volume) |
 | `/scan/src/views/templates/` | Built-in report templates |
 | `/cache/vulnscout/vulnscout.db` | SQLite database |
-| `/etc/vulnscout/config.env` | Persistent configuration file |
+| `/etc/vulnscout/config.env` | Default configuration file; the wrapper sets `VULNSCOUT_CONFIG=/cache/vulnscout/config.env` instead |
 | `/cache/vulnscout/local_databases/` | Shared NVD/local and sbom-cve-check advisory clones (`nvd-fkie` + `cvelist`), persisted in the cache. Set `SBOM_CVE_CHECK_DATABASES_DIR` and mount another directory to override |
 | `/scan/status.txt` | Scan progress status (used by the web UI) |
 

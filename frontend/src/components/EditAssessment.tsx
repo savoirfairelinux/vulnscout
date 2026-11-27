@@ -1,9 +1,20 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import type { Assessment, AssessmentTargetPair } from "../handlers/assessments";
+import { initialStatusNotes } from "../handlers/assessments";
 import type { Variant } from '../handlers/variant';
 import MessageBanner from './MessageBanner';
 import { formatPkgId } from '../helpers/pkgId';
 import TargetPairSelector from './TargetPairSelector';
+
+const justificationOptions: Record<string, string> = {
+    none: "No justification",
+    component_not_present: "Component not present",
+    vulnerable_code_not_present: "vulnerable code not present",
+    code_not_reachable: "The vulnerable code is not invoked at runtime",
+    requires_configuration: "Exploitability requires a configurable option to be set/unset",
+    requires_environment: "Exploitability requires a certain environment which is not present",
+    inline_mitigations_already_exist: "Inline Mitigation already exist",
+};
 
 type EditAssessmentData = {
     id: string;
@@ -34,6 +45,19 @@ type Props = {
     variantFindingsMap?: Record<string, Array<{ pkg: string; outdated: boolean }>>;
     findingsLoading?: boolean;
     findingsError?: string;
+    /** Edit only the rationale: show the stored status and hide the timestamp option. */
+    contentOnly?: boolean;
+    /** Require a non-empty message (notes, or impact statement where it applies). */
+    requireMessage?: boolean;
+    allowImpactInsteadOfJustification?: boolean;
+    title?: string;
+    saveLabel?: string;
+    cancelLabel?: string;
+    /** Disable the actions while the parent persists the edit. */
+    saving?: boolean;
+    saveDisabled?: boolean;
+    /** Error from the last save attempt, shown next to the actions. */
+    errorMessage?: string | null;
 }
 
 function EditAssessment({
@@ -52,6 +76,15 @@ function EditAssessment({
     variantFindingsMap,
     findingsLoading = false,
     findingsError,
+    contentOnly = false,
+    requireMessage = false,
+    allowImpactInsteadOfJustification = false,
+    title = "Edit Assessment",
+    saveLabel = "Save Changes",
+    cancelLabel = "Cancel",
+    saving = false,
+    saveDisabled = false,
+    errorMessage,
 }: Readonly<Props>) {
     const isImpactStatus = assessment.status === 'not_affected' || assessment.status === 'false_positive';
     const hasSelectedOutdatedFinding = useMemo(() => {
@@ -67,11 +100,10 @@ function EditAssessment({
     const [justification, setJustification] = useState(assessment.justification || "none");
     // For non-impact statuses (fixed, affected, …) Yocto stores its notes in impact_statement.
     // Pre-fill status_notes with that value so users see it in the right field.
-    const [statusNotes, setStatusNotes] = useState(
-        assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : "")
-    );
+    const [statusNotes, setStatusNotes] = useState(initialStatusNotes(assessment));
     const [workaround, setWorkaround] = useState(assessment.workaround || "");
-    const [impact, setImpact] = useState(isImpactStatus ? (assessment.impact_statement || "") : "");
+    const initialImpact = isImpactStatus ? assessment.impact_statement || "" : "";
+    const [impact, setImpact] = useState(initialImpact);
     const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>(
         defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : [])
     );
@@ -214,6 +246,7 @@ function EditAssessment({
     const [bannerMessage, setBannerMessage] = useState<string>('');
     const [bannerType, setBannerType] = useState<'error' | 'success'>('success');
     const [bannerVisible, setBannerVisible] = useState<boolean>(false);
+    const [messageError, setMessageError] = useState<string | null>(null);
 
     const internalTriggerBanner = (message: string, type: 'error' | 'success') => {
         setBannerMessage(message);
@@ -229,9 +262,12 @@ function EditAssessment({
         setIncludeOutdatedPackages(hasSelectedOutdatedFinding);
     }, [hasSelectedOutdatedFinding]);
 
+    useEffect(() => {
+        setMessageError(null);
+    }, [status, statusNotes, impact, justification]);
+
     // Check if fields have changes compared to original assessment
     useEffect(() => {
-        const initialStatusNotes = assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : "");
         const initialVariantIds = defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []);
         const initialPackages = defaultSelectedPackages ?? (availablePackages?.length === 1 ? [availablePackages[0]] : []);
         const hasSameValues = (current: string[], initial: string[]) =>
@@ -239,9 +275,9 @@ function EditAssessment({
         const hasChanges = (
             status !== assessment.status ||
             justification !== (assessment.justification || "none") ||
-            statusNotes !== initialStatusNotes ||
+            statusNotes !== initialStatusNotes(assessment) ||
             workaround !== (assessment.workaround || "") ||
-            impact !== (isImpactStatus ? (assessment.impact_statement || "") : "") ||
+            impact !== initialImpact ||
             !hasSameValues(selectedVariantIds, initialVariantIds) ||
             !hasSameValues(selectedPackages, initialPackages) ||
             (exactTargetMode && !hasSameValues(
@@ -253,7 +289,7 @@ function EditAssessment({
             !keepCurrentTimestamp
         );
         onFieldsChange?.(hasChanges);
-    }, [status, justification, statusNotes, workaround, impact, selectedVariantIds, selectedPackages, selectedTargetKeys, exactTargetMode, keepCurrentTimestamp, onFieldsChange, assessment, isImpactStatus, defaultSelectedVariantIds, availableVariants, defaultSelectedPackages, defaultSelectedTargets, availablePackages, targetKey]);
+    }, [status, justification, statusNotes, workaround, impact, selectedVariantIds, selectedPackages, selectedTargetKeys, exactTargetMode, keepCurrentTimestamp, onFieldsChange, assessment, initialImpact, defaultSelectedVariantIds, availableVariants, defaultSelectedPackages, defaultSelectedTargets, availablePackages, targetKey]);
 
     // Auto-select single variant when availableVariants load asynchronously (e.g. Edit from Actions column)
     useEffect(() => {
@@ -261,10 +297,13 @@ function EditAssessment({
     }, [availableVariants, defaultSelectedVariantIds]);
 
     function saveAssessment() {
+        if (saving || saveDisabled) return;
         if (status == '' || justification == '')
             return;
-        if (status == "not_affected" && justification == 'none') {
-            if (triggerBanner) {
+        if (status == "not_affected" && justification == 'none' && !(allowImpactInsteadOfJustification && impact.trim())) {
+            if (allowImpactInsteadOfJustification) {
+                setMessageError("Provide a justification or an impact statement for this status");
+            } else if (triggerBanner) {
                 triggerBanner("You must provide a justification for this status", "error");
             } else {
                 internalTriggerBanner("You must provide a justification for this status", "error");
@@ -284,6 +323,13 @@ function EditAssessment({
         // applies to both not_affected and false_positive (mirrors StatusEditor).
         const includeJustification = status == "not_affected";
         const includeImpact = status == "not_affected" || status == "false_positive";
+        if (requireMessage && !statusNotes.trim() && !(includeImpact && impact.trim())) {
+            setMessageError(includeImpact
+                ? "The assessment message cannot be empty: provide an impact statement or notes."
+                : "The assessment message cannot be empty.");
+            return;
+        }
+        setMessageError(null);
         const exactVariantIds = [...new Set(selectedExactTargets.flatMap(target =>
             target.variant_id ? [target.variant_id] : []))];
         const exactPackages = [...new Set(selectedExactTargets.map(target => target.package))];
@@ -291,7 +337,7 @@ function EditAssessment({
         onSaveAssessment({
             id: assessment.id,
             status,
-            justification: includeJustification ? justification : undefined,
+            justification: includeJustification ? (justification === "none" ? "" : justification) : undefined,
             status_notes: statusNotes,
             workaround,
             // For non-impact statuses the value was folded into status_notes; clear impact_statement.
@@ -310,9 +356,9 @@ function EditAssessment({
     const resetToOriginal = useCallback(() => {
         setStatus(assessment.status || "under_investigation");
         setJustification(assessment.justification || "none");
-        setStatusNotes(assessment.status_notes || (!isImpactStatus ? (assessment.impact_statement || "") : ""));
+        setStatusNotes(initialStatusNotes(assessment));
         setWorkaround(assessment.workaround || "");
-        setImpact(isImpactStatus ? (assessment.impact_statement || "") : "");
+        setImpact(initialImpact);
         setIncludeOutdatedPackages(hasSelectedOutdatedFinding);
         setKeepCurrentTimestamp(true);
         setSelectedVariantIds(defaultSelectedVariantIds ?? (availableVariants?.length === 1 ? [availableVariants[0].id] : []));
@@ -320,7 +366,7 @@ function EditAssessment({
         setSelectedTargetKeys(new Set((defaultSelectedTargets ?? []).flatMap(target =>
             target.variant_id ? [targetKey(target.variant_id, target.package)] : []
         )));
-    }, [assessment, isImpactStatus, defaultSelectedVariantIds, defaultSelectedPackages, defaultSelectedTargets, availableVariants, availablePackages, hasSelectedOutdatedFinding, targetKey]);
+    }, [assessment, initialImpact, defaultSelectedVariantIds, defaultSelectedPackages, defaultSelectedTargets, availableVariants, availablePackages, hasSelectedOutdatedFinding, targetKey]);
 
     useEffect(() => {
         if (shouldClearFields) {
@@ -329,7 +375,7 @@ function EditAssessment({
     }, [shouldClearFields, resetToOriginal]);
 
     return (
-        <div className="bg-gray-800 p-4 rounded-lg border border-gray-600">
+        <fieldset disabled={saving} className="min-w-0 bg-gray-800 p-4 rounded-lg border border-gray-600">
             {!triggerBanner && bannerVisible && (
                 <MessageBanner
                     type={bannerType}
@@ -339,38 +385,53 @@ function EditAssessment({
                 />
             )}
 
-            <h4 className="text-lg font-semibold text-white mb-3">Edit Assessment</h4>
+            <h4 className="text-lg font-semibold text-white mb-3">{title}</h4>
 
             <h3 className="m-1 text-white">
                 Status:
-                <select
-                    value={status}
-                    onChange={(event) => setStatus(event.target.value)}
-                    className="p-1 px-2 bg-gray-700 text-white mr-4 ml-2 rounded"
-                    name="edit_assessment_status"
-                >
-                    <option value="under_investigation">Pending Assessment</option>
-                    <option value="affected">Affected / exploitable</option>
-                    <option value="fixed">Fixed / patched</option>
-                    <option value="not_affected">Not applicable</option>
-                    <option value="false_positive">False positive</option>
-                </select>
+                {contentOnly ? (
+                    <span className="mx-2">{assessment.status}</span>
+                ) : (
+                    <select
+                        value={status}
+                        onChange={(event) => setStatus(event.target.value)}
+                        className="p-1 px-2 bg-gray-700 text-white mr-4 ml-2 rounded"
+                        name="edit_assessment_status"
+                    >
+                        <option value="under_investigation">Pending Assessment</option>
+                        <option value="affected">Affected / exploitable</option>
+                        <option value="fixed">Fixed / patched</option>
+                        <option value="not_affected">Not applicable</option>
+                        <option value="false_positive">False positive</option>
+                        {["in_triage", "exploitable", "resolved", "resolved_with_pedigree"].includes(assessment.status) && (
+                            <option value={assessment.status}>{assessment.status} (CycloneDX)</option>
+                        )}
+                    </select>
+                )}
                 {status == "not_affected" && <>
                     Justification:
                     <select
                         value={justification}
+                        disabled={contentOnly && assessment.justification === "component_not_present"}
                         onChange={(event) => setJustification(event.target.value)}
                         className="p-1 px-2 bg-gray-700 text-white ml-2 rounded"
                         name="edit_assessment_justification"
                     >
-                        <option value="none">No justification</option>
-                        <option value="component_not_present">Component not present</option>
-                        <option value="vulnerable_code_not_present">vulnerable code not present</option>
-                        <option value="code_not_reachable">The vulnerable code is not invoked at runtime</option>
-                        <option value="requires_configuration">Exploitability requires a configurable option to be set/unset</option>
-                        <option value="requires_environment">Exploitability requires a certain environment which is not present</option>
-                        <option value="inline_mitigations_already_exist">Inline Mitigation already exist</option>
+                        {Object.entries(justificationOptions).map(([value, label]) => (
+                            <option key={value} value={value}
+                                disabled={contentOnly && value === "component_not_present" && assessment.justification !== value}>
+                                {label}
+                            </option>
+                        ))}
+                        {contentOnly && assessment.justification && !Object.keys(justificationOptions).includes(assessment.justification) && (
+                            <option value={assessment.justification}>{assessment.justification}</option>
+                        )}
                     </select>
+                    {contentOnly && (
+                        <span className="ml-2 text-sm text-gray-300">
+                            Switching to or from “Component not present” would change the CycloneDX verdict.
+                        </span>
+                    )}
                 </>}
             </h3>
 
@@ -478,6 +539,7 @@ function EditAssessment({
                 </div>
             )}
 
+            {!contentOnly && (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-gray-600 bg-gray-800/40 px-3 py-2">
                 <span>
                     <span className="block text-sm font-medium text-gray-200">Keep the current timestamp</span>
@@ -503,6 +565,7 @@ function EditAssessment({
                     />
                 </button>
             </div>
+            )}
 
             {(status === 'not_affected' || status === 'false_positive') && (
                 <><textarea
@@ -533,23 +596,31 @@ function EditAssessment({
                     placeholder="Describe workaround here if available"
                 /><br/>
 
+            {(messageError || errorMessage) && (
+                <p role="alert" className="mt-3 rounded border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+                    {messageError ?? errorMessage}
+                </p>
+            )}
+
             <div className="flex gap-2 mt-3">
                 <button
                     onClick={saveAssessment}
                     type="button"
-                    className="bg-green-600 hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-800 font-medium rounded-lg px-4 py-2 text-center text-white"
+                    aria-busy={saving || undefined}
+                    disabled={saveDisabled}
+                    className="bg-green-600 hover:bg-green-700 focus:ring-4 focus:outline-none focus:ring-green-800 font-medium rounded-lg px-4 py-2 text-center text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                    Save Changes
+                    {saveLabel}
                 </button>
                 <button
                     onClick={onCancel}
                     type="button"
-                    className="bg-gray-600 hover:bg-gray-700 focus:ring-4 focus:outline-none focus:ring-gray-800 font-medium rounded-lg px-4 py-2 text-center text-white"
+                    className="bg-gray-600 hover:bg-gray-700 focus:ring-4 focus:outline-none focus:ring-gray-800 font-medium rounded-lg px-4 py-2 text-center text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                    Cancel
+                    {cancelLabel}
                 </button>
             </div>
-        </div>
+        </fieldset>
     );
 }
 

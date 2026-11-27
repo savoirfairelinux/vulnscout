@@ -29,9 +29,12 @@ from ..controllers.refresh_jobs import (
     MAX_CVE_IDS,
     MAX_GHSA_IDS,
     REFRESH_JOBS,
-    known_cve_ids,
+    _scoped_vulnerability_ids,
+    is_cve_id,
+    known_vulnerability_ids,
     normalise_cve_ids,
     normalise_ghsa_ids,
+    normalise_vulnerability_ids,
     run_deferred_refresh,
 )
 from ..controllers.scan_jobs import SCAN_JOBS
@@ -220,11 +223,11 @@ def _deferred_refresh_options(source: str, job: dict, mode: str) -> dict:
             raise _PlanError(f"Variant not found: {raw_id}", status=404)
         variant_ids.append(str(variant_uuid))
 
-    exclude_ids = (
-        normalise_ghsa_ids(job.get("exclude_ids", []))
-        if source == "ghsa"
-        else normalise_cve_ids(job.get("exclude_ids", []))
-    )
+    normalise = {
+        "ghsa": normalise_ghsa_ids,
+        "euvd": normalise_cve_ids,
+    }.get(source, normalise_vulnerability_ids)
+    exclude_ids = normalise(job.get("exclude_ids"))
     return {
         "ids": [],
         "mode": mode,
@@ -234,26 +237,37 @@ def _deferred_refresh_options(source: str, job: dict, mode: str) -> dict:
     }
 
 
-def _explicit_refresh_options(source: str, job: dict, mode: str) -> dict:
+def _explicit_refresh_options(
+    source: str, job: dict, mode: str, scoped_variant_ids: list[str] | None,
+) -> dict:
     if source == "ghsa":
         ids = normalise_ghsa_ids(job.get("ids"))
         if not ids:
             raise _PlanError("ghsa refresh requires valid GHSA identifiers")
         if len(ids) > MAX_GHSA_IDS:
             raise _PlanError(f"ghsa refresh accepts at most {MAX_GHSA_IDS} identifiers")
-        return {"ids": ids, "mode": mode}
-
-    ids = normalise_cve_ids(job.get("ids"))
-    if not ids:
-        raise _PlanError(f"{source} refresh requires valid CVE identifiers")
-    if source == "nvd" and mode == "api" and len(ids) > MAX_CVE_IDS:
-        raise _PlanError(
-            f"nvd refresh accepts at most {MAX_CVE_IDS} identifiers in api mode"
-        )
-    if source == "epss":
-        ids = known_cve_ids(ids)
+    elif source == "euvd":
+        ids = normalise_cve_ids(job.get("ids"))
         if not ids:
-            raise _PlanError("epss refresh requires at least one known CVE identifier")
+            raise _PlanError("euvd refresh requires valid CVE identifiers")
+    else:
+        ids = normalise_vulnerability_ids(job.get("ids"))
+        if source == "nvd" and mode == "api" and sum(map(is_cve_id, ids)) > MAX_CVE_IDS:
+            raise _PlanError(f"nvd refresh accepts at most {MAX_CVE_IDS} CVE identifiers in api mode")
+        if scoped_variant_ids is None:
+            if source == "nvd":
+                # Unscoped NVD accepts new CVEs but only records known unsupported IDs.
+                cve_ids = set(normalise_cve_ids(ids))
+                unsupported = [identifier for identifier in ids if identifier not in cve_ids]
+                allowed = cve_ids | known_vulnerability_ids(unsupported)
+            else:
+                allowed = known_vulnerability_ids(ids)
+            ids = [identifier for identifier in ids if identifier in allowed]
+        if not ids:
+            raise _PlanError(f"{source} refresh requires at least one valid target identifier")
+
+    if scoped_variant_ids is not None and set(ids) - _scoped_vulnerability_ids(scoped_variant_ids):
+        raise _PlanError("Refresh identifiers are outside the selected scope")
     return {"ids": ids, "mode": mode}
 
 
@@ -265,11 +279,6 @@ def _plan_refresh_job(job: dict) -> List[dict]:
     options = _job_options(job)
     mode = _mode_option(options)
     deferred = job.get("variant_ids") is not None
-    job_options = (
-        _deferred_refresh_options(source, job, mode)
-        if deferred
-        else _explicit_refresh_options(source, job, mode)
-    )
     from ..extensions import db
     from ..models import Project, Variant
     scope = {key: options.get(key) for key in ("project_id", "variant_id")}
@@ -288,6 +297,7 @@ def _plan_refresh_job(job: dict) -> List[dict]:
             raise _PlanError("variant_id does not belong to project_id")
         scope["project_id"] = str(variant.project_id)
     if deferred:
+        job_options = _deferred_refresh_options(source, job, mode)
         scope["variant_ids"] = job_options["variant_ids"]
         variant_scopes: list[dict] = []
         for identifier in job_options["variant_ids"]:
@@ -295,15 +305,15 @@ def _plan_refresh_job(job: dict) -> List[dict]:
             assert selected_variant is not None
             variant_scopes.append({"variant_id": identifier, "project_id": str(selected_variant.project_id)})
         scope["variants"] = variant_scopes
-    elif scope["project_id"] or scope["variant_id"]:
-        from ..controllers.refresh_jobs import _scoped_vulnerability_ids
-        selected_ids = (
-            [scope["variant_id"]] if scope["variant_id"] else [
-                str(variant.id) for variant in Variant.get_by_project(uuid_module.UUID(scope["project_id"]))
+    else:
+        scoped_variant_ids = None
+        if scope["variant_id"]:
+            scoped_variant_ids = [scope["variant_id"]]
+        elif scope["project_id"]:
+            scoped_variant_ids = [
+                str(item.id) for item in Variant.get_by_project(uuid_module.UUID(scope["project_id"]))
             ]
-        )
-        if set(job_options["ids"]) - _scoped_vulnerability_ids(selected_ids):
-            raise _PlanError("Refresh identifiers are outside the selected scope")
+        job_options = _explicit_refresh_options(source, job, mode, scoped_variant_ids)
 
     return [{
         "op_id": refresh_op_id(source),

@@ -74,7 +74,7 @@ def test_epss_refresh_response_contains_percentile(client):
 
 
 def test_epss_refresh_does_not_overwrite_score_on_api_failure(app_with_scan):
-    """When the EPSS API returns None the original score is unchanged."""
+    """When the EPSS lookup fails the original score is unchanged."""
     cve_id = "CVE-2020-35492"
     original_score: Decimal | None = None
     with app_with_scan.app_context():
@@ -83,7 +83,7 @@ def test_epss_refresh_does_not_overwrite_score_on_api_failure(app_with_scan):
         original_score = rec.epss_score
 
     with patch("src.routes.vulnerabilities.EPSS_DB") as MockEPSS:
-        MockEPSS.return_value.api_get_epss.return_value = None
+        MockEPSS.return_value.api_get_epss.side_effect = OSError("offline")
         with app_with_scan.test_client() as c:
             resp = c.post(f"/api/vulnerabilities/{cve_id}/epss-refresh")
     assert resp.status_code == 503

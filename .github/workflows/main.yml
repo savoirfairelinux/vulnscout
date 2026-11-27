@@ -67,6 +67,29 @@ jobs:
         if: matrix.target == 'Podman'
         run: BUILD_TAG=${{ github.sha }} make -C tests podman_test
 
+      - name: Attach a host folder with the built image
+        if: matrix.target == 'Podman'
+        env:
+          VULNSCOUT_IMAGE: sflinux/vulnscout:${{ github.sha }}
+          VULNSCOUT_BUILD_DIR: ${{ runner.temp }}/host-folder-test
+          VULNSCOUT_CONTAINER: vulnscout-host-folder-test
+        run: |
+          trap './vulnscout stop' EXIT
+          ./vulnscout add -p demo -v x86 --spdx tests/podman/spdx/valid_v2_2.spdx.json
+          ./vulnscout ai-context attach -p demo -v x86 "src=$PWD/tests/podman/spdx"
+          ./vulnscout ai-context list -p demo -v x86 --json |
+            jq -e '.mounts[] | select(.alias == "src" and .status == "available")'
+          ./vulnscout serve &
+          api=http://127.0.0.1:7275/api
+          project=$(curl -fsS --retry 30 --retry-delay 1 --retry-all-errors --max-time 5 "$api/projects" |
+            jq -er '.[] | select(.name == "demo") | .id')
+          variant=$(curl -fsS "$api/projects/$project/variants" |
+            jq -er '.[] | select(.name == "x86") | .id')
+          source="$api/variants/$variant/context/files/mount:src/source?operation=read&path=valid_v2_2.spdx.json&max_lines=2"
+          curl -fsS "$source" | jq -erj '.content' | diff - <(head -n 2 tests/podman/spdx/valid_v2_2.spdx.json)
+          ./vulnscout ai-context detach -p demo -v x86 src
+          test "$(curl -sS -o /dev/null -w '%{http_code}' "$source")" = 404
+
       - name: Podman Clean
         if: ${{ matrix.target == 'Podman' && always() }}
         run: BUILD_TAG=${{ github.sha }} make -C tests podman_clean

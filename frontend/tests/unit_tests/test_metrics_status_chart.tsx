@@ -5,7 +5,7 @@
  * (Not affected, Fixed, Pending Assessment, Exploitable), based on whether it
  * has any variant in that status — not by summing the per-variant counts.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 // @ts-expect-error TS6133
 import React from 'react';
@@ -32,10 +32,11 @@ jest.mock('chart.js', () => ({
 
 // Expose each Pie's `data` prop as JSON so tests can read the computed dataset.
 jest.mock('react-chartjs-2', () => ({
-    Pie: ({ data }: any) => (
-        <div data-testid="pie-chart" data-chart={JSON.stringify(data)} />
+    Pie: ({ data, options }: any) => (
+        <button data-testid="pie-chart" data-chart={JSON.stringify(data)}
+            onClick={() => options.onClick(null, [{ index: 3 }])} />
     ),
-    Line: () => <div data-testid="line-chart" />,
+    Line: ({ data }: any) => <div data-testid="line-chart" data-chart={JSON.stringify(data)} />,
     Bar:  () => <div data-testid="bar-chart" />,
 }));
 
@@ -75,6 +76,7 @@ jest.mock('../../src/handlers/variant', () => ({
 
 import Metrics from '../../src/pages/Metrics';
 import type { Vulnerability } from '../../src/handlers/vulnerabilities';
+import { asAssessment } from '../../src/handlers/assessments';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -188,5 +190,60 @@ describe('Metrics — Vulnerabilities by Status chart', () => {
         // Pending Assessment: CVE-C → 1
         // Exploitable: CVE-D → 1
         expect(getStatusChartData()).toEqual([1, 2, 1, 1]);
+    });
+
+    test('charts historical-only findings once per CVE without replacing other targets’ statuses', async () => {
+        const current = {
+            ...makeVuln('CVE-CURRENT', { 'Pending Assessment': 1 }),
+            packages_status_by_variant: { target: ['pkg@1.0.0'] },
+        };
+        const historical = {
+            ...makeVuln('CVE-OLD', { Exploitable: 1 }), packages_current: [],
+            packages_status_by_variant: { base: ['old@1'], target: ['old@1'] },
+        };
+        const fixed = {
+            ...makeVuln('CVE-FIXED', { Fixed: 1 }), packages_current: [],
+            packages_status_by_variant: { target: ['fixed@1'] },
+        };
+        const early = new Date(Date.now() - 3 * 86400_000).toISOString();
+        const later = new Date(Date.now() - 5 * 3600_000).toISOString();
+        const currentEvent = ['current', current.id, 'pkg@1.0.0', 'target', early, 'under_investigation'];
+        current.assessments = [currentEvent].flatMap(asAssessment);
+        jest.mocked(fetch).mockResolvedValueOnce({
+            ok: true,
+            json: async () => [
+                currentEvent,
+                ['initial', historical.id, 'old@1', 'base', early, 'affected'],
+                ['initial', historical.id, 'old@1', 'target', early, 'affected'],
+                ['initial', fixed.id, 'fixed@1', 'target', early, 'affected'],
+                ['updated', historical.id, 'old@1', 'base', later, 'fixed'],
+                ['updated', fixed.id, 'fixed@1', 'target', later, 'fixed'],
+                ['other-package', fixed.id, 'irrelevant@1', 'target', later, 'affected'],
+                ['other-variant', fixed.id, 'fixed@1', 'unselected', later, 'affected'],
+            ],
+        } as Response);
+        const trend = () => JSON.parse(screen.getByTestId('line-chart').dataset.chart!).datasets[0].data as number[];
+        const goToVulnsTabWithFilter = jest.fn();
+        const view = render(<Metrics {...DEFAULT_PROPS} vulnerabilities={[current]} />);
+        expect(trend().at(-1)).toBe(1);
+        expect(fetch).not.toHaveBeenCalled();
+        expect(getStatusChartData()).toEqual([0, 0, 1, 0]);
+        view.rerender(<Metrics {...DEFAULT_PROPS} includeOutdated vulnerabilities={[current, historical, fixed]}
+            variantId="target" baseVariantId="base" compareOperation="intersection"
+            goToVulnsTabWithFilter={goToVulnsTabWithFilter} />);
+        expect(screen.getByText('Assessment trend for ever-observed findings')).toBeVisible();
+        expect(screen.queryByText(/Aggregates assessment history for the selected evidence/)).not.toBeInTheDocument();
+        await screen.findByTestId('line-chart');
+        fireEvent.change(screen.getByRole('combobox', { name: 'Assessment trend interval' }), { target: { value: '24_hours' } });
+        expect(trend()[0]).toBe(3);
+        expect(trend().at(-1)).toBe(2);
+        const url = new URL(String(jest.mocked(fetch).mock.calls[0][0]));
+        expect(Object.fromEntries(url.searchParams)).toEqual({
+            project_id: 'proj-1', variant_id: 'base', compare_variant_id: 'target', operation: 'intersection',
+        });
+        expect(getStatusChartData()).toEqual([0, 1, 1, 1]);
+        const statusChart = screen.getAllByTestId('pie-chart').find(chart => chart.dataset.chart?.includes('Exploitable'))!;
+        fireEvent.click(statusChart);
+        expect(goToVulnsTabWithFilter).toHaveBeenCalledWith('Status', 'Exploitable');
     });
 });

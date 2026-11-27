@@ -339,8 +339,8 @@ Returns the merged project and variant context, including uploaded codebase refe
 and the variant must belong to the selected project.
 
 The agent-facing keys are plain text: `threat_model` and `risks` are rendered from the variant's STRIDE model.
-Source access uses `codebase_directory`: `{"file_id": "directory", "path": "<container-path>"}`
-or `null` if not provisioned. There is no source selector or external path setting.
+Approved host folders are listed under `mounts` as `{"alias": "<alias>", "file_id": "mount:<alias>"}`.
+There is no source selector or external path setting.
 The `editor` object carries system and STRIDE data, uploaded attachment metadata and the revision timestamp.
 
 ### Get or Update Project Context
@@ -364,8 +364,15 @@ Two body shapes are accepted.
 `variant_description`, `environment`, `other_info`,
 `system` (`scope`, `actors`, `entry_points`, `trust_boundaries`) and
 `stride` (`components`, `interactions`, `threats`, `risks`).
-Validation failures return `400` with `{"error": ..., "fields": {"<path>": "<message>"}}`
-(for example `"threat_model": "A threat model is required."`).
+An editor save replaces all editable fields; it does not merge rows. Within `stride`,
+an omitted table or `[]` clears that table. Neither `stride` nor a table may be `null`.
+A nonempty `stride` object must contain at least one of the four named tables.
+To clear all rows, use only recognized table names; extra keys are ignored only on populated models.
+If both System and STRIDE would be cleared, unknown keys at the top level or in `system` are rejected.
+Clients that previously sent `stride: null` with System text must send `stride: {}` to
+save System with no rows, or include the existing rows to keep them.
+Validation failures leave the saved context unchanged and return `400` with
+`{"error": ..., "fields": {"<path>": "<message>"}}`.
 A blank required STRIDE field reports `is required` (for example
 `"interactions[0].destination_id": "is required"`); a threat needs a category and at least one target
 (`"threats[0].target_ids": "is required"`). A non-empty id that matches no row reports
@@ -385,7 +392,7 @@ GET /api/variants/<variant_id>/context/draft
 
 Returns `200` with the pending AI threat-model draft and its status against the saved context.
 A valid variant without a pending draft returns `204 No Content`, whether or not its context
-has been saved before. This is a normal empty state, unrelated to codebase directory availability.
+has been saved before. This is a normal empty state.
 Invalid IDs return `400`; unknown variants return `404`; storage failures return `500`.
 Frontend and MCP clients treat only `204` as no draft and surface real errors.
 
@@ -401,9 +408,25 @@ export all context. Import accepts an exported context JSON document and applies
 
 Export format `3.0` carries `system` and `stride_model` per variant, alongside the text fields,
 and lists the variant's uploaded codebase references by `original_name` and `description` in `files`. The file
-contents are not exported, and import ignores `files`. Directory names,
-mounts and contents are not transferred; provision each destination variant's own directory.
-Every entry is imported through the editor path, so it needs a non-empty threat model;
+contents are not exported, and import ignores `files`. Host attachments are not transferred;
+approve and attach relevant host folders separately on the destination variant.
+Exports mark variants with no saved editable context as `context_configured: false`;
+import ignores those entries without changing the destination. Editor saves, including
+deliberate clears, are exported with `context_configured: true`. Variants with only
+Context text from a text-only save are exported without the marker. When present, the marker
+must be a JSON boolean; strings, numbers and `null` fail the entry.
+For an unmarked entry (including older exports), Context text alone replaces the three
+Context text fields without changing the destination's System or STRIDE. Nonblank System
+text or populated STRIDE rows instead request a full replacement.
+Every successful entry, including a text-only import, also replaces the destination
+project description. All variants in that project share the new description.
+An unmarked, completely blank variant fails without changing the
+destination, even if the project has a description or files are listed. To deliberately
+clear the destination with such an entry, set `context_configured: true` on that variant.
+Every unmarked or configured entry needs a valid `stride_model` object, even for text-only imports.
+In a full replacement, `{}` clears all tables, and an omitted table or `[]` clears that
+table. An explicitly `null` model or table, or an unknown table name without any recognized
+rows, fails the entry without changing its context.
 `1.0` files, which only carry `threat_model` and `risks` text, are reported under `failed`.
 Files exported as `2.x` still import, but their removed source selector and external paths are discarded.
 For `2.0`, each risk's `threat_id` becomes `threat_ids: [threat_id]`, with id `R<n>` in row order and an empty description.
@@ -452,11 +475,11 @@ Rules checked on import, with the same messages as the editor save:
   `denial_of_service` or `elevation_of_privilege`) with at least one non-repeated `target_ids` entry, and a risk with at
   least one non-repeated `threat_ids` entry (its `description` is optional). `likelihood` and `impact` are `low`, `medium`,
   `high` or `null`.
-- The system fields and STRIDE tables together must render a non-empty threat model.
 - At most 500 rows per table and 20,000 characters per text field.
 
 `version` and `exported_at` are ignored on import, and a bare list of projects is accepted. The response lists
-`imported`, `ignored` (project or variant not found) and `failed` (with the validation reason) entries. Failed entries are skipped; the imported ones are committed together.
+`imported`, `ignored` (unknown project/variant or unconfigured source context) and `failed`
+(with the validation reason) entries. Failed entries are skipped; the imported ones are committed together.
 
 ### Manage Codebase References
 
@@ -477,37 +500,45 @@ Context JSON import/export does not include uploaded file contents; export lists
 Upload returns `201` with the file's `id`, `original_name`, and `description`; delete returns an empty `204` response.
 Invalid uploads/UUIDs return `400`, missing variants/references `404`, and upload storage failures `500`.
 
-### Provision a Codebase Directory
+### Attached Host Folders
 
 ```
-GET /api/variants/<variant_id>/context/directory
-POST /api/variants/<variant_id>/context/directory
+GET /api/variants/<variant_id>/context/mounts
+DELETE /api/variants/<variant_id>/context/mounts/<alias>
+GET /api/variants/<variant_id>/context/files/mount:<alias>/source
 ```
 
-`GET` reports availability and automatically registers an existing matching cache directory,
-without creating filesystem paths. Merged-context and directory-source reads perform the same
-discovery, so CI can create and populate the directory without a web interaction or provisioning request.
-`POST` can also create a missing directory on demand. Neither operation saves text fields or
-requires a valid threat model. Initial registration updates the context timestamp,
-marking older pending assessments outdated.
-Both return `200` with
-`{"file_id": "directory", "path": "<container-path-or-null>", "status": "...", "message": "...", "file_count": 0, "directory_count": 0}`.
-Status is `not_created`, `ready`, `missing`, `unreadable` or `unavailable` (for example empty or over budget).
-Counts reflect a complete scan of eligible regular files and subdirectories, excluding the root,
-hidden/sensitive names and linked entries. Empty trees return zero files and their eligible directory count.
-Both counts are `null` when unprovisioned, missing, unreadable or incompletely scanned (including over budget);
-partial totals are never returned. Every `GET`, including the page's **Refresh directory status**, rescans.
-Invalid IDs return `400`, unknown variants `404`, and inspection/provisioning failures `500`.
-New directories are named `context-<sanitized-project>-<sanitized-variant>`, without database IDs;
-existing saved paths are preserved. Requests return `409` if another variant already owns the name,
-including after sanitization or truncation. Automatic discovery also returns `409` when several
-unregistered variants have the same normalized name; rename them or explicitly provision the intended owner.
-No custom path is accepted.
-Recreating the same names reuses any retained directory contents.
-A provisioned directory is discoverable and browsable immediately; no source selection
-or separate editor save is required.
-See [administrator directory setup](ai-assessments.md#administrator-provided-codebase-directories)
-for naming, retention, copying, read-only mounts and permissions.
+Only `./vulnscout ai-context attach` on the host can authorize a folder.
+The REST API cannot enumerate unattached host paths or grant access to them. `GET .../mounts` returns
+`{"helper": {"available", "message"}, "mounts": [...]}` with each folder's `status`
+(`available` or `unavailable`), `message`, `attachment_id` and `approval_revision` (UUIDs).
+To detach the exact approval shown in a listing, pass `?approval_revision=<uuid>` on `DELETE`.
+If the alias was removed, reused or approved for a different directory, the server returns
+`409` without deleting anything; refresh the list before retrying. `attachment_id` alone
+checks only the row identity, not same-path reapproval. Omitting both detaches the current alias
+unconditionally (`404` if absent). A successful `DELETE` returns
+`{"alias", "detached": true, "warning": str|null}`; access ends immediately even if the helper
+could not be updated. The backend records pending cleanup in the same transaction
+and retries it when the helper is reachable. Cleanup is scoped to the deleted
+attachment ID, not just its alias. `GET /api/context` lists only `alias` and `file_id` for each mount;
+absolute host paths are available only through the operator endpoints.
+
+Host-folder management, browsing and source reads are restricted to local operator requests.
+Browser requests must be same-origin; remote clients and cross-origin browser requests receive
+`403`. This does not change local Agent or MCP access.
+
+The source route supports `operation=children|list|read|search_file|search`. Recursive host listings return `engine="python"` and mark results
+`truncated` with a `message` when a budget, an I/O error or an unreadable path format
+limits coverage. `skipped_paths` counts files omitted because their paths cannot
+be passed to the read operation.
+When the 64 KiB JSON limit cuts a listing short, use `next_offset` to resume
+after the last file returned.
+
+Errors: `400` invalid alias, path or parameters (including a `pattern` over 512 characters or
+with more than 16 `*`/`?` wildcards); `403` access denied;
+`404` unknown variant, alias or folder; `409` folder unavailable;
+`503` helper not running.
+See [Attached host folders](ai-assessments.md#attached-host-folders).
 
 ### Browse Codebase Source
 
@@ -515,26 +546,73 @@ for naming, retention, copying, read-only mounts and permissions.
 GET /api/variants/<variant_id>/context/files/<file_id>/source
 ```
 
-For an upload, the file UUID must belong to that variant. For the variant's active server directory,
-use the literal `file_id=directory`; unprovisioned directories return `404`.
-`operation` selects `list` (default), `read` or `search`.
+For an upload, the file UUID must belong to that variant. For an approved host folder,
+use its `mount:<alias>` ID. All sources accept `list` (recursive, default), `read` and `search`.
+Recursive text search on host folders is deprecated, but retained for existing clients:
+it stops at 100 MiB read, 500,000 entries or 20 seconds. Prefer `children` and `search_file` on mounts.
 
 | Operation | Parameters | Result |
 |-----------|------------|--------|
-| `list` | `pattern` (case-sensitive path glob, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
-| `read` | `path` (exact listed member path), `start_line` (1-based, default 1), `max_lines` (1-200, default 200) | UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`; at most 64 KB of content |
-| `search` | `query` (1-200 characters, literal case-sensitive text), `pattern` (glob, default `*`), `max_results` (1-100, default 100) | `matches` with `path`/`line`/`text` (500-character snippets), `truncated`, `searched_files`, `skipped_binary_files` |
+| `search` | Case-sensitive literal `query` (1–200 characters), optional path `pattern` (default `*`), `max_results` (1–100, default 100); optional `folder` on mounts only | `matches` with path, line and text; `truncated`, `searched_files`, `skipped_binary_files` |
+| `children` | Mounts only: `folder` (relative, default root), `cursor` (opaque continuation), `limit` (1–200, default 50) | `children` with root-relative `path` and `type` (`directory` or `file`), `visited_entries`, `complete`, `next_cursor`; no total |
+| `list` | `folder` (mounts only), `pattern` (case-sensitive glob relative to folder, default `*`), `offset` (default 0), `limit` (1-200, default 200) | `files` with `path`/`size`, `total`, `next_offset` |
+| `read` | Exact `path`, `start_line` (1-based, default 1), `max_lines` (1-200, default 200); optional match `position` on a mount | Plain reads return UTF-8 `content`, `start_line`, `end_line`, `total_lines`, `next_line`. For positioned reads see below. |
+| `search_file` | Mounts only: exact `path`, literal `query` (1-200 characters), optional `cursor` | `matches` with `path`, 1-based `line`, short `text` and opaque `position`; `bytes_scanned`, `complete`, `next_cursor` |
 
-Every response includes `file_id` and `original_name`. Follow pagination for complete evidence and narrow
-truncated searches. Binary/non-UTF-8 files return 400 for reads and are counted as skipped in searches.
+For mount listings, the 64 KiB wire limit includes the full paths and pagination
+metadata. A page may contain fewer than `limit` rows; resume at the returned `next_offset`.
+
+For nearby lines, use `read` with a match's `position` and the same variant, source and path.
+Leave `start_line` at its default. This window uses at most 4 KiB on either side of the match start
+and at most `min(max_lines, 21)` lines, even for files over 10 MiB. It returns `content` with
+1-based `start_line`, `match_line` and `end_line`, not a whole-file line count or continuation.
+`truncated_before`/`truncated_after` indicate omitted file content; `partial_first_line` and
+`partial_last_line` flag clipped lines. Positions are not search cursors. Search again if stale.
+
+Search opens one regular file, without inventorying siblings. CVE IDs match whole tokens.
+Each page scans up to 1 MiB in chunks with a one-second scanning budget, at most 100 matches
+and a 64 KiB serialized response. Continue even after empty pages; only `complete=true` indicates EOF.
+Restart after a stale cursor. Invalid UTF-8 or NUL encountered during scanning invalidates the lookup.
+
+Use `children` to navigate without opening descendants or making a snapshot. Each page stops
+after at most 256 directory records (including exclusions), or earlier at its item/response limit.
+Pages are not sorted. Follow `next_cursor` even if `children` is empty and `complete` is false.
+`entries_filtered` is true only if policy omitted a real entry visited on this page; neither it nor
+`visited_entries` counts `.` or `..`. It says nothing about unvisited entries. Reuse the cursor only
+for the same variant, source and folder. Restart on directory change. Read known paths without listing first.
+
+For `mount:<alias>` reads, `partial_line: true` means only a prefix of the
+requested line fits in the serialized response. Its suffix is omitted;
+`next_line` points to the following line, not the omitted suffix.
+
+Every response includes `file_id` and `original_name`. Follow pagination for further evidence.
+Binary/non-UTF-8 files return 400 for reads.
 Missing references/members return 404; unavailable stored files return 500 with an explicit error.
 Individual files use their original name as the listed path. No arbitrary host path is accepted.
 
-Directory operations exclude hidden/sensitive names, symbolic/hard links and special files. They visit
-at most 500,000 entries, read at most 10 MiB/file and return at most 64 KiB of serialized JSON.
-Directory searches have a 100 MiB candidate-file budget; oversized files are skipped and counted alongside
-binary/non-UTF-8 files. Missing/unreadable/empty directories and exceeded budgets return explicit `400` errors.
-No shell, extraction or source execution is available.
+Within an approved mount, a regular file named exactly `.config` with one hard link
+is eligible for listing, reading, searching and shell snapshots. Directories named `.config` are never
+traversed. Other hidden/sensitive names and special files remain excluded. Directory operations visit
+at most 500,000 entries and return at most 64 KiB of serialized JSON. The 10 MiB whole-file
+read limit does not apply to single-file search.
+An unavailable host folder or an exceeded budget is reported as incomplete evidence.
+Uploads are not extracted or executed.
+
+### Run an Isolated Codebase Shell
+
+```
+POST /api/variants/<variant_id>/context/shell
+```
+
+For local operator requests, submit JSON with an approved `file_id` (`mount:<alias>`),
+`command`, and an optional relative `folder`. The JSON body
+is limited to 64 KiB (`413` when exceeded), including streamed requests. Uploads are not
+supported; any `file_id` other than an approved mount is rejected.
+The response includes command output, exit code, timeout and truncation
+flags, and snapshot metadata. The host helper and a local container engine must be
+available. Commands run in a separate, network-isolated container against a filtered
+read-only snapshot; see [AI Agent Development](agent-chat.md#architecture-and-access-boundaries)
+for limits and security caveats.
 
 ---
 
@@ -840,6 +918,19 @@ GET /api/vulnerabilities/<vuln_id>/assessments
 
 **Response:** array of assessment objects in the shape above, newest first.
 
+### Read the Historical Assessment Trend
+
+```
+GET /api/vulnerabilities/assessment-trend
+```
+
+Accepts the same project, variant, and comparison parameters as the
+vulnerabilities list. Returns chronological compact assessment rows
+`[id, vulnerability, package, variant, timestamp, status]`, one per
+assessment and exact finding target in the selected ever-observed evidence.
+Pending AI assessments are excluded. Rows are assessment events, not an
+as-of inventory of exposures.
+
 ### List Assessments for Review
 
 ```
@@ -856,6 +947,9 @@ GET /api/reviews/assessments
 
 **Response:** array of assessment objects, each enriched with a `vuln_texts`
 array holding the vulnerability texts of its CVE for front-end tooltips.
+Custom targets have `outdated: true` when the exact previously observed
+finding is absent from that variant's current published evidence. AI context
+staleness is reported separately as `context_outdated` for `origin=ai`.
 
 ### List Variants for a Vulnerability
 
@@ -934,6 +1028,68 @@ Converts a pending AI assessment to `custom` origin.
 POST /api/assessments/<assessment_id>/approve
 ```
 
+The body is optional. Without one (or with `{}`), approval does not edit the
+suggestion's content. You may amend `status_notes`, `justification`, `impact_statement`
+and `workaround` in the same transaction as approval. Omitted fields keep
+their suggested values. To clear an optional text field, send an empty
+string. A rationale field containing a NUL character returns `400` and leaves the
+suggestion pending and unchanged. For `not_affected`, the edited result must
+have a valid justification or a nonblank impact statement. The suggested
+verdict and targets are fixed: do not send `status`, even if it matches the
+stored verdict. For `not_affected`,
+switching to or from `component_not_present` returns `400`: that justification
+exports as `false_positive` in CycloneDX.
+
+Editors send the pending suggestion's `approval_fingerprint` as
+`expected_fingerprint`, including when confirming without edits. If any content
+field (including CycloneDX `responses`) or variant/finding target pair changed
+since the user opened the editor, approval returns `409` and leaves the newer
+suggestion pending. The precondition is optional for existing clients.
+
+If a legacy structured link becomes stale, approval is blocked until it is
+reviewed. For historical targets that cannot be reassessed in the web UI,
+inspect the saved target and `approval_fingerprint` from
+`GET /api/assessments/<assessment_id>`. To reconfirm a saved link, compare
+it to the current model with
+`GET /api/assessments/<assessment_id>/risk-link-preview`, passing the exact
+`variant_id`, `package`, `risk_id`, and (if present) `threat_id`. If you accept
+the current reference, use the preview's `revision` as `confirmed_revision`.
+
+In the body for `POST /api/assessments/<assessment_id>/approve` with
+`Content-Type: application/json`, copy the fingerprint and exact target
+identifiers from GET. Each `risk_links`
+array replaces the **entire** link list for that target: omit links you want
+to remove and project each retained link to `risk_id` and, if present,
+`threat_id`. Do not copy GET-only fields such as descriptions or `stale`.
+Add `confirmed_revision` only to links you reviewed against the preview.
+Use `[]` to clear the target's list. Omitted targets retain their links,
+which must still pass stale validation. Approval does not change the target set.
+
+```json
+{
+  "expected_fingerprint": "<approval_fingerprint from GET>",
+  "target_risk_links": [
+    {
+      "variant_id": "11111111-1111-1111-1111-111111111111",
+      "package": "example@1.0.0",
+      "risk_links": [
+        {"risk_id": "R1"},
+        {"risk_id": "R2", "threat_id": "T3", "confirmed_revision": "<revision from preview>"}
+      ]
+    }
+  ]
+}
+```
+
+**Request body (optional):**
+```json
+{
+  "justification": "code_not_reachable",
+  "impact_statement": "The vulnerable module is not built.",
+  "status_notes": "Reviewed and edited before approval."
+}
+```
+
 **Response:**
 ```json
 {
@@ -942,12 +1098,17 @@ POST /api/assessments/<assessment_id>/approve
 }
 ```
 
-`400` if the assessment is not a pending AI assessment. `404` if it does not
-exist.
+`400` if the assessment is not a pending AI assessment, the JSON body is not
+an object, or the edits are invalid (including a supplied `status` field).
+Invalid edits leave the pending suggestion unchanged.
+`404` if it does not exist. `409` if another write changes the content
+being validated, the fingerprinted targets change, or the row is no longer
+pending at promotion time; reload the assessment and review it again.
 
 ### Reject an AI Assessment
 
-Deletes a pending AI assessment.
+Deletes a pending AI assessment. Approval and rejection are serialized for the
+same assessment: a rejection cannot remove a row that has just been approved.
 
 ```
 POST /api/assessments/<assessment_id>/reject
@@ -986,6 +1147,13 @@ POST /api/vulnerabilities/<vuln_id>/assessments
 `variant_ids` (a list) may be given instead of `variant_id` to scope one
 assessment to several variants. Set `"ai_generated": true` to create a pending
 AI assessment (`origin` `"ai"`) instead of a `custom` one.
+New AI assessments should cite evidence-backed modeled risks and threats
+only in `status_notes`, and only when the citation and its supporting details
+apply independently to every exact target. Notes are shared free text:
+variant filtering and partial replacement do not rewrite them. The API
+rejects non-empty `targets[].risk_links` with `400` but does not enforce
+citation scope in free text. Structured links on custom assessments and
+existing AI suggestions are unaffected.
 
 One variant scope is required. Alternatively, supply a non-empty `targets` array of exact
 `{"variant_id":"uuid","package":"name@version::supplier"}` pairs; it overrides flattened scope fields.
@@ -1763,12 +1931,17 @@ Fetches NVD data for the given CVE and updates the stored description, CVSS scor
 | `mode` | string | `"local"` (default) or `"api"`. |
 
 **Response:** `200` with `{"vulnerabilities": [<updated vulnerability>]}`.
+If the lookup verifies that there is no NVD record, the response is
+`{"vulnerabilities": [], "outcome": "no_record"}`. An existing identifier
+unsupported by NVD returns `{"vulnerabilities": [], "outcome": "skipped"}`.
+Neither outcome changes stored vulnerability data.
 
 **Error responses:**
 
 | Code | `error_code` | Condition |
 |------|--------------|-----------|
-| `503` | `unavailable` | Local mode: CVE not found in the local database. API mode: NVD API unreachable or returned no data. |
+| `404` | — | Identifier is not stored. |
+| `503` | `unavailable` | The local snapshot or API lookup failed, or its result could not be verified. |
 | `429` | `rate_limited` | API mode only: NVD rate limit exceeded. |
 | `401`/`403` | `unauthorized` | API mode only: API key rejected by NVD. |
 
@@ -1785,7 +1958,11 @@ GHSA refresh accepts a `GHSA-xxxx-xxxx-xxxx` identifier and updates the advisory
 Identifiers are normalized to uppercase. Neither endpoint creates findings.
 
 **Response:** `200` with `{"vulnerabilities":[<updated vulnerability>]}`.
-EPSS returns `404` for an unknown CVE and `503` for unavailable data.
+EPSS returns `200` with `{"vulnerabilities": [], "outcome": "no_record"}` for
+a verified miss or `{"vulnerabilities": [], "outcome": "skipped"}` for an
+existing unsupported identifier. Neither outcome changes stored vulnerability
+data. EPSS returns `404` for an unknown identifier and `503` for a failed or
+unverifiable lookup.
 GHSA returns `400` for invalid identifiers, `404` for missing local/upstream advisories,
 `502` for other upstream HTTP errors, and `503` for network/unusable published-date data.
 
@@ -1812,7 +1989,19 @@ Submit scans and vulnerability-data refreshes as one ordered batch. Scans run in
 }
 ```
 
-For a standalone refresh, supply `ids` (CVE IDs for NVD/EPSS/EUVD, GHSA IDs for GHSA) instead of `variant_ids`. Deferred refresh jobs resolve the variant's newly discovered IDs after preceding scans; `exclude_ids` omits the pre-scan baseline. Scan options `exclude_kernel` and `exclude_native` default to `true` and `false`, respectively. `options.mode` accepts `"local"` (default) or `"api"` where supported. Duplicate or invalid operations are rejected before any job is queued; active conflicts return `409` with the conflicting operation IDs.
+For a standalone refresh, supply `ids` instead of `variant_ids`. EUVD takes
+CVE IDs and GHSA takes GHSA IDs. NVD and EPSS record known non-CVE targets as
+unsupported without querying the provider. Scoped requests must contain only
+targets in active findings in the selected scope; unknown and out-of-scope IDs
+are both rejected. NVD API mode accepts at most 1000 CVE targets; unsupported
+identifiers do not count toward this limit.
+Deferred refresh jobs resolve the variant's newly discovered IDs after
+preceding scans; `exclude_ids` omits the pre-scan baseline, including non-CVE
+IDs for NVD and EPSS. Scan options `exclude_kernel` and `exclude_native`
+default to `true` and `false`, respectively. `options.mode` accepts `"local"`
+(default) or `"api"` where supported. Duplicate or invalid operations are
+rejected before any job is queued; active conflicts return `409` with the
+conflicting operation IDs.
 
 **Response:** `202 Accepted` with `{ "queue_id": "q-...", "operations": [ ... ] }`. Each operation contains `op_id`, `kind`, `source`, `queue_id`, `position`, `status`, `progress` (`current`, `total`, `message`), `logs`, `error`, `result`, `scope`, and `cancellable`. `GET /api/operations` returns `{ "operations": [ ... ] }` with the current snapshot. Status values are `queued`, `running`, `done`, `error`, and `cancelled`; do not infer completion from the HTTP 202 response.
 
@@ -1848,6 +2037,7 @@ reserved for the route below and is rejected as a run ID.
 GET /api/refresh-runs
 GET /api/refresh-runs/latest
 GET /api/refresh-runs/<run_id>
+GET /api/refresh-runs/<run_id>/metadata
 GET /api/refresh-runs/<run_id>/export?format=json|csv
 ```
 
@@ -1863,8 +2053,10 @@ filtered changes without pagination. Coverage is never truncated or affected
 by source/field/kind/change-type filters.
 
 When no retained run matches, `GET /api/refresh-runs/latest` returns HTTP `200`
-with JSON `null`. Exact-run detail and export requests still return HTTP `404`
-for unavailable, expired or out-of-scope runs; they never substitute another run.
+with JSON `null`. Exact-run detail, metadata, and export requests return HTTP
+`404` for unavailable, expired or out-of-scope runs; they never substitute
+another run. The metadata endpoint uses the list entry shape without loading
+coverage, package links, or change bodies.
 
 Detail/latest responses have this shape:
 
@@ -1881,7 +2073,8 @@ Detail/latest responses have this shape:
     {"source": "epss", "vuln_id": "CVE-2020-35492", "status": "complete",
      "error": null, "packages": []}
   ],
-  "summary": {"total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0},
+  "summary": {"refreshed_vulnerabilities": 1, "no_record_vulnerabilities": 0,
+              "total_changes": 1, "changed_vulnerabilities": 1, "first_enrichments": 0},
   "changes": [
     {"vuln_id": "CVE-2020-35492", "source": "epss", "field": "epss_score",
      "before": 0.1, "after": 0.2, "kind": "changed", "change_type": "modification",
@@ -1898,14 +2091,25 @@ and `summary` but no `coverage`, `changes`, `total`, `limit` or `offset`, so a
 page only costs work for the runs it contains. Summary counts cover
 the complete filtered change set, not just the current page; changed CVEs include
 first enrichments. A zero-change run with complete coverage is successful.
-`running` means sources remain pending; `incomplete` means some source/target was
-not successfully checked. Coverage statuses are `pending`, `complete`, `failed`,
+`refreshed_vulnerabilities` counts distinct identifiers with at least one
+`complete` outcome in scope. `no_record_vulnerabilities` counts distinct
+identifiers with at least one `no_record` outcome in scope. One identifier can
+count in both fields if its provider outcomes differ.
+`running` means sources remain pending; `incomplete` means a source did not
+finish successfully or a target has an unverified outcome.
+Explicitly unsupported identifiers remain in coverage as `skipped` with a reason,
+but are neither checked nor gaps. A verified NVD or EPSS miss is `no_record`:
+it does not create a gap or supply a baseline for comparison. Failed or
+unverified lookups and historical skips without verified reasons remain gaps.
+Coverage statuses are `pending`, `complete`, `no_record`, `failed`,
 `skipped` or `cancelled`; source statuses are `pending`, `complete` or `incomplete`.
 Provider absence is not evidence of a removal.
 
 Snapshots share the originating data-write transaction and store both sides,
 including CVSS vectors under `cvss:<version>:<author>:<metric_id>`. Later refreshes,
-live-data deletion, or field-history pruning cannot change an artifact.
+live-data deletion, or field-history pruning cannot change the recorded outcomes.
+Run and source summaries can correct an older incomplete label if its only gaps
+were explicitly recorded as unsupported.
 Unavailable, expired or out-of-scope exact runs return `404`, never another run.
 The default retention window is 90 days; see
 [CLI archival and cleanup](cli-refresh-runs.md).
@@ -2192,8 +2396,9 @@ DELETE /api/agent/conversations
 POST /api/agent/conversations/main/reset
 ```
 
-The server runs AI requests (assess and review actions, chat messages) from one process-wide queue shared by
-every local client, the web UI and the CLI. Actions and messages run on two lanes, one request at a time per lane;
+The server runs AI requests from one process-wide queue shared by the web UI
+and CLI. Up to five independent actions (`assess`, `review`, or `context-import`)
+can run at once, in any combination. The chat lane runs one message independently;
 the requests of one conversation run in order. These routes have the same localhost/origin checks and
 `Cache-Control: no-store` as the other agent routes, but return `503` until the import finishes, except the stream.
 The queue is process-local: a restart forgets it.
@@ -2215,8 +2420,10 @@ POST queues actions:
 }
 ```
 
-Assess and review actions go to `per-action` (one new conversation per action key); a message
+Assess, review and context-import actions go to `per-action` (one new conversation per action key); a message
 (`{"kind":"message","text":"..."}`, at most 8000 characters) goes to `main` or to an existing conversation ID.
+A `context-import` action's `text` prompt is at most 8000 characters and may contain line feeds (LF) and
+horizontal tabs. Other control characters are rejected.
 `source` (at most 100 characters) names the client. `actions` lists 1 to 500 actions; each may set a `key`
 (at most 500 characters, derived from the action otherwise) and its own `context`. Assess actions take an optional
 `targets` list of `{variant_id, package}` pairs (the active targets in scope otherwise); `vuln_id` is uppercased.

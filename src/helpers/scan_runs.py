@@ -9,6 +9,7 @@ from typing import Callable, Iterator
 
 from ..extensions import db
 from ..models.scan import Scan
+from ..models.variant import lock_scan_membership
 
 
 @contextmanager
@@ -34,6 +35,7 @@ def tool_scan(
     scan_id = scan.id
     try:
         yield scan
+        lock_scan_membership([variant_id])
         persisted_scan = db.session.get(Scan, scan_id)
         if persisted_scan is not None:
             persisted_scan.in_progress = False
@@ -42,6 +44,7 @@ def tool_scan(
         db.session.rollback()
         for cleanup in failure_cleanups or ():
             cleanup()
+        lock_scan_membership([variant_id])
         persisted_scan = db.session.get(Scan, scan_id)
         if persisted_scan is not None:
             db.session.delete(persisted_scan)

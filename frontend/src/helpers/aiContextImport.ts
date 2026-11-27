@@ -31,7 +31,7 @@ export function contextImportMessage({ projectId, projectName, variantId, varian
 
 /**
  * The editor draft an AI draft turns into: null Context texts keep the saved
- * value, and the codebase settings always come from the saved context.
+ * value.
  */
 export function applyAiDraft(baseline: VariantDraft, values: AiContextDraftValues): VariantDraft {
     return {

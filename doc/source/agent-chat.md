@@ -31,11 +31,64 @@ only the skill files and fetch public `http(s)` pages; loopback, private,
 link-local and other non-public addresses are refused, and redirect targets rely
 on the Copilot runtime's own private-address guard. Set
 `VULNSCOUT_AGENT_WEB_ACCESS` to `off` (or `0`, `false`, `no`) to disable web
-fetch; the skills then report missing NVD/advisory evidence. Shell tools and
-host filesystem access stay disabled. Uploaded source is inspected through
-scoped codebase-reference tools, without extraction or execution. **Codebase
-Path** is an external-client hint, not a container mount. Dependency discovery
+fetch; the skills then report missing NVD/advisory evidence. The embedded agent
+uses `list_codebase_children` for navigation, direct reads for known paths, and
+`list_codebase_files` for filename matching in a narrowed folder. Use `search_codebase_file` directly
+for a literal in a known log, even over the 10 MiB direct-read limit. Follow `next_cursor` until
+`complete`; neither snapshot exhaustion nor a timeout establishes absence. For a known
+artifact requiring command-line inspection it can use `run_codebase_shell` on a filtered, read-only snapshot
+of an explicitly approved host folder attached to the variant. The host helper
+starts a separate container for each command with no network, a read-only root,
+no Linux capabilities, an unprivileged user, and bounded time, output, memory,
+processes and temporary storage. It never mounts the application cache or
+credentials. Direct host filesystem access and the SDK's built-in shell remain
+disabled. Uploaded source is inspected through scoped codebase-reference tools,
+without extraction or execution. A path in a prompt cannot grant host access. Dependency discovery
 does not establish runtime use or exploitability.
+
+The worker requires the host helper and a local Docker or Podman engine; it fails
+closed if unavailable. Build the current image and start VulnScout with the
+matching launcher, then start the helper with `./vulnscout ai-context helper start`.
+Only `mount:<alias>` supports the shell; uploads cannot run commands. The default shell snapshot
+cap is **512 MiB** across all copied files, independent of
+the 10 MiB direct-read limit. On the host, for example, run
+`./vulnscout config set VULNSCOUT_SHELL_SNAPSHOT_MIB 768` followed by
+`./vulnscout ai-context helper restart`. The setting takes a positive integer in MiB.
+Narrow `folder` if copying reaches its byte, 500,000-entry or 10-second snapshot limit.
+The snapshot includes single-link regular `.config` files, never directories of that name.
+Other hidden and sensitive names, symlinks and special files are excluded; unreadable files,
+hardlinks encountered during copying and incomplete walks fail the snapshot.
+Stopping or restarting the helper drains active shell jobs before removing its socket.
+After an unclean exit, startup removes abandoned helper-owned snapshots; active leases and
+unrelated directories in the state folder are left alone.
+Commands time out after 15 seconds and output is limited to 64 KiB. Snapshot
+exclusions and truncation prevent conclusions from a missing match. The worker
+may run arbitrary programs inside the container: container isolation is not a
+virtual machine and does not eliminate kernel or runtime vulnerabilities.
+The snapshot is not atomic across the tree; avoid changing source while it is
+being inspected.
+
+To reproduce navigation and evidence selection without a model, run these tests
+from the checkout with `requirements/dev.txt` installed. They use synthetic
+build metadata and temporary directories, not a developer's build or live CVE data:
+
+```sh
+python -m pytest -q \
+  tests/unit_tests/test_host_mount_helper.py::test_shallow_pages_bound_actual_work_and_do_not_open_children \
+  tests/unit_tests/test_host_mount_helper.py::test_excluded_children_progress_and_scope \
+  tests/unit_tests/test_host_mounts.py::TestSourceBrowsing
+```
+
+On a local Podman host, also test the real isolated worker and launcher with a
+disposable image. The tests do not require an existing VulnScout service:
+
+```sh
+podman build -t localhost/vulnscout:worker-check .
+VULNSCOUT_TEST_SHELL_IMAGE=localhost/vulnscout:worker-check python -m pytest -q \
+  tests/unit_tests/test_read_only_shell.py \
+  tests/unit_tests/test_host_mounts.py::test_attached_folder_shell_end_to_end
+podman rmi localhost/vulnscout:worker-check
+```
 
 ```{warning}
 With web fetch enabled, the model that reads your project data can also request
@@ -78,8 +131,9 @@ in `config.env`. Copilot may also keep SDK session state in its local directory.
 Without `VULNSCOUT_CONFIG`, standalone Flask stores configuration in
 `$XDG_CONFIG_HOME/vulnscout/config.env` (default `~/.config/vulnscout/config.env`);
 no root access is needed. Set `VULNSCOUT_CONFIG` to use another writable file.
-The container entrypoint explicitly uses `/etc/vulnscout/config.env`, bind-mounted
-from the host cache. Persisted configuration is owner-readable/writable only
+The wrapper sets `VULNSCOUT_CONFIG=/cache/vulnscout/config.env` inside the
+container, so the settings persist in the mounted cache. Without the wrapper,
+the entrypoint defaults to `/etc/vulnscout/config.env`. Persisted configuration is owner-readable/writable only
 (`0600`); both CLI `--config-list` paths redact `AI_AUTH_CREDENTIALS`.
 
 AI settings are read from this file on restart, not copied into container
@@ -256,13 +310,23 @@ text response is not proof of persistence.
 ## AI Queue and Streaming
 
 The server keeps one AI queue per process (`agent_queue`), shared by every tab
-and CLI run. Requests run on two lanes, each with one worker thread: `action`
-(assess and review, one at a time) and `chat` (messages), so a chat never waits
-behind an action. A request also waits for the earlier requests of its own
-conversation. A failed request blocks nothing and stays listed for retry or
+and CLI run. Assessments, reviews and context imports share five `action` slots.
+Independent actions can run together. An assessment waits for an assessment or
+review on an overlapping variant/finding target; reviews of the same assessment
+and imports into the same variant also run one at a time.
+The `chat` lane runs one message, so a chat never waits
+behind an action in a different conversation. Each turn holds its lane slot,
+conversation and target reservations until session cleanup finishes.
+A failed request then blocks nothing and stays listed for retry or
 removal; **Stop** cancels a running turn's task, which ends `cancelled` with
-what it saved. When no request can run (no AI configuration, invalid
-configuration, GitHub signed out), the queue is paused with a reason; sign-in,
+what it saved. Action workers waiting on the same successful readiness check
+can each start an eligible action without repeating provider discovery.
+Chat checks readiness independently of actions. Resuming the queue or removing
+the request being checked frees waiting workers to check the next eligible
+request without waiting for the old provider call to return.
+A failed check pauses the queue only if the request still
+qualifies to run on that connection. The pause includes a reason (no AI
+configuration, invalid configuration, or GitHub signed out); sign-in,
 provider and model changes resume it.
 
 Clients mirror the queue through `GET /api/agent/queue/stream` (server-sent

@@ -5,8 +5,8 @@ import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEyeSlash, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
-import RefreshRuns from '../handlers/refreshRuns';
-import type { RefreshChange, RefreshCoverage, RefreshFilters, RefreshRun, RefreshRunList } from '../handlers/refreshRuns';
+import RefreshRuns, { incompleteSources } from '../handlers/refreshRuns';
+import type { RefreshChange, RefreshCoverage, RefreshFilters, RefreshRun, RefreshRunList, RefreshRunMetadata } from '../handlers/refreshRuns';
 import { describeChange, fieldLabel, formatHistoryValue, sourceLabel } from '../handlers/vulnerabilityHistory';
 import { ROUTES } from '../routes';
 import RefreshControls from '../components/RefreshControls';
@@ -47,9 +47,19 @@ function counts(coverage: RefreshCoverage[]) {
     const distinct = (statuses?: RefreshCoverage['status'][]) =>
         new Set(coverage.filter(row => !statuses || statuses.includes(row.status)).map(row => row.vuln_id)).size;
     return {
-        Targeted: distinct(), Checked: distinct(['complete']), Skipped: distinct(['skipped']),
+        Targeted: distinct(), Checked: distinct(['complete']), 'No record': distinct(['no_record']), Skipped: distinct(['skipped']),
         Failed: distinct(['failed']), Cancelled: distinct(['cancelled']), Pending: distinct(['pending']),
     };
+}
+
+function coverageStatus(status: RefreshRunMetadata['status']) {
+    if (status === 'running') return 'In progress';
+    return status === 'incomplete' ? 'Incomplete coverage' : 'Coverage complete';
+}
+
+function coverageWarning(run: RefreshRunMetadata) {
+    const providers = incompleteSources(run).map(sourceLabel).join(', ');
+    return `Run finished with incomplete coverage${providers ? ` for ${providers}` : ''}.`;
 }
 
 function changeLabel(change: RefreshChange): string {
@@ -86,9 +96,13 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
     const [loading, setLoading] = useState(true);
     const [pageLoading, setPageLoading] = useState(false);
     const [section, setSection] = useState<'overview' | 'coverage' | 'changes'>('changes');
+    const [showAllCoverage, setShowAllCoverage] = useState(false);
 
     useEffect(() => { setListOffset(0); }, [projectId, variantId]);
-    useEffect(() => { setSection('changes'); }, [runId, projectId, variantId]);
+    useEffect(() => {
+        setSection('changes');
+        setShowAllCoverage(false);
+    }, [runId, projectId, variantId]);
 
     useEffect(() => {
         if (comparisonScope) return;
@@ -150,8 +164,8 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
     const summary = run ? counts(run.coverage) : null;
     const sourceNames = run ? [...new Set([...run.sources, ...Object.keys(run.source_status), ...run.coverage.map(row => row.source)])] : [];
     const incomplete = run?.status === 'incomplete';
-    const cancelled = run?.coverage.some(row => row.status === 'cancelled');
-    const failed = run?.coverage.some(row => row.status === 'failed');
+    const shownCoverage = section === 'coverage' && incomplete && !showAllCoverage
+        ? run.coverage.filter(row => row.status !== 'complete') : run?.coverage ?? [];
     const closeResult = () => setParams(previous => {
         const next = new URLSearchParams(previous);
         next.delete('run');
@@ -220,7 +234,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                                     {item.refresh_type === 'individual' ? 'Individual refresh' :
                                         item.refresh_type === 'full' ? 'Full refresh' : 'Refresh type unknown'}
                                 </span>
-                                <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${item.status === 'incomplete' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300'}`}>{item.status}</span>
+                                <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${item.status === 'incomplete' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300'}`}>{coverageStatus(item.status)}</span>
                                 {item.sources.map(name => <span key={name}
                                     className={`rounded-full px-2 py-0.5 text-xs font-semibold ${sourceStyles[name]?.badge ?? 'bg-gray-100 dark:bg-neutral-800'}`}>{sourceLabel(name)}</span>)}
                             </div>
@@ -247,7 +261,7 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                                 {item.status === 'running'
                                     ? <p className="text-cyan-600 dark:text-cyan-400">Refresh in progress · only committed changes are counted.</p>
                                     : item.status === 'incomplete'
-                                        ? <p className="text-amber-700 dark:text-amber-300">Incomplete coverage · inspect provider outcomes before concluding data is unchanged.</p>
+                                        ? <p className="text-amber-700 dark:text-amber-300">{coverageWarning(item)} Open the result’s Coverage tab for details.</p>
                                         : <p className="text-neutral-500 dark:text-neutral-400">Refresh complete · view the result for coverage and before/after values.</p>}
                             </div>
                         </article>
@@ -269,21 +283,20 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
             {!loading && !error && !run && <p role="status">No refresh has been recorded in this scope. Run Refresh Vulnerability Data to begin.</p>}
         </>}
         {runId && <ModalShell isOpen title="Refresh Result" size="fullscreen" onClose={closeResult}
-            subtitle={run?.run_id === runId ? `${formatDate(run.started_at)} · ${run.sources.map(sourceLabel).join(', ')} · ${run.status}` : undefined}
+            subtitle={run?.run_id === runId ? `${formatDate(run.started_at)} · ${run.sources.map(sourceLabel).join(', ')} · ${coverageStatus(run.status)}` : undefined}
             testId="refresh-result-modal-backdrop"
             contentClassName="flex min-h-0 flex-1 flex-col p-0 md:p-0"
-            headerActions={<ModalButton onClick={() => { retryResult(); retryList(); }}>Reload results</ModalButton>}
             footer={<ModalActions><ModalButton onClick={closeResult}>Close</ModalButton></ModalActions>}>
-            {run?.run_id === runId && <nav aria-label="Refresh result sections" className="flex flex-wrap border-b border-gray-600 px-4">
+            {run?.run_id === runId && <nav aria-label="Refresh result sections" className="flex shrink-0 flex-wrap border-b border-gray-600 px-4">
                 <button type="button" className={tabClass('changes')} aria-pressed={section === 'changes'} onClick={() => setSection('changes')}>
                     Changes <span className="ml-2 rounded-full bg-cyan-900/40 px-1.5 py-0.5 text-xs text-cyan-300">{run.summary.total_changes.toLocaleString()}</span>
                 </button>
                 <button type="button" className={tabClass('coverage')} aria-pressed={section === 'coverage'} onClick={() => setSection('coverage')}>
-                    Coverage <span className="ml-2 rounded-full bg-cyan-900/40 px-1.5 py-0.5 text-xs text-cyan-300">{run.coverage.length.toLocaleString()}</span>
+                    Coverage <span className="ml-2 rounded-full bg-cyan-900/40 px-1.5 py-0.5 text-xs text-cyan-300">{summary?.Targeted.toLocaleString()}</span>
                 </button>
                 <button type="button" className={tabClass('overview')} aria-pressed={section === 'overview'} onClick={() => setSection('overview')}>Overview</button>
             </nav>}
-            <div className="p-4 md:p-5 space-y-4 text-gray-300 flex-1 overflow-auto">
+            <div className={`p-4 md:p-5 text-gray-300 min-h-0 flex-1 overflow-auto ${section === 'coverage' ? 'flex flex-col gap-4' : 'space-y-4'}`}>
             {loading && <p role="status">Loading refresh results…</p>}
             {error && <div role="alert" className="flex items-center gap-3">
                 <p>{error}</p>
@@ -291,15 +304,15 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
             </div>}
             {!loading && !error && !run && <p role="status">Requested refresh run is unavailable in this scope. No other run has been substituted.</p>}
             {run?.run_id === runId && <>
-            {run.status === 'running' && <p role="status">Refresh in progress. Only committed changes are shown. Reload results to see progress.</p>}
-            {incomplete && <p role="alert">Incomplete refresh{cancelled ? ' — cancelled coverage' : ''}{failed ? ' — source failures' : ''}. Committed changes are shown below, but coverage gaps are not evidence of unchanged data or removals.</p>}
-            {run.summary.first_enrichments > 0 && <p role="status">First enrichment: {run.summary.first_enrichments} values had no recorded previous value. No baseline exists for those fields. These are additions, not modifications.</p>}
+            {run.status === 'running' && <p role="status" className="shrink-0">Refresh in progress. Only committed changes are shown.</p>}
+            {incomplete && <p role="alert" className="shrink-0 text-amber-300">{coverageWarning(run)} Coverage gaps do not imply unchanged data or removals.{section !== 'coverage' && ' Select Coverage to see provider outcomes.'}</p>}
+            {run.summary.first_enrichments > 0 && <p role="status" className="shrink-0">First enrichment: {run.summary.first_enrichments} values had no recorded previous value. No baseline exists for those fields. These are additions, not modifications.</p>}
             {section === 'overview' && <>
                 <div className="overflow-auto rounded border border-gray-600">
                     <table aria-label="Refresh metadata" className="w-full text-xs text-left">
                         <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr><th className="px-3 py-2">Property</th><th className="px-3 py-2">Value</th></tr></thead>
                         <tbody>
-                            <tr className="border-t border-gray-600"><th scope="row" className="px-3 py-2">Status</th><td className="px-3 py-2">{run.status}</td></tr>
+                            <tr className="border-t border-gray-600"><th scope="row" className="px-3 py-2">Status</th><td className="px-3 py-2">{coverageStatus(run.status)}</td></tr>
                             <tr className="border-t border-gray-600"><th scope="row" className="px-3 py-2">Sources</th><td className="px-3 py-2">{run.sources.map(sourceLabel).join(', ') || 'None'}</td></tr>
                             <tr className="border-t border-gray-600"><th scope="row" className="px-3 py-2">Started</th><td className="px-3 py-2"><time dateTime={run.started_at}>{formatDate(run.started_at)}</time></td></tr>
                             <tr className="border-t border-gray-600"><th scope="row" className="px-3 py-2">Finished</th><td className="px-3 py-2">{run.finished_at ? <time dateTime={run.finished_at}>{formatDate(run.finished_at)}</time> : 'Not finished'}</td></tr>
@@ -316,33 +329,48 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                 <p className="text-sm">Each vulnerability is counted once per category. A vulnerability may appear in several categories if providers have different outcomes.</p>
             </>}
             {section === 'coverage' && <>
-                <h3 className="font-bold text-base">Per-source coverage and gaps</h3>
-                <div className="overflow-auto max-h-80 rounded border border-gray-600">
+                <h3 className="shrink-0 font-bold text-base">Per-source coverage and gaps</h3>
+                <p className="shrink-0 text-sm">No record means a successful lookup returned no data for that identifier. This and explicit unsupported identifiers are not coverage gaps or removals. Unverified skips and failures still leave gaps.</p>
+                <div className="shrink-0 overflow-auto max-h-80 rounded border border-gray-600">
                     <table aria-label="Provider coverage" className="w-full text-xs text-left">
                         <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
-                            {['Source', 'Status', 'Targeted', 'Checked', 'Skipped', 'Failed', 'Cancelled', 'Pending'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
+                            {['Source', 'Status', 'Targeted', 'Checked', 'No record', 'Skipped', 'Failed', 'Cancelled', 'Pending'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
                         </tr></thead>
-                        <tbody>{sourceNames.map(name => <tr key={name} className="border-t border-gray-600 hover:bg-gray-600/40">
-                            <th scope="row" className="px-3 py-2">{sourceLabel(name)}</th>
-                            <td className="px-3 py-2">{run.source_status[name] ?? 'pending'}
-                                {run.source_status[name] === 'incomplete' && <p className="mt-1 text-amber-300">This source has incomplete coverage. Inspect target outcomes and operation logs. Missing or deferred responses are coverage gaps, not removals.</p>}
-                            </td>
-                            {Object.entries(counts(run.coverage.filter(row => row.source === name))).map(([label, count]) => <td key={label} className="px-3 py-2 tabular-nums">{count}</td>)}
-                        </tr>)}</tbody>
+                        <tbody>{sourceNames.map(name => {
+                            const outcomes = counts(run.coverage.filter(row => row.source === name));
+                            const status = run.source_status[name] ?? 'pending';
+                            return <tr key={name} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                <th scope="row" className="px-3 py-2">{sourceLabel(name)}</th>
+                                <td className="px-3 py-2">{status === 'incomplete' ? <div className="text-amber-300">
+                                    Incomplete coverage
+                                    {outcomes.Targeted === outcomes.Checked + outcomes['No record'] && <p>Check operation logs; no unresolved target is recorded in this scope.</p>}
+                                </div> : status}
+                                </td>
+                                {Object.entries(outcomes).map(([label, count]) => <td key={label} className="px-3 py-2 tabular-nums">{count}</td>)}
+                            </tr>;
+                        })}</tbody>
                     </table>
                 </div>
-                {!run.coverage.length ? <p>No targeted vulnerabilities recorded.</p> : <div className="overflow-auto max-h-80 rounded border border-gray-600">
-                    <table aria-label="Vulnerability coverage" className="w-full text-xs text-left">
-                        <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
-                            {['Vulnerability', 'Source', 'Outcome', 'Error'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
-                        </tr></thead>
-                        <tbody>{run.coverage.map((row, index) => <tr key={`${row.source}-${row.vuln_id}-${index}`} className="border-t border-gray-600 hover:bg-gray-600/40">
-                            <td className="px-3 py-2 font-mono">{row.vuln_id}</td>
-                            <td className="px-3 py-2">{sourceLabel(row.source)}</td>
-                            <td className="px-3 py-2">{row.status}</td>
-                            <td className="px-3 py-2 break-words">{row.error ?? '—'}</td>
-                        </tr>)}</tbody>
-                    </table>
+                {incomplete && run.coverage.length > 0 && <button type="button" className={`${control} shrink-0 self-start`}
+                    onClick={() => setShowAllCoverage(value => !value)}>
+                    {showAllCoverage ? 'Show unchecked outcomes only' : 'Show all target outcomes'}
+                </button>}
+                {!shownCoverage.length ? <p className="shrink-0">{run.coverage.length ? 'No unchecked targets recorded in this scope.' : 'No targeted vulnerabilities recorded.'}</p>
+                    : <div className="flex min-h-32 flex-1 flex-col rounded border border-gray-600">
+                    {incomplete && !showAllCoverage && <p className="shrink-0 px-3 py-2 text-sm">Showing unchecked targets and recorded reasons.</p>}
+                    <div className="min-h-0 flex-1 overflow-auto" role="region" aria-label="Target outcomes" tabIndex={0}>
+                        <table aria-label="Vulnerability coverage" className="w-full text-xs text-left">
+                            <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
+                                {['Vulnerability', 'Source', 'Outcome', 'Reason'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
+                            </tr></thead>
+                            <tbody>{shownCoverage.map((row, index) => <tr key={`${row.source}-${row.vuln_id}-${index}`} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                <td className="px-3 py-2 font-mono">{row.vuln_id}</td>
+                                <td className="px-3 py-2">{sourceLabel(row.source)}</td>
+                                <td className="px-3 py-2">{row.status === 'no_record' ? 'No record' : row.status}</td>
+                                <td className="px-3 py-2 break-words">{row.error ?? '—'}</td>
+                            </tr>)}</tbody>
+                        </table>
+                    </div>
                 </div>}
             </>}
             {section === 'changes' && <>
@@ -366,6 +394,12 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                     ? 'No changes match these filters.'
                     : run.status === 'complete' && run.coverage.length === 0
                         ? 'No vulnerabilities were targeted in this scope. No comparison baseline is available.'
+                    : run.status === 'complete' && summary?.['No record']
+                        ? summary.Checked === 0
+                            ? 'No provider records were returned. No comparison baseline is available.'
+                            : 'No changes were recorded for returned records. Lookups that returned no record cannot be compared.'
+                    : run.status === 'complete' && summary?.Checked === 0
+                        ? 'No provider checks were performed in this scope. No comparison baseline is available.'
                     : run.status === 'complete'
                         ? 'Refresh complete: zero changes. Checked data is unchanged.'
                         : 'No committed changes recorded yet. Coverage is incomplete. Unchanged data cannot be concluded.'}</p>}

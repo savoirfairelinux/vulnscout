@@ -117,6 +117,16 @@ def test_every_route_rejects_remote_clients_and_foreign_origins(env, method, pat
     assert response.get_json()["error"] == "Invalid request origin."
 
 
+@pytest.mark.parametrize("method,path", ROUTES)
+def test_queue_rejects_forwarded_clients_without_loopback_publication(env, method, path, monkeypatch, tmp_path):
+    from src.routes import agent
+
+    monkeypatch.setattr(agent, "_container_gateway", lambda: "192.0.2.1")
+    monkeypatch.setattr(agent, "_LOOPBACK_PUBLICATION", tmp_path / "absent")
+    response = getattr(env.client, method)(path, environ_overrides={"REMOTE_ADDR": "192.0.2.1"})
+    assert response.status_code == 403
+
+
 # ---------------------------------------------------------------- submit
 
 

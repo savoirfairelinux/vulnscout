@@ -103,11 +103,13 @@ def test_sdk_exposes_only_scoped_reference_and_dependency_tools(monkeypatch):
         agent.Conversation(), "Inspect uploaded source", agent._mcp_path(), "model", scope,
     ))
     assert response == "Source inspected"
-    source_tools = {"list_codebase_files", "read_codebase_file", "search_codebase"}
+    source_tools = {"list_codebase_children", "list_codebase_files", "read_codebase_file", "read_codebase_files",
+                    "search_codebase", "search_codebase_file", "run_codebase_shell"}
     assert source_tools <= set(captured["mcp_servers"]["vulnscout"]["tools"])
     assert {f"mcp:vulnscout-{name}" for name in source_tools} <= set(captured["available_tools"])
     assert all(name.startswith("mcp:vulnscout-") for name in captured["available_tools"])
     assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SCOPE"] == scope
+    assert captured["mcp_servers"]["vulnscout"]["env"]["VULNSCOUT_AGENT_SHELL"] == "1"
     assert captured["enable_skills"] is False
     assert captured["on_permission_request"].__name__ == "approve_all" and "custom_agents" not in captured
     assert "untrusted evidence" in captured["system_message"]["content"]
@@ -144,12 +146,13 @@ def test_agent_rejects_remote_requests(client):
     assert response.status_code == 403
 
 
-def test_agent_accepts_container_gateway(client):
+def test_agent_accepts_container_gateway(client, monkeypatch):
     from src.routes.agent import _container_gateway
 
     gateway = _container_gateway()
     if gateway is None:
         pytest.skip("Container gateway not available")
+    monkeypatch.setattr("src.routes.agent._LOOPBACK_PUBLICATION", Path("/"))
     response = client.get("/api/agent", environ_overrides={"REMOTE_ADDR": gateway})
     assert response.status_code == 200
 
@@ -157,6 +160,7 @@ def test_agent_accepts_container_gateway(client):
 def test_agent_accepts_pasta_forwarded_host_but_rejects_remote(client, monkeypatch):
     from src.routes import agent
 
+    monkeypatch.setattr(agent, "_LOOPBACK_PUBLICATION", Path("/"))
     monkeypatch.setattr(agent, "_container_gateway", lambda: "192.0.2.1")
     monkeypatch.setattr(agent, "_container_host_forward_ip", lambda gateway: "192.0.2.2")
     local = {"REMOTE_ADDR": "192.0.2.2"}
@@ -989,9 +993,7 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
             chosen_id, file_id, {"operation": "read", "path": "main.c", "start_line": 2},
         )
         assert source["content"] == "unsafe_call();\n"
-        matches = agent_client.get_codebase_source(
-            chosen_id, file_id, {"operation": "search", "query": "unsafe_call"},
-        )
+        matches = agent_client.get_codebase_source(chosen_id, file_id, {"operation": "search", "query": "unsafe_call"})
         assert matches["matches"] == [{"path": "main.c", "line": 2, "text": "unsafe_call();"}]
         with pytest.raises(VulnScoutError, match="outside"):
             agent_client.get_codebase_source(other_id, other_file_id, {"operation": "list"})
@@ -999,21 +1001,15 @@ def test_scoped_agent_mcp_reads_and_writes_against_live_backend(client, monkeypa
             agent_client.get_codebase_source(chosen_id, other_file_id, {"operation": "list"})
         directory = tmp_path / "context-Project-A-Chosen"
         directory.mkdir()
-        (directory / "source.c").write_text("first\nvulnerable_call();\n")
+        legacy_file = directory / "source.c"
+        legacy_file.write_text("legacy source\n")
         context = agent_client.get_merged_context(project_id, chosen_id)
         assert context["files"][0]["id"] == file_id
-        assert not {"codebase_source", "codebase_path"} & context["editor"].keys()
-        directory_id = context["codebase_directory"]["file_id"]
-        listing = json.loads(_codebase_source_impl(agent_client, chosen_id, directory_id, {"operation": "list"}))
-        assert listing["files"] == [{"path": "source.c", "size": 25}]
-        matches = agent_client.get_codebase_source(
-            chosen_id, directory_id, {"operation": "search", "query": "vulnerable_call"})
-        assert matches["matches"] == [{"path": "source.c", "line": 2, "text": "vulnerable_call();"}]
-        source = agent_client.get_codebase_source(
-            chosen_id, directory_id, {"operation": "read", "path": "source.c", "start_line": 2})
-        assert source["content"] == "vulnerable_call();\n"
-        with pytest.raises(VulnScoutError, match="outside"):
-            agent_client.get_codebase_source(other_id, directory_id, {"operation": "list"})
+        assert "codebase_directory" not in context
+        assert context["mounts"] == []
+        with pytest.raises(VulnScoutError, match="file_id"):
+            agent_client.get_codebase_source(chosen_id, "directory", {"operation": "list"})
+        assert legacy_file.read_text() == "legacy source\n"
         assessments = agent_client.list_assessments_by_vuln("CVE-2024-1234")
         assert [assessment["id"] for assessment in assessments] == [shared_id]
         assert assessments[0]["variant_ids"] == [chosen_id]
@@ -1432,7 +1428,8 @@ def test_ephemeral_action_profile_turn_limits_tools_and_deletes_its_session(monk
     assert server["env"]["VULNSCOUT_BASE_URL"] == "http://127.0.0.1:4321"
     assert captured["available_tools"] == ([f"mcp:vulnscout-{tool}" for tool in tools]
                                            + ["builtin:skill", "builtin:view", "builtin:web_fetch"])
-    assert {"get_merged_context", "list_codebase_files", "search_codebase", "read_codebase_file"} <= set(tools)
+    assert {"get_merged_context", "list_codebase_children", "list_codebase_files", "read_codebase_file",
+            "run_codebase_shell"} <= set(tools)
     assert not (set(agent.WRITE_TOOLS) - set(profile.write_tools)) & set(tools)
     assert captured["enable_skills"] is True and captured["agent"] == f"vulnscout-{action}"
     assert captured["custom_agents"][0]["skills"] == list(profile.skills)

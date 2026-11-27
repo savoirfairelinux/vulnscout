@@ -83,10 +83,11 @@ class VariantContextController:
         )
 
     @staticmethod
-    def save_editor(variant_id: uuid.UUID | str, payload: dict, commit: bool = True) -> VariantContext:
+    def save_editor(variant_id: uuid.UUID | str, payload: dict, commit: bool = True, *,
+                    replace_empty_model: bool = True) -> VariantContext:
         vid = ensure_uuid(variant_id)
         VariantContextController._get_variant(vid)
-        return VariantContext.save_editor(vid, payload, commit=commit)
+        return VariantContext.save_editor(vid, payload, commit=commit, replace_empty_model=replace_empty_model)
 
     @staticmethod
     def serialize(vc: VariantContext) -> dict:
