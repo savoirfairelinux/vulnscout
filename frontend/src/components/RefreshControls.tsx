@@ -18,7 +18,7 @@ type Props = {
 
 export default function RefreshControls(props: Readonly<Props>) {
     const operations = useSyncExternalStore(subscribe, getSnapshot);
-    const [banner, setBanner] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+    const [banner, setBanner] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
     const progress = Object.fromEntries(vulnerabilityRefreshSources.map(({ source }) => [
         source, operations.some(operation => operation.op_id === `refresh:${source}`) ? refreshProgressOf(source) : null,
     ]));

@@ -30,6 +30,9 @@ export type RefreshRunMetadata = {
     status: 'running' | 'complete' | 'incomplete';
     summary: { refreshed_vulnerabilities?: number; total_changes: number; changed_vulnerabilities: number; first_enrichments: number };
 };
+export const incompleteSources = (run: RefreshRunMetadata): string[] =>
+    Object.keys(run.source_status).filter(source => run.source_status[source] === 'incomplete');
+
 export type RefreshRun = RefreshRunMetadata & {
     coverage: RefreshCoverage[];
     changes: RefreshChange[];

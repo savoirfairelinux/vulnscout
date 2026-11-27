@@ -291,21 +291,29 @@ describe('Refresh overview', () => {
         expect(screen.getByText(/Long value Long value/)).toHaveClass('max-h-48');
     });
 
-    test('retains committed changes in partial/cancelled/failed runs and exposes gaps', async () => {
-        const partial: RefreshRun = { ...run, status: 'incomplete', coverage: [
+    test('retains committed changes and makes unchecked provider outcomes easy to find', async () => {
+        const partial: RefreshRun = { ...run, status: 'incomplete',
+            source_status: { nvd: 'incomplete', epss: 'incomplete' }, coverage: [
             ...run.coverage,
-            { source: 'epss', vuln_id: 'CVE-2', status: 'cancelled', error: null },
-            { source: 'nvd', vuln_id: 'CVE-3', status: 'failed', error: 'Provider unavailable' },
+            { source: 'nvd', vuln_id: 'CVE-2', status: 'skipped', error: 'Provider record unavailable' },
+            { source: 'epss', vuln_id: 'CVE-2', status: 'skipped', error: 'Provider record unavailable' },
+            { source: 'epss', vuln_id: 'CVE-3', status: 'failed', error: 'Provider request failed' },
+            { source: 'nvd', vuln_id: 'CVE-4', status: 'cancelled', error: null },
         ] };
         latest.mockResolvedValue(partial);
         detail.mockResolvedValue(partial);
         show();
         await openResult();
-        expect(await screen.findByRole('alert')).toHaveTextContent('Incomplete refresh — cancelled coverage — source failures');
+        expect(await screen.findByRole('alert')).toHaveTextContent('Run finished with incomplete coverage for NVD, EPSS.');
         expect(await screen.findByText('New description')).toBeInTheDocument();
         await selectSection('Coverage');
-        expect(within(screen.getByRole('table', { name: 'Vulnerability coverage' }))
-            .getByRole('row', { name: 'CVE-3 NVD failed Provider unavailable' })).toBeInTheDocument();
+        const outcomes = within(screen.getByRole('table', { name: 'Vulnerability coverage' }));
+        expect(outcomes.getByRole('row', { name: 'CVE-2 NVD skipped Provider record unavailable' })).toBeInTheDocument();
+        expect(outcomes.getByRole('row', { name: 'CVE-3 EPSS failed Provider request failed' })).toBeInTheDocument();
+        expect(outcomes.getByRole('row', { name: /CVE-4 NVD cancelled/ })).toBeInTheDocument();
+        expect(outcomes.queryByRole('row', { name: /CVE-1 NVD complete/ })).not.toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: 'Show all target outcomes' }));
+        expect(outcomes.getByRole('row', { name: /CVE-1 NVD complete/ })).toBeInTheDocument();
         expect(screen.queryByText(/Refresh complete: zero changes/)).not.toBeInTheDocument();
     });
 
@@ -386,9 +394,9 @@ describe('Refresh overview', () => {
 
     test.each([
         ['running', /Refresh in progress.*only committed changes/],
-        ['incomplete', /Incomplete coverage.*inspect provider outcomes/],
+        ['incomplete', /Run finished with incomplete coverage for NVD/],
     ] as const)('timeline cards make %s coverage explicit without opening details', async (status, message) => {
-        list.mockResolvedValue({ runs: [{ ...run, status }], total: 1, limit: 20, offset: 0 });
+        list.mockResolvedValue({ runs: [{ ...run, status, source_status: { nvd: 'incomplete', epss: 'complete' } }], total: 1, limit: 20, offset: 0 });
         show();
         const card = await screen.findByRole('article');
         expect(within(card).getByText(message)).toBeInTheDocument();
@@ -521,7 +529,7 @@ describe('Refresh overview', () => {
         await openResult();
         expect(await screen.findByText(/Coverage is incomplete\. Unchanged data cannot be concluded/)).toBeInTheDocument();
         await selectSection('Coverage');
-        expect(await screen.findByText(/This source has incomplete coverage/)).toBeInTheDocument();
+        expect(await screen.findByText(/Check operation logs; no unchecked target/)).toBeInTheDocument();
         expect(screen.queryByText(/Refresh complete: zero changes/)).not.toBeInTheDocument();
     });
 

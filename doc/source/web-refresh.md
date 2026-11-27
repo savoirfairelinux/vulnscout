@@ -6,8 +6,8 @@ of the **Refresh History** bar. Choose
 **Complete refresh** for every available provider or **Custom refresh** to choose
 providers, then **Start**. The action uses vulnerabilities in the selected scope,
 not table filters. Detailed progress is shown in the operation queue.
-Per-provider cancellation remains available in the refresh menu, and success
-or error banners appear above **Refresh History**. The success banner reports
+Per-provider cancellation remains available in the refresh menu, and status
+banners appear above **Refresh History**. The completion banner reports
 how many distinct CVEs had data changes, not how many were checked. If the run
 includes GitHub Advisory Database, it counts changed CVEs and advisories together
 as vulnerabilities. Open the refresh result to inspect individual field changes.
@@ -16,9 +16,11 @@ containing all selected providers. Loaded data and run results update once after
 every step finishes, fails or is cancelled, not after individual providers.
 Accepted refreshes appear immediately as one operation-queue task with provider
 steps, without waiting for the first streamed progress update.
-Missing provider records or deferred checks leave coverage incomplete even
-when execution succeeds. Targets explicitly skipped because their identifier
-is unsupported by a provider do not leave a gap for that provider.
+Missing provider records, failed requests or deferred checks leave coverage
+incomplete even when queued jobs finish. In that case the banner warns about
+incomplete coverage, names the affected providers when known, and still reports
+observed changes. Targets explicitly skipped because their identifier is
+unsupported by a provider do not leave a gap for that provider.
 This view does not run scanners or duplicate the
 vulnerability's
 [Data history](web-vulnerability-details.md#data-history).
@@ -93,8 +95,10 @@ overlap: for example, NVD can succeed while EPSS fails for the same CVE.
 An unsupported identifier still counts as **Targeted** and **Skipped** for its
 provider, never as **Checked**.
 Open **Overview** for the distinct counts or **Coverage** for per-source totals
-and each vulnerability's outcome and reason. Counts describe the whole selected run in the viewing scope,
-not just the current page or change filter.
+and each vulnerability's outcome and reason. Incomplete runs show unchecked
+targets first; use **Show all target outcomes** to include successful checks.
+Counts describe the whole selected run in the viewing scope, not just the
+displayed outcomes, current page or change filter.
 
 - **No refresh / no baseline** means no matching recorded run exists. Earlier
   values may predate run tracking; this does not establish that nothing changed.
