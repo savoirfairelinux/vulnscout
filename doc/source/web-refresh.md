@@ -77,7 +77,7 @@ The page never silently substitutes another run.
 
 Run identifiers remain in shareable URLs; providers, start/end dates and status
 are displayed without internal IDs.
-**Reload results** retrieves those persisted records, including after a browser
+Opening a result retrieves the persisted records, including after a browser
 reload or server restart. It does not refresh provider data, acknowledge changes,
 or clear another user's indicators.
 
@@ -90,6 +90,9 @@ restricted to the selected scope; partial provider failures are shown separately
 Exact-run JSON and CSV exports include the origin and these same summary counts.
 Older runs retain their recorded coverage and have an unknown origin; historical
 field-history exports continue to group changes by the shared refresh run ID.
+
+The **Coverage** tab badge counts distinct targeted vulnerabilities in the selected
+scope across all providers. The tab still lists each provider's outcome separately.
 
 **Targeted**, **Checked**, **Changed**, **No record**, **Skipped**, **Failed**, **Cancelled**
 and **Pending** count distinct vulnerability IDs, not source/ID pairs. One ID checked by
