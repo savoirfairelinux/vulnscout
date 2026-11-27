@@ -8,8 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+---
+
+## [0.26.0] - 2026-11-27
+
+### Added
+- Explorer: choose Current or Ever observed evidence in the shared Project & Variant selector. The applied scope is shared by Vulnerabilities, SBOM, and Metrics, including comparisons and the historical assessment trend.
+- AI context: explicitly attach approved read-only host folders per variant. Browse scoped source, inspect build artifacts in isolation, and use attributable Yocto task logs and CVE reports as evidence.
+- AI review: edit the rationale of a pending assessment before approval without changing its verdict, and carry the corrected rationale into VEX exports.
+- Review: filter current and outdated assessments and distinguish partly outdated assessments from those with no current targets.
+- SBOM: select or deselect all packages in the package filter.
+
+### Changed
+- Refresh: show the count of updated CVEs and distinguish successful provider lookups with no record from incomplete coverage. Report affected providers and retry transient EPSS batch failures.
+- AI agent: run up to five independent actions concurrently and update scoped views without blocking assessment writes or discarding edits when a refresh fails.
+- AI context: save context before adding a threat model, preserve untouched models during import, and enter multiline document-import prompts.
+- Assessments: cite modeled risks in AI Notes instead of creating structured links on new AI assessments. Existing links remain available through the API. Confirm before applying shared Notes to additional targets.
+- SBOM import: remove refresh controls from the Settings import dialog and do not record a refresh run when refresh is opted out.
+
 ### Removed
-- AI context: retire automatic source directories. To expose host source, explicitly approve and attach a read-only host folder. Existing source files and uploaded references are not deleted.
+- AI context: retire automatic `context-<project>-<variant>` source directories, the `/context/directory` GET and POST endpoints under a variant, and the `directory` file ID. Explicitly attach a read-only host folder to reuse existing sources. Existing source files and uploaded references are not deleted.
+
+### Fixed
+- Explorer and Review: scope findings, package drill-downs, and effort estimates to the selected targets; mark exact missing findings outdated and revalidate current bulk assessment targets before writing.
+- Scans: honor native package preferences, preserve Grype component identity and package scope, record intentionally empty OSV scans, and handle escaped colons in CPEs.
+- Host folders: preserve verifiable approvals across restarts, recover from unavailable folders and interrupted detach operations, and drain pending replies before helper shutdown.
+- Review and exports: preserve saved verdicts and scoped edits during refreshes, keep variant-owned effort estimates in custom-data exports, and preserve linked assessments on OpenVEX reimport.
+- Database: serialize scan membership changes with current-only assessment writes and isolate deferred commits to the active session.
 
 ---
 
