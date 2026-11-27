@@ -14,6 +14,7 @@ export default function ConfirmSharedAssessmentNotes({ isOpen, onConfirm, onCanc
             message="Confirm that the shared Notes, including any citations and supporting evidence, apply to every newly added package and variant pair. Go back to revise the Notes if needed."
             confirmText="Confirm and save"
             cancelText="Back to edit"
+            suspendUnderlyingDialogs
             onConfirm={onConfirm}
             onCancel={onCancel}
         />

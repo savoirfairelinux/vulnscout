@@ -8,6 +8,7 @@ type Props = {
     confirmText?: string;
     cancelText?: string;
     showTitleIcon?: boolean;
+    suspendUnderlyingDialogs?: boolean;
     children?: ReactNode;
     onConfirm: () => void;
     onCancel: () => void;
@@ -20,6 +21,7 @@ function ConfirmationModal({
     confirmText = "Yes",
     cancelText = "No",
     showTitleIcon = false,
+    suspendUnderlyingDialogs = false,
     children,
     onConfirm,
     onCancel
@@ -31,6 +33,7 @@ function ConfirmationModal({
             onClose={onCancel}
             testId="confirmation-modal-backdrop"
             size="compact"
+            suspendUnderlyingDialogs={suspendUnderlyingDialogs}
         >
             {children ?? (
                 <p className="text-lg font-normal text-gray-500 dark:text-gray-400">{message}</p>

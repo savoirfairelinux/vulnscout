@@ -856,10 +856,17 @@ describe('Review — editing "Apply to variants"', () => {
         await user.click(variantCheckbox('Variant Beta'));
         await user.click(screen.getByText('Save Changes'));
         const dialog = screen.getByRole('dialog', { name: confirmationName });
+        const editor = screen.getByPlaceholderText(/Free text notes/).closest('[role="dialog"]');
+        expect(editor?.closest('[inert]')).not.toBeNull();
+        expect(dialog).toHaveFocus();
+        await user.tab({ shift: true });
+        expect(within(dialog).getByRole('button', { name: 'Back to edit' })).toHaveFocus();
         expect(reconcileCalls()).toHaveLength(0);
 
-        await user.click(within(dialog).getByRole('button', { name: 'Back to edit' }));
+        await user.keyboard('{Enter}');
         expect(screen.queryByRole('dialog', { name: confirmationName })).not.toBeInTheDocument();
+        expect(editor?.closest('[inert]')).toBeNull();
+        expect(screen.getByText('Save Changes')).toHaveFocus();
         expect(reconcileCalls()).toHaveLength(0);
         expect(variantCheckbox('Variant Beta')).toBeChecked();
         const notes = screen.getByPlaceholderText(/Free text notes/);
