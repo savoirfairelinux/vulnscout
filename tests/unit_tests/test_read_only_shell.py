@@ -192,6 +192,15 @@ def test_reaper_only_removes_abandoned_owned_snapshots(worker):
         assert not abandoned.exists() and unrelated.is_dir() and (source / "source.c").is_file()
 
 
+def _wait_for_path(path, process):
+    for _ in range(250):
+        if path.exists():
+            return
+        assert process.poll() is None
+        time.sleep(.02)
+    pytest.fail(f"Timed out waiting for {path.name}")
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="the host helper refuses to run as root")
 def test_restart_drains_a_running_shell_job(worker, tmp_path):
     _, source = worker
@@ -210,18 +219,10 @@ def test_restart_drains_a_running_shell_job(worker, tmp_path):
             "--pid-file", str(pid_path), "--state-dir", str(state),
             "--engine", str(engine), "--image", "fixture"]
 
-    def wait_for(path, process):
-        for _ in range(250):
-            if path.exists():
-                return
-            assert process.poll() is None
-            time.sleep(.02)
-        pytest.fail(f"Timed out waiting for {path.name}")
-
     for first_start in (True, False):
         process = subprocess.Popen(argv, cwd=REPO_ROOT)
         try:
-            wait_for(pid_path, process)
+            _wait_for_path(pid_path, process)
             assert request(str(socket_path), {"op": "status"})["ok"]
             if first_start:
                 approve_on_socket(state, socket_path, source, VARIANT)
@@ -230,7 +231,7 @@ def test_restart_drains_a_running_shell_job(worker, tmp_path):
                         "op": "shell", **binding(source), "command": "true",
                     })
                     try:
-                        wait_for(running, process)
+                        _wait_for_path(running, process)
                         process.terminate()
                         with pytest.raises(subprocess.TimeoutExpired):
                             process.wait(timeout=.2)
@@ -245,6 +246,37 @@ def test_restart_drains_a_running_shell_job(worker, tmp_path):
             if process.poll() is None:
                 process.kill()
                 process.wait()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="the host helper refuses to run as root")
+def test_shutdown_signal_does_not_interrupt_request_handoff(tmp_path):
+    script = """
+import os
+import signal
+import socketserver
+from src.helpers.host_mount_helper import main
+
+def finish_before_handoff_returns(server, connection, address):
+    server.process_request_thread(connection, address)
+    os.kill(os.getpid(), signal.SIGTERM)
+
+socketserver.ThreadingMixIn.process_request = finish_before_handoff_returns
+raise SystemExit(main())
+"""
+    socket_path = tmp_path / "socket" / "helper.sock"
+    pid_path = tmp_path / "helper.pid"
+    argv = [sys.executable, "-c", script, "serve", "--socket", str(socket_path),
+            "--pid-file", str(pid_path), "--state-dir", str(tmp_path / "daemon-state")]
+    with subprocess.Popen(argv, cwd=REPO_ROOT) as process:
+        try:
+            _wait_for_path(pid_path, process)
+            assert request(str(socket_path), {"op": "status"}, timeout=5)["ok"]
+            assert process.wait(timeout=5) == 0
+        finally:
+            if process.poll() is None:
+                process.kill()
+    assert not pid_path.exists()
+    assert not socket_path.exists()
 
 
 def test_shutdown_drains_pending_shell_reply(worker, monkeypatch):

@@ -1840,9 +1840,14 @@ class HelperServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         finally:
             stopped.set()
 
+    def service_actions(self) -> None:
+        if self.stop_requested:
+            raise SystemExit(0)
+
     def __init__(self, socket_path: str, helper: Helper, socket_label: str | None = None):
         self.helper = helper
         self.socket_path = socket_path
+        self.stop_requested = False
         self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         self.socket_name = os.path.basename(socket_path)
         self.directory_fd: int | None = None
@@ -2054,14 +2059,15 @@ def _serve(args: argparse.Namespace) -> int:
         return 1
     if args.daemon:
         _daemonize(args.log_file or os.devnull)
-    if args.pid_file:
-        _write_pid(args.pid_file)
 
     def stop(signum, frame):
-        raise SystemExit(0)
+        # Unwind at the server loop boundary, not during a request handoff.
+        server.stop_requested = True
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGHUP, stop)
+    if args.pid_file:
+        _write_pid(args.pid_file)
     _log(f"host folder helper {os.getpid()} serving {args.socket}")
     try:
         server.serve_forever(poll_interval=0.5)
