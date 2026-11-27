@@ -17,6 +17,7 @@ import { __reset, __setEventSourceFactory } from '../../src/handlers/operationSt
 import type { Operation } from '../../src/types/operation';
 import { UnsavedGuardProvider, useUnsavedGuard } from '../../src/hooks/useUnsavedGuard';
 import RefreshRuns from '../../src/handlers/refreshRuns';
+import type { RefreshRunMetadata } from '../../src/handlers/refreshRuns';
 import Operations from '../../src/handlers/operations';
 import VulnerabilityHistory from '../../src/handlers/vulnerabilityHistory';
 import Iso8601Duration from '../../src/handlers/iso8601duration';
@@ -91,6 +92,7 @@ jest.mock('../../src/handlers/refreshRuns', () => ({
     default: {
         latest: jest.fn(() => Promise.resolve(null)),
         detail: jest.fn(() => Promise.resolve(null)),
+        metadata: jest.fn(() => Promise.resolve(null)),
         list: jest.fn(() => Promise.resolve({ runs: [], total: 0, limit: 20, offset: 0 })),
     },
 }));
@@ -462,6 +464,14 @@ describe('Explorer saved-scope validation', () => {
         const summary = jest.spyOn(VulnerabilityHistory, 'changesSince').mockResolvedValue({
             since: epss.created_at, total: 0, vulnerabilities: 0, fields: {},
         });
+        const run: RefreshRunMetadata = {
+            run_id: 'refresh-batch', scope: { project_id: null, variant_id: null },
+            sources: ['epss', 'euvd'], source_status: { epss: 'complete', euvd: 'complete' },
+            status: 'complete', started_at: epss.created_at, finished_at: epss.created_at,
+            summary: { refreshed_vulnerabilities: 1, no_record_vulnerabilities: 0,
+                total_changes: 0, changed_vulnerabilities: 0, first_enrichments: 0 },
+        };
+        jest.mocked(RefreshRuns.metadata).mockResolvedValueOnce(run);
         render(<MemoryRouter initialEntries={['/refresh']}><Explorer /></MemoryRouter>);
         await screen.findByText(/No refresh has been recorded/);
         await waitFor(() => expect(screen.getByTestId('refresh-dropdown-toggle')).toBeEnabled());
@@ -479,9 +489,12 @@ describe('Explorer saved-scope validation', () => {
         await act(async () => TestEventSource.current.send('operation', { ...epss, status: 'done' }));
         handlers.forEach((handler, index) => expect(handler).toHaveBeenCalledTimes(initialCalls[index]));
         expect(summary).not.toHaveBeenCalled();
+        expect(RefreshRuns.metadata).not.toHaveBeenCalled();
 
         TestEventSource.current.send('operation', { ...euvd, status: 'done' });
         await waitFor(() => expect(summary).toHaveBeenCalledTimes(1));
+        expect(RefreshRuns.metadata).toHaveBeenCalledTimes(1);
+        expect(RefreshRuns.metadata).toHaveBeenCalledWith(run.run_id, expect.any(Object));
         await waitFor(() => handlers.forEach((handler, index) =>
             expect(handler).toHaveBeenCalledTimes(initialCalls[index] + 1)));
     });
