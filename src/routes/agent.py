@@ -184,6 +184,11 @@ def _mcp_path():
     return Path(__file__).resolve().parents[2] / "vulnscout_mcp" / "server.py"
 
 
+def _mcp_api_url():
+    return (os.getenv("VULNSCOUT_AGENT_API_URL")
+            or f"http://127.0.0.1:{os.getenv('FLASK_RUN_PORT') or '7275'}")
+
+
 def _github_form(url, fields):
     github_request = urllib.request.Request(url, data=urlencode(fields).encode(),
                                             headers={"Accept": "application/json"})
@@ -723,7 +728,7 @@ async def _reply(conversation, message, path, model, scope, publish=None, *,
                 "type": "local", "command": sys.executable,
                 "args": [str(path)], "cwd": str(path.parent),
                 "env": {
-                    "VULNSCOUT_BASE_URL": api_url or os.getenv("VULNSCOUT_AGENT_API_URL", "http://localhost:7275"),
+                    "VULNSCOUT_BASE_URL": api_url or _mcp_api_url(),
                     "VULNSCOUT_AGENT_SCOPE": scope,
                     "VULNSCOUT_AGENT_SHELL": "1",
                 },
