@@ -286,18 +286,17 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
             subtitle={run?.run_id === runId ? `${formatDate(run.started_at)} · ${run.sources.map(sourceLabel).join(', ')} · ${coverageStatus(run.status)}` : undefined}
             testId="refresh-result-modal-backdrop"
             contentClassName="flex min-h-0 flex-1 flex-col p-0 md:p-0"
-            headerActions={<ModalButton onClick={() => { retryResult(); retryList(); }}>Reload results</ModalButton>}
             footer={<ModalActions><ModalButton onClick={closeResult}>Close</ModalButton></ModalActions>}>
-            {run?.run_id === runId && <nav aria-label="Refresh result sections" className="flex flex-wrap border-b border-gray-600 px-4">
+            {run?.run_id === runId && <nav aria-label="Refresh result sections" className="flex shrink-0 flex-wrap border-b border-gray-600 px-4">
                 <button type="button" className={tabClass('changes')} aria-pressed={section === 'changes'} onClick={() => setSection('changes')}>
                     Changes <span className="ml-2 rounded-full bg-cyan-900/40 px-1.5 py-0.5 text-xs text-cyan-300">{run.summary.total_changes.toLocaleString()}</span>
                 </button>
                 <button type="button" className={tabClass('coverage')} aria-pressed={section === 'coverage'} onClick={() => setSection('coverage')}>
-                    Coverage <span className="ml-2 rounded-full bg-cyan-900/40 px-1.5 py-0.5 text-xs text-cyan-300">{run.coverage.length.toLocaleString()}</span>
+                    Coverage <span className="ml-2 rounded-full bg-cyan-900/40 px-1.5 py-0.5 text-xs text-cyan-300">{summary?.Targeted.toLocaleString()}</span>
                 </button>
                 <button type="button" className={tabClass('overview')} aria-pressed={section === 'overview'} onClick={() => setSection('overview')}>Overview</button>
             </nav>}
-            <div className="p-4 md:p-5 space-y-4 text-gray-300 flex-1 overflow-auto">
+            <div className={`p-4 md:p-5 text-gray-300 min-h-0 flex-1 overflow-auto ${section === 'coverage' ? 'flex flex-col gap-4' : 'space-y-4'}`}>
             {loading && <p role="status">Loading refresh results…</p>}
             {error && <div role="alert" className="flex items-center gap-3">
                 <p>{error}</p>
@@ -305,9 +304,9 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
             </div>}
             {!loading && !error && !run && <p role="status">Requested refresh run is unavailable in this scope. No other run has been substituted.</p>}
             {run?.run_id === runId && <>
-            {run.status === 'running' && <p role="status">Refresh in progress. Only committed changes are shown. Reload results to see progress.</p>}
-            {incomplete && <p role="alert" className="text-amber-300">{coverageWarning(run)} Coverage gaps do not imply unchanged data or removals.{section !== 'coverage' && ' Select Coverage to see provider outcomes.'}</p>}
-            {run.summary.first_enrichments > 0 && <p role="status">First enrichment: {run.summary.first_enrichments} values had no recorded previous value. No baseline exists for those fields. These are additions, not modifications.</p>}
+            {run.status === 'running' && <p role="status" className="shrink-0">Refresh in progress. Only committed changes are shown.</p>}
+            {incomplete && <p role="alert" className="shrink-0 text-amber-300">{coverageWarning(run)} Coverage gaps do not imply unchanged data or removals.{section !== 'coverage' && ' Select Coverage to see provider outcomes.'}</p>}
+            {run.summary.first_enrichments > 0 && <p role="status" className="shrink-0">First enrichment: {run.summary.first_enrichments} values had no recorded previous value. No baseline exists for those fields. These are additions, not modifications.</p>}
             {section === 'overview' && <>
                 <div className="overflow-auto rounded border border-gray-600">
                     <table aria-label="Refresh metadata" className="w-full text-xs text-left">
@@ -330,9 +329,9 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                 <p className="text-sm">Each vulnerability is counted once per category. A vulnerability may appear in several categories if providers have different outcomes.</p>
             </>}
             {section === 'coverage' && <>
-                <h3 className="font-bold text-base">Per-source coverage and gaps</h3>
-                <p className="text-sm">No record means a successful lookup returned no data for that identifier. This and explicit unsupported identifiers are not coverage gaps or removals. Unverified skips and failures still leave gaps.</p>
-                <div className="overflow-auto max-h-80 rounded border border-gray-600">
+                <h3 className="shrink-0 font-bold text-base">Per-source coverage and gaps</h3>
+                <p className="shrink-0 text-sm">No record means a successful lookup returned no data for that identifier. This and explicit unsupported identifiers are not coverage gaps or removals. Unverified skips and failures still leave gaps.</p>
+                <div className="shrink-0 overflow-auto max-h-80 rounded border border-gray-600">
                     <table aria-label="Provider coverage" className="w-full text-xs text-left">
                         <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
                             {['Source', 'Status', 'Targeted', 'Checked', 'No record', 'Skipped', 'Failed', 'Cancelled', 'Pending'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
@@ -352,24 +351,26 @@ export default function RefreshOverview({ projectId, variantId, dataRevision = 0
                         })}</tbody>
                     </table>
                 </div>
-                {incomplete && run.coverage.length > 0 && <button type="button" className={control}
+                {incomplete && run.coverage.length > 0 && <button type="button" className={`${control} shrink-0 self-start`}
                     onClick={() => setShowAllCoverage(value => !value)}>
                     {showAllCoverage ? 'Show unchecked outcomes only' : 'Show all target outcomes'}
                 </button>}
-                {!shownCoverage.length ? <p>{run.coverage.length ? 'No unchecked targets recorded in this scope.' : 'No targeted vulnerabilities recorded.'}</p>
-                    : <div className="overflow-auto max-h-80 rounded border border-gray-600">
-                    {incomplete && !showAllCoverage && <p className="px-3 py-2 text-sm">Showing unchecked targets and recorded reasons.</p>}
-                    <table aria-label="Vulnerability coverage" className="w-full text-xs text-left">
-                        <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
-                            {['Vulnerability', 'Source', 'Outcome', 'Reason'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
-                        </tr></thead>
-                        <tbody>{shownCoverage.map((row, index) => <tr key={`${row.source}-${row.vuln_id}-${index}`} className="border-t border-gray-600 hover:bg-gray-600/40">
-                            <td className="px-3 py-2 font-mono">{row.vuln_id}</td>
-                            <td className="px-3 py-2">{sourceLabel(row.source)}</td>
-                            <td className="px-3 py-2">{row.status === 'no_record' ? 'No record' : row.status}</td>
-                            <td className="px-3 py-2 break-words">{row.error ?? '—'}</td>
-                        </tr>)}</tbody>
-                    </table>
+                {!shownCoverage.length ? <p className="shrink-0">{run.coverage.length ? 'No unchecked targets recorded in this scope.' : 'No targeted vulnerabilities recorded.'}</p>
+                    : <div className="flex min-h-32 flex-1 flex-col rounded border border-gray-600">
+                    {incomplete && !showAllCoverage && <p className="shrink-0 px-3 py-2 text-sm">Showing unchecked targets and recorded reasons.</p>}
+                    <div className="min-h-0 flex-1 overflow-auto" role="region" aria-label="Target outcomes" tabIndex={0}>
+                        <table aria-label="Vulnerability coverage" className="w-full text-xs text-left">
+                            <thead className="sticky top-0 bg-gray-800 text-gray-300 uppercase"><tr>
+                                {['Vulnerability', 'Source', 'Outcome', 'Reason'].map(label => <th key={label} scope="col" className="px-3 py-2">{label}</th>)}
+                            </tr></thead>
+                            <tbody>{shownCoverage.map((row, index) => <tr key={`${row.source}-${row.vuln_id}-${index}`} className="border-t border-gray-600 hover:bg-gray-600/40">
+                                <td className="px-3 py-2 font-mono">{row.vuln_id}</td>
+                                <td className="px-3 py-2">{sourceLabel(row.source)}</td>
+                                <td className="px-3 py-2">{row.status === 'no_record' ? 'No record' : row.status}</td>
+                                <td className="px-3 py-2 break-words">{row.error ?? '—'}</td>
+                            </tr>)}</tbody>
+                        </table>
+                    </div>
                 </div>}
             </>}
             {section === 'changes' && <>

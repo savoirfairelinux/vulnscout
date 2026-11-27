@@ -323,7 +323,10 @@ describe('Refresh overview', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent('Run finished with incomplete coverage for NVD, EPSS.');
         expect(await screen.findByText('New description')).toBeInTheDocument();
         await selectSection('Coverage');
-        const outcomes = within(screen.getByRole('table', { name: 'Vulnerability coverage' }));
+        const targetRegion = screen.getByRole('region', { name: 'Target outcomes' });
+        expect(targetRegion).toHaveAttribute('tabindex', '0');
+        expect(targetRegion).not.toContainElement(screen.getByText('Showing unchecked targets and recorded reasons.'));
+        const outcomes = within(within(targetRegion).getByRole('table', { name: 'Vulnerability coverage' }));
         expect(outcomes.getByRole('row', { name: 'CVE-2 NVD skipped Provider record unavailable' })).toBeInTheDocument();
         expect(outcomes.getByRole('row', { name: 'CVE-3 EPSS failed Provider request failed' })).toBeInTheDocument();
         expect(outcomes.getByRole('row', { name: /CVE-4 NVD cancelled/ })).toBeInTheDocument();
@@ -355,24 +358,31 @@ describe('Refresh overview', () => {
         expect(detail.mock.calls[0][2].aborted).toBe(true);
     });
 
-    test('keeps the coverage section selected when reloading popup results', async () => {
-        show();
-        await openResult();
-        await selectSection('Coverage');
-        await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reload results' }));
-        expect(await screen.findByRole('table', { name: 'Provider coverage' })).toBeInTheDocument();
-        expect(within(screen.getByRole('navigation', { name: 'Refresh result sections' }))
-            .getByRole('button', { name: /^Coverage/ })).toHaveAttribute('aria-pressed', 'true');
+    test('only offers a result retry on load error and does not reload the timeline', async () => {
+        detail.mockRejectedValueOnce(new Error('HTTP 503'));
+        show('/refresh?run=persisted-run');
+        const popup = within(screen.getByRole('dialog'));
+        expect(await popup.findByRole('alert')).toHaveTextContent('HTTP 503');
+        await userEvent.click(popup.getByRole('button', { name: 'Retry' }));
+        expect(await popup.findByText('New description')).toBeInTheDocument();
+        expect(popup.queryByRole('button', { name: /reload results|retry/i })).not.toBeInTheDocument();
+        expect(detail.mock.calls[1][1]).toEqual(detail.mock.calls[0][1]);
+        expect(list).toHaveBeenCalledTimes(1);
     });
 
-    test('server-scoped shared CVE is shown in another visible variant and reload is read-only', async () => {
+    test('counts distinct scoped targets across providers, not the current changes page', async () => {
+        detail.mockImplementation(async (_id, filters) =>
+            filters.limit === undefined ? run : { ...run, coverage: [run.coverage[0]] });
         show('/refresh?run=persisted-run', { projectId: 'project-a', variantId: 'variant-b' });
         expect(await screen.findByText('New description')).toBeInTheDocument();
         expect(detail).toHaveBeenCalledWith('persisted-run',
             { project_id: 'project-a', variant_id: 'variant-b' }, expect.any(AbortSignal));
-        await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reload results' }));
-        await waitFor(() => expect(detail.mock.calls.filter(call => call[1].limit === undefined)).toHaveLength(2));
-        expect(await screen.findByText('New description')).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: 'Coverage 2' }));
+        const targets = within(screen.getByRole('table', { name: 'Vulnerability coverage' }));
+        expect(targets.getAllByRole('row')).toHaveLength(4);
+        const providers = within(screen.getByRole('table', { name: 'Provider coverage' }));
+        expect(within(providers.getByRole('row', { name: /^NVD / })).getAllByRole('cell')[1]).toHaveTextContent('2');
+        expect(within(providers.getByRole('row', { name: /^EPSS / })).getAllByRole('cell')[1]).toHaveTextContent('1');
     });
 
     test('paginates persisted runs without opening results or loading hidden changes', async () => {
