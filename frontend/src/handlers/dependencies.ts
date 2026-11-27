@@ -24,6 +24,8 @@ export type DependencyDocument = {
     variant_id: string;
     variant_name: string;
     dependencies_recorded: boolean;
+    // Full variant evidence, before source or comparison filters.
+    dependent_counts?: Record<string, number>;
     packages: DependencyPackage[];
     edges: DependencyEdge[];
     build_targets?: BuildTarget[];

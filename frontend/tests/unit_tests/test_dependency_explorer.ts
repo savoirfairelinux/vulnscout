@@ -1,5 +1,5 @@
 import { buildDependencyScopes, dependencyNeighborhood, dependencyRoots, dependencyTreeRows,
-    reachablePackages, treePathKey } from '../../src/helpers/dependencyExplorer';
+    exclusiveDirectDependencies, reachablePackages, treePathKey } from '../../src/helpers/dependencyExplorer';
 import type { DependencyDocument } from '../../src/handlers/dependencies';
 
 function document(ids: string[], edges: [string, string][], variant = 'v1'): DependencyDocument {
@@ -7,6 +7,42 @@ function document(ids: string[], edges: [string, string][], variant = 'v1'): Dep
         dependencies_recorded: true, packages: ids.map(id => ({ id, name: id, version: '1' })),
         edges: edges.map(([package_id, dependency_id]) => ({ package_id, dependency_id })) };
 }
+
+test('discovers only CURL exclusive direct dependencies, deduplicating declarations and excluding shared and transitive packages', () => {
+    const doc = document(['CURL', 'A', 'B', 'C', 'D', 'other', 'transitive'], [
+        ['CURL', 'A'], ['CURL', 'B'], ['CURL', 'C'], ['CURL', 'D'],
+        ['other', 'A'], ['other', 'D'], ['B', 'transitive'],
+    ]);
+    const [scope] = buildDependencyScopes([doc, { ...doc, id: 'duplicate' }], 'all');
+    expect(exclusiveDirectDependencies(scope, 'CURL').map(pkg => pkg.id)).toEqual(['B', 'C']);
+    expect(exclusiveDirectDependencies(scope, 'transitive')).toEqual([]);
+    expect(exclusiveDirectDependencies(scope, 'missing')).toEqual([]);
+});
+
+test('checks companion-source evidence without mixing variants or changing the visible direct dependency selection', () => {
+    const doc = document(['CURL', 'B', 'C'], [['CURL', 'B'], ['CURL', 'C']]);
+    const companion = { ...document(['other', 'C'], [['other', 'C']]), id: 'companion' };
+    const foreign = document(['other', 'B'], [['other', 'B']], 'v2');
+    const documents = [doc, companion, foreign];
+    const [selected] = buildDependencyScopes(documents, doc.id);
+    const evidence = buildDependencyScopes(documents, 'all').find(scope => scope.id === selected.id)!;
+    expect(exclusiveDirectDependencies(selected, 'CURL', evidence).map(pkg => pkg.id)).toEqual(['B']);
+    expect(selected.outgoing.get('CURL')).toEqual(['B', 'C']);
+});
+
+test('retains backend incoming evidence for dependents hidden by comparison filters', () => {
+    const doc = document(['CURL', 'B', 'C'], [['CURL', 'B'], ['CURL', 'C']]);
+    doc.dependent_counts = { CURL: 0, B: 1, C: 2 };
+    const [scope] = buildDependencyScopes([doc], 'all');
+    expect(exclusiveDirectDependencies(scope, 'CURL').map(pkg => pkg.id)).toEqual(['B']);
+});
+
+test('does not perform cascade analysis, excludes the selected package and counts dependency self edges as other dependents', () => {
+    const [scope] = buildDependencyScopes([document(['CURL', 'B', 'C'], [
+        ['CURL', 'CURL'], ['CURL', 'B'], ['B', 'CURL'], ['CURL', 'C'], ['C', 'C'],
+    ])], 'all');
+    expect(exclusiveDirectDependencies(scope, 'CURL').map(pkg => pkg.id)).toEqual(['B']);
+});
 
 test('keeps transitive paths within each variant instead of stitching unrelated edges', () => {
     const scopes = buildDependencyScopes([
