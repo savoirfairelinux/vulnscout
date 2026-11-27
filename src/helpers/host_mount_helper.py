@@ -44,7 +44,7 @@ import threading
 import time
 import uuid
 import weakref
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime, timezone
 from fnmatch import fnmatchcase, translate
 from typing import Any, Callable, ContextManager, Iterator
@@ -928,19 +928,28 @@ class Helper:
 
     # -- dispatch -----------------------------------------------------------------------------
 
-    def dispatch(self, request: object) -> dict:
-        try:
-            if not isinstance(request, dict):
-                raise HelperError("invalid", "Request must be a JSON object.")
-            operation = self.operations.get(request.get("op"))  # type: ignore[arg-type]
-            if operation is None:
-                raise HelperError("invalid", "Unknown operation; the helper is read-only.")
-            return {"ok": True, "result": operation(request)}
-        except HelperError as exc:
-            return {"ok": False, "code": exc.code, "error": exc.message}
-        except Exception as exc:  # pragma: no cover - defensive: never leak tracebacks to clients
-            _log(f"internal error: {type(exc).__name__}: {exc}")
-            return {"ok": False, "code": "internal", "error": "Internal helper error; see the helper log."}
+    def dispatch(self, request: object, *, reply: Callable[[dict], None] | None = None) -> dict:
+        with ExitStack() as admission:
+            try:
+                if not isinstance(request, dict):
+                    raise HelperError("invalid", "Request must be a JSON object.")
+                op = request.get("op")
+                operation = self.operations.get(op)  # type: ignore[arg-type]
+                if operation is None:
+                    raise HelperError("invalid", "Unknown operation; the helper is read-only.")
+                if op == "shell" and reply is not None:
+                    # Shutdown must wait for the socket reply, not just the job.
+                    admission.enter_context(self._admit_shell())
+                    operation = self._shell_job
+                response = {"ok": True, "result": operation(request)}
+            except HelperError as exc:
+                response = {"ok": False, "code": exc.code, "error": exc.message}
+            except Exception as exc:  # pragma: no cover - defensive: never leak tracebacks to clients
+                _log(f"internal error: {type(exc).__name__}: {exc}")
+                response = {"ok": False, "code": "internal", "error": "Internal helper error; see the helper log."}
+            if reply is not None:
+                reply(response)
+            return response
 
     # -- path checks --------------------------------------------------------------------------
 
@@ -1210,17 +1219,22 @@ class Helper:
             self._shell_condition.wait_for(lambda: self._active_shells == 0,
                                            timeout=max(0.0, deadline - time.monotonic()))
 
-    def shell(self, request: dict) -> dict:
+    @contextmanager
+    def _admit_shell(self) -> Iterator[None]:
         with self._shell_condition:
             if self._closing_shells:
                 raise HelperError("unavailable", "The host helper is stopping.")
             self._active_shells += 1
         try:
-            return self._shell_job(request)
+            yield
         finally:
             with self._shell_condition:
                 self._active_shells -= 1
                 self._shell_condition.notify_all()
+
+    def shell(self, request: dict) -> dict:
+        with self._admit_shell():
+            return self._shell_job(request)
 
     def _shell_job(self, request: dict) -> dict:
         if not self.engine or not self.image:
@@ -1766,7 +1780,11 @@ class _Handler(socketserver.StreamRequestHandler):
             except ValueError:
                 response = {"ok": False, "code": "invalid", "error": "Request is not valid JSON."}
             else:
-                response = server.helper.dispatch(request)
+                server.helper.dispatch(request, reply=self._write_reply)
+                return
+        self._write_reply(response)
+
+    def _write_reply(self, response: dict) -> None:
         try:
             self.wfile.write(_encode(response))
         except OSError:
