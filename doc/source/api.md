@@ -1968,7 +1968,8 @@ For a standalone refresh, supply `ids` instead of `variant_ids`. EUVD takes
 CVE IDs and GHSA takes GHSA IDs. NVD and EPSS record known non-CVE targets as
 unsupported without querying the provider. Scoped requests must contain only
 targets in active findings in the selected scope; unknown and out-of-scope IDs
-are both rejected. NVD API mode accepts at most 1000 targets.
+are both rejected. NVD API mode accepts at most 1000 CVE targets; unsupported
+identifiers do not count toward this limit.
 Deferred refresh jobs resolve the variant's newly discovered IDs after
 preceding scans; `exclude_ids` omits the pre-scan baseline, including non-CVE
 IDs for NVD and EPSS. Scan options `exclude_kernel` and `exclude_native`

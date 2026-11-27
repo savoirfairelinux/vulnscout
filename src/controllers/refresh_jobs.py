@@ -19,7 +19,9 @@ import uuid
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..extensions import db
-from ..helpers.refresh_runs import UNSUPPORTED_CVE_IDENTIFIER, add_targets, target_result, tracked_refresh
+from ..helpers.refresh_runs import (
+    UNSUPPORTED_CVE_IDENTIFIER, add_targets, target_result, target_results, tracked_refresh,
+)
 from ..helpers.active_scans import active_package_ids_for_scans, active_scan_ids_for_variant
 from ..models import Finding, Observation, Scan, Vulnerability
 from .epss_db import EPSS_DB
@@ -47,6 +49,7 @@ EUVD_COMMIT_EVERY = 200
 # Kept under SQLite's 999 bound-parameter limit so the "which of these exist?"
 # intersection stays an indexed ``WHERE id IN (...)`` bounded by request size.
 DB_LOOKUP_CHUNK = 500
+SKIP_BATCH_SIZE = 500
 
 
 def _nvd_sleep_interval() -> float:
@@ -73,8 +76,12 @@ def normalise_vulnerability_ids(raw_ids: object) -> List[str]:
     return list(dict.fromkeys(c for c in candidates if c and "\x00" not in c))
 
 
+def is_cve_id(identifier: str) -> bool:
+    return CVE_RE.fullmatch(identifier.strip().upper()) is not None
+
+
 def normalise_cve_ids(raw_ids: object) -> List[str]:
-    return [c for c in normalise_vulnerability_ids(raw_ids) if CVE_RE.fullmatch(c)]
+    return [c for c in normalise_vulnerability_ids(raw_ids) if is_cve_id(c)]
 
 
 def normalise_ghsa_ids(raw_ids: object) -> List[str]:
@@ -96,16 +103,18 @@ def known_vulnerability_ids(ids: List[str]) -> Set[str]:
 
 def _applicable_cve_targets(ctx: JobContext, source: str) -> tuple[list[str], int]:
     ctx.check_cancelled()
-    applicable = []
+    ids: list[str] = ctx.options["ids"]
+    applicable: list[str] = []
     skipped = 0
-    for identifier in ctx.options["ids"]:
-        if CVE_RE.fullmatch(identifier.strip().upper()):
-            applicable.append(identifier)
-        else:
-            target_result(source, identifier, "skipped", UNSUPPORTED_CVE_IDENTIFIER)
-            skipped += 1
-    if skipped:
-        _safe_commit(f"bulk {source} refresh unsupported targets")
+    for start in range(0, len(ids), SKIP_BATCH_SIZE):
+        unsupported: list[str] = []
+        for identifier in ids[start:start + SKIP_BATCH_SIZE]:
+            (applicable if is_cve_id(identifier) else unsupported).append(identifier)
+        if unsupported:
+            target_results(source, unsupported, "skipped", UNSUPPORTED_CVE_IDENTIFIER)
+            _safe_commit(f"bulk {source} refresh unsupported targets")
+            skipped += len(unsupported)
+        ctx.check_cancelled()
     return applicable, skipped
 
 
@@ -161,9 +170,9 @@ def run_deferred_refresh(ctx: JobContext) -> None:
         ids = normalise_cve_ids(discovered)
     else:
         ids = discovered
-        if source == "nvd" and ctx.options.get("mode") == "api" and len(ids) > MAX_CVE_IDS:
+        if source == "nvd" and ctx.options.get("mode") == "api" and sum(map(is_cve_id, ids)) > MAX_CVE_IDS:
             raise OperationError(
-                f"nvd refresh accepts at most {MAX_CVE_IDS} identifiers in api mode"
+                f"nvd refresh accepts at most {MAX_CVE_IDS} CVE identifiers in api mode"
             )
 
     if not ids:
@@ -214,6 +223,7 @@ def run_nvd_refresh(ctx: JobContext) -> None:
     total = len(cve_ids) + skipped
     ctx.report(skipped, total, f"Starting bulk NVD refresh: {skipped}/{total}")
     if not cve_ids:
+        ctx.check_cancelled()
         return
 
     nvd: Optional[NVD_DB] = None
@@ -276,6 +286,7 @@ def run_epss_refresh(ctx: JobContext) -> None:
     total = len(cve_ids) + skipped
     ctx.report(skipped, total, f"Starting bulk EPSS refresh: {skipped}/{total}")
     if not cve_ids:
+        ctx.check_cancelled()
         return
 
     epss = EPSS_DB()
